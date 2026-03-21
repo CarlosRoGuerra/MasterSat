@@ -14,6 +14,14 @@ class Settings(BaseSettings):
     debug_return_reset_token: bool = True
     database_url: str = 'postgresql+psycopg://postgres:postgres@db:5432/rastreamento'
     frontend_url: str = 'http://localhost:3000'
+    backend_public_url: str = 'http://localhost:8000'
+
+    minio_endpoint: str = 'minio:9000'
+    minio_root_user: str = 'minioadmin'
+    minio_root_password: str = 'minioadmin'
+    minio_secure: bool = False
+    minio_bucket: str = 'rastreamento'
+    minio_public_url: str = 'http://localhost:9000'
 
 
 settings = Settings()

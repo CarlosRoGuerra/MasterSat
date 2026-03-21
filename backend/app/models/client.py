@@ -1,4 +1,4 @@
-from sqlalchemy import Enum, String, Text
+from sqlalchemy import Enum, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -15,6 +15,7 @@ class Client(Base, TimestampMixin, SoftDeleteMixin):
     type: Mapped[str] = mapped_column(String(20), default='pf')
     status: Mapped[ClientStatus] = mapped_column(Enum(ClientStatus), default=ClientStatus.ACTIVE)
     email: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    extra_emails: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     phone: Mapped[str | None] = mapped_column(String(30), nullable=True)
     zip_code: Mapped[str | None] = mapped_column(String(12), nullable=True)
     address_line: Mapped[str | None] = mapped_column(String(180), nullable=True)

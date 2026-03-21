@@ -43,7 +43,8 @@ def build_full_address(payload: RegisterClientRequest) -> str:
 
 @router.post('/login', response_model=TokenResponse)
 def login(payload: LoginRequest, db: Session = Depends(get_db)):
-    user = db.scalar(select(User).where(User.email == payload.email, User.is_deleted.is_(False)))
+    normalized_email = payload.email.strip().lower()
+    user = db.scalar(select(User).where(User.email == normalized_email, User.is_deleted.is_(False)))
     if not user or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Credenciais inválidas')
     return TokenResponse(
@@ -62,12 +63,17 @@ def register_client(payload: RegisterClientRequest, db: Session = Depends(get_db
     if existing_client:
         raise HTTPException(status_code=409, detail='Já existe um cliente cadastrado com este CPF/CNPJ')
 
+    extra_emails = [email for email in (payload.extra_emails or []) if email != payload.email]
+    if payload.type != 'pj':
+        extra_emails = None
+
     client = Client(
         name=payload.name,
         cpf_cnpj=payload.cpf_cnpj,
         type=payload.type,
         status=ClientStatus.ACTIVE,
         email=payload.email,
+        extra_emails=extra_emails,
         phone=payload.phone,
         zip_code=payload.zip_code,
         address_line=payload.address_line,

@@ -1,13 +1,15 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import inspect, text
 
 from app.api.v1.api import api_router
 from app.core.config import settings
 from app.core.security import get_password_hash
 from app.db.session import Base, SessionLocal, engine
-from app.models import billing, client, contract, password_reset_token, plan, service_order, tracker, user, vehicle
+from app.models import billing, client, contract, document, password_reset_token, plan, service_order, tracker, user, vehicle
 from app.models.enums import UserRole
 from app.models.user import User
+from app.services.storage import ensure_bucket
 
 app = FastAPI(title=settings.app_name)
 
@@ -26,9 +28,21 @@ app.add_middleware(
 app.include_router(api_router, prefix=settings.api_v1_prefix)
 
 
+def ensure_schema_updates():
+    with engine.begin() as conn:
+        inspector = inspect(conn)
+
+        if inspector.has_table('clients'):
+            client_columns = {column['name'] for column in inspector.get_columns('clients')}
+            if 'extra_emails' not in client_columns:
+                conn.execute(text('ALTER TABLE clients ADD COLUMN extra_emails JSON'))
+
+
 @app.on_event('startup')
 def on_startup():
     Base.metadata.create_all(bind=engine)
+    ensure_schema_updates()
+    ensure_bucket()
     db = SessionLocal()
     try:
         admin = db.query(User).filter(User.email == 'admin@rastreamento.local').first()

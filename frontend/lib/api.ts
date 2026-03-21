@@ -1,10 +1,15 @@
 export const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
 
+function buildApiUrl(path: string) {
+  return `${API_URL.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
+}
+
 export async function apiFetch<T>(path: string, options: RequestInit = {}, token?: string): Promise<T> {
-  const response = await fetch(`${API_URL}${path}`, {
+  const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
+  const response = await fetch(buildApiUrl(path), {
     ...options,
     headers: {
-      'Content-Type': 'application/json',
+      ...(!isFormData ? { 'Content-Type': 'application/json' } : {}),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(options.headers || {}),
     },

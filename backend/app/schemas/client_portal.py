@@ -1,8 +1,8 @@
 from datetime import date
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
-from app.models.enums import BillingStatus, ClientStatus, VehicleStatus
+from app.models.enums import BillingStatus, ClientStatus, DocumentReviewStatus, VehicleStatus
 
 
 class ClientProfileOut(BaseModel):
@@ -10,10 +10,86 @@ class ClientProfileOut(BaseModel):
     name: str
     cpf_cnpj: str
     email: str | None = None
+    extra_emails: list[str] | None = None
     phone: str | None = None
+    zip_code: str | None = None
+    address_line: str | None = None
+    address_number: str | None = None
+    address_complement: str | None = None
+    neighborhood: str | None = None
     city: str | None = None
     state: str | None = None
     status: ClientStatus
+    type: str
+
+
+class ClientProfileUpdate(BaseModel):
+    email: str | None = None
+    extra_emails: list[str] | None = None
+    phone: str | None = None
+    zip_code: str | None = None
+    address_line: str | None = None
+    address_number: str | None = None
+    address_complement: str | None = None
+    neighborhood: str | None = None
+    city: str | None = None
+    state: str | None = None
+
+    @field_validator('email')
+    @classmethod
+    def normalize_email(cls, value: str | None) -> str | None:
+        if value is None or value == '':
+            return None
+        email = value.strip().lower()
+        if '@' not in email or '.' not in email.split('@')[-1]:
+            raise ValueError('Informe um e-mail válido')
+        return email
+
+    @field_validator('extra_emails')
+    @classmethod
+    def normalize_extra_emails(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        normalized: list[str] = []
+        for item in value:
+            email = item.strip().lower()
+            if not email:
+                continue
+            if '@' not in email or '.' not in email.split('@')[-1]:
+                raise ValueError('Informe e-mails adicionais válidos')
+            if email not in normalized:
+                normalized.append(email)
+        return normalized or None
+
+    @field_validator('phone')
+    @classmethod
+    def normalize_phone(cls, value: str | None) -> str | None:
+        if value is None or value == '':
+            return None
+        digits = ''.join(filter(str.isdigit, value))
+        if len(digits) not in (10, 11):
+            raise ValueError('Telefone inválido')
+        return digits
+
+    @field_validator('zip_code')
+    @classmethod
+    def normalize_zip(cls, value: str | None) -> str | None:
+        if value is None or value == '':
+            return None
+        digits = ''.join(filter(str.isdigit, value))
+        if len(digits) != 8:
+            raise ValueError('CEP inválido')
+        return digits
+
+    @field_validator('state')
+    @classmethod
+    def normalize_state(cls, value: str | None) -> str | None:
+        if value is None or value == '':
+            return None
+        value = value.strip().upper()
+        if len(value) != 2:
+            raise ValueError('UF inválida')
+        return value
 
 
 class ClientVehicleOut(BaseModel):
@@ -23,6 +99,133 @@ class ClientVehicleOut(BaseModel):
     brand: str | None = None
     year: int | None = None
     status: VehicleStatus
+    type: str | None = None
+    chassis: str | None = None
+    renavam: str | None = None
+    color: str | None = None
+
+
+class ClientVehicleCreate(BaseModel):
+    plate: str
+    chassis: str | None = None
+    renavam: str | None = None
+    brand: str | None = None
+    model: str | None = None
+    year: int | None = None
+    color: str | None = None
+    type: str | None = None
+
+    @field_validator('plate')
+    @classmethod
+    def normalize_plate(cls, value: str) -> str:
+        value = value.strip().upper().replace('-', '').replace(' ', '')
+        if len(value) != 7:
+            raise ValueError('Placa inválida')
+        return value
+
+    @field_validator('chassis')
+    @classmethod
+    def normalize_chassis(cls, value: str | None) -> str | None:
+        if value is None or value == '':
+            return None
+        value = value.strip().upper().replace(' ', '')
+        if len(value) < 8:
+            raise ValueError('Chassi inválido')
+        return value
+
+    @field_validator('renavam')
+    @classmethod
+    def normalize_renavam(cls, value: str | None) -> str | None:
+        if value is None or value == '':
+            return None
+        digits = ''.join(filter(str.isdigit, value))
+        if len(digits) not in (9, 10, 11):
+            raise ValueError('RENAVAM inválido')
+        return digits
+
+    @field_validator('type')
+    @classmethod
+    def normalize_type(cls, value: str | None) -> str | None:
+        if value is None or value == '':
+            return None
+        return value.strip().lower()
+
+    @field_validator('year')
+    @classmethod
+    def validate_year(cls, value: int | None) -> int | None:
+        if value is None:
+            return None
+        if value < 1950 or value > 2100:
+            raise ValueError('Ano inválido')
+        return value
+
+
+class ClientVehicleUpdate(BaseModel):
+    plate: str | None = None
+    chassis: str | None = None
+    renavam: str | None = None
+    brand: str | None = None
+    model: str | None = None
+    year: int | None = None
+    color: str | None = None
+    type: str | None = None
+
+    @field_validator('plate')
+    @classmethod
+    def normalize_plate(cls, value: str | None) -> str | None:
+        if value is None or value == '':
+            return None
+        value = value.strip().upper().replace('-', '').replace(' ', '')
+        if len(value) != 7:
+            raise ValueError('Placa inválida')
+        return value
+
+    @field_validator('chassis')
+    @classmethod
+    def normalize_chassis(cls, value: str | None) -> str | None:
+        if value is None or value == '':
+            return None
+        value = value.strip().upper().replace(' ', '')
+        if len(value) < 8:
+            raise ValueError('Chassi inválido')
+        return value
+
+    @field_validator('renavam')
+    @classmethod
+    def normalize_renavam(cls, value: str | None) -> str | None:
+        if value is None or value == '':
+            return None
+        digits = ''.join(filter(str.isdigit, value))
+        if len(digits) not in (9, 10, 11):
+            raise ValueError('RENAVAM inválido')
+        return digits
+
+    @field_validator('type')
+    @classmethod
+    def normalize_type(cls, value: str | None) -> str | None:
+        if value is None or value == '':
+            return None
+        return value.strip().lower()
+
+    @field_validator('year')
+    @classmethod
+    def validate_year(cls, value: int | None) -> int | None:
+        if value is None:
+            return None
+        if value < 1950 or value > 2100:
+            raise ValueError('Ano inválido')
+        return value
+
+
+class ClientVehicleDocumentOut(BaseModel):
+    id: int
+    file_name: str
+    category: str
+    content_type: str
+    size_bytes: int
+    review_status: DocumentReviewStatus
+    review_notes: str | None = None
+    url: str
 
 
 class ClientBillingOut(BaseModel):
@@ -47,3 +250,4 @@ class ClientDashboardOut(BaseModel):
     summary: ClientDashboardSummaryOut
     vehicles: list[ClientVehicleOut]
     recent_billings: list[ClientBillingOut]
+    client_documents: list[ClientVehicleDocumentOut]

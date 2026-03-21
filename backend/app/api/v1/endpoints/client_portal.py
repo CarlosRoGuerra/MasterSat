@@ -1,6 +1,9 @@
-from datetime import date
+from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from datetime import date
+from uuid import uuid4
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import asc, func, select
 from sqlalchemy.orm import Session
 
@@ -8,7 +11,8 @@ from app.api.deps import require_roles
 from app.db.session import get_db
 from app.models.billing import Billing
 from app.models.client import Client
-from app.models.enums import BillingStatus, UserRole, VehicleStatus
+from app.models.document import Document
+from app.models.enums import BillingStatus, DocumentReviewStatus, UserRole, VehicleStatus
 from app.models.user import User
 from app.models.vehicle import Vehicle
 from app.schemas.client_portal import (
@@ -16,10 +20,141 @@ from app.schemas.client_portal import (
     ClientDashboardOut,
     ClientDashboardSummaryOut,
     ClientProfileOut,
+    ClientProfileUpdate,
+    ClientVehicleCreate,
+    ClientVehicleDocumentOut,
     ClientVehicleOut,
+    ClientVehicleUpdate,
 )
+from app.core.config import settings
+from app.core.security import create_file_access_token
+from app.services.storage import remove_object, upload_bytes
 
 router = APIRouter()
+
+
+EDITABLE_STATUSES = {
+    VehicleStatus.PENDING_VALIDATION,
+    VehicleStatus.CORRECTION_REQUESTED,
+    VehicleStatus.REJECTED,
+}
+
+
+ALLOWED_CLIENT_DOC_CATEGORIES = {
+    'cnh',
+    'rg',
+    'cpf',
+    'contrato',
+    'comprovante_endereco',
+    'cartao_cnpj',
+    'contrato_social',
+    'outro',
+}
+
+
+ALLOWED_VEHICLE_DOC_CATEGORIES = {
+    'crlv',
+    'documento_veiculo',
+    'foto_frontal',
+    'foto_traseira',
+    'foto_lateral',
+    'comprovante_propriedade',
+    'outro',
+}
+
+
+def _get_current_client(current_user: User, db: Session) -> Client:
+    if not current_user.client_id:
+        raise HTTPException(status_code=404, detail='Cliente vinculado não encontrado')
+
+    client = db.get(Client, current_user.client_id)
+    if not client or client.is_deleted:
+        raise HTTPException(status_code=404, detail='Cliente vinculado não encontrado')
+    return client
+
+
+
+def _vehicle_to_out(vehicle: Vehicle) -> ClientVehicleOut:
+    return ClientVehicleOut(
+        id=vehicle.id,
+        plate=vehicle.plate,
+        model=vehicle.model,
+        brand=vehicle.brand,
+        year=vehicle.year,
+        status=vehicle.status,
+        type=vehicle.type,
+        chassis=vehicle.chassis,
+        renavam=vehicle.renavam,
+        color=vehicle.color,
+    )
+
+
+
+def _document_to_out(document: Document) -> ClientVehicleDocumentOut:
+    return ClientVehicleDocumentOut(
+        id=document.id,
+        file_name=document.file_name,
+        category=document.category,
+        content_type=document.content_type,
+        size_bytes=document.size_bytes,
+        review_status=document.review_status,
+        review_notes=document.review_notes,
+        url=f"{settings.backend_public_url.rstrip('/')}/{settings.api_v1_prefix.lstrip('/')}/documents/{document.id}/view?token={create_file_access_token(document.id)}",
+    )
+
+
+
+def _build_address(client: Client) -> str | None:
+    parts = [
+        client.address_line,
+        f'nº {client.address_number}' if client.address_number else None,
+        client.address_complement,
+        client.neighborhood,
+        f'{client.city}/{client.state}' if client.city and client.state else client.city,
+        f'CEP {client.zip_code}' if client.zip_code else None,
+    ]
+    values = [part for part in parts if part]
+    return ', '.join(values) if values else None
+
+
+
+def _ensure_plate_available(plate: str, client_id: int, db: Session, ignore_id: int | None = None) -> None:
+    stmt = select(Vehicle).where(Vehicle.plate == plate, Vehicle.is_deleted.is_(False))
+    if ignore_id is not None:
+        stmt = stmt.where(Vehicle.id != ignore_id)
+    existing = db.scalar(stmt)
+    if existing and existing.client_id != client_id:
+        raise HTTPException(status_code=400, detail='Esta placa já está vinculada a outro cliente')
+    if existing and existing.client_id == client_id:
+        raise HTTPException(status_code=400, detail='Você já possui um veículo com esta placa')
+
+
+
+def _ensure_chassis_available(chassis: str | None, client_id: int, db: Session, ignore_id: int | None = None) -> None:
+    if not chassis:
+        return
+    stmt = select(Vehicle).where(Vehicle.chassis == chassis, Vehicle.is_deleted.is_(False))
+    if ignore_id is not None:
+        stmt = stmt.where(Vehicle.id != ignore_id)
+    existing = db.scalar(stmt)
+    if existing and existing.client_id != client_id:
+        raise HTTPException(status_code=400, detail='Este chassi já está vinculado a outro cliente')
+    if existing and existing.client_id == client_id:
+        raise HTTPException(status_code=400, detail='Você já possui um veículo com este chassi')
+
+
+
+def _get_vehicle_for_client(vehicle_id: int, client_id: int, db: Session) -> Vehicle:
+    vehicle = db.scalar(
+        select(Vehicle).where(
+            Vehicle.id == vehicle_id,
+            Vehicle.client_id == client_id,
+            Vehicle.is_deleted.is_(False),
+        )
+    )
+    if not vehicle:
+        raise HTTPException(status_code=404, detail='Veículo não encontrado')
+    return vehicle
 
 
 @router.get('/dashboard', response_model=ClientDashboardOut)
@@ -27,12 +162,7 @@ def client_dashboard(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(UserRole.CLIENT)),
 ):
-    if not current_user.client_id:
-        raise HTTPException(status_code=404, detail='Cliente vinculado não encontrado')
-
-    client = db.get(Client, current_user.client_id)
-    if not client or client.is_deleted:
-        raise HTTPException(status_code=404, detail='Cliente vinculado não encontrado')
+    client = _get_current_client(current_user, db)
 
     vehicles = db.scalars(
         select(Vehicle)
@@ -45,6 +175,16 @@ def client_dashboard(
         .where(Billing.client_id == client.id, Billing.is_deleted.is_(False))
         .order_by(Billing.due_date.desc())
         .limit(6)
+    ).all()
+
+    client_documents = db.scalars(
+        select(Document)
+        .where(
+            Document.reference_type == 'client',
+            Document.reference_id == client.id,
+            Document.active.is_(True),
+        )
+        .order_by(Document.id.desc())
     ).all()
 
     today = date.today()
@@ -77,29 +217,26 @@ def client_dashboard(
             name=client.name,
             cpf_cnpj=client.cpf_cnpj,
             email=client.email,
+            extra_emails=client.extra_emails,
             phone=client.phone,
+            zip_code=client.zip_code,
+            address_line=client.address_line,
+            address_number=client.address_number,
+            address_complement=client.address_complement,
+            neighborhood=client.neighborhood,
             city=client.city,
             state=client.state,
             status=client.status,
+            type=client.type,
         ),
         summary=ClientDashboardSummaryOut(
             total_vehicles=len(vehicles),
-            active_vehicles=sum(1 for item in vehicles if item.status == VehicleStatus.ACTIVE),
+            active_vehicles=sum(1 for item in vehicles if item.status in {VehicleStatus.ACTIVE, VehicleStatus.APPROVED}),
             pending_billings=int(pending_billings),
             overdue_billings=int(overdue_billings),
             total_open_amount=float(total_open_amount),
         ),
-        vehicles=[
-            ClientVehicleOut(
-                id=item.id,
-                plate=item.plate,
-                model=item.model,
-                brand=item.brand,
-                year=item.year,
-                status=item.status,
-            )
-            for item in vehicles
-        ],
+        vehicles=[_vehicle_to_out(item) for item in vehicles],
         recent_billings=[
             ClientBillingOut(
                 id=item.id,
@@ -111,4 +248,260 @@ def client_dashboard(
             )
             for item in recent_billings
         ],
+        client_documents=[_document_to_out(item) for item in client_documents],
     )
+
+
+@router.put('/profile', response_model=ClientProfileOut)
+def update_profile(
+    payload: ClientProfileUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.CLIENT)),
+):
+    client = _get_current_client(current_user, db)
+    data = payload.model_dump(exclude_unset=True)
+
+    if data.get('email'):
+        existing_user = db.scalar(
+            select(User).where(
+                User.email == data['email'],
+                User.id != current_user.id,
+                User.is_deleted.is_(False),
+            )
+        )
+        if existing_user:
+            raise HTTPException(status_code=409, detail='Já existe outra conta usando este e-mail')
+        current_user.email = data['email']
+    if client.type != 'pj':
+        data['extra_emails'] = None
+    elif data.get('email') and data.get('extra_emails'):
+        data['extra_emails'] = [email for email in data['extra_emails'] if email != data['email']] or None
+
+    for key, value in data.items():
+        setattr(client, key, value)
+
+    client.address = _build_address(client)
+    db.commit()
+    db.refresh(client)
+    db.refresh(current_user)
+
+    return ClientProfileOut(
+        id=client.id,
+        name=client.name,
+        cpf_cnpj=client.cpf_cnpj,
+        email=client.email,
+        extra_emails=client.extra_emails,
+        phone=client.phone,
+        zip_code=client.zip_code,
+        address_line=client.address_line,
+        address_number=client.address_number,
+        address_complement=client.address_complement,
+        neighborhood=client.neighborhood,
+        city=client.city,
+        state=client.state,
+        status=client.status,
+        type=client.type,
+    )
+
+
+@router.get('/vehicles', response_model=list[ClientVehicleOut])
+def list_my_vehicles(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.CLIENT)),
+):
+    client = _get_current_client(current_user, db)
+    vehicles = db.scalars(
+        select(Vehicle)
+        .where(Vehicle.client_id == client.id, Vehicle.is_deleted.is_(False))
+        .order_by(Vehicle.id.desc())
+    ).all()
+    return [_vehicle_to_out(item) for item in vehicles]
+
+
+@router.post('/vehicles', response_model=ClientVehicleOut)
+def create_my_vehicle(
+    payload: ClientVehicleCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.CLIENT)),
+):
+    client = _get_current_client(current_user, db)
+    data = payload.model_dump()
+    _ensure_plate_available(data['plate'], client.id, db)
+    _ensure_chassis_available(data.get('chassis'), client.id, db)
+
+    vehicle = Vehicle(
+        **data,
+        client_id=client.id,
+        status=VehicleStatus.PENDING_VALIDATION,
+    )
+    db.add(vehicle)
+    db.commit()
+    db.refresh(vehicle)
+    return _vehicle_to_out(vehicle)
+
+
+@router.put('/vehicles/{vehicle_id}', response_model=ClientVehicleOut)
+def update_my_vehicle(
+    vehicle_id: int,
+    payload: ClientVehicleUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.CLIENT)),
+):
+    client = _get_current_client(current_user, db)
+    vehicle = _get_vehicle_for_client(vehicle_id, client.id, db)
+    if vehicle.status not in EDITABLE_STATUSES:
+        raise HTTPException(status_code=400, detail='Este veículo já está em processamento e não pode ser editado agora')
+
+    data = payload.model_dump(exclude_unset=True)
+    if 'plate' in data and data['plate']:
+        _ensure_plate_available(data['plate'], client.id, db, ignore_id=vehicle.id)
+    if 'chassis' in data:
+        _ensure_chassis_available(data['chassis'], client.id, db, ignore_id=vehicle.id)
+
+    for key, value in data.items():
+        setattr(vehicle, key, value)
+    vehicle.status = VehicleStatus.PENDING_VALIDATION
+    db.commit()
+    db.refresh(vehicle)
+    return _vehicle_to_out(vehicle)
+
+
+@router.get('/vehicles/{vehicle_id}/documents', response_model=list[ClientVehicleDocumentOut])
+def list_my_vehicle_documents(
+    vehicle_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.CLIENT)),
+):
+    client = _get_current_client(current_user, db)
+    _get_vehicle_for_client(vehicle_id, client.id, db)
+    documents = db.scalars(
+        select(Document)
+        .where(
+            Document.reference_type == 'vehicle',
+            Document.reference_id == vehicle_id,
+            Document.active.is_(True),
+        )
+        .order_by(Document.id.desc())
+    ).all()
+    return [_document_to_out(item) for item in documents]
+
+
+@router.post('/vehicles/{vehicle_id}/documents', response_model=ClientVehicleDocumentOut)
+async def upload_my_vehicle_document(
+    vehicle_id: int,
+    category: str = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.CLIENT)),
+):
+    client = _get_current_client(current_user, db)
+    vehicle = _get_vehicle_for_client(vehicle_id, client.id, db)
+    category = category.strip().lower()
+    if category not in ALLOWED_VEHICLE_DOC_CATEGORIES:
+        raise HTTPException(status_code=400, detail='Categoria de documento do veículo inválida')
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail='Arquivo vazio')
+
+    object_key = f'clients/{client.id}/vehicles/{vehicle.id}/{uuid4()}-{file.filename}'
+    upload_bytes(object_name=object_key, content=content, content_type=file.content_type or 'application/octet-stream')
+
+    document = Document(
+        file_name=file.filename,
+        object_key=object_key,
+        content_type=file.content_type or 'application/octet-stream',
+        size_bytes=len(content),
+        reference_type='vehicle',
+        reference_id=vehicle.id,
+        category=category,
+        review_status=DocumentReviewStatus.SUBMITTED,
+        review_notes=None,
+        active=True,
+    )
+    db.add(document)
+    vehicle.status = VehicleStatus.PENDING_VALIDATION
+    db.commit()
+    db.refresh(document)
+    return _document_to_out(document)
+
+
+@router.get('/documents', response_model=list[ClientVehicleDocumentOut])
+def list_my_documents(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.CLIENT)),
+):
+    client = _get_current_client(current_user, db)
+    documents = db.scalars(
+        select(Document)
+        .where(
+            Document.reference_type == 'client',
+            Document.reference_id == client.id,
+            Document.active.is_(True),
+        )
+        .order_by(Document.id.desc())
+    ).all()
+    return [_document_to_out(item) for item in documents]
+
+
+@router.post('/documents', response_model=ClientVehicleDocumentOut)
+async def upload_my_document(
+    category: str = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.CLIENT)),
+):
+    client = _get_current_client(current_user, db)
+    category = category.strip().lower()
+    if category not in ALLOWED_CLIENT_DOC_CATEGORIES:
+        raise HTTPException(status_code=400, detail='Categoria de documento do cliente inválida')
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail='Arquivo vazio')
+
+    object_key = f'clients/{client.id}/documents/{uuid4()}-{file.filename}'
+    upload_bytes(object_name=object_key, content=content, content_type=file.content_type or 'application/octet-stream')
+
+    document = Document(
+        file_name=file.filename,
+        object_key=object_key,
+        content_type=file.content_type or 'application/octet-stream',
+        size_bytes=len(content),
+        reference_type='client',
+        reference_id=client.id,
+        category=category,
+        review_status=DocumentReviewStatus.SUBMITTED,
+        review_notes=None,
+        active=True,
+    )
+    db.add(document)
+    db.commit()
+    db.refresh(document)
+    return _document_to_out(document)
+
+
+@router.delete('/documents/{document_id}')
+def delete_my_document(
+    document_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.CLIENT)),
+):
+    client = _get_current_client(current_user, db)
+    document = db.scalar(
+        select(Document).where(
+            Document.id == document_id,
+            Document.reference_type == 'client',
+            Document.reference_id == client.id,
+            Document.active.is_(True),
+        )
+    )
+    if not document:
+        raise HTTPException(status_code=404, detail='Documento não encontrado')
+    try:
+        remove_object(document.object_key)
+    except Exception:
+        pass
+    document.active = False
+    db.commit()
+    return {'message': 'Documento removido com sucesso'}

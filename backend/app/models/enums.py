@@ -16,10 +16,23 @@ class ClientStatus(str, Enum):
 
 
 class VehicleStatus(str, Enum):
+    PENDING_VALIDATION = 'pendente_validacao'
+    UNDER_REVIEW = 'em_analise'
+    APPROVED = 'aprovado'
+    REJECTED = 'reprovado'
+    CORRECTION_REQUESTED = 'correcao_solicitada'
     ACTIVE = 'ativo'
     NO_TRACKER = 'sem_rastreador'
     REMOVED = 'retirado'
     BLOCKED = 'bloqueado'
+
+
+class DocumentReviewStatus(str, Enum):
+    SUBMITTED = 'enviado'
+    UNDER_REVIEW = 'em_analise'
+    APPROVED = 'aprovado'
+    REJECTED = 'rejeitado'
+    RESUBMISSION_REQUESTED = 'reenvio_solicitado'
 
 
 class TrackerStatus(str, Enum):

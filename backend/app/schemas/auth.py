@@ -5,6 +5,21 @@ from pydantic import BaseModel, field_validator, model_validator
 from app.models.enums import UserRole
 
 
+def normalize_email_list(value: list[str] | None) -> list[str] | None:
+    if value is None:
+        return None
+    normalized: list[str] = []
+    for item in value:
+        email = item.strip().lower()
+        if not email:
+            continue
+        if '@' not in email or '.' not in email.split('@')[-1]:
+            raise ValueError('Informe e-mails adicionais válidos')
+        if email not in normalized:
+            normalized.append(email)
+    return normalized or None
+
+
 class LoginRequest(BaseModel):
     email: str
     password: str
@@ -40,6 +55,7 @@ class RegisterClientRequest(BaseModel):
     cpf_cnpj: str
     type: str = 'pf'
     email: str
+    extra_emails: list[str] | None = None
     phone: str
     zip_code: str
     address_line: str
@@ -66,6 +82,11 @@ class RegisterClientRequest(BaseModel):
         if '@' not in value or '.' not in value.split('@')[-1]:
             raise ValueError('Informe um e-mail válido')
         return value
+
+    @field_validator('extra_emails')
+    @classmethod
+    def valid_extra_emails(cls, value: list[str] | None) -> list[str] | None:
+        return normalize_email_list(value)
 
     @field_validator('cpf_cnpj')
     @classmethod
@@ -126,6 +147,13 @@ class RegisterClientRequest(BaseModel):
     def passwords_match(self):
         if self.password != self.password_confirmation:
             raise ValueError('As senhas não conferem')
+        return self
+
+    @model_validator(mode='after')
+    def validate_company_extra_emails(self):
+        if self.type == 'pj' and self.extra_emails:
+            extras = [email for email in self.extra_emails if email != self.email]
+            self.extra_emails = extras or None
         return self
 
 

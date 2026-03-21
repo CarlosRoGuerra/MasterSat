@@ -7,6 +7,7 @@ from app.api.v1.endpoints import (
     clients,
     contracts,
     dashboard,
+    documents,
     plans,
     service_orders,
     trackers,
@@ -26,3 +27,4 @@ api_router.include_router(plans.router, prefix='/plans', tags=['plans'])
 api_router.include_router(contracts.router, prefix='/contracts', tags=['contracts'])
 api_router.include_router(billings.router, prefix='/billings', tags=['billings'])
 api_router.include_router(dashboard.router, prefix='/dashboard', tags=['dashboard'])
+api_router.include_router(documents.router, prefix='/documents', tags=['documents'])

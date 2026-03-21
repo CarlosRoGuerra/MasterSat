@@ -27,6 +27,7 @@ type RegisterForm = {
   name: string;
   cpf_cnpj: string;
   email: string;
+  extra_emails: string;
   phone: string;
   zip_code: string;
   address_line: string;
@@ -44,6 +45,7 @@ const initialForm: RegisterForm = {
   name: '',
   cpf_cnpj: '',
   email: '',
+  extra_emails: '',
   phone: '',
   zip_code: '',
   address_line: '',
@@ -55,6 +57,13 @@ const initialForm: RegisterForm = {
   password: '',
   password_confirmation: '',
 };
+
+function parseExtraEmails(value: string) {
+  return value
+    .split(/[,;\n]/)
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+}
 
 export default function ClientRegisterPage() {
   const [form, setForm] = useState<RegisterForm>(initialForm);
@@ -83,7 +92,13 @@ export default function ClientRegisterPage() {
     if (form.name.trim().length < 3) return 'Informe o nome completo ou razão social.';
     const docDigits = onlyDigits(form.cpf_cnpj);
     if (![11, 14].includes(docDigits.length)) return 'Informe um CPF ou CNPJ válido.';
-    if (!form.email.includes('@')) return 'Informe um e-mail válido.';
+    if (!form.email.includes('@')) return 'Informe um e-mail principal válido.';
+    if (form.type === 'pj' && form.extra_emails.trim()) {
+      const extras = parseExtraEmails(form.extra_emails);
+      if (extras.some((email) => !email.includes('@') || !email.split('@')[1]?.includes('.'))) {
+        return 'Revise os e-mails adicionais da empresa.';
+      }
+    }
     if (![10, 11].includes(onlyDigits(form.phone).length)) return 'Informe um telefone válido.';
     if (onlyDigits(form.zip_code).length !== 8) return 'Informe um CEP válido.';
     if (form.address_line.trim().length < 3) return 'Informe o logradouro.';
@@ -110,9 +125,14 @@ export default function ClientRegisterPage() {
     }
 
     try {
+      const payload = {
+        ...form,
+        email: form.email.trim().toLowerCase(),
+        extra_emails: form.type === 'pj' ? parseExtraEmails(form.extra_emails) : undefined,
+      };
       const result = await apiFetch<RegisterResponse>('/auth/register-client', {
         method: 'POST',
-        body: JSON.stringify(form),
+        body: JSON.stringify(payload),
       });
       saveSession(result.access_token, result.refresh_token);
       setSuccess(result.message);
@@ -152,9 +172,20 @@ export default function ClientRegisterPage() {
             <input className="w-full rounded-xl border border-slate-300 px-4 py-3" value={form.phone} onChange={handleFormattedChange('phone')} />
           </label>
           <label className="block md:col-span-2">
-            <span className="mb-2 block text-sm font-medium text-slate-700">E-mail</span>
+            <span className="mb-2 block text-sm font-medium text-slate-700">E-mail principal</span>
             <input className="w-full rounded-xl border border-slate-300 px-4 py-3" value={form.email} onChange={(e) => updateField('email', e.target.value.toLowerCase())} />
           </label>
+          {form.type === 'pj' && (
+            <label className="block md:col-span-2">
+              <span className="mb-2 block text-sm font-medium text-slate-700">E-mails adicionais da empresa</span>
+              <textarea
+                className="min-h-[96px] w-full rounded-xl border border-slate-300 px-4 py-3"
+                placeholder="Separe por vírgula ou uma linha por e-mail"
+                value={form.extra_emails}
+                onChange={(e) => updateField('extra_emails', e.target.value)}
+              />
+            </label>
+          )}
           <label className="block">
             <span className="mb-2 block text-sm font-medium text-slate-700">CEP</span>
             <input className="w-full rounded-xl border border-slate-300 px-4 py-3" value={form.zip_code} onChange={handleFormattedChange('zip_code')} />

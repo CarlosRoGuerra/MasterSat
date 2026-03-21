@@ -1,6 +1,7 @@
 from app.models.billing import Billing
 from app.models.client import Client
 from app.models.contract import Contract
+from app.models.document import Document
 from app.models.password_reset_token import PasswordResetToken
 from app.models.plan import Plan
 from app.models.service_order import ServiceOrder
@@ -18,4 +19,5 @@ __all__ = [
     'Contract',
     'Billing',
     'PasswordResetToken',
+    'Document',
 ]
