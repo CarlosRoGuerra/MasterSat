@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react';
 import { PageShell } from '@/components/page-shell';
 import { Card } from '@/components/ui/card';
 import { apiFetch } from '@/lib/api';
-import { AuthUser, clearSession, getAccessToken } from '@/lib/auth';
+import { useAuthGuard } from '@/lib/use-auth-guard';
 
 type DashboardData = {
   clients: { active: number; inactive: number; delinquent: number };
@@ -18,31 +18,19 @@ type DashboardData = {
 export default function DashboardPage() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState('');
+  const { token, loading, error: guardError } = useAuthGuard(['admin', 'operacional', 'financeiro'], '/login/admin');
 
   useEffect(() => {
-    const token = getAccessToken();
-    if (!token) {
-      window.location.href = '/login/admin';
-      return;
-    }
-
-    apiFetch<AuthUser>('/auth/me', {}, token)
-      .then((me) => {
-        if (me.role === 'cliente') {
-          window.location.href = '/cliente/dashboard';
-          return;
-        }
-        return apiFetch<DashboardData>('/dashboard', {}, token).then(setData);
-      })
-      .catch((err) => {
-        setError(err instanceof Error ? err.message : 'Não foi possível carregar o dashboard.');
-        clearSession();
-      });
-  }, []);
+    if (!token) return;
+    apiFetch<DashboardData>('/dashboard', {}, token)
+      .then(setData)
+      .catch((err) => setError(err instanceof Error ? err.message : 'Não foi possível carregar o dashboard.'));
+  }, [token]);
 
   return (
     <PageShell title="Dashboard">
-      {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
+      {(guardError || error) && <p className="mb-4 text-sm text-red-600">{guardError || error}</p>}
+      {loading && <p className="mb-4 text-sm text-slate-500">Validando sessão...</p>}
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Card>
           <p className="text-sm text-slate-500">Clientes Ativos</p>

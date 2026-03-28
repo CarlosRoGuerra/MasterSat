@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from datetime import date
-from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy import asc, func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_roles
+from app.core.config import settings
+from app.core.security import create_file_access_token
 from app.db.session import get_db
 from app.models.billing import Billing
 from app.models.client import Client
@@ -21,24 +22,12 @@ from app.schemas.client_portal import (
     ClientDashboardSummaryOut,
     ClientProfileOut,
     ClientProfileUpdate,
-    ClientVehicleCreate,
     ClientVehicleDocumentOut,
     ClientVehicleOut,
-    ClientVehicleUpdate,
 )
-from app.core.config import settings
-from app.core.security import create_file_access_token
 from app.services.storage import remove_object, upload_bytes
 
 router = APIRouter()
-
-
-EDITABLE_STATUSES = {
-    VehicleStatus.PENDING_VALIDATION,
-    VehicleStatus.CORRECTION_REQUESTED,
-    VehicleStatus.REJECTED,
-}
-
 
 ALLOWED_CLIENT_DOC_CATEGORIES = {
     'cnh',
@@ -52,15 +41,13 @@ ALLOWED_CLIENT_DOC_CATEGORIES = {
 }
 
 
-ALLOWED_VEHICLE_DOC_CATEGORIES = {
-    'crlv',
-    'documento_veiculo',
-    'foto_frontal',
-    'foto_traseira',
-    'foto_lateral',
-    'comprovante_propriedade',
-    'outro',
-}
+def _build_document_urls(document_id: int) -> tuple[str, str]:
+    base = f"{settings.backend_public_url.rstrip('/')}/{settings.api_v1_prefix.lstrip('/')}"
+    token = create_file_access_token(document_id)
+    return (
+        f"{base}/documents/{document_id}/view?token={token}",
+        f"{base}/documents/{document_id}/view?token={token}&download=1",
+    )
 
 
 def _get_current_client(current_user: User, db: Session) -> Client:
@@ -73,7 +60,6 @@ def _get_current_client(current_user: User, db: Session) -> Client:
     return client
 
 
-
 def _vehicle_to_out(vehicle: Vehicle) -> ClientVehicleOut:
     return ClientVehicleOut(
         id=vehicle.id,
@@ -81,16 +67,20 @@ def _vehicle_to_out(vehicle: Vehicle) -> ClientVehicleOut:
         model=vehicle.model,
         brand=vehicle.brand,
         year=vehicle.year,
+        manufacture_year=vehicle.manufacture_year,
+        model_year=vehicle.model_year,
         status=vehicle.status,
         type=vehicle.type,
         chassis=vehicle.chassis,
         renavam=vehicle.renavam,
         color=vehicle.color,
+        contract_number=vehicle.contract_number,
+        fuel_type=vehicle.fuel_type,
     )
 
 
-
 def _document_to_out(document: Document) -> ClientVehicleDocumentOut:
+    view_url, download_url = _build_document_urls(document.id)
     return ClientVehicleDocumentOut(
         id=document.id,
         file_name=document.file_name,
@@ -99,9 +89,9 @@ def _document_to_out(document: Document) -> ClientVehicleDocumentOut:
         size_bytes=document.size_bytes,
         review_status=document.review_status,
         review_notes=document.review_notes,
-        url=f"{settings.backend_public_url.rstrip('/')}/{settings.api_v1_prefix.lstrip('/')}/documents/{document.id}/view?token={create_file_access_token(document.id)}",
+        url=view_url,
+        download_url=download_url,
     )
-
 
 
 def _build_address(client: Client) -> str | None:
@@ -115,33 +105,6 @@ def _build_address(client: Client) -> str | None:
     ]
     values = [part for part in parts if part]
     return ', '.join(values) if values else None
-
-
-
-def _ensure_plate_available(plate: str, client_id: int, db: Session, ignore_id: int | None = None) -> None:
-    stmt = select(Vehicle).where(Vehicle.plate == plate, Vehicle.is_deleted.is_(False))
-    if ignore_id is not None:
-        stmt = stmt.where(Vehicle.id != ignore_id)
-    existing = db.scalar(stmt)
-    if existing and existing.client_id != client_id:
-        raise HTTPException(status_code=400, detail='Esta placa já está vinculada a outro cliente')
-    if existing and existing.client_id == client_id:
-        raise HTTPException(status_code=400, detail='Você já possui um veículo com esta placa')
-
-
-
-def _ensure_chassis_available(chassis: str | None, client_id: int, db: Session, ignore_id: int | None = None) -> None:
-    if not chassis:
-        return
-    stmt = select(Vehicle).where(Vehicle.chassis == chassis, Vehicle.is_deleted.is_(False))
-    if ignore_id is not None:
-        stmt = stmt.where(Vehicle.id != ignore_id)
-    existing = db.scalar(stmt)
-    if existing and existing.client_id != client_id:
-        raise HTTPException(status_code=400, detail='Este chassi já está vinculado a outro cliente')
-    if existing and existing.client_id == client_id:
-        raise HTTPException(status_code=400, detail='Você já possui um veículo com este chassi')
-
 
 
 def _get_vehicle_for_client(vehicle_id: int, client_id: int, db: Session) -> Vehicle:
@@ -318,54 +281,6 @@ def list_my_vehicles(
     return [_vehicle_to_out(item) for item in vehicles]
 
 
-@router.post('/vehicles', response_model=ClientVehicleOut)
-def create_my_vehicle(
-    payload: ClientVehicleCreate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(UserRole.CLIENT)),
-):
-    client = _get_current_client(current_user, db)
-    data = payload.model_dump()
-    _ensure_plate_available(data['plate'], client.id, db)
-    _ensure_chassis_available(data.get('chassis'), client.id, db)
-
-    vehicle = Vehicle(
-        **data,
-        client_id=client.id,
-        status=VehicleStatus.PENDING_VALIDATION,
-    )
-    db.add(vehicle)
-    db.commit()
-    db.refresh(vehicle)
-    return _vehicle_to_out(vehicle)
-
-
-@router.put('/vehicles/{vehicle_id}', response_model=ClientVehicleOut)
-def update_my_vehicle(
-    vehicle_id: int,
-    payload: ClientVehicleUpdate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(UserRole.CLIENT)),
-):
-    client = _get_current_client(current_user, db)
-    vehicle = _get_vehicle_for_client(vehicle_id, client.id, db)
-    if vehicle.status not in EDITABLE_STATUSES:
-        raise HTTPException(status_code=400, detail='Este veículo já está em processamento e não pode ser editado agora')
-
-    data = payload.model_dump(exclude_unset=True)
-    if 'plate' in data and data['plate']:
-        _ensure_plate_available(data['plate'], client.id, db, ignore_id=vehicle.id)
-    if 'chassis' in data:
-        _ensure_chassis_available(data['chassis'], client.id, db, ignore_id=vehicle.id)
-
-    for key, value in data.items():
-        setattr(vehicle, key, value)
-    vehicle.status = VehicleStatus.PENDING_VALIDATION
-    db.commit()
-    db.refresh(vehicle)
-    return _vehicle_to_out(vehicle)
-
-
 @router.get('/vehicles/{vehicle_id}/documents', response_model=list[ClientVehicleDocumentOut])
 def list_my_vehicle_documents(
     vehicle_id: int,
@@ -384,46 +299,6 @@ def list_my_vehicle_documents(
         .order_by(Document.id.desc())
     ).all()
     return [_document_to_out(item) for item in documents]
-
-
-@router.post('/vehicles/{vehicle_id}/documents', response_model=ClientVehicleDocumentOut)
-async def upload_my_vehicle_document(
-    vehicle_id: int,
-    category: str = Form(...),
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(UserRole.CLIENT)),
-):
-    client = _get_current_client(current_user, db)
-    vehicle = _get_vehicle_for_client(vehicle_id, client.id, db)
-    category = category.strip().lower()
-    if category not in ALLOWED_VEHICLE_DOC_CATEGORIES:
-        raise HTTPException(status_code=400, detail='Categoria de documento do veículo inválida')
-
-    content = await file.read()
-    if not content:
-        raise HTTPException(status_code=400, detail='Arquivo vazio')
-
-    object_key = f'clients/{client.id}/vehicles/{vehicle.id}/{uuid4()}-{file.filename}'
-    upload_bytes(object_name=object_key, content=content, content_type=file.content_type or 'application/octet-stream')
-
-    document = Document(
-        file_name=file.filename,
-        object_key=object_key,
-        content_type=file.content_type or 'application/octet-stream',
-        size_bytes=len(content),
-        reference_type='vehicle',
-        reference_id=vehicle.id,
-        category=category,
-        review_status=DocumentReviewStatus.SUBMITTED,
-        review_notes=None,
-        active=True,
-    )
-    db.add(document)
-    vehicle.status = VehicleStatus.PENDING_VALIDATION
-    db.commit()
-    db.refresh(document)
-    return _document_to_out(document)
 
 
 @router.get('/documents', response_model=list[ClientVehicleDocumentOut])
@@ -460,7 +335,7 @@ async def upload_my_document(
     if not content:
         raise HTTPException(status_code=400, detail='Arquivo vazio')
 
-    object_key = f'clients/{client.id}/documents/{uuid4()}-{file.filename}'
+    object_key = f'clients/{client.id}/documents/{date.today().isoformat()}-{file.filename}'
     upload_bytes(object_name=object_key, content=content, content_type=file.content_type or 'application/octet-stream')
 
     document = Document(

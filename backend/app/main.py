@@ -37,6 +37,33 @@ def ensure_schema_updates():
             if 'extra_emails' not in client_columns:
                 conn.execute(text('ALTER TABLE clients ADD COLUMN extra_emails JSON'))
 
+        if inspector.has_table('vehicles'):
+            vehicle_columns = {column['name'] for column in inspector.get_columns('vehicles')}
+            alter_statements = {
+                'sales_point': 'ALTER TABLE vehicles ADD COLUMN sales_point VARCHAR(120)',
+                'seller_consultant': 'ALTER TABLE vehicles ADD COLUMN seller_consultant VARCHAR(120)',
+                'vehicle_classification': 'ALTER TABLE vehicles ADD COLUMN vehicle_classification VARCHAR(80)',
+                'user_alert': 'ALTER TABLE vehicles ADD COLUMN user_alert TEXT',
+                'contract_number': 'ALTER TABLE vehicles ADD COLUMN contract_number VARCHAR(60)',
+                'contract_date': 'ALTER TABLE vehicles ADD COLUMN contract_date DATE',
+                'contract_end_date': 'ALTER TABLE vehicles ADD COLUMN contract_end_date DATE',
+                'address_zip_code': 'ALTER TABLE vehicles ADD COLUMN address_zip_code VARCHAR(8)',
+                'address_line': 'ALTER TABLE vehicles ADD COLUMN address_line VARCHAR(255)',
+                'address_number': 'ALTER TABLE vehicles ADD COLUMN address_number VARCHAR(30)',
+                'address_complement': 'ALTER TABLE vehicles ADD COLUMN address_complement VARCHAR(120)',
+                'neighborhood': 'ALTER TABLE vehicles ADD COLUMN neighborhood VARCHAR(120)',
+                'city': 'ALTER TABLE vehicles ADD COLUMN city VARCHAR(120)',
+                'state': 'ALTER TABLE vehicles ADD COLUMN state VARCHAR(2)',
+                'manufacture_year': 'ALTER TABLE vehicles ADD COLUMN manufacture_year INTEGER',
+                'model_year': 'ALTER TABLE vehicles ADD COLUMN model_year INTEGER',
+                'fuel_type': 'ALTER TABLE vehicles ADD COLUMN fuel_type VARCHAR(40)',
+                'fipe_code': 'ALTER TABLE vehicles ADD COLUMN fipe_code VARCHAR(30)',
+                'fipe_value': 'ALTER TABLE vehicles ADD COLUMN fipe_value NUMERIC(12,2)',
+            }
+            for column_name, sql in alter_statements.items():
+                if column_name not in vehicle_columns:
+                    conn.execute(text(sql))
+
 
 @app.on_event('startup')
 def on_startup():

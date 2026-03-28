@@ -98,123 +98,15 @@ class ClientVehicleOut(BaseModel):
     model: str | None = None
     brand: str | None = None
     year: int | None = None
+    manufacture_year: int | None = None
+    model_year: int | None = None
     status: VehicleStatus
     type: str | None = None
     chassis: str | None = None
     renavam: str | None = None
     color: str | None = None
-
-
-class ClientVehicleCreate(BaseModel):
-    plate: str
-    chassis: str | None = None
-    renavam: str | None = None
-    brand: str | None = None
-    model: str | None = None
-    year: int | None = None
-    color: str | None = None
-    type: str | None = None
-
-    @field_validator('plate')
-    @classmethod
-    def normalize_plate(cls, value: str) -> str:
-        value = value.strip().upper().replace('-', '').replace(' ', '')
-        if len(value) != 7:
-            raise ValueError('Placa inválida')
-        return value
-
-    @field_validator('chassis')
-    @classmethod
-    def normalize_chassis(cls, value: str | None) -> str | None:
-        if value is None or value == '':
-            return None
-        value = value.strip().upper().replace(' ', '')
-        if len(value) < 8:
-            raise ValueError('Chassi inválido')
-        return value
-
-    @field_validator('renavam')
-    @classmethod
-    def normalize_renavam(cls, value: str | None) -> str | None:
-        if value is None or value == '':
-            return None
-        digits = ''.join(filter(str.isdigit, value))
-        if len(digits) not in (9, 10, 11):
-            raise ValueError('RENAVAM inválido')
-        return digits
-
-    @field_validator('type')
-    @classmethod
-    def normalize_type(cls, value: str | None) -> str | None:
-        if value is None or value == '':
-            return None
-        return value.strip().lower()
-
-    @field_validator('year')
-    @classmethod
-    def validate_year(cls, value: int | None) -> int | None:
-        if value is None:
-            return None
-        if value < 1950 or value > 2100:
-            raise ValueError('Ano inválido')
-        return value
-
-
-class ClientVehicleUpdate(BaseModel):
-    plate: str | None = None
-    chassis: str | None = None
-    renavam: str | None = None
-    brand: str | None = None
-    model: str | None = None
-    year: int | None = None
-    color: str | None = None
-    type: str | None = None
-
-    @field_validator('plate')
-    @classmethod
-    def normalize_plate(cls, value: str | None) -> str | None:
-        if value is None or value == '':
-            return None
-        value = value.strip().upper().replace('-', '').replace(' ', '')
-        if len(value) != 7:
-            raise ValueError('Placa inválida')
-        return value
-
-    @field_validator('chassis')
-    @classmethod
-    def normalize_chassis(cls, value: str | None) -> str | None:
-        if value is None or value == '':
-            return None
-        value = value.strip().upper().replace(' ', '')
-        if len(value) < 8:
-            raise ValueError('Chassi inválido')
-        return value
-
-    @field_validator('renavam')
-    @classmethod
-    def normalize_renavam(cls, value: str | None) -> str | None:
-        if value is None or value == '':
-            return None
-        digits = ''.join(filter(str.isdigit, value))
-        if len(digits) not in (9, 10, 11):
-            raise ValueError('RENAVAM inválido')
-        return digits
-
-    @field_validator('type')
-    @classmethod
-    def normalize_type(cls, value: str | None) -> str | None:
-        if value is None or value == '':
-            return None
-        return value.strip().lower()
-
-    @field_validator('year')
-    @classmethod
-    def validate_year(cls, value: int | None) -> int | None:
-        if value is None:
-            return None
-        if value < 1950 or value > 2100:
-            raise ValueError('Ano inválido')
-        return value
+    contract_number: str | None = None
+    fuel_type: str | None = None
 
 
 class ClientVehicleDocumentOut(BaseModel):
@@ -226,6 +118,7 @@ class ClientVehicleDocumentOut(BaseModel):
     review_status: DocumentReviewStatus
     review_notes: str | None = None
     url: str
+    download_url: str
 
 
 class ClientBillingOut(BaseModel):

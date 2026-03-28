@@ -12,6 +12,7 @@ class DocumentOut(BaseModel):
     review_status: DocumentReviewStatus
     review_notes: str | None = None
     url: str
+    download_url: str
 
 
 class DocumentReviewUpdate(BaseModel):

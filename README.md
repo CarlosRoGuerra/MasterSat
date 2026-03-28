@@ -44,3 +44,13 @@ Como houve mudança de schema, use `docker compose down -v` antes de subir para 
 As URLs assinadas dos arquivos usam o host definido em `MINIO_PUBLIC_URL`.
 Em ambiente local, mantenha `MINIO_PUBLIC_URL=http://localhost:9000`.
 Em produção, troque para o domínio público do MinIO/proxy.
+
+
+## Ajustes desta entrega
+- portal do cliente mantido como consulta de veículos + gestão de perfil/documentos do cliente
+- cadastro de veículos restrito ao administrativo
+- filtros server-side em clientes
+- criação/sincronização automática do usuário cliente quando o administrativo informa e-mail no cadastro
+- abertura e download de documentos pelo backend
+- proteção de rota no frontend para separar admin e cliente
+- navegação administrativa focada apenas nos módulos já fechados neste sprint

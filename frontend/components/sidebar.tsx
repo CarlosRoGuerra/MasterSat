@@ -8,9 +8,6 @@ const items = [
   { href: '/dashboard', label: 'Dashboard' },
   { href: '/clientes', label: 'Clientes' },
   { href: '/veiculos', label: 'Veículos' },
-  { href: '/rastreadores', label: 'Rastreadores' },
-  { href: '/ordens-servico', label: 'Ordens de Serviço' },
-  { href: '/financeiro', label: 'Financeiro' },
 ];
 
 export function Sidebar() {
@@ -19,6 +16,7 @@ export function Sidebar() {
       <div className="mb-8">
         <p className="text-xs uppercase tracking-[0.2em] text-slate-300">Guerra IT</p>
         <h1 className="text-xl font-bold">Rastreamento ERP</h1>
+        <p className="mt-2 text-xs text-slate-300">Sprint atual: clientes, veículos e documentos.</p>
       </div>
       <nav className="space-y-2">
         {items.map((item) => (

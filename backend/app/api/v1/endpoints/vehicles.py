@@ -7,6 +7,8 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_roles
+from app.core.config import settings
+from app.core.security import create_file_access_token
 from app.db.session import get_db
 from app.models.client import Client
 from app.models.document import Document
@@ -15,23 +17,25 @@ from app.models.tracker import Tracker
 from app.models.vehicle import Vehicle
 from app.schemas.document import DocumentDeleteOut, DocumentOut, DocumentReviewUpdate
 from app.schemas.vehicle import VehicleCreate, VehicleOut, VehicleUpdate
-from app.core.config import settings
-from app.core.security import create_file_access_token
 from app.services.storage import remove_object, upload_bytes
 
 router = APIRouter()
-
 
 VIEW_ROLES = (UserRole.ADMIN, UserRole.OPERATIONAL, UserRole.FINANCIAL)
 EDIT_ROLES = (UserRole.ADMIN, UserRole.OPERATIONAL)
 
 
-def _vehicle_to_out(vehicle: Vehicle) -> VehicleOut:
-    return VehicleOut.model_validate(vehicle)
-
+def _build_document_urls(document_id: int) -> tuple[str, str]:
+    base = f"{settings.backend_public_url.rstrip('/')}/{settings.api_v1_prefix.lstrip('/')}"
+    token = create_file_access_token(document_id)
+    return (
+        f"{base}/documents/{document_id}/view?token={token}",
+        f"{base}/documents/{document_id}/view?token={token}&download=1",
+    )
 
 
 def _document_to_out(document: Document) -> DocumentOut:
+    view_url, download_url = _build_document_urls(document.id)
     return DocumentOut(
         id=document.id,
         file_name=document.file_name,
@@ -40,9 +44,9 @@ def _document_to_out(document: Document) -> DocumentOut:
         size_bytes=document.size_bytes,
         review_status=document.review_status,
         review_notes=document.review_notes,
-        url=f"{settings.backend_public_url.rstrip('/')}/{settings.api_v1_prefix.lstrip('/')}/documents/{document.id}/view?token={create_file_access_token(document.id)}",
+        url=view_url,
+        download_url=download_url,
     )
-
 
 
 def _get_vehicle_or_404(item_id: int, db: Session) -> Vehicle:
@@ -52,12 +56,10 @@ def _get_vehicle_or_404(item_id: int, db: Session) -> Vehicle:
     return obj
 
 
-
 def _ensure_client_exists(client_id: int, db: Session) -> None:
     client = db.scalar(select(Client).where(Client.id == client_id, Client.is_deleted.is_(False)))
     if not client:
         raise HTTPException(status_code=404, detail='Cliente não encontrado')
-
 
 
 def _ensure_plate_available(plate: str, db: Session, ignore_id: int | None = None) -> None:
@@ -67,7 +69,6 @@ def _ensure_plate_available(plate: str, db: Session, ignore_id: int | None = Non
     exists = db.scalar(stmt)
     if exists:
         raise HTTPException(status_code=400, detail='Já existe veículo com essa placa')
-
 
 
 def _ensure_chassis_available(chassis: str | None, db: Session, ignore_id: int | None = None) -> None:
@@ -81,6 +82,14 @@ def _ensure_chassis_available(chassis: str | None, db: Session, ignore_id: int |
         raise HTTPException(status_code=400, detail='Já existe veículo com esse chassi')
 
 
+def _normalize_vehicle_data(data: dict) -> dict:
+    if 'model_year' in data and data.get('model_year') is not None:
+        data['year'] = data['model_year']
+    elif 'manufacture_year' in data and data.get('manufacture_year') is not None and data.get('year') is None:
+        data['year'] = data['manufacture_year']
+    return data
+
+
 @router.get('/', response_model=list[VehicleOut])
 def list_items(
     search: str | None = None,
@@ -88,7 +97,7 @@ def list_items(
     client_id: int | None = None,
     type: str | None = None,
     skip: int = 0,
-    limit: int = Query(default=20, le=100),
+    limit: int = Query(default=50, le=200),
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*VIEW_ROLES)),
 ):
@@ -102,6 +111,10 @@ def list_items(
                 Vehicle.renavam.ilike(term),
                 Vehicle.brand.ilike(term),
                 Vehicle.model.ilike(term),
+                Vehicle.contract_number.ilike(term),
+                Vehicle.sales_point.ilike(term),
+                Vehicle.seller_consultant.ilike(term),
+                Vehicle.city.ilike(term),
             )
         )
     if status:
@@ -120,7 +133,7 @@ def create_item(
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*EDIT_ROLES)),
 ):
-    data = payload.model_dump()
+    data = _normalize_vehicle_data(payload.model_dump())
     _ensure_client_exists(data['client_id'], db)
     _ensure_plate_available(data['plate'], db)
     _ensure_chassis_available(data.get('chassis'), db)
@@ -148,7 +161,7 @@ def update_item(
     _: object = Depends(require_roles(*EDIT_ROLES)),
 ):
     obj = _get_vehicle_or_404(item_id, db)
-    data = payload.model_dump(exclude_unset=True)
+    data = _normalize_vehicle_data(payload.model_dump(exclude_unset=True))
 
     if 'client_id' in data and data['client_id'] is not None:
         _ensure_client_exists(data['client_id'], db)
@@ -200,38 +213,46 @@ def list_vehicle_documents(
     return [_document_to_out(document) for document in documents]
 
 
-@router.post('/{item_id}/documents', response_model=DocumentOut)
+@router.post('/{item_id}/documents', response_model=list[DocumentOut])
 async def upload_vehicle_document(
     item_id: int,
     category: str = Form(...),
-    file: UploadFile = File(...),
+    files: list[UploadFile] = File(...),
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*EDIT_ROLES)),
 ):
     _get_vehicle_or_404(item_id, db)
-    content = await file.read()
-    if not content:
-        raise HTTPException(status_code=400, detail='Arquivo vazio')
-    object_key = f'vehicles/{item_id}/{uuid4()}-{file.filename}'
-    upload_bytes(object_name=object_key, content=content, content_type=file.content_type or 'application/octet-stream')
+    created_documents: list[DocumentOut] = []
 
-    document = Document(
-        file_name=file.filename,
-        object_key=object_key,
-        content_type=file.content_type or 'application/octet-stream',
-        size_bytes=len(content),
-        reference_type='vehicle',
-        reference_id=item_id,
-        category=category.strip().lower() or 'geral',
-        review_status=DocumentReviewStatus.SUBMITTED,
-        review_notes=None,
-        active=True,
-    )
-    db.add(document)
+    normalized_category = category.strip().lower() or 'geral'
+    for file in files:
+        content = await file.read()
+        if not content:
+            continue
+        object_key = f'vehicles/{item_id}/{uuid4()}-{file.filename}'
+        upload_bytes(object_name=object_key, content=content, content_type=file.content_type or 'application/octet-stream')
+
+        document = Document(
+            file_name=file.filename,
+            object_key=object_key,
+            content_type=file.content_type or 'application/octet-stream',
+            size_bytes=len(content),
+            reference_type='vehicle',
+            reference_id=item_id,
+            category=normalized_category,
+            review_status=DocumentReviewStatus.SUBMITTED,
+            review_notes=None,
+            active=True,
+        )
+        db.add(document)
+        db.flush()
+        created_documents.append(_document_to_out(document))
+
+    if not created_documents:
+        raise HTTPException(status_code=400, detail='Nenhum arquivo válido foi enviado')
+
     db.commit()
-    db.refresh(document)
-
-    return _document_to_out(document)
+    return created_documents
 
 
 @router.put('/{item_id}/documents/{document_id}/review', response_model=DocumentOut)

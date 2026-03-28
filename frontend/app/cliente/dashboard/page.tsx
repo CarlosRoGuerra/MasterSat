@@ -6,8 +6,9 @@ import { ClientShell } from '@/components/client-shell';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { apiFetch } from '@/lib/api';
-import { clearSession, getAccessToken } from '@/lib/auth';
-import { formatCpfCnpj, formatPhone, formatZipCode, onlyDigits } from '@/lib/format';
+import { useAuthGuard } from '@/lib/use-auth-guard';
+import { fetchAddressByCep } from '@/lib/cep';
+import { formatPhone, formatZipCode, onlyDigits } from '@/lib/format';
 
 type ClientDocument = {
   id: number;
@@ -18,6 +19,7 @@ type ClientDocument = {
   review_status: string;
   review_notes?: string | null;
   url: string;
+  download_url: string;
 };
 
 type ClientVehicle = {
@@ -26,11 +28,15 @@ type ClientVehicle = {
   model?: string | null;
   brand?: string | null;
   year?: number | null;
+  manufacture_year?: number | null;
+  model_year?: number | null;
   status: string;
   type?: string | null;
   chassis?: string | null;
   renavam?: string | null;
   color?: string | null;
+  contract_number?: string | null;
+  fuel_type?: string | null;
 };
 
 type ClientDashboardData = {
@@ -83,17 +89,6 @@ type ProfileForm = {
   state: string;
 };
 
-type VehicleForm = {
-  plate: string;
-  chassis: string;
-  renavam: string;
-  brand: string;
-  model: string;
-  year: string;
-  color: string;
-  type: string;
-};
-
 const initialProfileForm: ProfileForm = {
   email: '',
   extra_emails: '',
@@ -107,20 +102,7 @@ const initialProfileForm: ProfileForm = {
   state: '',
 };
 
-const initialVehicleForm: VehicleForm = {
-  plate: '',
-  chassis: '',
-  renavam: '',
-  brand: '',
-  model: '',
-  year: '',
-  color: '',
-  type: 'carro',
-};
-
-const editableStatuses = new Set(['pendente_validacao', 'correcao_solicitada', 'reprovado']);
 const clientDocumentOptions = ['cnh', 'rg', 'cpf', 'contrato', 'comprovante_endereco', 'cartao_cnpj', 'contrato_social', 'outro'];
-const vehicleDocumentOptions = ['crlv', 'documento_veiculo', 'foto_frontal', 'foto_traseira', 'foto_lateral', 'comprovante_propriedade', 'outro'];
 
 function parseError(error: unknown) {
   return error instanceof Error ? error.message : 'Ocorreu um erro inesperado.';
@@ -133,54 +115,28 @@ function parseExtraEmails(value: string) {
     .filter(Boolean);
 }
 
-function formatPlate(value: string) {
-  return value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 7);
-}
-
-function formatChassis(value: string) {
-  return value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 17);
-}
-
-function formatRenavam(value: string) {
-  return value.replace(/\D/g, '').slice(0, 11);
-}
-
 export default function ClientDashboardPage() {
-  const [token, setToken] = useState('');
   const [data, setData] = useState<ClientDashboardData | null>(null);
   const [profileForm, setProfileForm] = useState<ProfileForm>(initialProfileForm);
-  const [vehicleForm, setVehicleForm] = useState<VehicleForm>(initialVehicleForm);
-  const [editingVehicleId, setEditingVehicleId] = useState<number | null>(null);
   const [selectedVehicleId, setSelectedVehicleId] = useState<number | null>(null);
   const [vehicleDocuments, setVehicleDocuments] = useState<ClientDocument[]>([]);
   const [clientDocuments, setClientDocuments] = useState<ClientDocument[]>([]);
   const [profileSaving, setProfileSaving] = useState(false);
-  const [vehicleSaving, setVehicleSaving] = useState(false);
   const [clientUploadCategory, setClientUploadCategory] = useState('cnh');
-  const [vehicleUploadCategory, setVehicleUploadCategory] = useState('crlv');
   const [clientUploadFile, setClientUploadFile] = useState<File | null>(null);
-  const [vehicleUploadFile, setVehicleUploadFile] = useState<File | null>(null);
   const [uploadingClientDoc, setUploadingClientDoc] = useState(false);
-  const [uploadingVehicleDoc, setUploadingVehicleDoc] = useState(false);
+  const [lookingUpCep, setLookingUpCep] = useState(false);
   const [error, setError] = useState('');
   const [feedback, setFeedback] = useState('');
 
-  useEffect(() => {
-    const currentToken = getAccessToken();
-    if (!currentToken) {
-      window.location.href = '/login/cliente';
-      return;
-    }
-    setToken(currentToken);
-  }, []);
+  const { token, loading: guardLoading, error: guardError } = useAuthGuard(['cliente'], '/login/cliente');
 
   async function loadDashboard(currentToken: string) {
     try {
       const response = await apiFetch<ClientDashboardData>('/client-portal/dashboard', {}, currentToken);
       setData(response);
       setClientDocuments(response.client_documents || []);
-      setProfileForm((current) => ({
-        ...current,
+      setProfileForm({
         email: response.profile.email || '',
         extra_emails: (response.profile.extra_emails || []).join('\n'),
         phone: response.profile.phone ? formatPhone(response.profile.phone) : '',
@@ -191,17 +147,13 @@ export default function ClientDashboardPage() {
         neighborhood: response.profile.neighborhood || '',
         city: response.profile.city || '',
         state: response.profile.state || '',
-      }));
+      });
       if (!selectedVehicleId && response.vehicles.length) {
         setSelectedVehicleId(response.vehicles[0].id);
       }
     } catch (err) {
       const message = parseError(err);
       setError(message);
-      if (message.includes('credenciais')) {
-        clearSession();
-        window.location.href = '/login/cliente';
-      }
     }
   }
 
@@ -225,24 +177,29 @@ export default function ClientDashboardPage() {
     [data, selectedVehicleId],
   );
 
-  function resetVehicleForm() {
-    setEditingVehicleId(null);
-    setVehicleForm(initialVehicleForm);
-  }
-
-  function handleVehicleEdit(vehicle: ClientVehicle) {
-    setEditingVehicleId(vehicle.id);
-    setVehicleForm({
-      plate: vehicle.plate || '',
-      chassis: vehicle.chassis || '',
-      renavam: vehicle.renavam || '',
-      brand: vehicle.brand || '',
-      model: vehicle.model || '',
-      year: vehicle.year ? String(vehicle.year) : '',
-      color: vehicle.color || '',
-      type: vehicle.type || 'carro',
-    });
-    setSelectedVehicleId(vehicle.id);
+  async function fillAddressFromCep(rawCep: string) {
+    const cep = onlyDigits(rawCep);
+    if (cep.length !== 8) return;
+    setLookingUpCep(true);
+    setError('');
+    try {
+      const result = await fetchAddressByCep(cep);
+      if (!result) return;
+      setProfileForm((prev) => ({
+        ...prev,
+        zip_code: formatZipCode(result.zip_code),
+        address_line: prev.address_line || result.address_line,
+        address_complement: prev.address_complement || result.address_complement,
+        neighborhood: prev.neighborhood || result.neighborhood,
+        city: prev.city || result.city,
+        state: prev.state || result.state,
+      }));
+      setFeedback('Endereço preenchido automaticamente pelo CEP.');
+    } catch (err) {
+      setError(parseError(err));
+    } finally {
+      setLookingUpCep(false);
+    }
   }
 
   async function handleProfileSubmit(event: FormEvent<HTMLFormElement>) {
@@ -266,11 +223,11 @@ export default function ClientDashboardPage() {
         state: profileForm.state.trim().toUpperCase() || null,
       };
 
-      await apiFetch<ClientDashboardData['profile']>('/client-portal/profile', {
+      await apiFetch('/client-portal/profile', {
         method: 'PUT',
         body: JSON.stringify(payload),
       }, token);
-      setFeedback('Dados do portal atualizados com sucesso.');
+      setFeedback('Perfil atualizado com sucesso.');
       await loadDashboard(token);
     } catch (err) {
       setError(parseError(err));
@@ -279,51 +236,7 @@ export default function ClientDashboardPage() {
     }
   }
 
-  async function handleVehicleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!token) return;
-    setVehicleSaving(true);
-    setError('');
-    setFeedback('');
-    try {
-      const payload = {
-        plate: formatPlate(vehicleForm.plate),
-        chassis: vehicleForm.chassis ? formatChassis(vehicleForm.chassis) : null,
-        renavam: vehicleForm.renavam ? formatRenavam(vehicleForm.renavam) : null,
-        brand: vehicleForm.brand.trim() || null,
-        model: vehicleForm.model.trim() || null,
-        year: vehicleForm.year ? Number(vehicleForm.year) : null,
-        color: vehicleForm.color.trim() || null,
-        type: vehicleForm.type.trim() || null,
-      };
-
-      if (!payload.plate || payload.plate.length !== 7) {
-        throw new Error('Informe uma placa válida.');
-      }
-
-      if (editingVehicleId) {
-        await apiFetch<ClientVehicle>(`/client-portal/vehicles/${editingVehicleId}`, {
-          method: 'PUT',
-          body: JSON.stringify(payload),
-        }, token);
-        setFeedback('Veículo atualizado e reenviado para validação.');
-      } else {
-        await apiFetch<ClientVehicle>('/client-portal/vehicles', {
-          method: 'POST',
-          body: JSON.stringify(payload),
-        }, token);
-        setFeedback('Veículo enviado para validação com sucesso.');
-      }
-      resetVehicleForm();
-      await loadDashboard(token);
-    } catch (err) {
-      setError(parseError(err));
-    } finally {
-      setVehicleSaving(false);
-    }
-  }
-
-  async function handleClientDocumentUpload(event: FormEvent<HTMLFormElement>) {
+  async function handleClientUpload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!token || !clientUploadFile) {
       setError('Selecione um documento do cliente para enviar.');
@@ -336,9 +249,12 @@ export default function ClientDashboardPage() {
       const formData = new FormData();
       formData.append('category', clientUploadCategory);
       formData.append('file', clientUploadFile);
-      await apiFetch<ClientDocument>('/client-portal/documents', { method: 'POST', body: formData }, token);
+      await apiFetch<ClientDocument>('/client-portal/documents', {
+        method: 'POST',
+        body: formData,
+      }, token);
       setClientUploadFile(null);
-      setFeedback('Documento do cliente enviado para análise.');
+      setFeedback('Documento enviado com sucesso.');
       await loadDashboard(token);
     } catch (err) {
       setError(parseError(err));
@@ -347,269 +263,166 @@ export default function ClientDashboardPage() {
     }
   }
 
-  async function handleVehicleDocumentUpload(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!token || !selectedVehicleId || !vehicleUploadFile) {
-      setError('Selecione um veículo e um arquivo para enviar.');
-      return;
-    }
-    setUploadingVehicleDoc(true);
+  async function handleDeleteClientDocument(documentId: number) {
+    if (!token) return;
+    if (!window.confirm('Remover este documento?')) return;
     setError('');
     setFeedback('');
     try {
-      const formData = new FormData();
-      formData.append('category', vehicleUploadCategory);
-      formData.append('file', vehicleUploadFile);
-      await apiFetch<ClientDocument>(`/client-portal/vehicles/${selectedVehicleId}/documents`, { method: 'POST', body: formData }, token);
-      setVehicleUploadFile(null);
-      setFeedback('Documento do veículo enviado para análise.');
-      const docs = await apiFetch<ClientDocument[]>(`/client-portal/vehicles/${selectedVehicleId}/documents`, {}, token);
-      setVehicleDocuments(docs);
+      await apiFetch(`/client-portal/documents/${documentId}`, { method: 'DELETE' }, token);
+      setFeedback('Documento removido com sucesso.');
       await loadDashboard(token);
     } catch (err) {
       setError(parseError(err));
-    } finally {
-      setUploadingVehicleDoc(false);
     }
   }
 
   return (
-    <ClientShell title="Dashboard do cliente">
-      {(error || feedback) && (
+    <ClientShell title="Minha dashboard">
+      {(guardError || error || feedback) && (
         <div className="mb-6 space-y-3">
-          {error && <p className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error}</p>}
+          {(guardError || error) && <p className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{guardError || error}</p>}
           {feedback && <p className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700">{feedback}</p>}
         </div>
       )}
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <Card><p className="text-sm text-slate-500">Veículos</p><p className="mt-2 text-3xl font-bold text-slate-900">{data?.summary.total_vehicles ?? '--'}</p></Card>
-        <Card><p className="text-sm text-slate-500">Ativos / aprovados</p><p className="mt-2 text-3xl font-bold text-slate-900">{data?.summary.active_vehicles ?? '--'}</p></Card>
-        <Card><p className="text-sm text-slate-500">Cobranças pendentes</p><p className="mt-2 text-3xl font-bold text-slate-900">{data?.summary.pending_billings ?? '--'}</p></Card>
-        <Card><p className="text-sm text-slate-500">Total em aberto</p><p className="mt-2 text-3xl font-bold text-slate-900">R$ {data?.summary.total_open_amount?.toFixed(2) ?? '--'}</p></Card>
+      {guardLoading && <p className="mb-4 text-sm text-slate-500">Validando sessão...</p>}
+      <div className="mb-6 grid gap-4 md:grid-cols-4">
+        <Card><p className="text-xs uppercase tracking-[0.12em] text-slate-500">Veículos</p><p className="mt-2 text-3xl font-bold text-slate-900">{data?.summary.total_vehicles ?? 0}</p></Card>
+        <Card><p className="text-xs uppercase tracking-[0.12em] text-slate-500">Veículos ativos</p><p className="mt-2 text-3xl font-bold text-slate-900">{data?.summary.active_vehicles ?? 0}</p></Card>
+        <Card><p className="text-xs uppercase tracking-[0.12em] text-slate-500">Cobranças pendentes</p><p className="mt-2 text-3xl font-bold text-slate-900">{data?.summary.pending_billings ?? 0}</p></Card>
+        <Card><p className="text-xs uppercase tracking-[0.12em] text-slate-500">Em aberto</p><p className="mt-2 text-3xl font-bold text-slate-900">R$ {(data?.summary.total_open_amount ?? 0).toFixed(2)}</p></Card>
       </div>
 
-      <div className="mt-6 grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
-        <Card>
-          <h3 className="mb-4 text-lg font-semibold text-slate-900">Perfil do cliente</h3>
-          <div className="mb-4 space-y-2 text-sm text-slate-600">
-            <p><span className="font-medium text-slate-900">Nome:</span> {data?.profile.name ?? '--'}</p>
-            <p><span className="font-medium text-slate-900">Documento:</span> {data?.profile.cpf_cnpj ? formatCpfCnpj(data.profile.cpf_cnpj) : '--'}</p>
-            <p><span className="font-medium text-slate-900">Tipo:</span> {data?.profile.type === 'pj' ? 'Pessoa jurídica' : 'Pessoa física'}</p>
-            <p><span className="font-medium text-slate-900">Status:</span> {data?.profile.status ?? '--'}</p>
-          </div>
-          <form className="space-y-4" onSubmit={handleProfileSubmit}>
-            <div>
-              <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">E-mail principal</label>
-              <input value={profileForm.email} onChange={(e) => setProfileForm((prev) => ({ ...prev, email: e.target.value.toLowerCase() }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm" />
+      <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
+        <div className="space-y-6">
+          <Card>
+            <h3 className="mb-4 text-lg font-semibold text-slate-900">Meu perfil</h3>
+            <div className="mb-4 rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
+              <p><strong>Nome:</strong> {data?.profile.name || '-'}</p>
+              <p><strong>Documento:</strong> {data?.profile.cpf_cnpj || '-'}</p>
+              <p><strong>Status:</strong> {data?.profile.status || '-'}</p>
             </div>
-            {data?.profile.type === 'pj' && (
-              <div>
-                <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">E-mails adicionais</label>
-                <textarea value={profileForm.extra_emails} onChange={(e) => setProfileForm((prev) => ({ ...prev, extra_emails: e.target.value }))} className="min-h-[96px] w-full rounded-xl border border-slate-300 px-3 py-2 text-sm" placeholder="Separe por vírgula ou uma linha por e-mail" />
-              </div>
-            )}
-            <div className="grid gap-4 md:grid-cols-2">
-              <div>
-                <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Telefone</label>
-                <input value={profileForm.phone} onChange={(e) => setProfileForm((prev) => ({ ...prev, phone: formatPhone(e.target.value) }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm" />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">CEP</label>
-                <input value={profileForm.zip_code} onChange={(e) => setProfileForm((prev) => ({ ...prev, zip_code: formatZipCode(e.target.value) }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm" />
-              </div>
-            </div>
-            <div className="grid gap-4 md:grid-cols-2">
-              <div>
-                <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Logradouro</label>
-                <input value={profileForm.address_line} onChange={(e) => setProfileForm((prev) => ({ ...prev, address_line: e.target.value }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm" />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Número</label>
-                <input value={profileForm.address_number} onChange={(e) => setProfileForm((prev) => ({ ...prev, address_number: e.target.value }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm" />
-              </div>
-            </div>
-            <div className="grid gap-4 md:grid-cols-2">
-              <div>
-                <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Complemento</label>
-                <input value={profileForm.address_complement} onChange={(e) => setProfileForm((prev) => ({ ...prev, address_complement: e.target.value }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm" />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Bairro</label>
-                <input value={profileForm.neighborhood} onChange={(e) => setProfileForm((prev) => ({ ...prev, neighborhood: e.target.value }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm" />
-              </div>
-            </div>
-            <div className="grid gap-4 md:grid-cols-2">
-              <div>
-                <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Cidade</label>
-                <input value={profileForm.city} onChange={(e) => setProfileForm((prev) => ({ ...prev, city: e.target.value }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm" />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">UF</label>
-                <input value={profileForm.state} onChange={(e) => setProfileForm((prev) => ({ ...prev, state: e.target.value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 2) }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm" />
-              </div>
-            </div>
-            <Button type="submit" disabled={profileSaving}>{profileSaving ? 'Salvando...' : 'Atualizar dados do portal'}</Button>
-          </form>
-        </Card>
+            <form onSubmit={handleProfileSubmit} className="grid gap-4 md:grid-cols-2">
+              <label className="block md:col-span-2"><span className="mb-2 block text-sm font-medium text-slate-700">E-mail principal</span><input className="w-full rounded-xl border border-slate-300 px-4 py-3" value={profileForm.email} onChange={(e) => setProfileForm((prev) => ({ ...prev, email: e.target.value.toLowerCase() }))} /></label>
+              {data?.profile.type === 'pj' && (
+                <label className="block md:col-span-2"><span className="mb-2 block text-sm font-medium text-slate-700">E-mails adicionais</span><textarea className="min-h-[90px] w-full rounded-xl border border-slate-300 px-4 py-3" value={profileForm.extra_emails} onChange={(e) => setProfileForm((prev) => ({ ...prev, extra_emails: e.target.value }))} /></label>
+              )}
+              <label className="block"><span className="mb-2 block text-sm font-medium text-slate-700">Telefone</span><input className="w-full rounded-xl border border-slate-300 px-4 py-3" value={profileForm.phone} onChange={(e) => setProfileForm((prev) => ({ ...prev, phone: formatPhone(e.target.value) }))} /></label>
+              <label className="block"><span className="mb-2 block text-sm font-medium text-slate-700">CEP</span><input className="w-full rounded-xl border border-slate-300 px-4 py-3" value={profileForm.zip_code} onChange={(e) => setProfileForm((prev) => ({ ...prev, zip_code: formatZipCode(e.target.value) }))} onBlur={(e) => fillAddressFromCep(e.target.value)} /></label>
+              <label className="block md:col-span-2"><span className="mb-2 block text-sm font-medium text-slate-700">Logradouro</span><input className="w-full rounded-xl border border-slate-300 px-4 py-3" value={profileForm.address_line} onChange={(e) => setProfileForm((prev) => ({ ...prev, address_line: e.target.value }))} /></label>
+              <label className="block"><span className="mb-2 block text-sm font-medium text-slate-700">Número</span><input className="w-full rounded-xl border border-slate-300 px-4 py-3" value={profileForm.address_number} onChange={(e) => setProfileForm((prev) => ({ ...prev, address_number: e.target.value }))} /></label>
+              <label className="block"><span className="mb-2 block text-sm font-medium text-slate-700">Complemento</span><input className="w-full rounded-xl border border-slate-300 px-4 py-3" value={profileForm.address_complement} onChange={(e) => setProfileForm((prev) => ({ ...prev, address_complement: e.target.value }))} /></label>
+              <label className="block"><span className="mb-2 block text-sm font-medium text-slate-700">Bairro</span><input className="w-full rounded-xl border border-slate-300 px-4 py-3" value={profileForm.neighborhood} onChange={(e) => setProfileForm((prev) => ({ ...prev, neighborhood: e.target.value }))} /></label>
+              <label className="block"><span className="mb-2 block text-sm font-medium text-slate-700">Cidade</span><input className="w-full rounded-xl border border-slate-300 px-4 py-3" value={profileForm.city} onChange={(e) => setProfileForm((prev) => ({ ...prev, city: e.target.value }))} /></label>
+              <label className="block"><span className="mb-2 block text-sm font-medium text-slate-700">UF</span><input className="w-full rounded-xl border border-slate-300 px-4 py-3" value={profileForm.state} onChange={(e) => setProfileForm((prev) => ({ ...prev, state: e.target.value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 2) }))} /></label>
+              <div className="md:col-span-2 flex justify-end"><Button type="submit" disabled={profileSaving || lookingUpCep}>{profileSaving ? 'Salvando...' : 'Salvar perfil'}</Button></div>
+            </form>
+          </Card>
 
-        <Card>
-          <h3 className="mb-4 text-lg font-semibold text-slate-900">Cadastrar ou editar veículo</h3>
-          <form className="space-y-4" onSubmit={handleVehicleSubmit}>
-            <div className="grid gap-4 md:grid-cols-2">
-              <div>
-                <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Placa</label>
-                <input value={vehicleForm.plate} onChange={(e) => setVehicleForm((prev) => ({ ...prev, plate: formatPlate(e.target.value) }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm" required />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Tipo</label>
-                <select value={vehicleForm.type} onChange={(e) => setVehicleForm((prev) => ({ ...prev, type: e.target.value }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm">
-                  <option value="carro">Carro</option>
-                  <option value="moto">Moto</option>
-                  <option value="caminhao">Caminhão</option>
-                  <option value="utilitario">Utilitário</option>
-                  <option value="outros">Outros</option>
-                </select>
-              </div>
-            </div>
-            <div className="grid gap-4 md:grid-cols-2">
-              <div>
-                <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Marca</label>
-                <input value={vehicleForm.brand} onChange={(e) => setVehicleForm((prev) => ({ ...prev, brand: e.target.value }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm" />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Modelo</label>
-                <input value={vehicleForm.model} onChange={(e) => setVehicleForm((prev) => ({ ...prev, model: e.target.value }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm" />
-              </div>
-            </div>
-            <div className="grid gap-4 md:grid-cols-2">
-              <div>
-                <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Chassi</label>
-                <input value={vehicleForm.chassis} onChange={(e) => setVehicleForm((prev) => ({ ...prev, chassis: formatChassis(e.target.value) }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm" />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">RENAVAM</label>
-                <input value={vehicleForm.renavam} onChange={(e) => setVehicleForm((prev) => ({ ...prev, renavam: formatRenavam(e.target.value) }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm" />
-              </div>
-            </div>
-            <div className="grid gap-4 md:grid-cols-2">
-              <div>
-                <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Ano</label>
-                <input value={vehicleForm.year} onChange={(e) => setVehicleForm((prev) => ({ ...prev, year: e.target.value.replace(/\D/g, '').slice(0, 4) }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm" />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Cor</label>
-                <input value={vehicleForm.color} onChange={(e) => setVehicleForm((prev) => ({ ...prev, color: e.target.value }))} className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm" />
-              </div>
-            </div>
-            <div className="flex flex-wrap gap-3">
-              <Button type="submit" disabled={vehicleSaving}>{vehicleSaving ? 'Enviando...' : editingVehicleId ? 'Salvar e reenviar para validação' : 'Cadastrar veículo'}</Button>
-              {editingVehicleId ? <button type="button" className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700" onClick={resetVehicleForm}>Cancelar edição</button> : null}
-            </div>
-          </form>
-        </Card>
-      </div>
-
-      <div className="mt-6 grid gap-6 xl:grid-cols-[1fr_1fr]">
-        <Card>
-          <div className="mb-4 flex items-center justify-between gap-3">
-            <div>
-              <h3 className="text-lg font-semibold text-slate-900">Meus veículos</h3>
-              <p className="text-sm text-slate-500">Cadastre, acompanhe a validação e reenvie correções quando necessário.</p>
-            </div>
-          </div>
-          <div className="space-y-3 text-sm text-slate-600">
-            {data?.vehicles.length ? data.vehicles.map((vehicle) => (
-              <div key={vehicle.id} className={`rounded-2xl border p-4 ${selectedVehicleId === vehicle.id ? 'border-brand-300 bg-brand-50/30' : 'border-slate-200'}`}>
-                <div className="flex flex-wrap items-start justify-between gap-3">
+          <Card>
+            <h3 className="mb-4 text-lg font-semibold text-slate-900">Documentos do cliente</h3>
+            <form onSubmit={handleClientUpload} className="mb-5 grid gap-4 md:grid-cols-[180px_1fr_auto] md:items-end">
+              <label className="block"><span className="mb-2 block text-sm font-medium text-slate-700">Categoria</span><select className="w-full rounded-xl border border-slate-300 px-4 py-3" value={clientUploadCategory} onChange={(e) => setClientUploadCategory(e.target.value)}>{clientDocumentOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
+              <label className="block"><span className="mb-2 block text-sm font-medium text-slate-700">Arquivo</span><input type="file" className="w-full rounded-xl border border-slate-300 px-4 py-3" onChange={(e) => setClientUploadFile(e.target.files?.[0] || null)} /></label>
+              <div className="flex justify-end"><Button type="submit" disabled={uploadingClientDoc}>{uploadingClientDoc ? 'Enviando...' : 'Enviar documento'}</Button></div>
+            </form>
+            <div className="space-y-3">
+              {clientDocuments.length === 0 ? <p className="text-sm text-slate-500">Nenhum documento enviado.</p> : clientDocuments.map((doc) => (
+                <div key={doc.id} className="flex flex-wrap items-start justify-between gap-3 rounded-2xl border border-slate-200 p-4">
                   <div>
-                    <p className="font-semibold text-slate-900">{vehicle.plate}</p>
-                    <p>{vehicle.brand || 'Marca não informada'} • {vehicle.model || 'Modelo não informado'}</p>
-                    <p>Ano: {vehicle.year || '--'} • Status: {vehicle.status}</p>
-                    <p>Tipo: {vehicle.type || '--'} • RENAVAM: {vehicle.renavam || '--'}</p>
+                    <p className="font-semibold text-slate-900">{doc.file_name}</p>
+                    <p className="text-sm text-slate-500">{doc.category} • {doc.review_status}</p>
+                    {doc.review_notes && <p className="text-sm text-amber-700">Observação: {doc.review_notes}</p>}
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    <button type="button" className="rounded-xl border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700" onClick={() => setSelectedVehicleId(vehicle.id)}>Documentos</button>
-                    {editableStatuses.has(vehicle.status) ? (
-                      <button type="button" className="rounded-xl border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700" onClick={() => handleVehicleEdit(vehicle)}>Editar</button>
-                    ) : null}
+                  <div className="flex gap-2">
+                    <div className="flex gap-2"><a href={doc.url} target="_blank" rel="noreferrer" className="rounded-xl border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700">Visualizar</a><a href={doc.download_url} className="rounded-xl border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700">Baixar</a></div>
+                    <Button type="button" className="bg-red-600 hover:bg-red-700" onClick={() => handleDeleteClientDocument(doc.id)}>Excluir</Button>
                   </div>
                 </div>
-              </div>
-            )) : <p className="rounded-2xl border border-dashed border-slate-300 p-4 text-slate-500">Você ainda não cadastrou veículos no portal.</p>}
-          </div>
-        </Card>
-
-        <Card>
-          <h3 className="mb-4 text-lg font-semibold text-slate-900">Documentos do veículo</h3>
-          {selectedVehicle ? (
-            <>
-              <p className="mb-4 text-sm text-slate-500">Veículo selecionado: <span className="font-semibold text-slate-900">{selectedVehicle.plate}</span></p>
-              <form className="mb-5 space-y-3" onSubmit={handleVehicleDocumentUpload}>
-                <div>
-                  <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Categoria</label>
-                  <select value={vehicleUploadCategory} onChange={(e) => setVehicleUploadCategory(e.target.value)} className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm">
-                    {vehicleDocumentOptions.map((option) => <option key={option} value={option}>{option}</option>)}
-                  </select>
-                </div>
-                <input type="file" onChange={(e) => setVehicleUploadFile(e.target.files?.[0] || null)} className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm" />
-                <Button type="submit" disabled={uploadingVehicleDoc}>{uploadingVehicleDoc ? 'Enviando...' : 'Enviar documento do veículo'}</Button>
-              </form>
-              <div className="space-y-3 text-sm text-slate-600">
-                {vehicleDocuments.length ? vehicleDocuments.map((document) => (
-                  <div key={document.id} className="rounded-2xl border border-slate-200 p-4">
-                    <p className="font-semibold text-slate-900">{document.file_name}</p>
-                    <p>Categoria: {document.category}</p>
-                    <p>Status: {document.review_status}</p>
-                    {document.review_notes ? <p>Retorno do administrativo: {document.review_notes}</p> : null}
-                    <a href={document.url} target="_blank" className="mt-2 inline-flex text-sm font-semibold text-brand-600">Abrir arquivo</a>
-                  </div>
-                )) : <p className="rounded-2xl border border-dashed border-slate-300 p-4 text-slate-500">Nenhum documento enviado para este veículo.</p>}
-              </div>
-            </>
-          ) : <p className="rounded-2xl border border-dashed border-slate-300 p-4 text-slate-500">Selecione um veículo para enviar e acompanhar documentos.</p>}
-        </Card>
-      </div>
-
-      <div className="mt-6 grid gap-6 xl:grid-cols-[1fr_1fr]">
-        <Card>
-          <h3 className="mb-4 text-lg font-semibold text-slate-900">Documentos do cliente</h3>
-          <form className="mb-5 space-y-3" onSubmit={handleClientDocumentUpload}>
-            <div>
-              <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Categoria</label>
-              <select value={clientUploadCategory} onChange={(e) => setClientUploadCategory(e.target.value)} className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm">
-                {clientDocumentOptions.map((option) => <option key={option} value={option}>{option}</option>)}
-              </select>
+              ))}
             </div>
-            <input type="file" onChange={(e) => setClientUploadFile(e.target.files?.[0] || null)} className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm" />
-            <Button type="submit" disabled={uploadingClientDoc}>{uploadingClientDoc ? 'Enviando...' : 'Enviar documento do cliente'}</Button>
-          </form>
-          <div className="space-y-3 text-sm text-slate-600">
-            {clientDocuments.length ? clientDocuments.map((document) => (
-              <div key={document.id} className="rounded-2xl border border-slate-200 p-4">
-                <p className="font-semibold text-slate-900">{document.file_name}</p>
-                <p>Categoria: {document.category}</p>
-                <p>Status: {document.review_status}</p>
-                {document.review_notes ? <p>Retorno do administrativo: {document.review_notes}</p> : null}
-                <a href={document.url} target="_blank" className="mt-2 inline-flex text-sm font-semibold text-brand-600">Abrir arquivo</a>
-              </div>
-            )) : <p className="rounded-2xl border border-dashed border-slate-300 p-4 text-slate-500">Nenhum documento pessoal/empresarial enviado.</p>}
-          </div>
-        </Card>
+          </Card>
+        </div>
 
-        <Card>
-          <h3 className="mb-4 text-lg font-semibold text-slate-900">Cobranças recentes</h3>
-          <div className="space-y-3 text-sm text-slate-600">
-            {data?.recent_billings.length ? data.recent_billings.map((billing) => (
-              <div key={billing.id} className="rounded-2xl border border-slate-200 p-4">
-                <p className="font-semibold text-slate-900">R$ {billing.amount.toFixed(2)}</p>
-                <p>Vencimento: {new Date(`${billing.due_date}T00:00:00`).toLocaleDateString('pt-BR')}</p>
-                <p>Status: {billing.status}</p>
-                <p>Pagamento: {billing.payment_date ? new Date(`${billing.payment_date}T00:00:00`).toLocaleDateString('pt-BR') : '--'}</p>
+        <div className="space-y-6">
+          <Card>
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-900">Meus veículos</h3>
+                <p className="text-sm text-slate-500">O cadastro e a manutenção dos veículos são realizados pela equipe administrativa.</p>
               </div>
-            )) : <p className="rounded-2xl border border-dashed border-slate-300 p-4 text-slate-500">Nenhuma cobrança disponível.</p>}
-          </div>
-        </Card>
+            </div>
+
+            {data?.vehicles.length ? (
+              <div className="space-y-3">
+                {data.vehicles.map((vehicle) => (
+                  <button key={vehicle.id} type="button" onClick={() => setSelectedVehicleId(vehicle.id)} className={`w-full rounded-2xl border p-4 text-left ${selectedVehicleId === vehicle.id ? 'border-brand-500 bg-brand-50' : 'border-slate-200 bg-white'}`}>
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="font-semibold text-slate-900">{vehicle.plate}</p>
+                        <p className="text-sm text-slate-500">{[vehicle.brand, vehicle.model].filter(Boolean).join(' • ') || 'Veículo cadastrado'}</p>
+                        <p className="text-sm text-slate-500">Status: {vehicle.status}</p>
+                      </div>
+                      <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">{vehicle.type || 'sem tipo'}</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-slate-500">Nenhum veículo vinculado até o momento.</p>
+            )}
+          </Card>
+
+          <Card>
+            <h3 className="mb-4 text-lg font-semibold text-slate-900">Detalhes do veículo</h3>
+            {selectedVehicle ? (
+              <div className="space-y-5">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="rounded-2xl bg-slate-50 p-4"><p className="text-xs uppercase tracking-[0.12em] text-slate-500">Placa</p><p className="mt-1 font-semibold text-slate-900">{selectedVehicle.plate}</p></div>
+                  <div className="rounded-2xl bg-slate-50 p-4"><p className="text-xs uppercase tracking-[0.12em] text-slate-500">Contrato</p><p className="mt-1 font-semibold text-slate-900">{selectedVehicle.contract_number || '-'}</p></div>
+                  <div className="rounded-2xl bg-slate-50 p-4"><p className="text-xs uppercase tracking-[0.12em] text-slate-500">Modelo</p><p className="mt-1 font-semibold text-slate-900">{selectedVehicle.model || '-'}</p></div>
+                  <div className="rounded-2xl bg-slate-50 p-4"><p className="text-xs uppercase tracking-[0.12em] text-slate-500">Montadora</p><p className="mt-1 font-semibold text-slate-900">{selectedVehicle.brand || '-'}</p></div>
+                  <div className="rounded-2xl bg-slate-50 p-4"><p className="text-xs uppercase tracking-[0.12em] text-slate-500">Ano fabricação / modelo</p><p className="mt-1 font-semibold text-slate-900">{selectedVehicle.manufacture_year || '-'} / {selectedVehicle.model_year || selectedVehicle.year || '-'}</p></div>
+                  <div className="rounded-2xl bg-slate-50 p-4"><p className="text-xs uppercase tracking-[0.12em] text-slate-500">Combustível / cor</p><p className="mt-1 font-semibold text-slate-900">{selectedVehicle.fuel_type || '-'} / {selectedVehicle.color || '-'}</p></div>
+                  <div className="rounded-2xl bg-slate-50 p-4"><p className="text-xs uppercase tracking-[0.12em] text-slate-500">Chassi</p><p className="mt-1 font-semibold text-slate-900">{selectedVehicle.chassis || '-'}</p></div>
+                  <div className="rounded-2xl bg-slate-50 p-4"><p className="text-xs uppercase tracking-[0.12em] text-slate-500">RENAVAM</p><p className="mt-1 font-semibold text-slate-900">{selectedVehicle.renavam || '-'}</p></div>
+                </div>
+
+                <div>
+                  <h4 className="mb-3 text-sm font-semibold uppercase tracking-[0.12em] text-slate-500">Documentos do veículo</h4>
+                  <div className="space-y-3">
+                    {vehicleDocuments.length === 0 ? <p className="text-sm text-slate-500">Nenhum documento vinculado a este veículo.</p> : vehicleDocuments.map((doc) => (
+                      <div key={doc.id} className="flex flex-wrap items-start justify-between gap-3 rounded-2xl border border-slate-200 p-4">
+                        <div>
+                          <p className="font-semibold text-slate-900">{doc.file_name}</p>
+                          <p className="text-sm text-slate-500">{doc.category} • {doc.review_status}</p>
+                          {doc.review_notes && <p className="text-sm text-amber-700">Observação: {doc.review_notes}</p>}
+                        </div>
+                        <div className="flex gap-2"><a href={doc.url} target="_blank" rel="noreferrer" className="rounded-xl border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700">Visualizar</a><a href={doc.download_url} className="rounded-xl border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700">Baixar</a></div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-slate-500">Selecione um veículo para ver os detalhes.</p>
+            )}
+          </Card>
+
+          <Card>
+            <h3 className="mb-4 text-lg font-semibold text-slate-900">Cobranças recentes</h3>
+            <div className="space-y-3">
+              {data?.recent_billings.length ? data.recent_billings.map((billing) => (
+                <div key={billing.id} className="rounded-2xl border border-slate-200 p-4">
+                  <p className="font-semibold text-slate-900">R$ {billing.amount.toFixed(2)}</p>
+                  <p className="text-sm text-slate-500">Vencimento: {billing.due_date} • Status: {billing.status}</p>
+                  {billing.payment_date && <p className="text-sm text-emerald-700">Pago em {billing.payment_date}</p>}
+                </div>
+              )) : <p className="text-sm text-slate-500">Nenhuma cobrança encontrada.</p>}
+            </div>
+          </Card>
+        </div>
       </div>
     </ClientShell>
   );

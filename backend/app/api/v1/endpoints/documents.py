@@ -16,7 +16,7 @@ router = APIRouter()
 
 
 @router.get('/{document_id}/view')
-def view_document(document_id: int, token: str = Query(...)):
+def view_document(document_id: int, token: str = Query(...), download: bool = False):
     try:
         token_document_id = decode_file_access_token(token)
     except ValueError as exc:
@@ -33,8 +33,9 @@ def view_document(document_id: int, token: str = Query(...)):
 
         obj = get_object_stream(document.object_key)
         filename = quote(document.file_name)
+        disposition = 'attachment' if download else 'inline'
         headers = {
-            'Content-Disposition': f"inline; filename*=UTF-8''{filename}",
+            'Content-Disposition': f"{disposition}; filename*=UTF-8''{filename}",
             'Cache-Control': 'private, max-age=300',
         }
         return StreamingResponse(

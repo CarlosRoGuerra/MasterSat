@@ -6,6 +6,7 @@ import { AuthShell } from '@/components/auth-shell';
 import { Button } from '@/components/ui/button';
 import { apiFetch } from '@/lib/api';
 import { redirectByRole, saveSession } from '@/lib/auth';
+import { fetchAddressByCep } from '@/lib/cep';
 import { formatCpfCnpj, formatPhone, formatZipCode, onlyDigits, validatePassword } from '@/lib/format';
 
 type RegisterResponse = {
@@ -70,11 +71,36 @@ export default function ClientRegisterPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
+  const [lookingUpCep, setLookingUpCep] = useState(false);
 
   const passwordChecks = useMemo(() => validatePassword(form.password), [form.password]);
 
   function updateField(field: keyof RegisterForm, value: string) {
     setForm((current) => ({ ...current, [field]: value }));
+  }
+
+  async function fillAddressFromCep(rawCep: string) {
+    const cep = onlyDigits(rawCep);
+    if (cep.length !== 8) return;
+    setLookingUpCep(true);
+    setError('');
+    try {
+      const result = await fetchAddressByCep(cep);
+      if (!result) return;
+      setForm((current) => ({
+        ...current,
+        zip_code: formatZipCode(result.zip_code),
+        address_line: current.address_line || result.address_line,
+        address_complement: current.address_complement || result.address_complement,
+        neighborhood: current.neighborhood || result.neighborhood,
+        city: current.city || result.city,
+        state: current.state || result.state,
+      }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não foi possível consultar o CEP.');
+    } finally {
+      setLookingUpCep(false);
+    }
   }
 
   function handleFormattedChange(field: keyof RegisterForm) {
@@ -188,7 +214,7 @@ export default function ClientRegisterPage() {
           )}
           <label className="block">
             <span className="mb-2 block text-sm font-medium text-slate-700">CEP</span>
-            <input className="w-full rounded-xl border border-slate-300 px-4 py-3" value={form.zip_code} onChange={handleFormattedChange('zip_code')} />
+            <input className="w-full rounded-xl border border-slate-300 px-4 py-3" value={form.zip_code} onChange={handleFormattedChange('zip_code')} onBlur={(e) => fillAddressFromCep(e.target.value)} />
           </label>
           <label className="block">
             <span className="mb-2 block text-sm font-medium text-slate-700">UF</span>
@@ -235,11 +261,12 @@ export default function ClientRegisterPage() {
           </div>
         </div>
 
+        {lookingUpCep && <p className="text-sm text-slate-500">Consultando CEP...</p>}
         {error && <p className="text-sm text-red-600">{error}</p>}
         {success && <p className="text-sm text-emerald-600">{success}</p>}
 
         <div className="flex justify-end">
-          <Button type="submit" disabled={loading}>
+          <Button type="submit" disabled={loading || lookingUpCep}>
             {loading ? 'Cadastrando...' : 'Criar conta'}
           </Button>
         </div>
