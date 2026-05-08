@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date, datetime
+from decimal import Decimal
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
@@ -11,12 +13,18 @@ from app.core.config import settings
 from app.core.security import create_file_access_token
 from app.db.session import get_db
 from app.models.client import Client
+from app.models.billing import Billing
+from app.models.client import Client
+from app.models.contract import Contract
 from app.models.document import Document
-from app.models.enums import DocumentReviewStatus, UserRole
+from app.models.enums import BillingStatus, DocumentReviewStatus, TrackerStatus, UserRole, VehicleStatus
+from app.models.plan import Plan
+from app.models.service_product import ServiceProduct
 from app.models.tracker import Tracker
 from app.models.vehicle import Vehicle
 from app.schemas.document import DocumentDeleteOut, DocumentOut, DocumentReviewUpdate
 from app.schemas.vehicle import VehicleCreate, VehicleOut, VehicleUpdate
+from app.services.financial import current_cycle_bounds, decimal_to_float, period_label_for_date, prorated_amount
 from app.services.storage import remove_object, upload_bytes
 
 router = APIRouter()
@@ -97,7 +105,7 @@ def list_items(
     client_id: int | None = None,
     type: str | None = None,
     skip: int = 0,
-    limit: int = Query(default=50, le=200),
+    limit: int = Query(default=50, le=500),
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*VIEW_ROLES)),
 ):
@@ -193,6 +201,122 @@ def delete_item(
     db.commit()
     return {'message': 'Veículo removido com soft delete'}
 
+
+
+
+@router.post('/{item_id}/uninstall')
+def uninstall_vehicle(
+    item_id: int,
+    uninstall_date: date,
+    uninstall_service_product_id: int | None = None,
+    destination_contract_id: int | None = None,
+    destination_vehicle_id: int | None = None,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*EDIT_ROLES)),
+):
+    vehicle = _get_vehicle_or_404(item_id, db)
+    tracker = db.scalar(select(Tracker).where(Tracker.vehicle_id == vehicle.id, Tracker.is_deleted.is_(False)))
+    contract = db.scalar(select(Contract).where(Contract.client_id == vehicle.client_id, Contract.status == 'ativo', Contract.is_deleted.is_(False)).order_by(Contract.id.desc()))
+
+    source_prorated = None
+    destination_prorated = None
+    uninstall_fee_billing_id = None
+
+    if contract:
+        plan = db.get(Plan, contract.plan_id)
+        if plan and plan.active:
+            cycle_start, cycle_end = current_cycle_bounds(contract, plan, uninstall_date)
+            source_amount = prorated_amount(plan.price, cycle_start, cycle_end, uninstall_date)
+            period_label = period_label_for_date(cycle_start, getattr(plan, 'billing_interval_months', 1) or 1)
+            current_billing = db.scalar(select(Billing).where(
+                Billing.contract_id == contract.id,
+                Billing.item_id.is_(None),
+                Billing.billing_type == 'recorrente',
+                Billing.period_label == period_label,
+                Billing.status.in_([BillingStatus.PENDING, BillingStatus.OVERDUE]),
+                Billing.is_deleted.is_(False),
+            ))
+            if current_billing:
+                current_billing.amount = source_amount
+                current_billing.title = f'Plano pró-rata até desinstalação • {vehicle.plate}'
+                current_billing.notes = f'Cobrança proporcional até {uninstall_date.strftime("%d/%m/%Y")}'
+                source_prorated = decimal_to_float(source_amount)
+            else:
+                billing = Billing(
+                    contract_id=contract.id,
+                    client_id=contract.client_id,
+                    vehicle_id=vehicle.id,
+                    title=f'Plano pró-rata até desinstalação • {vehicle.plate}',
+                    billing_type='desinstalacao_prorata_origem',
+                    amount=source_amount,
+                    due_date=uninstall_date,
+                    status=BillingStatus.PENDING if uninstall_date >= date.today() else BillingStatus.OVERDUE,
+                    period_label=period_label,
+                    notes=f'Cobrança proporcional até {uninstall_date.strftime("%d/%m/%Y")}',
+                )
+                db.add(billing)
+                db.flush()
+                source_prorated = decimal_to_float(source_amount)
+
+            if destination_contract_id:
+                destination_contract = db.get(Contract, destination_contract_id)
+                if destination_contract and not destination_contract.is_deleted:
+                    dest_plan = db.get(Plan, destination_contract.plan_id)
+                    if dest_plan:
+                        remaining_days = max((cycle_end - uninstall_date).days, 0)
+                        if remaining_days > 0:
+                            next_day = uninstall_date + __import__('datetime').timedelta(days=1)
+                            dest_amount = prorated_amount(dest_plan.price, cycle_start, cycle_end, cycle_end) - prorated_amount(dest_plan.price, cycle_start, cycle_end, uninstall_date)
+                            dest_billing = Billing(
+                                contract_id=destination_contract.id,
+                                client_id=destination_contract.client_id,
+                                vehicle_id=destination_vehicle_id,
+                                title=f'Plano pró-rata remanescente • {destination_vehicle_id or "novo veículo"}',
+                                billing_type='desinstalacao_prorata_destino',
+                                amount=dest_amount,
+                                due_date=uninstall_date,
+                                status=BillingStatus.PENDING if uninstall_date >= date.today() else BillingStatus.OVERDUE,
+                                period_label=period_label,
+                                notes=f'Cobrança proporcional remanescente após instalação no mesmo período',
+                            )
+                            db.add(dest_billing)
+                            destination_prorated = decimal_to_float(dest_amount)
+
+    if uninstall_service_product_id:
+        product = db.get(ServiceProduct, uninstall_service_product_id)
+        if product and not product.is_deleted:
+            fee_billing = Billing(
+                contract_id=contract.id if contract else None,
+                client_id=vehicle.client_id,
+                vehicle_id=vehicle.id,
+                title=product.name,
+                billing_type='servico_desinstalacao',
+                amount=product.default_price,
+                due_date=uninstall_date,
+                status=BillingStatus.PENDING if uninstall_date >= date.today() else BillingStatus.OVERDUE,
+                period_label=uninstall_date.strftime('%m/%Y'),
+                notes='Taxa de desinstalação gerada automaticamente',
+            )
+            db.add(fee_billing)
+            db.flush()
+            uninstall_fee_billing_id = fee_billing.id
+
+    if tracker:
+        tracker.vehicle_id = None
+        tracker.client_id = None
+        tracker.status = TrackerStatus.STOCK
+        tracker.install_date = None
+    vehicle.status = VehicleStatus.REMOVED
+    vehicle.uninstalled_at = uninstall_date
+    db.commit()
+
+    return {
+        'message': 'Desinstalação registrada com sucesso.',
+        'source_prorated_amount': source_prorated,
+        'destination_prorated_amount': destination_prorated,
+        'uninstall_fee_billing_id': uninstall_fee_billing_id,
+        'tracker_returned_to_stock': bool(tracker),
+    }
 
 @router.get('/{item_id}/documents', response_model=list[DocumentOut])
 def list_vehicle_documents(

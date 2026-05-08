@@ -3,6 +3,13 @@ from pydantic import BaseModel, field_validator
 from app.models.enums import ClientStatus
 
 
+class ContactItem(BaseModel):
+    name: str
+    phone: str | None = None
+    email: str | None = None
+    role: str | None = None
+
+
 def normalize_email_list(value: list[str] | None) -> list[str] | None:
     if value is None:
         return None
@@ -26,6 +33,7 @@ class ClientBase(BaseModel):
     email: str | None = None
     extra_emails: list[str] | None = None
     phone: str | None = None
+    contacts: list[ContactItem] | None = None
     zip_code: str | None = None
     address_line: str | None = None
     address_number: str | None = None
@@ -102,6 +110,7 @@ class ClientUpdate(BaseModel):
     email: str | None = None
     extra_emails: list[str] | None = None
     phone: str | None = None
+    contacts: list[ContactItem] | None = None
     zip_code: str | None = None
     address_line: str | None = None
     address_number: str | None = None

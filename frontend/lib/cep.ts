@@ -1,4 +1,5 @@
 import { onlyDigits } from '@/lib/format';
+import { API_URL } from '@/lib/api';
 
 export type CepAddress = {
   zip_code: string;
@@ -13,26 +14,20 @@ export async function fetchAddressByCep(rawCep: string): Promise<CepAddress | nu
   const cep = onlyDigits(rawCep);
   if (cep.length !== 8) return null;
 
-  const response = await fetch(`https://viacep.com.br/ws/${cep}/json/`, {
+  const base = API_URL.replace(/\/+$/, '');
+  const response = await fetch(`${base}/utils/cep/${cep}`, {
     headers: { Accept: 'application/json' },
     cache: 'no-store',
   });
 
   if (!response.ok) {
-    throw new Error('Não foi possível consultar o CEP no momento.');
+    let message = 'Não foi possível consultar o CEP no momento.';
+    try {
+      const data = await response.json();
+      if (typeof data?.detail === 'string') message = data.detail;
+    } catch {}
+    throw new Error(message);
   }
 
-  const data = await response.json();
-  if (data?.erro) {
-    throw new Error('CEP não encontrado.');
-  }
-
-  return {
-    zip_code: data.cep || rawCep,
-    address_line: data.logradouro || '',
-    neighborhood: data.bairro || '',
-    city: data.localidade || '',
-    state: data.uf || '',
-    address_complement: data.complemento || '',
-  };
+  return response.json();
 }

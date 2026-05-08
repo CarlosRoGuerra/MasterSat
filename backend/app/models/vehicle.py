@@ -44,3 +44,4 @@ class Vehicle(Base, TimestampMixin, SoftDeleteMixin):
     fipe_value: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
 
     status: Mapped[VehicleStatus] = mapped_column(Enum(VehicleStatus), default=VehicleStatus.ACTIVE)
+    uninstalled_at: Mapped[Date | None] = mapped_column(Date, nullable=True)

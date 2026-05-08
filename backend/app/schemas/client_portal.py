@@ -93,6 +93,8 @@ class ClientProfileUpdate(BaseModel):
 
 
 class ClientVehicleOut(BaseModel):
+    model_config = {'protected_namespaces': ()}
+
     id: int
     plate: str
     model: str | None = None
@@ -107,6 +109,13 @@ class ClientVehicleOut(BaseModel):
     color: str | None = None
     contract_number: str | None = None
     fuel_type: str | None = None
+    tracker_id: int | None = None
+    tracker_imei: str | None = None
+    tracker_status: str | None = None
+    tracker_brand: str | None = None
+    tracker_model: str | None = None
+    tracker_sim_number: str | None = None
+    tracker_carrier: str | None = None
 
 
 class ClientVehicleDocumentOut(BaseModel):

@@ -82,7 +82,7 @@ export default function ResetPasswordPage() {
         {error && <p className="text-sm text-red-600">{error}</p>}
         {message && <p className="text-sm text-emerald-600">{message}</p>}
         <div className="flex justify-between gap-3">
-          <Link href="/login/cliente" className="rounded-xl border border-slate-300 px-4 py-3 text-sm font-semibold text-slate-700">
+          <Link href="/login/admin" className="rounded-xl border border-slate-300 px-4 py-3 text-sm font-semibold text-slate-700">
             Voltar ao login
           </Link>
           <Button type="submit" disabled={loading}>

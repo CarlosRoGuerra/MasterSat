@@ -15,6 +15,18 @@ from app.services.storage import get_object_stream
 router = APIRouter()
 
 
+def _object_iterator(obj, chunk_size: int = 32 * 1024):
+    try:
+        for chunk in obj.stream(chunk_size):
+            yield chunk
+    finally:
+        try:
+            obj.close()
+            obj.release_conn()
+        except Exception:
+            pass
+
+
 @router.get('/{document_id}/view')
 def view_document(document_id: int, token: str = Query(...), download: bool = False):
     try:
@@ -39,7 +51,7 @@ def view_document(document_id: int, token: str = Query(...), download: bool = Fa
             'Cache-Control': 'private, max-age=300',
         }
         return StreamingResponse(
-            obj.stream(32 * 1024),
+            _object_iterator(obj),
             media_type=document.content_type or 'application/octet-stream',
             headers=headers,
         )

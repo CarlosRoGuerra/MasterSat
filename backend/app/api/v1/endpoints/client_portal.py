@@ -14,6 +14,7 @@ from app.models.billing import Billing
 from app.models.client import Client
 from app.models.document import Document
 from app.models.enums import BillingStatus, DocumentReviewStatus, UserRole, VehicleStatus
+from app.models.tracker import Tracker
 from app.models.user import User
 from app.models.vehicle import Vehicle
 from app.schemas.client_portal import (
@@ -60,7 +61,7 @@ def _get_current_client(current_user: User, db: Session) -> Client:
     return client
 
 
-def _vehicle_to_out(vehicle: Vehicle) -> ClientVehicleOut:
+def _vehicle_to_out(vehicle: Vehicle, tracker: Tracker | None = None) -> ClientVehicleOut:
     return ClientVehicleOut(
         id=vehicle.id,
         plate=vehicle.plate,
@@ -76,6 +77,13 @@ def _vehicle_to_out(vehicle: Vehicle) -> ClientVehicleOut:
         color=vehicle.color,
         contract_number=vehicle.contract_number,
         fuel_type=vehicle.fuel_type,
+        tracker_id=tracker.id if tracker else None,
+        tracker_imei=tracker.imei if tracker else None,
+        tracker_status=tracker.status.value if tracker else None,
+        tracker_brand=tracker.brand if tracker else None,
+        tracker_model=tracker.model if tracker else None,
+        tracker_sim_number=tracker.sim_number if tracker else None,
+        tracker_carrier=tracker.carrier if tracker else None,
     )
 
 
@@ -174,6 +182,8 @@ def client_dashboard(
         )
     ) or 0
 
+    tracker_map = {item.vehicle_id: item for item in db.scalars(select(Tracker).where(Tracker.vehicle_id.in_([vehicle.id for vehicle in vehicles]), Tracker.is_deleted.is_(False))).all()} if vehicles else {}
+
     return ClientDashboardOut(
         profile=ClientProfileOut(
             id=client.id,
@@ -199,7 +209,7 @@ def client_dashboard(
             overdue_billings=int(overdue_billings),
             total_open_amount=float(total_open_amount),
         ),
-        vehicles=[_vehicle_to_out(item) for item in vehicles],
+        vehicles=[_vehicle_to_out(item, tracker_map.get(item.id)) for item in vehicles],
         recent_billings=[
             ClientBillingOut(
                 id=item.id,
@@ -278,7 +288,8 @@ def list_my_vehicles(
         .where(Vehicle.client_id == client.id, Vehicle.is_deleted.is_(False))
         .order_by(Vehicle.id.desc())
     ).all()
-    return [_vehicle_to_out(item) for item in vehicles]
+    tracker_map = {item.vehicle_id: item for item in db.scalars(select(Tracker).where(Tracker.vehicle_id.in_([vehicle.id for vehicle in vehicles]), Tracker.is_deleted.is_(False))).all()} if vehicles else {}
+    return [_vehicle_to_out(item, tracker_map.get(item.id)) for item in vehicles]
 
 
 @router.get('/vehicles/{vehicle_id}/documents', response_model=list[ClientVehicleDocumentOut])

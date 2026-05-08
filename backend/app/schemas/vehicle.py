@@ -6,6 +6,8 @@ from app.models.enums import VehicleStatus
 
 
 class VehicleBase(BaseModel):
+    model_config = {'protected_namespaces': ()}
+
     client_id: int
     sales_point: str | None = None
     seller_consultant: str | None = None
@@ -121,6 +123,8 @@ class VehicleCreate(VehicleBase):
 
 
 class VehicleUpdate(BaseModel):
+    model_config = {'protected_namespaces': ()}
+
     client_id: int | None = None
     sales_point: str | None = None
     seller_consultant: str | None = None
@@ -223,4 +227,4 @@ class VehicleUpdate(BaseModel):
 class VehicleOut(VehicleBase):
     id: int
 
-    model_config = {'from_attributes': True}
+    model_config = {'from_attributes': True, 'protected_namespaces': ()}

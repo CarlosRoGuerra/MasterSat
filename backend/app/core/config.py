@@ -23,5 +23,13 @@ class Settings(BaseSettings):
     minio_bucket: str = 'rastreamento'
     minio_public_url: str = 'http://localhost:9000'
 
+    multiportal_enabled: bool = False
+    multiportal_wsdl_url: str = 'http://webmportal.dynalias.net:83/services/IntegracaoAdmService?wsdl'
+    multiportal_id: str = ''
+    multiportal_password: str = ''
+    multiportal_group_codes: str = ''
+    multiportal_send_welcome_email: bool = False
+    multiportal_request_timeout: int = 30
+
 
 settings = Settings()

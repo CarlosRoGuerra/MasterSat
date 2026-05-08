@@ -33,7 +33,7 @@ export function useAuthGuard(allowedRoles: AllowedRole[], loginPath: string): Gu
       .then((me) => {
         if (!allowedRoles.includes(me.role)) {
           clearSession();
-          window.location.href = me.role === 'cliente' ? '/login/cliente' : '/login/admin';
+          window.location.href = '/login/admin';
           return;
         }
         setUser(me);

@@ -45,8 +45,10 @@ def build_full_address(payload: RegisterClientRequest) -> str:
 def login(payload: LoginRequest, db: Session = Depends(get_db)):
     normalized_email = payload.email.strip().lower()
     user = db.scalar(select(User).where(User.email == normalized_email, User.is_deleted.is_(False)))
-    if not user or not verify_password(payload.password, user.password_hash):
+    if not user or not user.active or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Credenciais inválidas')
+    if user.role == UserRole.CLIENT:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='O acesso de clientes foi desativado. Utilize o painel administrativo.')
     return TokenResponse(
         access_token=create_access_token(str(user.id)),
         refresh_token=create_refresh_token(str(user.id)),
@@ -55,55 +57,11 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
 
 @router.post('/register-client', response_model=RegisterClientResponse)
 def register_client(payload: RegisterClientRequest, db: Session = Depends(get_db)):
-    existing_user = db.scalar(select(User).where(User.email == payload.email, User.is_deleted.is_(False)))
-    if existing_user:
-        raise HTTPException(status_code=409, detail='Já existe uma conta cadastrada com este e-mail')
-
-    existing_client = db.scalar(select(Client).where(Client.cpf_cnpj == payload.cpf_cnpj, Client.is_deleted.is_(False)))
-    if existing_client:
-        raise HTTPException(status_code=409, detail='Já existe um cliente cadastrado com este CPF/CNPJ')
-
-    extra_emails = [email for email in (payload.extra_emails or []) if email != payload.email]
-    if payload.type != 'pj':
-        extra_emails = None
-
-    client = Client(
-        name=payload.name,
-        cpf_cnpj=payload.cpf_cnpj,
-        type=payload.type,
-        status=ClientStatus.ACTIVE,
-        email=payload.email,
-        extra_emails=extra_emails,
-        phone=payload.phone,
-        zip_code=payload.zip_code,
-        address_line=payload.address_line,
-        address_number=payload.address_number,
-        address_complement=payload.address_complement,
-        neighborhood=payload.neighborhood,
-        city=payload.city,
-        state=payload.state,
-        address=build_full_address(payload),
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail='O cadastro de clientes é realizado exclusivamente pela equipe administrativa.',
     )
-    db.add(client)
-    db.flush()
 
-    user = User(
-        name=payload.name,
-        email=payload.email,
-        password_hash=get_password_hash(payload.password),
-        role=UserRole.CLIENT,
-        active=True,
-        client_id=client.id,
-    )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-
-    return RegisterClientResponse(
-        access_token=create_access_token(str(user.id)),
-        refresh_token=create_refresh_token(str(user.id)),
-        user=user,
-    )
 
 
 @router.post('/refresh', response_model=TokenResponse)

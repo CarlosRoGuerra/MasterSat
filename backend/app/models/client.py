@@ -17,6 +17,7 @@ class Client(Base, TimestampMixin, SoftDeleteMixin):
     email: Mapped[str | None] = mapped_column(String(180), nullable=True)
     extra_emails: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     phone: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    contacts: Mapped[list | None] = mapped_column(JSON, nullable=True)
     zip_code: Mapped[str | None] = mapped_column(String(12), nullable=True)
     address_line: Mapped[str | None] = mapped_column(String(180), nullable=True)
     address_number: Mapped[str | None] = mapped_column(String(30), nullable=True)

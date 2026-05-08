@@ -1,0 +1,113 @@
+from __future__ import annotations
+
+from typing import Any
+
+OPERATION_LABELS = {
+    "sincronizaCliente": "Cadastro do cliente",
+    "sincronizaUsuario": "Cadastro do usuário do portal",
+    "sincronizaVeiculo": "Cadastro do veículo",
+    "sincronizaEquipamento": "Cadastro do equipamento",
+    "vinculoVeiculoCliente": "Vínculo veículo x cliente",
+    "vinculoEquipamentoVeiculo": "Vínculo equipamento x veículo",
+    "listarFabricantes": "Consulta de fabricantes",
+}
+
+RETURN_CODE_MAP: dict[str, dict[str, Any]] = {
+    "0": {"title": "Operação concluída", "message": "A plataforma Multiportal concluiu a operação com sucesso.", "retry_allowed": False, "level": "success"},
+    "200": {"title": "OK", "message": "A plataforma Multiportal respondeu com sucesso.", "retry_allowed": False, "level": "success"},
+    "-1": {"title": "Credenciais inválidas", "message": "A integração foi recusada pela Multiportal. Revise ID, senha e a configuração do ambiente.", "retry_allowed": False, "level": "error"},
+    "2": {"title": "Operação não implementada", "message": "A operação solicitada não está disponível na Multiportal para este serviço.", "retry_allowed": False, "level": "error"},
+    "3": {"title": "Cliente ausente", "message": "A requisição foi enviada sem os dados do cliente. Revise o cadastro antes de reenviar.", "retry_allowed": True, "level": "error"},
+    "4": {"title": "Cliente não encontrado", "message": "O cliente ainda não existe na plataforma. Sincronize o cliente antes das demais etapas.", "retry_allowed": True, "level": "error"},
+    "5": {"title": "Lista de equipamentos vazia", "message": "Nenhum equipamento foi informado para a operação solicitada.", "retry_allowed": True, "level": "error"},
+    "6": {"title": "Operação inválida", "message": "A plataforma recebeu um código de operação inválido ou incompleto.", "retry_allowed": False, "level": "error"},
+    "7": {"title": "Configuração inválida", "message": "A plataforma não encontrou uma configuração válida para este ID de integração.", "retry_allowed": False, "level": "error"},
+    "8": {"title": "Fabricante não encontrado", "message": "O fabricante informado não existe na Multiportal. Atualize o fabricante externo do equipamento.", "retry_allowed": True, "level": "error"},
+    "9": {"title": "Veículo em outro usuário", "message": "O veículo está associado a outro usuário/cliente na plataforma.", "retry_allowed": False, "level": "error"},
+    "10": {"title": "Equipamento em outro veículo", "message": "O equipamento já está instalado em outro veículo na Multiportal.", "retry_allowed": False, "level": "error"},
+    "11": {"title": "Equipamento já cadastrado neste veículo", "message": "A vinculação já existe na plataforma. Não é necessário reenviar.", "retry_allowed": False, "level": "success"},
+    "12": {"title": "Lista de veículos vazia", "message": "Nenhum veículo foi informado para a operação.", "retry_allowed": True, "level": "error"},
+    "13": {"title": "Lista de endereços vazia", "message": "O cliente precisa de endereço válido para ser enviado à plataforma.", "retry_allowed": True, "level": "error"},
+    "14": {"title": "Lista de contatos vazia", "message": "O cliente precisa de pelo menos um contato válido para a sincronização.", "retry_allowed": True, "level": "error"},
+    "15": {"title": "Tipo de cliente inválido", "message": "O tipo do cliente deve ser Pessoa Física ou Jurídica conforme o manual da Multiportal.", "retry_allowed": True, "level": "error"},
+    "16": {"title": "Documento inválido", "message": "CPF/CNPJ do cliente está ausente ou inválido para a integração.", "retry_allowed": True, "level": "error"},
+    "17": {"title": "Chassi inválido", "message": "O chassi do veículo é obrigatório e precisa estar válido para a Multiportal.", "retry_allowed": True, "level": "error"},
+    "18": {"title": "Número de série inválido", "message": "O número de série / ID do equipamento é obrigatório para a integração.", "retry_allowed": True, "level": "error"},
+    "19": {"title": "Fabricante inválido", "message": "O fabricante externo do equipamento não foi informado corretamente.", "retry_allowed": True, "level": "error"},
+    "20": {"title": "Cliente já cadastrado", "message": "O cliente já existe na Multiportal. O sistema pode seguir com atualização incremental.", "retry_allowed": False, "level": "success"},
+    "21": {"title": "Veículo já cadastrado", "message": "O veículo já existe na plataforma. O sistema continuará com atualização quando necessário.", "retry_allowed": False, "level": "success"},
+    "22": {"title": "Equipamento já cadastrado", "message": "O equipamento já existe na Multiportal. O sistema continuará com atualização quando necessário.", "retry_allowed": False, "level": "success"},
+    "23": {"title": "Veículo associado a outro cliente", "message": "O veículo está vinculado a outro cliente na Multiportal. É preciso ajustar o vínculo antes de reenviar.", "retry_allowed": False, "level": "error"},
+    "24": {"title": "Equipamento em outro veículo", "message": "O equipamento consta instalado em outro veículo na Multiportal.", "retry_allowed": False, "level": "error"},
+    "25": {"title": "Fabricante não encontrado", "message": "O código do fabricante não foi localizado na Multiportal. Atualize o cadastro do equipamento.", "retry_allowed": True, "level": "error"},
+    "26": {"title": "RG inválido", "message": "O RG do cliente está inválido para a plataforma.", "retry_allowed": True, "level": "error"},
+    "27": {"title": "Data de nascimento inválida", "message": "A data de nascimento do cliente não está no formato aceito pela plataforma.", "retry_allowed": True, "level": "error"},
+    "28": {"title": "Sexo inválido", "message": "O sexo informado para o cliente é inválido para a Multiportal.", "retry_allowed": True, "level": "error"},
+    "29": {"title": "Usuário de cadastro não encontrado", "message": "A plataforma não conseguiu localizar o usuário de cadastro associado à operação.", "retry_allowed": False, "level": "error"},
+    "30": {"title": "Veículo ausente", "message": "A operação foi enviada sem dados do veículo.", "retry_allowed": True, "level": "error"},
+    "31": {"title": "Equipamento ausente", "message": "A operação foi enviada sem os dados do equipamento.", "retry_allowed": True, "level": "error"},
+    "32": {"title": "Usuário ausente", "message": "A operação foi enviada sem os dados do usuário do portal.", "retry_allowed": True, "level": "error"},
+    "33": {"title": "Equipamento não encontrado", "message": "O equipamento ainda não existe na Multiportal. Sincronize o equipamento antes do vínculo.", "retry_allowed": True, "level": "error"},
+    "34": {"title": "Veículo não encontrado", "message": "O veículo ainda não existe na Multiportal. Sincronize o veículo antes do vínculo.", "retry_allowed": True, "level": "error"},
+    "35": {"title": "Status do chip inválido", "message": "O status da linha/chip está ausente ou fora do domínio aceito pela Multiportal.", "retry_allowed": True, "level": "error"},
+    "36": {"title": "Identificador ausente", "message": "Informe o número de série do equipamento ou o ICCID do chip para concluir a operação.", "retry_allowed": True, "level": "error"},
+    "37": {"title": "ICCID inválido", "message": "O ICCID informado está inválido para a plataforma.", "retry_allowed": True, "level": "error"},
+    "38": {"title": "Duplicidade de equipamento ou chip", "message": "A Multiportal identificou duplicidade no equipamento ou na linha/chip informada.", "retry_allowed": False, "level": "error"},
+    "39": {"title": "Login inválido", "message": "O login do usuário do portal está ausente ou inválido.", "retry_allowed": True, "level": "error"},
+    "40": {"title": "Login já cadastrado", "message": "O login do usuário já existe na Multiportal. O sistema pode seguir com atualização.", "retry_allowed": False, "level": "success"},
+    "41": {"title": "Grupo de acesso inválido", "message": "Os grupos de acesso do usuário não foram informados corretamente.", "retry_allowed": True, "level": "error"},
+    "42": {"title": "Grupo inexistente", "message": "Foi informado um grupo vazio ou inválido para o usuário da Multiportal.", "retry_allowed": True, "level": "error"},
+    "43": {"title": "Grupo não encontrado", "message": "O grupo de acesso informado não existe no portal Multiportal.", "retry_allowed": False, "level": "error"},
+    "44": {"title": "Grupo não permitido", "message": "O grupo de acesso informado não pertence a este portal Multiportal.", "retry_allowed": False, "level": "error"},
+    "45": {"title": "Tipo de usuário inválido", "message": "O tipo de usuário enviado para a Multiportal está inválido.", "retry_allowed": True, "level": "error"},
+    "46": {"title": "Tipo de usuário não permitido", "message": "A plataforma não permite este tipo de usuário para o portal configurado.", "retry_allowed": False, "level": "error"},
+    "47": {"title": "Tipo de veículo inválido", "message": "O tipo do veículo precisa seguir o domínio aceito pela Multiportal.", "retry_allowed": True, "level": "error"},
+    "48": {"title": "Tipo de veículo não permitido", "message": "O tipo do veículo informado não é permitido neste portal.", "retry_allowed": False, "level": "error"},
+    "49": {"title": "E-mail inválido", "message": "O e-mail informado está vazio ou inválido para a Multiportal.", "retry_allowed": True, "level": "error"},
+    "50": {"title": "Categoria do cliente inválida", "message": "A categoria do cliente precisa ser Cliente (Pessoa) ou Empresa.", "retry_allowed": True, "level": "error"},
+    "51": {"title": "Chave de pesquisa inválida", "message": "A chave de pesquisa enviada para a Multiportal está em formato inválido.", "retry_allowed": False, "level": "error"},
+    "52": {"title": "Data inválida", "message": "A data informada não está no formato aceito pela Multiportal.", "retry_allowed": True, "level": "error"},
+    "53": {"title": "Formato inválido", "message": "Um ou mais parâmetros foram enviados em formato incompatível com o serviço.", "retry_allowed": True, "level": "error"},
+    "54": {"title": "Usuário não encontrado", "message": "O usuário informado não foi localizado na Multiportal.", "retry_allowed": True, "level": "error"},
+    "55": {"title": "Equipamento já desvinculado", "message": "O equipamento já está desvinculado na Multiportal.", "retry_allowed": False, "level": "success"},
+    "56": {"title": "Equipamento já vinculado a este veículo", "message": "O vínculo do equipamento com este veículo já existe na plataforma.", "retry_allowed": False, "level": "success"},
+    "57": {"title": "Equipamento vinculado a outro veículo", "message": "O equipamento ainda está vinculado a outro veículo na Multiportal.", "retry_allowed": False, "level": "error"},
+    "58": {"title": "Veículo já desvinculado", "message": "O veículo já está desvinculado do cliente na plataforma.", "retry_allowed": False, "level": "success"},
+    "59": {"title": "Veículo já vinculado a este cliente", "message": "O vínculo do veículo com este cliente já existe na plataforma.", "retry_allowed": False, "level": "success"},
+    "60": {"title": "Veículo vinculado a outro cliente", "message": "O veículo está vinculado a outro cliente na Multiportal.", "retry_allowed": False, "level": "error"},
+    "61": {"title": "Novo equipamento sem número de série", "message": "Na troca, o novo equipamento precisa ter número de série / ID válido.", "retry_allowed": True, "level": "error"},
+    "62": {"title": "Novo equipamento sem fabricante", "message": "Na troca, o novo equipamento precisa ter fabricante válido.", "retry_allowed": True, "level": "error"},
+    "63": {"title": "Fabricante do novo equipamento não encontrado", "message": "O fabricante do novo equipamento não existe na Multiportal.", "retry_allowed": True, "level": "error"},
+    "64": {"title": "Novo equipamento já vinculado a este veículo", "message": "O novo equipamento já está vinculado a este veículo na Multiportal.", "retry_allowed": False, "level": "success"},
+    "65": {"title": "Novo equipamento vinculado a outro veículo", "message": "O novo equipamento ainda está vinculado a outro veículo na Multiportal.", "retry_allowed": False, "level": "error"},
+    "94": {"title": "Status não alterado", "message": "A plataforma não conseguiu alterar o status solicitado.", "retry_allowed": True, "level": "error"},
+    "95": {"title": "Dados não alterados", "message": "A plataforma não conseguiu atualizar os dados informados.", "retry_allowed": True, "level": "error"},
+    "96": {"title": "Tipo não encontrado", "message": "Um tipo ou domínio informado não foi reconhecido pela plataforma.", "retry_allowed": True, "level": "error"},
+    "97": {"title": "Erro de validação", "message": "A Multiportal rejeitou a operação por validação de dados. Revise os campos obrigatórios e o formato enviado.", "retry_allowed": True, "level": "error"},
+    "98": {"title": "Erro de integração", "message": "A Multiportal reportou erro interno de integração. É recomendável tentar novamente após validar os dados locais.", "retry_allowed": True, "level": "error"},
+    "99": {"title": "Erro de execução", "message": "A chamada para a Multiportal falhou durante a execução do serviço.", "retry_allowed": True, "level": "error"},
+    "199": {"title": "Operação não realizada", "message": "A operação não foi concluída na plataforma.", "retry_allowed": True, "level": "error"},
+    "300": {"title": "Erro ao pesquisar aplicação/usuário", "message": "A Multiportal não conseguiu localizar a aplicação ou o usuário de cadastro associado.", "retry_allowed": False, "level": "error"},
+    "665": {"title": "Duplicidade", "message": "A plataforma identificou registros duplicados para a operação solicitada.", "retry_allowed": False, "level": "error"},
+    "666": {"title": "Erro de banco na Multiportal", "message": "A Multiportal informou erro interno de banco de dados ao processar a requisição.", "retry_allowed": True, "level": "error"},
+    "1001": {"title": "Transação sem ID", "message": "A requisição foi enviada sem identificador de transação.", "retry_allowed": True, "level": "error"},
+    "1011": {"title": "Transação já em uso", "message": "O identificador da transação já foi utilizado anteriormente na Multiportal.", "retry_allowed": True, "level": "warning"},
+}
+
+
+def interpret_multiportal_response(operation: str, status_code: str | None, status_description: str | None) -> dict[str, Any]:
+    operation_label = OPERATION_LABELS.get(operation, operation)
+    info = RETURN_CODE_MAP.get(str(status_code), {}) if status_code is not None else {}
+    title = info.get("title") or "Retorno não mapeado"
+    message = info.get("message") or (status_description or "A plataforma retornou uma resposta sem mapeamento detalhado.")
+    retry_allowed = bool(info.get("retry_allowed", not str(status_code or "") in {"0", "200"}))
+    level = info.get("level") or ("success" if str(status_code or "") in {"0", "200"} else "warning")
+    technical_message = status_description or info.get("title") or None
+    return {
+        "operation_label": operation_label,
+        "friendly_title": title,
+        "friendly_message": message,
+        "technical_message": technical_message,
+        "retry_allowed": retry_allowed,
+        "level": level,
+    }

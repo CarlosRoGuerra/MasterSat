@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Recurse -Directory)",
+      "Bash(Select-Object -First 50 FullName)",
+      "Bash(npm install *)",
+      "Bash(npx tsc *)",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\crrob\\\\OneDrive\\\\Área de Trabalho\\\\MasterSat\" -Directory)",
+      "Bash(Select-Object Name)",
+      "Bash(xargs grep -l \"pdf\\\\|PDF\\\\|reportlab\\\\|weasyprint\\\\|fpdf\")",
+      "Bash(dir /s /b)"
+    ]
+  }
+}
