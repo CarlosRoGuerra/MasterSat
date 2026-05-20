@@ -199,6 +199,7 @@ export default function VeiculosPage() {
   const [uninstallServiceProductId, setUninstallServiceProductId] = useState('');
   const [error, setError] = useState('');
   const [feedback, setFeedback] = useState('');
+  const [modalError, setModalError] = useState('');
 
   async function loadVehicles(currentToken: string) {
     setLoading(true);
@@ -281,11 +282,13 @@ export default function VeiculosPage() {
 
   function openCreateModal() {
     resetForm();
+    setModalError('');
     setModalOpen(true);
   }
 
   function openEditModal(vehicle: Vehicle) {
     setSelectedVehicle(vehicle);
+    setModalError('');
     setIsEditing(true);
     setForm({
       client_id: String(vehicle.client_id || ''),
@@ -336,7 +339,7 @@ export default function VeiculosPage() {
         }));
       }
     } catch (err) {
-      setError(parseError(err));
+      setModalError(parseError(err));
     } finally {
       setLookingUpCep(false);
     }
@@ -346,7 +349,7 @@ export default function VeiculosPage() {
     event.preventDefault();
     if (!token || !canEdit) return;
     setSaving(true);
-    setError('');
+    setModalError('');
     setFeedback('');
     try {
       const payload = {
@@ -396,7 +399,7 @@ export default function VeiculosPage() {
       setSelectedVehicle(saved);
       await loadDocuments(token, saved.id);
     } catch (err) {
-      setError(parseError(err));
+      setModalError(parseError(err));
     } finally {
       setSaving(false);
     }
@@ -462,6 +465,7 @@ export default function VeiculosPage() {
 
   async function confirmUninstall() {
     if (!token || !selectedVehicle || !canEdit) return;
+    setModalError('');
     try {
       const params = new URLSearchParams();
       if (uninstallDate) params.set('uninstall_date', uninstallDate);
@@ -474,7 +478,7 @@ export default function VeiculosPage() {
       const updated = await apiFetch<Vehicle>(`/vehicles/${selectedVehicle.id}`, {}, token);
       setSelectedVehicle(updated);
     } catch (err) {
-      setError(parseError(err));
+      setModalError(parseError(err));
     }
   }
 
@@ -585,8 +589,9 @@ export default function VeiculosPage() {
         </div>
       </section>
 
-      <Modal open={modalOpen} onClose={() => { setModalOpen(false); resetForm(); }} title={isEditing ? 'Editar veículo' : 'Novo veículo'} description="Mantenha o cadastro técnico e documental do veículo em um fluxo de preenchimento mais limpo." size="2xl">
+      <Modal open={modalOpen} onClose={() => { setModalOpen(false); resetForm(); setModalError(''); }} title={isEditing ? 'Editar veículo' : 'Novo veículo'} description="Mantenha o cadastro técnico e documental do veículo em um fluxo de preenchimento mais limpo." size="2xl">
         <form className="space-y-6" onSubmit={submitVehicle}>
+          {modalError && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>}
           <div className="grid gap-4 md:grid-cols-3">
             <select className={fieldClass} value={form.client_id} onChange={(e) => setForm((prev) => ({ ...prev, client_id: e.target.value }))} required>
               <option value="">Selecione o cliente</option>
@@ -644,8 +649,9 @@ export default function VeiculosPage() {
         </form>
       </Modal>
 
-      <Modal open={uninstallOpen} onClose={() => setUninstallOpen(false)} title="Registrar desinstalação" description="Gere a desinstalação do veículo com pró-rata, taxa de serviço e retorno do equipamento ao estoque." size="lg">
+      <Modal open={uninstallOpen} onClose={() => { setUninstallOpen(false); setModalError(''); }} title="Registrar desinstalação" description="Gere a desinstalação do veículo com pró-rata, taxa de serviço e retorno do equipamento ao estoque." size="lg">
         <div className="space-y-5">
+          {modalError && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>}
           <div className="grid gap-4 md:grid-cols-2">
             <label className="block"><span className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-200">Data da desinstalação</span><input type="date" className={fieldClass} value={uninstallDate} onChange={(e) => setUninstallDate(e.target.value)} /></label>
             <label className="block"><span className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-200">Taxa de desinstalação</span><select className={fieldClass} value={uninstallServiceProductId} onChange={(e) => setUninstallServiceProductId(e.target.value)}><option value="">Selecione um serviço</option>{serviceProducts.map((item) => <option key={item.id} value={item.id}>{item.name}{item.auto_add_on_uninstall ? ' • recomendado' : ''}</option>)}</select></label>

@@ -13,6 +13,7 @@ import {
   ShieldCheck,
   LogOut,
   Satellite,
+  PlugZap,
 } from 'lucide-react';
 
 import { clearSession } from '@/lib/auth';
@@ -26,6 +27,7 @@ const items = [
   { href: '/ordens-servico', label: 'Ordens de serviço',    description: 'Operação em campo',                 icon: ClipboardList },
   { href: '/financeiro',     label: 'Financeiro',           description: 'Planos, contratos e cobranças',     icon: Wallet },
   { href: '/usuarios',       label: 'Equipe administrativa', description: 'Perfis e acessos',                 icon: ShieldCheck },
+  { href: '/integracao',     label: 'Integração Multiportal', description: 'Sincronização com plataforma',    icon: PlugZap },
 ];
 
 export function Sidebar() {

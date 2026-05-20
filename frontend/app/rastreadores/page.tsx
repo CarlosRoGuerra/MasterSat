@@ -34,6 +34,8 @@ type Tracker = {
   client_name?: string | null;
   client_cpf_cnpj?: string | null;
   vehicle_plate?: string | null;
+  active_plan_id?: number | null;
+  active_plan_name?: string | null;
   integration_status?: string | null;
   integration_last_code?: string | null;
   integration_last_description?: string | null;
@@ -42,6 +44,7 @@ type Tracker = {
 type ClientOption = { id: number; name: string; cpf_cnpj: string };
 type VehicleOption = { id: number; client_id: number; plate: string; model?: string | null };
 type ManufacturerOption = { code: string; description: string };
+type PlanOption = { id: number; name: string; price: number };
 type TrackerHistory = { id: number; action: string; previous_vehicle_id?: number | null; new_vehicle_id?: number | null; previous_client_id?: number | null; new_client_id?: number | null; new_status?: string | null; event_date?: string | null; notes?: string | null; created_at?: string | null };
 type ContractInfo = { id: number; plan_name?: string | null; status: string; monthly_value?: number | null; start_date?: string | null; next_due_date?: string | null };
 
@@ -62,6 +65,11 @@ type TrackerFormState = {
   client_id: string;
   vehicle_id: string;
   client_lookup_document: string;
+  link_plan_id: string;
+  link_start_date: string;
+  link_billing_day: string;
+  link_payment_method: string;
+  link_billing_cycles: string;
 };
 
 const initialForm: TrackerFormState = {
@@ -81,6 +89,11 @@ const initialForm: TrackerFormState = {
   client_id: '',
   vehicle_id: '',
   client_lookup_document: '',
+  link_plan_id: '',
+  link_start_date: new Date().toISOString().split('T')[0],
+  link_billing_day: '',
+  link_payment_method: '',
+  link_billing_cycles: '12',
 };
 
 const fieldClass = 'w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-brand-500 dark:border-slate-700 dark:bg-slate-950/70 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-cyan-400';
@@ -139,8 +152,10 @@ export default function RastreadoresPage() {
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [vehicles, setVehicles] = useState<VehicleOption[]>([]);
   const [manufacturers, setManufacturers] = useState<ManufacturerOption[]>([]);
+  const [plans, setPlans] = useState<PlanOption[]>([]);
   const [history, setHistory] = useState<TrackerHistory[]>([]);
   const [trackerContract, setTrackerContract] = useState<ContractInfo | null>(null);
+  const [vehicleTrackers, setVehicleTrackers] = useState<Tracker[]>([]);
   const [selectedTracker, setSelectedTracker] = useState<Tracker | null>(null);
   const [form, setForm] = useState<TrackerFormState>(initialForm);
   const [search, setSearch] = useState('');
@@ -153,6 +168,8 @@ export default function RastreadoresPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [feedback, setFeedback] = useState('');
+  const [modalError, setModalError] = useState('');
+  const [manufacturerError, setManufacturerError] = useState('');
 
   async function loadBaseData(currentToken: string) {
     setLoading(true);
@@ -164,19 +181,23 @@ export default function RastreadoresPage() {
       if (clientFilter) query.set('client_id', clientFilter);
       if (vehicleFilter) query.set('vehicle_id', vehicleFilter);
       query.set('limit', '100');
-      const [trackerResponse, clientResponse, vehicleResponse] = await Promise.all([
+      const [trackerResponse, clientResponse, vehicleResponse, planResponse] = await Promise.all([
         apiFetch<Tracker[]>(`/trackers?${query.toString()}`, {}, currentToken),
         apiFetch<ClientOption[]>('/clients?limit=300', {}, currentToken),
         apiFetch<VehicleOption[]>('/vehicles?limit=400', {}, currentToken),
+        apiFetch<PlanOption[]>('/plans?limit=100', {}, currentToken).catch(() => [] as PlanOption[]),
       ]);
       setTrackers(trackerResponse);
       setClients(clientResponse);
       setVehicles(vehicleResponse);
+      setPlans(planResponse);
       try {
         const manufacturerResponse = await apiFetch<ManufacturerOption[]>('/integrations/multiportal/manufacturers', {}, currentToken);
         setManufacturers(manufacturerResponse);
-      } catch {
+        setManufacturerError('');
+      } catch (err) {
         setManufacturers([]);
+        setManufacturerError(parseError(err));
       }
       if (selectedTracker) setSelectedTracker(trackerResponse.find((item) => item.id === selectedTracker.id) || null);
     } catch (err) {
@@ -195,15 +216,19 @@ export default function RastreadoresPage() {
     if (!token || !selectedTracker) {
       setHistory([]);
       setTrackerContract(null);
+      setVehicleTrackers([]);
       return;
     }
     apiFetch<TrackerHistory[]>(`/trackers/${selectedTracker.id}/history`, {}, token).then(setHistory).catch(() => setHistory([]));
+    apiFetch<ContractInfo[]>(`/contracts?tracker_id=${selectedTracker.id}&status=ativo`, {}, token)
+      .then((items) => setTrackerContract(items[0] || null))
+      .catch(() => setTrackerContract(null));
     if (selectedTracker.vehicle_id) {
-      apiFetch<ContractInfo[]>(`/contracts?vehicle_id=${selectedTracker.vehicle_id}&status=ativo`, {}, token)
-        .then((items) => setTrackerContract(items[0] || null))
-        .catch(() => setTrackerContract(null));
+      apiFetch<Tracker[]>(`/trackers?vehicle_id=${selectedTracker.vehicle_id}&limit=20`, {}, token)
+        .then((items) => setVehicleTrackers(items.filter((t) => t.id !== selectedTracker.id)))
+        .catch(() => setVehicleTrackers([]));
     } else {
-      setTrackerContract(null);
+      setVehicleTrackers([]);
     }
   }, [token, selectedTracker?.id]);
 
@@ -211,6 +236,11 @@ export default function RastreadoresPage() {
     if (!form.client_id) return vehicles;
     return vehicles.filter((item) => item.client_id === Number(form.client_id));
   }, [vehicles, form.client_id]);
+
+  const vehicleExistingTrackers = useMemo(() => {
+    if (!form.vehicle_id) return [];
+    return trackers.filter((t) => t.vehicle_id === Number(form.vehicle_id) && (!selectedTracker || t.id !== selectedTracker.id));
+  }, [trackers, form.vehicle_id, selectedTracker]);
 
   const stats = useMemo(() => ({
     total: trackers.length,
@@ -226,11 +256,13 @@ export default function RastreadoresPage() {
 
   function openCreateModal() {
     resetForm();
+    setModalError('');
     setModalOpen(true);
   }
 
   function openEditModal(tracker: Tracker) {
     setSelectedTracker(tracker);
+    setModalError('');
     setForm({
       imei: tracker.imei || '',
       brand: tracker.brand || '',
@@ -248,6 +280,11 @@ export default function RastreadoresPage() {
       client_id: tracker.client_id ? String(tracker.client_id) : '',
       vehicle_id: tracker.vehicle_id ? String(tracker.vehicle_id) : '',
       client_lookup_document: tracker.client_cpf_cnpj ? formatCpfCnpj(tracker.client_cpf_cnpj) : '',
+      link_plan_id: '',
+      link_start_date: new Date().toISOString().split('T')[0],
+      link_billing_day: '',
+      link_payment_method: '',
+      link_billing_cycles: '12',
     });
     setIsEditing(true);
     setModalOpen(true);
@@ -272,6 +309,8 @@ export default function RastreadoresPage() {
     setFeedback('');
     try {
       const selectedManufacturer = manufacturers.find((item) => item.code === form.external_manufacturer_id);
+      const isLinkingVehicle = !!form.vehicle_id && (!selectedTracker || selectedTracker.vehicle_id !== Number(form.vehicle_id));
+
       const payload = {
         imei: onlyDigits(form.imei),
         brand: form.brand.trim() || null,
@@ -289,16 +328,53 @@ export default function RastreadoresPage() {
         client_id: form.client_id ? Number(form.client_id) : null,
         vehicle_id: form.vehicle_id ? Number(form.vehicle_id) : null,
       };
-      const saved = isEditing && selectedTracker
-        ? await apiFetch<Tracker>(`/trackers/${selectedTracker.id}`, { method: 'PUT', body: JSON.stringify(payload) }, token)
-        : await apiFetch<Tracker>('/trackers', { method: 'POST', body: JSON.stringify(payload) }, token);
+
+      let saved: Tracker;
+      if (isEditing && selectedTracker) {
+        saved = await apiFetch<Tracker>(`/trackers/${selectedTracker.id}`, { method: 'PUT', body: JSON.stringify(payload) }, token);
+
+        // Se está vinculando a um veículo novo e selecionou plano → usar endpoint dedicado
+        if (isLinkingVehicle && form.link_plan_id) {
+          await apiFetch(`/trackers/${selectedTracker.id}/link-vehicle`, {
+            method: 'POST',
+            body: JSON.stringify({
+              vehicle_id: Number(form.vehicle_id),
+              plan_id: Number(form.link_plan_id),
+              start_date: form.link_start_date,
+              billing_day: form.link_billing_day ? Number(form.link_billing_day) : null,
+              payment_method: form.link_payment_method || null,
+              auto_generate_billings: true,
+              billing_cycles: Number(form.link_billing_cycles) || 12,
+            }),
+          }, token);
+        }
+      } else {
+        saved = await apiFetch<Tracker>('/trackers', { method: 'POST', body: JSON.stringify(payload) }, token);
+
+        // Após criar, se selecionou veículo + plano → vincular com contrato
+        if (form.vehicle_id && form.link_plan_id) {
+          await apiFetch(`/trackers/${saved.id}/link-vehicle`, {
+            method: 'POST',
+            body: JSON.stringify({
+              vehicle_id: Number(form.vehicle_id),
+              plan_id: Number(form.link_plan_id),
+              start_date: form.link_start_date,
+              billing_day: form.link_billing_day ? Number(form.link_billing_day) : null,
+              payment_method: form.link_payment_method || null,
+              auto_generate_billings: true,
+              billing_cycles: Number(form.link_billing_cycles) || 12,
+            }),
+          }, token);
+        }
+      }
+
       setFeedback(isEditing ? 'Rastreador atualizado com sucesso.' : 'Rastreador cadastrado com sucesso.');
       setModalOpen(false);
       resetForm();
       await loadBaseData(token);
       setSelectedTracker(saved);
     } catch (err) {
-      setError(parseError(err));
+      setModalError(parseError(err));
     } finally {
       setSaving(false);
     }
@@ -356,6 +432,7 @@ export default function RastreadoresPage() {
                       </div>
                       <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">{[tracker.brand, tracker.model].filter(Boolean).join(' • ') || 'Sem marca/modelo'}</p>
                       <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{tracker.client_name || 'Sem cliente'} • {tracker.vehicle_plate ? `Veículo ${tracker.vehicle_plate}` : 'Sem veículo'}</p>
+                      {tracker.active_plan_name && <p className="mt-1 text-xs font-medium text-brand-600 dark:text-cyan-400">{tracker.active_plan_name}</p>}
                     </div>
                     {canEdit ? <Button type="button" onClick={(event) => { event.stopPropagation(); openEditModal(tracker); }}>Editar</Button> : null}
                   </div>
@@ -391,6 +468,26 @@ export default function RastreadoresPage() {
                     <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">{selectedTracker.vehicle_id ? 'Nenhum contrato ativo — cadastre em Contratos' : 'Vincule a um veículo para ver o plano'}</p>
                   )}
                 </div>
+                {vehicleTrackers.length > 0 && (
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60">
+                    <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Outros equipamentos neste veículo</p>
+                    <ul className="mt-3 space-y-2">
+                      {vehicleTrackers.map((t) => (
+                        <li
+                          key={t.id}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => setSelectedTracker(t)}
+                          onKeyDown={(e) => cardKeyHandler(e, () => setSelectedTracker(t))}
+                          className="flex cursor-pointer items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm transition hover:border-brand-400 dark:border-slate-700 dark:bg-slate-900 dark:hover:border-cyan-500"
+                        >
+                          <span className="font-medium text-slate-800 dark:text-white">{t.imei}</span>
+                          <span className="text-xs text-slate-500 dark:text-slate-400">{t.active_plan_name || 'sem plano'}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </div>
             ) : null}
           </Card>
@@ -409,8 +506,9 @@ export default function RastreadoresPage() {
         </div>
       </section>
 
-      <Modal open={modalOpen} onClose={() => { setModalOpen(false); resetForm(); }} title={isEditing ? 'Editar rastreador' : 'Novo rastreador'} description="Cadastre o equipamento em um fluxo mais limpo, com foco no identificador técnico, vínculo e dados essenciais." size="xl">
+      <Modal open={modalOpen} onClose={() => { setModalOpen(false); resetForm(); setModalError(''); }} title={isEditing ? 'Editar rastreador' : 'Novo rastreador'} description="Cadastre o equipamento em um fluxo mais limpo, com foco no identificador técnico, vínculo e dados essenciais." size="xl">
         <form className="space-y-6" onSubmit={submitTracker}>
+          {modalError && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>}
           <div className="grid gap-4 md:grid-cols-2">
             <input className={fieldClass} placeholder="Número de série / ID" value={form.imei} onChange={(e) => setForm((prev) => ({ ...prev, imei: onlyDigits(e.target.value).slice(0, 20) }))} required />
             <select className={fieldClass} value={form.status} onChange={(e) => setForm((prev) => ({ ...prev, status: e.target.value as TrackerStatus }))}>{statusOptions.map((option) => <option key={option} value={option}>{option.replace(/_/g, ' ')}</option>)}</select>
@@ -426,16 +524,65 @@ export default function RastreadoresPage() {
               <Button type="button" onClick={findClientByDocument}>Buscar cliente</Button>
             </div>
             <div className="mt-4 grid gap-4 md:grid-cols-2">
-              <select className={fieldClass} value={form.client_id} onChange={(e) => setForm((prev) => ({ ...prev, client_id: e.target.value, vehicle_id: '' }))}><option value="">Sem cliente</option>{clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select>
+              <select className={fieldClass} value={form.client_id} onChange={(e) => setForm((prev) => ({ ...prev, client_id: e.target.value, vehicle_id: '', link_plan_id: '' }))}><option value="">Sem cliente</option>{clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select>
               <select className={fieldClass} value={form.vehicle_id} onChange={(e) => setForm((prev) => ({ ...prev, vehicle_id: e.target.value }))}><option value="">Sem veículo</option>{filteredVehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.plate} {vehicle.model ? `• ${vehicle.model}` : ''}</option>)}</select>
             </div>
           </div>
 
+          {form.vehicle_id && (
+            <div className="rounded-[24px] border border-brand-200 bg-brand-50/50 p-5 dark:border-cyan-900 dark:bg-cyan-950/30">
+              <p className="text-sm font-semibold text-slate-900 dark:text-white">Plano contratado</p>
+              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Selecione o plano para criar o contrato automaticamente ao vincular. Deixe em branco para vincular sem contrato.</p>
+              {vehicleExistingTrackers.length > 0 && (
+                <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-800 dark:bg-amber-950/40">
+                  <p className="text-xs font-semibold text-amber-700 dark:text-amber-400">Este veículo já possui {vehicleExistingTrackers.length} rastreador(es) instalado(s):</p>
+                  <ul className="mt-1 space-y-0.5">
+                    {vehicleExistingTrackers.map((t) => (
+                      <li key={t.id} className="text-xs text-amber-600 dark:text-amber-300">• {t.imei} — {t.active_plan_name || 'sem plano'}</li>
+                    ))}
+                  </ul>
+                  <p className="mt-2 text-xs text-amber-600 dark:text-amber-300">Cada equipamento pode ter seu próprio plano e contrato.</p>
+                </div>
+              )}
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                <select className={fieldClass} value={form.link_plan_id} onChange={(e) => setForm((prev) => ({ ...prev, link_plan_id: e.target.value }))}>
+                  <option value="">Sem contrato agora</option>
+                  {plans.map((p) => <option key={p.id} value={p.id}>{p.name} — R$ {Number(p.price ?? 0).toFixed(2)}/mês</option>)}
+                </select>
+                <input type="date" className={fieldClass} value={form.link_start_date} onChange={(e) => setForm((prev) => ({ ...prev, link_start_date: e.target.value }))} title="Início do contrato" />
+                {form.link_plan_id && (
+                  <>
+                    <select className={fieldClass} value={form.link_payment_method} onChange={(e) => setForm((prev) => ({ ...prev, link_payment_method: e.target.value }))}>
+                      <option value="">Forma de pagamento</option>
+                      <option value="boleto">Boleto</option>
+                      <option value="pix">PIX</option>
+                      <option value="cartao">Cartão</option>
+                      <option value="deposito">Depósito</option>
+                      <option value="dinheiro">Dinheiro</option>
+                    </select>
+                    <div className="grid grid-cols-2 gap-3">
+                      <input className={fieldClass} placeholder="Dia venc. (1-28)" type="number" min={1} max={28} value={form.link_billing_day} onChange={(e) => setForm((prev) => ({ ...prev, link_billing_day: e.target.value }))} />
+                      <input className={fieldClass} placeholder="Ciclos (meses)" type="number" min={1} max={60} value={form.link_billing_cycles} onChange={(e) => setForm((prev) => ({ ...prev, link_billing_cycles: e.target.value }))} />
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
           <div className="grid gap-4 md:grid-cols-3">
-            <select className={fieldClass} value={form.external_manufacturer_id} onChange={(e) => { const option = manufacturers.find((item) => item.code === e.target.value); setForm((prev) => ({ ...prev, external_manufacturer_id: e.target.value, external_manufacturer_label: option?.description || '' })); }}>
-              <option value="">Fabricante Multiportal</option>
-              {manufacturers.map((option) => <option key={option.code} value={option.code}>{option.code} • {option.description}</option>)}
-            </select>
+            <div className="space-y-1">
+              <select className={fieldClass} value={form.external_manufacturer_id} onChange={(e) => { const option = manufacturers.find((item) => item.code === e.target.value); setForm((prev) => ({ ...prev, external_manufacturer_id: e.target.value, external_manufacturer_label: option?.description || '' })); }}>
+                <option value="">{manufacturers.length === 0 ? 'Fabricante Multiportal (sem dados)' : 'Fabricante Multiportal'}</option>
+                {manufacturers.map((option) => <option key={option.code} value={option.code}>{option.code} • {option.description}</option>)}
+              </select>
+              {manufacturerError && (
+                <div className="flex items-center gap-2">
+                  <p className="text-xs text-rose-600 dark:text-rose-400">{manufacturerError}</p>
+                  <button type="button" onClick={() => token && loadBaseData(token)} className="text-xs font-semibold text-brand-600 underline dark:text-cyan-400">Recarregar</button>
+                </div>
+              )}
+            </div>
             <input className={fieldClass} placeholder="Firmware" value={form.firmware} onChange={(e) => setForm((prev) => ({ ...prev, firmware: e.target.value.slice(0, 60) }))} />
             <input className={fieldClass} placeholder="Linha / MSISDN" value={form.sim_number} onChange={(e) => setForm((prev) => ({ ...prev, sim_number: onlyDigits(e.target.value).slice(0, 20) }))} />
             <input className={fieldClass} placeholder="ICCID" value={form.sim_iccid} onChange={(e) => setForm((prev) => ({ ...prev, sim_iccid: onlyDigits(e.target.value).slice(0, 22) }))} />

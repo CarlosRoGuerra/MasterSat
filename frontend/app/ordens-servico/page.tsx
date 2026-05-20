@@ -199,6 +199,7 @@ export default function ServiceOrdersPage() {
   const [docFiles, setDocFiles] = useState<File[]>([]);
   const [error, setError] = useState('');
   const [feedback, setFeedback] = useState('');
+  const [modalError, setModalError] = useState('');
 
   const filteredVehicles = useMemo(() => {
     if (!form.client_id) return vehicles;
@@ -299,12 +300,14 @@ export default function ServiceOrdersPage() {
 
   function openCreateModal() {
     resetForm();
+    setModalError('');
     setModalOpen(true);
   }
 
   function fillForm(order: ServiceOrder) {
     setSelectedOrder(order);
     setIsEditing(true);
+    setModalError('');
     setForm({
       type: order.type,
       status: order.status,
@@ -335,7 +338,7 @@ export default function ServiceOrdersPage() {
     event.preventDefault();
     if (!token || !canEdit) return;
     setSaving(true);
-    setError('');
+    setModalError('');
     setFeedback('');
     try {
       const payload = {
@@ -360,7 +363,7 @@ export default function ServiceOrdersPage() {
       setSelectedOrder(saved);
       await loadOrderDetails(token, saved.id);
     } catch (err) {
-      setError(parseError(err));
+      setModalError(parseError(err));
     } finally {
       setSaving(false);
     }
@@ -470,7 +473,14 @@ export default function ServiceOrdersPage() {
 
             <div className="mt-5 grid gap-3">
               {orders.length === 0 ? <p className="rounded-2xl border border-dashed border-slate-300 px-4 py-6 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">Nenhuma ordem de serviço encontrada com os filtros atuais.</p> : orders.map((order) => (
-                <button key={order.id} type="button" onClick={() => setSelectedOrder(order)} className={`rounded-[24px] border p-5 text-left transition ${selectedOrder?.id === order.id ? 'border-brand-500 bg-brand-50/60 shadow-sm dark:border-cyan-400 dark:bg-cyan-400/10' : 'border-slate-200 bg-white hover:-translate-y-0.5 hover:border-brand-400 hover:shadow-lg dark:border-slate-800 dark:bg-slate-900'}`}>
+                <div
+                  key={order.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setSelectedOrder(order)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedOrder(order); } }}
+                  className={`cursor-pointer rounded-[24px] border p-5 text-left transition ${selectedOrder?.id === order.id ? 'border-brand-500 bg-brand-50/60 shadow-sm dark:border-cyan-400 dark:bg-cyan-400/10' : 'border-slate-200 bg-white hover:-translate-y-0.5 hover:border-brand-400 hover:shadow-lg dark:border-slate-800 dark:bg-slate-900'}`}
+                >
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <div className="flex flex-wrap items-center gap-2">
@@ -482,7 +492,7 @@ export default function ServiceOrdersPage() {
                     </div>
                     {canEdit ? <Button type="button" onClick={(event) => { event.stopPropagation(); fillForm(order); }}>Editar</Button> : null}
                   </div>
-                </button>
+                </div>
               ))}
             </div>
           </Card>
@@ -581,8 +591,11 @@ export default function ServiceOrdersPage() {
         </div>
       </section>
 
-      <Modal open={modalOpen} onClose={() => { setModalOpen(false); resetForm(); }} title={isEditing ? 'Editar ordem de serviço' : 'Nova ordem de serviço'} description="Abra a ordem via modal, selecione o tipo de atendimento e configure o checklist conforme o serviço.">
+      <Modal open={modalOpen} onClose={() => { setModalOpen(false); resetForm(); setModalError(''); }} title={isEditing ? 'Editar ordem de serviço' : 'Nova ordem de serviço'} description="Abra a ordem via modal, selecione o tipo de atendimento e configure o checklist conforme o serviço.">
         <form className="space-y-6" onSubmit={handleSubmit}>
+          {modalError && (
+            <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>
+          )}
           <div className="grid gap-4 md:grid-cols-2">
             <select className={fieldClass} value={form.type} onChange={(e) => useTemplate(e.target.value as OrderType)}>
               {orderTypeOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}

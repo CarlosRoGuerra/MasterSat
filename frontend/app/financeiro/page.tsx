@@ -48,7 +48,29 @@ function parseError(error: unknown) { return error instanceof Error ? error.mess
 function formatCurrency(value: number) { return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value || 0); }
 function intervalLabel(months: number) { return ({ 1: 'Mensal', 3: 'Trimestral', 6: 'Semestral', 12: 'Anual' } as Record<number, string>)[months] || `${months} meses`; }
 function statusBadge(status: string) { switch (status) { case 'paga': return 'border-emerald-200 bg-emerald-50 text-emerald-700'; case 'vencida': return 'border-rose-200 bg-rose-50 text-rose-700'; case 'cancelada': return 'border-amber-200 bg-amber-50 text-amber-700'; default: return 'border-slate-200 bg-slate-50 text-slate-700'; } }
-async function downloadProtectedFile(path: string, token: string, filename: string) { const response = await fetch(`${API_URL.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`, { headers: { Authorization: `Bearer ${token}` } }); if (!response.ok) throw new Error(await response.text()); const blob = await response.blob(); const url = window.URL.createObjectURL(blob); const anchor = document.createElement('a'); anchor.href = url; anchor.download = filename; document.body.appendChild(anchor); anchor.click(); anchor.remove(); window.URL.revokeObjectURL(url); }
+async function downloadProtectedFile(path: string, token: string, filename: string): Promise<void> {
+  const url = `${API_URL.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
+  let response: Response;
+  try {
+    response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  } catch {
+    throw new Error('Não foi possível conectar ao servidor. Verifique se o backend está em execução.');
+  }
+  if (!response.ok) {
+    let detail = `HTTP ${response.status}`;
+    try { const data = await response.json(); detail = data?.detail || detail; } catch { try { detail = await response.text() || detail; } catch { /* noop */ } }
+    throw new Error(detail);
+  }
+  const blob = await response.blob();
+  const objectUrl = window.URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = objectUrl;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.URL.revokeObjectURL(objectUrl);
+}
 
 
 
@@ -91,6 +113,7 @@ export default function FinanceiroPage() {
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState('');
   const [feedback, setFeedback] = useState('');
+  const [modalError, setModalError] = useState('');
   const [planModal, setPlanModal] = useState(false);
   const [productModal, setProductModal] = useState(false);
   const [contractModal, setContractModal] = useState(false);
@@ -98,13 +121,14 @@ export default function FinanceiroPage() {
   const [receiveModal, setReceiveModal] = useState(false);
   const [adjustModal, setAdjustModal] = useState(false);
 
-  function openCreatePlan() { setEditingPlanId(null); setPlanForm(initialPlanForm); setPlanModal(true); }
-  function openCreateProduct() { setEditingProductId(null); setServiceProductForm(initialProductForm); setProductModal(true); }
-  function openCreateContract() { setEditingContractId(null); setContractForm(initialContractForm); setContractModal(true); }
+  function openCreatePlan() { setEditingPlanId(null); setPlanForm(initialPlanForm); setModalError(''); setPlanModal(true); }
+  function openCreateProduct() { setEditingProductId(null); setServiceProductForm(initialProductForm); setModalError(''); setProductModal(true); }
+  function openCreateContract() { setEditingContractId(null); setContractForm(initialContractForm); setModalError(''); setContractModal(true); }
 
   function openEditPlan(plan: Plan) {
     setEditingPlanId(plan.id);
     setPlanForm({ name: plan.name, price: String(plan.price), description: plan.description || '', active: plan.active, billing_interval_months: String(plan.billing_interval_months) });
+    setModalError('');
     setPlanModal(true);
   }
 
@@ -120,11 +144,13 @@ export default function FinanceiroPage() {
       remove_after_payment: product.remove_after_payment,
       auto_add_on_uninstall: product.auto_add_on_uninstall,
     });
+    setModalError('');
     setProductModal(true);
   }
 
   function openEditContract(contract: Contract) {
     setEditingContractId(contract.id);
+    setModalError('');
     setContractForm({
       client_id: String(contract.client_id),
       vehicle_id: contract.vehicle_id ? String(contract.vehicle_id) : '',
@@ -264,7 +290,7 @@ export default function FinanceiroPage() {
       setEditingPlanId(null);
       setPlanModal(false);
       await loadData(token);
-    } catch (err) { setError(parseError(err)); } finally { setProcessing(false); }
+    } catch (err) { setModalError(parseError(err)); } finally { setProcessing(false); }
   }
 
   async function submitProduct(event: FormEvent<HTMLFormElement>) {
@@ -284,7 +310,7 @@ export default function FinanceiroPage() {
       setEditingProductId(null);
       setProductModal(false);
       await loadData(token);
-    } catch (err) { setError(parseError(err)); } finally { setProcessing(false); }
+    } catch (err) { setModalError(parseError(err)); } finally { setProcessing(false); }
   }
 
   async function submitContract(event: FormEvent<HTMLFormElement>) {
@@ -304,7 +330,7 @@ export default function FinanceiroPage() {
       setEditingContractId(null);
       setContractModal(false);
       await loadData(token);
-    } catch (err) { setError(parseError(err)); } finally { setProcessing(false); }
+    } catch (err) { setModalError(parseError(err)); } finally { setProcessing(false); }
   }
 
   async function submitChargeItem(event: FormEvent<HTMLFormElement>) {
@@ -317,7 +343,7 @@ export default function FinanceiroPage() {
       setChargeItemForm(initialChargeItemForm);
       setChargeModal(false);
       await loadData(token);
-    } catch (err) { setError(parseError(err)); } finally { setProcessing(false); }
+    } catch (err) { setModalError(parseError(err)); } finally { setProcessing(false); }
   }
 
   async function handleReceive() {
@@ -328,7 +354,7 @@ export default function FinanceiroPage() {
       setFeedback('Pagamento registrado com sucesso.');
       setReceiveModal(false);
       await loadData(token);
-    } catch (err) { setError(parseError(err)); } finally { setProcessing(false); }
+    } catch (err) { setModalError(parseError(err)); } finally { setProcessing(false); }
   }
 
   async function handleAdjust() {
@@ -339,7 +365,7 @@ export default function FinanceiroPage() {
       setFeedback('Cobrança ajustada com sucesso.');
       setAdjustModal(false);
       await loadData(token);
-    } catch (err) { setError(parseError(err)); } finally { setProcessing(false); }
+    } catch (err) { setModalError(parseError(err)); } finally { setProcessing(false); }
   }
 
   async function handleCancel() {
@@ -633,7 +659,7 @@ export default function FinanceiroPage() {
                   <Button type="button" disabled={!canEdit || processing || selectedBilling.status === 'paga' || selectedBilling.status === 'cancelada'} onClick={() => setReceiveModal(true)}>Registrar pagamento</Button>
                   <button type="button" disabled={!canEdit || processing || selectedBilling.status === 'cancelada'} onClick={() => setAdjustModal(true)} className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-600 disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:border-cyan-400 dark:hover:text-cyan-300">Ajustar cobrança</button>
                   <button type="button" disabled={!canEdit || processing || selectedBilling.status === 'cancelada'} onClick={handleCancel} className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm font-semibold text-rose-700 disabled:opacity-50">Cancelar</button>
-                  {selectedBilling.status === 'paga' && selectedBilling.receipt_number ? <Button type="button" className="bg-slate-900 hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-950 dark:hover:bg-white" onClick={() => token && downloadProtectedFile(`/billings/${selectedBilling.id}/receipt`, token, `${selectedBilling.receipt_number}.pdf`)}>Baixar recibo</Button> : null}
+                  {selectedBilling.status === 'paga' && selectedBilling.receipt_number ? <Button type="button" className="bg-slate-900 hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-950 dark:hover:bg-white" onClick={() => { if (!token) return; downloadProtectedFile(`/billings/${selectedBilling.id}/receipt`, token, `recibo-${selectedBilling.receipt_number}.pdf`).catch((err) => setError(parseError(err))); }}>Baixar recibo</Button> : null}
                 </div>
               </div>
             ) : null}
@@ -641,8 +667,9 @@ export default function FinanceiroPage() {
         </div>
       </section>
 
-      <Modal open={planModal} onClose={() => { setPlanModal(false); setEditingPlanId(null); setPlanForm(initialPlanForm); }} title={editingPlanId ? "Editar plano" : "Novo plano"} description="Cadastre planos com periodicidade mensal, trimestral, semestral ou anual." size="lg">
+      <Modal open={planModal} onClose={() => { setPlanModal(false); setEditingPlanId(null); setPlanForm(initialPlanForm); setModalError(''); }} title={editingPlanId ? "Editar plano" : "Novo plano"} description="Cadastre planos com periodicidade mensal, trimestral, semestral ou anual." size="lg">
         <form className="space-y-5" onSubmit={submitPlan}>
+          {modalError && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>}
           <div className="grid gap-4 md:grid-cols-2">
             <input className={fieldClass} placeholder="Nome do plano" value={planForm.name} onChange={(e) => setPlanForm((prev) => ({ ...prev, name: e.target.value }))} required />
             <input className={fieldClass} placeholder="Valor base" value={planForm.price} onChange={(e) => setPlanForm((prev) => ({ ...prev, price: e.target.value }))} required />
@@ -654,8 +681,9 @@ export default function FinanceiroPage() {
         </form>
       </Modal>
 
-      <Modal open={productModal} onClose={() => { setProductModal(false); setEditingProductId(null); setServiceProductForm(initialProductForm); }} title={editingProductId ? "Editar serviço / produto" : "Novo serviço / produto"} description="Cadastre taxas, acessórios, sensores e outros itens cobrados do cliente." size="lg">
+      <Modal open={productModal} onClose={() => { setProductModal(false); setEditingProductId(null); setServiceProductForm(initialProductForm); setModalError(''); }} title={editingProductId ? "Editar serviço / produto" : "Novo serviço / produto"} description="Cadastre taxas, acessórios, sensores e outros itens cobrados do cliente." size="lg">
         <form className="space-y-5" onSubmit={submitProduct}>
+          {modalError && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>}
           <div className="grid gap-4 md:grid-cols-2">
             <input className={fieldClass} placeholder="Nome do item" value={serviceProductForm.name} onChange={(e) => setServiceProductForm((prev) => ({ ...prev, name: e.target.value }))} required />
             <select className={fieldClass} value={serviceProductForm.category} onChange={(e) => setServiceProductForm((prev) => ({ ...prev, category: e.target.value }))}><option value="servico">Serviço</option><option value="produto">Produto</option><option value="taxa">Taxa</option></select>
@@ -670,8 +698,9 @@ export default function FinanceiroPage() {
         </form>
       </Modal>
 
-      <Modal open={contractModal} onClose={() => { setContractModal(false); setEditingContractId(null); setContractForm(initialContractForm); }} title={editingContractId ? "Editar contrato" : "Novo contrato"} description="Vincule o plano ao cliente e, se necessário, a um veículo e rastreador específicos." size="xl">
+      <Modal open={contractModal} onClose={() => { setContractModal(false); setEditingContractId(null); setContractForm(initialContractForm); setModalError(''); }} title={editingContractId ? "Editar contrato" : "Novo contrato"} description="Vincule o plano ao cliente e, se necessário, a um veículo e rastreador específicos." size="xl">
         <form className="space-y-5" onSubmit={submitContract}>
+          {modalError && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>}
           <div className="grid gap-4 md:grid-cols-2">
             <select className={fieldClass} value={contractForm.client_id} onChange={(e) => setContractForm((prev) => ({ ...prev, client_id: e.target.value, vehicle_id: '', tracker_id: '' }))} required><option value="">Selecione o cliente</option>{clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select>
             <select className={fieldClass} value={contractForm.plan_id} onChange={(e) => setContractForm((prev) => ({ ...prev, plan_id: e.target.value }))} required><option value="">Selecione o plano</option>{plans.filter((item) => item.active || String(item.id) === contractForm.plan_id).map((plan) => <option key={plan.id} value={plan.id}>{plan.name} • {intervalLabel(plan.billing_interval_months)}</option>)}</select>
@@ -690,8 +719,9 @@ export default function FinanceiroPage() {
         </form>
       </Modal>
 
-      <Modal open={chargeModal} onClose={() => setChargeModal(false)} title="Novo lançamento financeiro" description="Lance serviços, produtos e taxas com opção de parcelamento e remoção após pagamento." size="xl">
+      <Modal open={chargeModal} onClose={() => { setChargeModal(false); setModalError(''); }} title="Novo lançamento financeiro" description="Lance serviços, produtos e taxas com opção de parcelamento e remoção após pagamento." size="xl">
         <form className="space-y-5" onSubmit={submitChargeItem}>
+          {modalError && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>}
           <div className="grid gap-4 md:grid-cols-2">
             <select className={fieldClass} value={chargeItemForm.client_id} onChange={(e) => setChargeItemForm((prev) => ({ ...prev, client_id: e.target.value, contract_id: '', vehicle_id: '', tracker_id: '' }))} required><option value="">Selecione o cliente</option>{clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select>
             <select className={fieldClass} value={chargeItemForm.contract_id} onChange={(e) => { const selected = visibleContracts.find((item) => item.id === Number(e.target.value)); setChargeItemForm((prev) => ({ ...prev, contract_id: e.target.value, vehicle_id: selected?.vehicle_id ? String(selected.vehicle_id) : prev.vehicle_id, tracker_id: selected?.tracker_id ? String(selected.tracker_id) : prev.tracker_id })); }}><option value="">Sem contrato</option>{visibleContracts.map((contract) => <option key={contract.id} value={contract.id}>{contract.client_name} • {contract.plan_name || 'Contrato'}{contract.vehicle_plate ? ` • ${contract.vehicle_plate}` : ''}</option>)}</select>
@@ -710,8 +740,9 @@ export default function FinanceiroPage() {
         </form>
       </Modal>
 
-      <Modal open={receiveModal} onClose={() => setReceiveModal(false)} title="Registrar pagamento" description="Confirme o recebimento da cobrança selecionada e gere o recibo em PDF após a baixa." size="lg">
+      <Modal open={receiveModal} onClose={() => { setReceiveModal(false); setModalError(''); }} title="Registrar pagamento" description="Confirme o recebimento da cobrança selecionada e gere o recibo em PDF após a baixa." size="lg">
         <div className="space-y-5">
+          {modalError && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>}
           <div className="grid gap-4 md:grid-cols-2">
             <input className={fieldClass} placeholder="Valor pago" value={receiveForm.paid_amount} onChange={(e) => setReceiveForm((prev) => ({ ...prev, paid_amount: e.target.value }))} />
             <input type="date" className={fieldClass} value={receiveForm.payment_date} onChange={(e) => setReceiveForm((prev) => ({ ...prev, payment_date: e.target.value }))} />
@@ -722,8 +753,9 @@ export default function FinanceiroPage() {
         </div>
       </Modal>
 
-      <Modal open={adjustModal} onClose={() => setAdjustModal(false)} title="Ajustar cobrança" description="Atualize valor ou vencimento com justificativa obrigatória para manter rastreabilidade." size="lg">
+      <Modal open={adjustModal} onClose={() => { setAdjustModal(false); setModalError(''); }} title="Ajustar cobrança" description="Atualize valor ou vencimento com justificativa obrigatória para manter rastreabilidade." size="lg">
         <div className="space-y-5">
+          {modalError && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>}
           <div className="grid gap-4 md:grid-cols-2">
             <input className={fieldClass} placeholder="Novo valor" value={adjustForm.amount} onChange={(e) => setAdjustForm((prev) => ({ ...prev, amount: e.target.value }))} />
             <input type="date" className={fieldClass} value={adjustForm.due_date} onChange={(e) => setAdjustForm((prev) => ({ ...prev, due_date: e.target.value }))} />

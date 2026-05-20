@@ -183,6 +183,7 @@ export default function ClientesPage() {
   const [lookingUpCep, setLookingUpCep] = useState(false);
   const [error, setError] = useState('');
   const [feedback, setFeedback] = useState('');
+  const [modalError, setModalError] = useState('');
   const [docCategory, setDocCategory] = useState('cnh');
   const [docFiles, setDocFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -324,12 +325,14 @@ export default function ClientesPage() {
 
   function openCreateModal() {
     resetForm();
+    setModalError('');
     setModalOpen(true);
   }
 
   function openEditModal(client: Client) {
     setSelectedClient(client);
     setIsEditing(true);
+    setModalError('');
     setForm({
       name: client.name || '',
       cpf_cnpj: formatCpfCnpj(client.cpf_cnpj || ''),
@@ -413,7 +416,7 @@ export default function ClientesPage() {
         }));
       }
     } catch (err) {
-      setError(parseError(err));
+      setModalError(parseError(err));
     } finally {
       setLookingUpCep(false);
     }
@@ -423,7 +426,7 @@ export default function ClientesPage() {
     event.preventDefault();
     if (!token || !canEdit) return;
     setSaving(true);
-    setError('');
+    setModalError('');
     setFeedback('');
     try {
       const cleanContacts = form.contacts
@@ -467,7 +470,7 @@ export default function ClientesPage() {
       setSelectedClient(saved);
       await loadClientDocuments(token, saved.id);
     } catch (err) {
-      setError(parseError(err));
+      setModalError(parseError(err));
     } finally {
       setSaving(false);
     }
@@ -708,12 +711,13 @@ export default function ClientesPage() {
 
       <Modal
         open={modalOpen}
-        onClose={() => { setModalOpen(false); resetForm(); }}
+        onClose={() => { setModalOpen(false); resetForm(); setModalError(''); }}
         title={isEditing ? 'Editar cliente' : 'Novo cliente'}
         description="Preencha os dados principais do cadastro. Você também pode incluir documentação inicial no mesmo fluxo."
         size="xl"
       >
         <form className="space-y-6" onSubmit={submitClient}>
+          {modalError && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>}
           <div className="grid gap-4 md:grid-cols-2">
             <input className={fieldClass} placeholder="Nome / razão social" value={form.name} onChange={(e) => handleChange('name', e.target.value)} required />
             <select className={fieldClass} value={form.type} onChange={(e) => handleChange('type', e.target.value)}>
