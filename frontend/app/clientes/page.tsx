@@ -9,6 +9,11 @@ import { Button } from '@/components/ui/button';
 import { Modal } from '@/components/ui/modal';
 import { StatCard } from '@/components/ui/stat-card';
 import { SectionHeader } from '@/components/ui/section-header';
+import { Input, Textarea } from '@/components/ui/input';
+import { Select } from '@/components/ui/select';
+import { FormField, FormGrid, FormSection, FormDivider } from '@/components/ui/form-field';
+import { Badge, statusVariant, statusLabel } from '@/components/ui/badge';
+import { EmptyState, TableSkeleton } from '@/components/ui/empty-state';
 import { apiFetch, API_URL } from '@/lib/api';
 import { fetchAddressByCep } from '@/lib/cep';
 import { formatCpfCnpj, formatPhone, formatZipCode, onlyDigits } from '@/lib/format';
@@ -112,9 +117,8 @@ const initialForm: ClientFormState = {
   notes: '',
 };
 
-const fieldClass = 'w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-brand-500 dark:border-slate-700 dark:bg-slate-950/70 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-cyan-400';
-const areaClass = `${fieldClass} min-h-[96px] resize-y`;
 const documentCategoryOptions = ['cnh', 'rg', 'cpf', 'contrato', 'comprovante_endereco', 'cartao_cnpj', 'contrato_social', 'outro'];
+const fileInputClass = 'w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white file:mr-4 file:rounded-lg file:border-0 file:bg-brand-700 file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-white dark:file:bg-brand-500';
 
 function parseError(error: unknown) {
   return error instanceof Error ? error.message : 'Ocorreu um erro inesperado.';
@@ -127,35 +131,6 @@ function normalizeEmail(value: string) {
 function parseExtraEmails(value: string) {
   return value.split(/[,;\n]/).map((item) => item.trim().toLowerCase()).filter(Boolean);
 }
-
-function reviewBadge(status: string) {
-  switch (status) {
-    case 'aprovado':
-      return 'border-emerald-200 bg-emerald-50 text-emerald-700';
-    case 'rejeitado':
-      return 'border-rose-200 bg-rose-50 text-rose-700';
-    case 'reenvio_solicitado':
-      return 'border-amber-200 bg-amber-50 text-amber-700';
-    case 'em_analise':
-      return 'border-cyan-200 bg-cyan-50 text-cyan-700';
-    default:
-      return 'border-slate-200 bg-slate-50 text-slate-700';
-  }
-}
-
-function clientStatusBadge(status: string) {
-  switch (status) {
-    case 'ativo':
-      return 'border-emerald-200 bg-emerald-50 text-emerald-700';
-    case 'inadimplente':
-      return 'border-amber-200 bg-amber-50 text-amber-700';
-    case 'suspenso':
-      return 'border-rose-200 bg-rose-50 text-rose-700';
-    default:
-      return 'border-slate-200 bg-slate-50 text-slate-700';
-  }
-}
-
 
 function cardKeyHandler(event: React.KeyboardEvent<HTMLElement>, callback: () => void) {
   if (event.key === 'Enter' || event.key === ' ') {
@@ -531,7 +506,6 @@ export default function ClientesPage() {
           {feedback ? <p className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{feedback}</p> : null}
         </div>
       )}
-      {guardLoading ? <p className="mb-4 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">Validando sessão...</p> : null}
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Clientes cadastrados" value={stats.total}      hint="Base total disponível"           icon={<Users className="h-5 w-5" />} />
@@ -549,43 +523,66 @@ export default function ClientesPage() {
               description="Pesquise, selecione e acompanhe rapidamente o status cadastral da carteira."
               actions={canEdit ? <Button type="button" onClick={openCreateModal}>Adicionar cliente</Button> : null}
             />
-            <div className="mt-5 grid gap-4 md:grid-cols-4">
-              <input className={fieldClass} placeholder="Buscar por nome, CPF/CNPJ ou e-mail" value={search} onChange={(e) => setSearch(e.target.value)} />
-              <select className={fieldClass} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+            <div className="mt-4 flex flex-wrap gap-3">
+              <Input placeholder="Buscar por nome, CPF/CNPJ ou e-mail" value={search} onChange={(e) => setSearch(e.target.value)} className="max-w-xs" />
+              <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="w-44">
                 <option value="">Todos os status</option>
                 <option value="ativo">Ativo</option>
                 <option value="inativo">Inativo</option>
                 <option value="inadimplente">Inadimplente</option>
                 <option value="suspenso">Suspenso</option>
-              </select>
-              <select className={fieldClass} value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+              </Select>
+              <Select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="w-40">
                 <option value="">Todos os tipos</option>
                 <option value="pf">Pessoa física</option>
                 <option value="pj">Pessoa jurídica</option>
-              </select>
-              <Button type="button" onClick={() => token && loadClients(token)} disabled={loading}>{loading ? 'Atualizando...' : 'Aplicar filtros'}</Button>
+              </Select>
+              <Button type="button" variant="secondary" onClick={() => token && loadClients(token)} disabled={loading}>
+                {loading ? 'Atualizando…' : 'Filtrar'}
+              </Button>
             </div>
 
-            <div className="mt-5 grid gap-3">
-              {clients.length === 0 ? <p className="rounded-2xl border border-dashed border-slate-300 px-4 py-6 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">Nenhum cliente encontrado com os filtros aplicados.</p> : clients.map((client) => {
-                const vehicles = vehiclesByClient[client.id] || [];
-                return (
-                  <div key={client.id} role="button" tabIndex={0} onClick={() => setSelectedClient(client)} onKeyDown={(event) => cardKeyHandler(event, () => setSelectedClient(client))} className={`cursor-pointer rounded-[24px] border p-5 text-left transition ${selectedClient?.id === client.id ? 'border-brand-500 bg-brand-50/60 shadow-sm dark:border-cyan-400 dark:bg-cyan-400/10' : 'border-slate-200 bg-white hover:-translate-y-0.5 hover:border-brand-400 hover:shadow-lg dark:border-slate-800 dark:bg-slate-900'}`}>
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="text-lg font-semibold text-slate-900 dark:text-white">{client.name}</p>
-                          <span className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase ${clientStatusBadge(client.status)}`}>{client.status}</span>
-                          <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold uppercase text-slate-600 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300">{client.type === 'pj' ? 'PJ' : 'PF'}</span>
+            <div className="mt-4">
+              {loading ? (
+                <TableSkeleton rows={6} cols={4} />
+              ) : clients.length === 0 ? (
+                <EmptyState icon={Users} title="Nenhum cliente encontrado" description="Ajuste os filtros ou cadastre o primeiro cliente." action={canEdit ? <Button onClick={openCreateModal}>Adicionar cliente</Button> : undefined} />
+              ) : (
+                <div className="space-y-2">
+                  {clients.map((client) => {
+                    const vehicles = vehiclesByClient[client.id] || [];
+                    const isSelected = selectedClient?.id === client.id;
+                    return (
+                      <div
+                        key={client.id}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => setSelectedClient(client)}
+                        onKeyDown={(e) => cardKeyHandler(e, () => setSelectedClient(client))}
+                        className={`cursor-pointer rounded-xl border p-4 text-left transition-colors ${isSelected ? 'border-brand-400 bg-brand-50/60 dark:border-brand-600 dark:bg-brand-950/30' : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:hover:bg-slate-800/60'}`}
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="font-semibold text-slate-900 dark:text-white">{client.name}</p>
+                              <Badge variant={statusVariant(client.status)}>{statusLabel(client.status)}</Badge>
+                              <Badge variant="default">{client.type === 'pj' ? 'PJ' : 'PF'}</Badge>
+                            </div>
+                            <p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">
+                              {formatCpfCnpj(client.cpf_cnpj)} · {client.email || 'sem e-mail'} · {vehicles.length} veículo(s)
+                            </p>
+                          </div>
+                          {canEdit && (
+                            <Button type="button" variant="secondary" onClick={(e) => { e.stopPropagation(); openEditModal(client); }}>
+                              Editar
+                            </Button>
+                          )}
                         </div>
-                        <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">{formatCpfCnpj(client.cpf_cnpj)} • {client.email || 'sem e-mail'} • {client.phone ? formatPhone(client.phone) : 'sem telefone'}</p>
-                        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{client.city || 'Cidade não informada'} {client.state ? `• ${client.state}` : ''} • {vehicles.length} veículo(s)</p>
                       </div>
-                      {canEdit ? <Button type="button" onClick={(event) => { event.stopPropagation(); openEditModal(client); }}>Editar</Button> : null}
-                    </div>
-                  </div>
-                );
-              })}
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </Card>
         </div>
@@ -632,9 +629,11 @@ export default function ClientesPage() {
             {selectedClient ? (
               <div className="mt-4">
                 {timelineLoading ? (
-                  <p className="text-sm text-slate-400">Carregando histórico…</p>
+                  <div className="space-y-3 pt-1">
+                    {[1,2,3].map((i) => <div key={i} className="flex gap-3"><div className="h-7 w-7 shrink-0 animate-pulse rounded-full bg-slate-100 dark:bg-slate-800" /><div className="flex-1 space-y-1.5 pt-1"><div className="h-3 w-3/4 animate-pulse rounded bg-slate-100 dark:bg-slate-800" /><div className="h-3 w-1/2 animate-pulse rounded bg-slate-100 dark:bg-slate-800" /></div></div>)}
+                  </div>
                 ) : clientTimeline.length === 0 ? (
-                  <p className="text-sm text-slate-400">Nenhum evento registrado para este cliente.</p>
+                  <p className="mt-2 text-sm text-slate-400 dark:text-slate-500">Nenhum evento registrado.</p>
                 ) : (
                   <ol className="relative border-l border-slate-200 dark:border-slate-700">
                     {clientTimeline.map((event) => {
@@ -671,12 +670,12 @@ export default function ClientesPage() {
             <SectionHeader eyebrow="Documentação" title="Documentos do cliente" description="Anexe, revise e acompanhe o status documental diretamente no módulo administrativo." />
             {selectedClient ? (
               <>
-                <div className="mt-5 grid gap-3 md:grid-cols-[1fr_1fr_auto]">
-                  <select className={fieldClass} value={docCategory} onChange={(e) => setDocCategory(e.target.value)}>
-                    {documentCategoryOptions.map((option) => <option key={option} value={option}>{option}</option>)}
-                  </select>
-                  <input type="file" multiple className={`${fieldClass} file:mr-4 file:rounded-xl file:border-0 file:bg-slate-950 file:px-3 file:py-2 file:text-white dark:file:bg-cyan-400 dark:file:text-slate-950`} onChange={(e) => setDocFiles(Array.from(e.target.files || []))} />
-                  <Button type="button" disabled={!canEdit || uploading || !docFiles.length} onClick={uploadDocuments}>{uploading ? 'Enviando...' : 'Enviar'}</Button>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <Select value={docCategory} onChange={(e) => setDocCategory(e.target.value)} className="w-44">
+                    {documentCategoryOptions.map((o) => <option key={o} value={o}>{o}</option>)}
+                  </Select>
+                  <input type="file" multiple className={fileInputClass} onChange={(e) => setDocFiles(Array.from(e.target.files || []))} />
+                  <Button type="button" disabled={!canEdit || uploading || !docFiles.length} onClick={uploadDocuments}>{uploading ? 'Enviando…' : 'Enviar'}</Button>
                 </div>
                 <div className="mt-5 space-y-3">
                   {clientDocuments.length === 0 ? <p className="text-sm text-slate-500 dark:text-slate-400">Nenhum documento anexado até o momento.</p> : clientDocuments.map((document) => (
@@ -687,7 +686,7 @@ export default function ClientesPage() {
                           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Categoria: {document.category}</p>
                           {document.review_notes ? <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Obs.: {document.review_notes}</p> : null}
                         </div>
-                        <span className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase ${reviewBadge(document.review_status)}`}>{document.review_status.replace(/_/g, ' ')}</span>
+                        <Badge variant={statusVariant(document.review_status)}>{statusLabel(document.review_status)}</Badge>
                       </div>
                       <div className="mt-4 flex flex-wrap gap-2">
                         <a href={document.url} target="_blank" rel="noreferrer" className="rounded-2xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-600 dark:border-slate-700 dark:text-slate-200 dark:hover:border-cyan-400 dark:hover:text-cyan-300">Visualizar</a>
@@ -717,79 +716,127 @@ export default function ClientesPage() {
         size="xl"
       >
         <form className="space-y-6" onSubmit={submitClient}>
-          {modalError && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>}
-          <div className="grid gap-4 md:grid-cols-2">
-            <input className={fieldClass} placeholder="Nome / razão social" value={form.name} onChange={(e) => handleChange('name', e.target.value)} required />
-            <select className={fieldClass} value={form.type} onChange={(e) => handleChange('type', e.target.value)}>
-              <option value="pf">Pessoa física</option>
-              <option value="pj">Pessoa jurídica</option>
-            </select>
-            <input className={fieldClass} placeholder={form.type === 'pj' ? 'CNPJ' : 'CPF'} value={form.cpf_cnpj} onChange={(e) => handleChange('cpf_cnpj', e.target.value)} required />
-            <select className={fieldClass} value={form.status} onChange={(e) => handleChange('status', e.target.value)}>
-              <option value="ativo">Ativo</option>
-              <option value="inativo">Inativo</option>
-              <option value="inadimplente">Inadimplente</option>
-              <option value="suspenso">Suspenso</option>
-            </select>
-            <input className={fieldClass} placeholder="E-mail principal" value={form.email} onChange={(e) => handleChange('email', e.target.value)} type="email" required />
-            <input className={fieldClass} placeholder="Telefone principal" value={form.phone} onChange={(e) => handleChange('phone', e.target.value)} />
-            <textarea className={`${areaClass} md:col-span-2`} placeholder="E-mails adicionais (um por linha ou separados por vírgula)" value={form.extra_emails} onChange={(e) => handleChange('extra_emails', e.target.value)} />
-          </div>
+          {modalError && (
+            <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-400">
+              {modalError}
+            </div>
+          )}
 
-          <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-5 dark:border-slate-800 dark:bg-slate-950/60">
+          <FormSection title="Dados principais">
+            <FormGrid cols={2}>
+              <FormField label="Nome / razão social" required>
+                <Input placeholder="Nome completo ou razão social" value={form.name} onChange={(e) => handleChange('name', e.target.value)} required />
+              </FormField>
+              <FormGrid cols={2}>
+                <FormField label="Tipo de pessoa" required>
+                  <Select value={form.type} onChange={(e) => handleChange('type', e.target.value)}>
+                    <option value="pf">Pessoa física</option>
+                    <option value="pj">Pessoa jurídica</option>
+                  </Select>
+                </FormField>
+                <FormField label="Status" required>
+                  <Select value={form.status} onChange={(e) => handleChange('status', e.target.value)}>
+                    <option value="ativo">Ativo</option>
+                    <option value="inativo">Inativo</option>
+                    <option value="inadimplente">Inadimplente</option>
+                    <option value="suspenso">Suspenso</option>
+                  </Select>
+                </FormField>
+              </FormGrid>
+              <FormField label={form.type === 'pj' ? 'CNPJ' : 'CPF'} required>
+                <Input placeholder={form.type === 'pj' ? '00.000.000/0001-00' : '000.000.000-00'} value={form.cpf_cnpj} onChange={(e) => handleChange('cpf_cnpj', e.target.value)} required />
+              </FormField>
+              <FormField label="E-mail principal" required>
+                <Input type="email" placeholder="email@empresa.com" value={form.email} onChange={(e) => handleChange('email', e.target.value)} required />
+              </FormField>
+              <FormField label="Telefone principal">
+                <Input placeholder="(11) 99999-0000" value={form.phone} onChange={(e) => handleChange('phone', e.target.value)} />
+              </FormField>
+            </FormGrid>
+            <FormField label="E-mails adicionais" hint="Um por linha ou separados por vírgula">
+              <Textarea placeholder="outro@email.com, terceiro@email.com" value={form.extra_emails} onChange={(e) => handleChange('extra_emails', e.target.value)} className="min-h-[72px]" />
+            </FormField>
+          </FormSection>
+
+          <FormDivider />
+
+          <FormSection title="Contatos adicionais">
             <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-semibold text-slate-900 dark:text-white">Contatos adicionais</p>
-                <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">Adicione quantos contatos precisar — nome, telefone, e-mail e cargo.</p>
-              </div>
-              <button type="button" onClick={addContact} className="flex items-center gap-1.5 rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-600 dark:border-slate-700 dark:text-slate-200 dark:hover:border-cyan-400 dark:hover:text-cyan-300"><Plus className="h-4 w-4" />Adicionar</button>
+              <p className="text-xs text-slate-400 dark:text-slate-500">Responsáveis, técnicos ou gestores adicionais.</p>
+              <Button type="button" variant="secondary" onClick={addContact} className="gap-1.5">
+                <Plus className="h-3.5 w-3.5" /> Adicionar contato
+              </Button>
             </div>
-            {form.contacts.length > 0 && (
-              <div className="mt-4 space-y-3">
-                {form.contacts.map((contact, i) => (
-                  <div key={i} className="grid gap-2 md:grid-cols-[1fr_1fr_1fr_1fr_auto] rounded-2xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-950/60">
-                    <input className={fieldClass} placeholder="Nome" value={contact.name} onChange={(e) => updateContact(i, 'name', e.target.value)} />
-                    <input className={fieldClass} placeholder="Telefone" value={contact.phone} onChange={(e) => updateContact(i, 'phone', formatPhone(e.target.value))} />
-                    <input className={fieldClass} placeholder="E-mail" value={contact.email} onChange={(e) => updateContact(i, 'email', e.target.value)} />
-                    <input className={fieldClass} placeholder="Cargo / função" value={contact.role} onChange={(e) => updateContact(i, 'role', e.target.value)} />
-                    <button type="button" onClick={() => removeContact(i)} className="flex items-center justify-center rounded-2xl border border-rose-200 bg-rose-50 px-3 text-rose-700 transition hover:bg-rose-100"><Trash2 className="h-4 w-4" /></button>
-                  </div>
-                ))}
+            {form.contacts.map((contact, i) => (
+              <div key={i} className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-900/50 md:grid-cols-[1fr_1fr_1fr_1fr_auto]">
+                <Input placeholder="Nome" value={contact.name} onChange={(e) => updateContact(i, 'name', e.target.value)} />
+                <Input placeholder="Telefone" value={contact.phone} onChange={(e) => updateContact(i, 'phone', formatPhone(e.target.value))} />
+                <Input placeholder="E-mail" value={contact.email} onChange={(e) => updateContact(i, 'email', e.target.value)} />
+                <Input placeholder="Cargo" value={contact.role} onChange={(e) => updateContact(i, 'role', e.target.value)} />
+                <button type="button" onClick={() => removeContact(i)} className="flex items-center justify-center rounded-xl border border-rose-200 bg-rose-50 px-3 text-rose-600 hover:bg-rose-100 dark:border-rose-900/40 dark:bg-rose-950/30">
+                  <Trash2 className="h-4 w-4" />
+                </button>
               </div>
-            )}
-          </div>
+            ))}
+          </FormSection>
 
-          <div className="grid gap-4 md:grid-cols-4">
-            <div className="md:col-span-1">
-              <div className="flex gap-2">
-                <input className={fieldClass} placeholder="CEP" value={form.zip_code} onChange={(e) => handleChange('zip_code', e.target.value)} onBlur={(e) => fillAddressFromCep(e.target.value)} />
-                <button type="button" className="rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-700 dark:border-slate-700 dark:text-slate-200 dark:hover:border-cyan-400 dark:hover:text-cyan-200" onClick={() => fillAddressFromCep(form.zip_code)} disabled={lookingUpCep}>Buscar</button>
+          <FormDivider />
+
+          <FormSection title="Endereço">
+            <div className="flex gap-2">
+              <FormField label="CEP" className="w-40">
+                <Input placeholder="00000-000" value={form.zip_code} onChange={(e) => handleChange('zip_code', e.target.value)} onBlur={(e) => fillAddressFromCep(e.target.value)} />
+              </FormField>
+              <div className="flex items-end">
+                <Button type="button" variant="secondary" onClick={() => fillAddressFromCep(form.zip_code)} disabled={lookingUpCep}>
+                  {lookingUpCep ? 'Buscando…' : 'Buscar CEP'}
+                </Button>
               </div>
-              {lookingUpCep ? <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">Buscando endereço...</p> : null}
             </div>
-            <input className="md:col-span-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-brand-500 dark:border-slate-700 dark:bg-slate-950/70 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-cyan-400" placeholder="Logradouro" value={form.address_line} onChange={(e) => handleChange('address_line', e.target.value)} />
-            <input className={fieldClass} placeholder="Número" value={form.address_number} onChange={(e) => handleChange('address_number', e.target.value)} />
-            <input className={fieldClass} placeholder="Complemento" value={form.address_complement} onChange={(e) => handleChange('address_complement', e.target.value)} />
-            <input className={fieldClass} placeholder="Bairro" value={form.neighborhood} onChange={(e) => handleChange('neighborhood', e.target.value)} />
-            <input className={fieldClass} placeholder="Cidade" value={form.city} onChange={(e) => handleChange('city', e.target.value)} />
-            <input className={fieldClass} placeholder="UF" value={form.state} onChange={(e) => handleChange('state', e.target.value)} maxLength={2} />
-            <textarea className={`${areaClass} md:col-span-4`} placeholder="Observações administrativas" value={form.notes} onChange={(e) => handleChange('notes', e.target.value)} />
-          </div>
+            <FormGrid cols={3}>
+              <FormField label="Logradouro" className="col-span-2">
+                <Input placeholder="Rua / Avenida" value={form.address_line} onChange={(e) => handleChange('address_line', e.target.value)} />
+              </FormField>
+              <FormField label="Número">
+                <Input placeholder="Nº" value={form.address_number} onChange={(e) => handleChange('address_number', e.target.value)} />
+              </FormField>
+              <FormField label="Complemento">
+                <Input placeholder="Apto, sala…" value={form.address_complement} onChange={(e) => handleChange('address_complement', e.target.value)} />
+              </FormField>
+              <FormField label="Bairro">
+                <Input placeholder="Bairro" value={form.neighborhood} onChange={(e) => handleChange('neighborhood', e.target.value)} />
+              </FormField>
+              <FormField label="Cidade">
+                <Input placeholder="Cidade" value={form.city} onChange={(e) => handleChange('city', e.target.value)} />
+              </FormField>
+              <FormField label="UF">
+                <Input placeholder="SP" value={form.state} onChange={(e) => handleChange('state', e.target.value)} maxLength={2} />
+              </FormField>
+            </FormGrid>
+            <FormField label="Observações">
+              <Textarea placeholder="Anotações administrativas internas" value={form.notes} onChange={(e) => handleChange('notes', e.target.value)} />
+            </FormField>
+          </FormSection>
 
-          <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-5 dark:border-slate-800 dark:bg-slate-950/60">
-            <p className="text-sm font-semibold text-slate-900 dark:text-white">Documentação inicial</p>
-            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Opcional. Se informar arquivos agora, eles serão enviados automaticamente após salvar o cliente.</p>
-            <div className="mt-4 grid gap-4 md:grid-cols-[220px_1fr]">
-              <select className={fieldClass} value={docCategory} onChange={(e) => setDocCategory(e.target.value)}>
-                {documentCategoryOptions.map((option) => <option key={option} value={option}>{option}</option>)}
-              </select>
-              <input type="file" multiple className={`${fieldClass} file:mr-4 file:rounded-xl file:border-0 file:bg-slate-950 file:px-3 file:py-2 file:text-white dark:file:bg-cyan-400 dark:file:text-slate-950`} onChange={(e) => setDocFiles(Array.from(e.target.files || []))} />
-            </div>
-          </div>
+          <FormDivider />
 
-          <div className="flex justify-end gap-3">
-            <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-600 dark:border-slate-700 dark:text-slate-200 dark:hover:border-cyan-400 dark:hover:text-cyan-300" onClick={() => { setModalOpen(false); resetForm(); }}>Cancelar</button>
-            <Button type="submit" disabled={!canEdit || saving}>{saving ? 'Salvando...' : isEditing ? 'Atualizar cliente' : 'Cadastrar cliente'}</Button>
+          <FormSection title="Documentação inicial (opcional)">
+            <p className="text-xs text-slate-400 dark:text-slate-500">Arquivos enviados automaticamente após salvar o cliente.</p>
+            <FormGrid cols={2}>
+              <FormField label="Categoria">
+                <Select value={docCategory} onChange={(e) => setDocCategory(e.target.value)}>
+                  {documentCategoryOptions.map((o) => <option key={o} value={o}>{o}</option>)}
+                </Select>
+              </FormField>
+              <FormField label="Arquivo(s)">
+                <input type="file" multiple className={fileInputClass} onChange={(e) => setDocFiles(Array.from(e.target.files || []))} />
+              </FormField>
+            </FormGrid>
+          </FormSection>
+
+          <div className="flex justify-end gap-2 border-t border-slate-100 pt-4 dark:border-slate-800">
+            <Button type="button" variant="secondary" onClick={() => { setModalOpen(false); resetForm(); }}>Cancelar</Button>
+            <Button type="submit" disabled={!canEdit || saving}>{saving ? 'Salvando…' : isEditing ? 'Atualizar cliente' : 'Cadastrar cliente'}</Button>
           </div>
         </form>
       </Modal>

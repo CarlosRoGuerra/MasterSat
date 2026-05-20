@@ -19,6 +19,7 @@ import { Card } from '@/components/ui/card';
 import { StatCard } from '@/components/ui/stat-card';
 import { SectionHeader } from '@/components/ui/section-header';
 import { Button } from '@/components/ui/button';
+import { Skeleton } from '@/components/ui/empty-state';
 import { apiFetch } from '@/lib/api';
 import { useAuthGuard } from '@/lib/use-auth-guard';
 
@@ -96,18 +97,25 @@ export default function DashboardPage() {
           {guardError || error}
         </div>
       )}
-      {loading && (
-        <div className="mb-4 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">
-          Carregando dados…
-        </div>
-      )}
 
       {/* KPI row */}
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="Clientes ativos"        value={data?.clients.active ?? '—'}            hint="Base ativa em acompanhamento"  tone="brand"   icon={<Users className="h-5 w-5" />} />
-        <StatCard label="Rastreadores instalados" value={data?.trackers.installed ?? '—'}        hint="Equipamentos em produção"       tone="success" icon={<Radio className="h-5 w-5" />} />
-        <StatCard label="OS em andamento"         value={data?.service_orders.in_progress ?? '—'} hint="Ordens abertas no campo"       tone="warning" icon={<ClipboardList className="h-5 w-5" />} />
-        <StatCard label="Receita do mês"          value={currency(data?.finance.received_month)} hint="Recebimentos consolidados"      tone="default" icon={<Wallet className="h-5 w-5" />} />
+        {loading ? (
+          Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900">
+              <Skeleton className="mb-3 h-3 w-28" />
+              <Skeleton className="h-8 w-16" />
+              <Skeleton className="mt-2 h-3 w-36" />
+            </div>
+          ))
+        ) : (
+          <>
+            <StatCard label="Clientes ativos"        value={data?.clients.active ?? '—'}             hint="Base ativa em acompanhamento"   tone="brand"   icon={<Users className="h-5 w-5" />} />
+            <StatCard label="Rastreadores instalados" value={data?.trackers.installed ?? '—'}         hint="Equipamentos em produção"        tone="success" icon={<Radio className="h-5 w-5" />} />
+            <StatCard label="OS em andamento"         value={data?.service_orders.in_progress ?? '—'} hint="Ordens abertas no campo"         tone="warning" icon={<ClipboardList className="h-5 w-5" />} />
+            <StatCard label="Receita do mês"          value={currency(data?.finance.received_month)}  hint="Recebimentos consolidados"       tone="default" icon={<Wallet className="h-5 w-5" />} />
+          </>
+        )}
       </section>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[1fr_360px]">

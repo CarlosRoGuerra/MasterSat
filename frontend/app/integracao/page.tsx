@@ -55,7 +55,7 @@ type IntegrationLog = {
 
 type Tracker = { id: number; imei?: string | null; brand?: string | null; model?: string | null; client_name?: string | null; vehicle_plate?: string | null; integration_status?: string | null };
 
-const fieldClass = 'w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-brand-500 dark:border-slate-700 dark:bg-slate-950/70 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-cyan-400';
+const fieldClass = 'w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-brand-400';
 
 function parseError(err: unknown) {
   return err instanceof Error ? err.message : 'Ocorreu um erro inesperado.';

@@ -1,47 +1,34 @@
 'use client';
 
 import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { ShieldCheck, Plus, Pencil, Trash2, RefreshCw } from 'lucide-react';
 
 import { PageShell } from '@/components/page-shell';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Select } from '@/components/ui/select';
+import { FormField, FormGrid } from '@/components/ui/form-field';
+import { Badge, statusLabel, statusVariant } from '@/components/ui/badge';
+import { Table, TableHead, Th, TableBody, Tr, Td } from '@/components/ui/table';
+import { EmptyState, TableSkeleton } from '@/components/ui/empty-state';
 import { apiFetch } from '@/lib/api';
 import { useAuthGuard } from '@/lib/use-auth-guard';
 
 type InternalRole = 'admin' | 'operacional' | 'financeiro';
+type UserItem = { id: number; name: string; email: string; role: InternalRole | 'cliente'; active: boolean };
+type UserForm = { name: string; email: string; role: InternalRole; password: string; active: boolean };
 
-type UserItem = {
-  id: number;
-  name: string;
-  email: string;
-  role: InternalRole | 'cliente';
-  active: boolean;
-};
+const initialForm: UserForm = { name: '', email: '', role: 'operacional', password: '', active: true };
 
-type UserForm = {
-  name: string;
-  email: string;
-  role: InternalRole;
-  password: string;
-  active: boolean;
-};
+function parseError(e: unknown) { return e instanceof Error ? e.message : 'Erro inesperado.'; }
 
-const initialForm: UserForm = {
-  name: '',
-  email: '',
-  role: 'operacional',
-  password: '',
-  active: true,
-};
-
-function parseError(error: unknown) {
-  return error instanceof Error ? error.message : 'Ocorreu um erro inesperado.';
-}
+const roleLabel: Record<string, string> = { admin: 'Administrador', operacional: 'Operacional', financeiro: 'Financeiro' };
 
 export default function UsersPage() {
   const { token, loading: guardLoading, error: guardError } = useAuthGuard(['admin'], '/login/admin');
   const [users, setUsers] = useState<UserItem[]>([]);
-  const [selectedUser, setSelectedUser] = useState<UserItem | null>(null);
+  const [selected, setSelected] = useState<UserItem | null>(null);
   const [form, setForm] = useState<UserForm>(initialForm);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
@@ -49,167 +36,241 @@ export default function UsersPage() {
   const [error, setError] = useState('');
   const [feedback, setFeedback] = useState('');
 
-  async function loadUsers(currentToken: string) {
-    setLoading(true);
-    setError('');
-    try {
-      const response = await apiFetch<UserItem[]>('/users', {}, currentToken);
-      setUsers(response.filter((item) => item.role !== 'cliente'));
-    } catch (err) {
-      setError(parseError(err));
-    } finally {
-      setLoading(false);
-    }
+  async function loadUsers(t: string) {
+    setLoading(true); setError('');
+    try { setUsers((await apiFetch<UserItem[]>('/users', {}, t)).filter((u) => u.role !== 'cliente')); }
+    catch (e) { setError(parseError(e)); }
+    finally { setLoading(false); }
   }
 
-  useEffect(() => {
-    if (!token) return;
-    loadUsers(token);
-  }, [token]);
+  useEffect(() => { if (token) loadUsers(token); }, [token]);
 
-  const filteredUsers = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    if (!term) return users;
-    return users.filter((item) => item.name.toLowerCase().includes(term) || item.email.toLowerCase().includes(term) || item.role.includes(term));
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return q ? users.filter((u) => u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q) || u.role.includes(q)) : users;
   }, [users, search]);
 
-  function resetForm() {
-    setSelectedUser(null);
-    setForm(initialForm);
+  function reset() { setSelected(null); setForm(initialForm); }
+
+  function startEdit(u: UserItem) {
+    setSelected(u);
+    setForm({ name: u.name, email: u.email, role: u.role === 'cliente' ? 'operacional' : u.role, password: '', active: u.active });
   }
 
-  function editUser(user: UserItem) {
-    setSelectedUser(user);
-    setForm({
-      name: user.name,
-      email: user.email,
-      role: user.role === 'cliente' ? 'operacional' : user.role,
-      password: '',
-      active: user.active,
-    });
-  }
-
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault();
     if (!token) return;
-    setSaving(true);
-    setError('');
-    setFeedback('');
+    setSaving(true); setError(''); setFeedback('');
     try {
-      const payload = {
-        name: form.name.trim(),
-        email: form.email.trim().toLowerCase(),
-        role: form.role,
-        active: form.active,
-        ...(form.password ? { password: form.password } : {}),
-      };
-
-      if (!payload.name) throw new Error('Informe o nome completo do usuário.');
-      if (!payload.email) throw new Error('Informe o e-mail do usuário.');
-      if (!selectedUser && !form.password) throw new Error('Defina uma senha inicial para o novo administrador.');
-
-      if (selectedUser) {
-        await apiFetch(`/users/${selectedUser.id}`, { method: 'PUT', body: JSON.stringify(payload) }, token);
-        setFeedback('Usuário administrativo atualizado com sucesso.');
+      const payload = { name: form.name.trim(), email: form.email.trim().toLowerCase(), role: form.role, active: form.active, ...(form.password ? { password: form.password } : {}) };
+      if (!payload.name) throw new Error('Informe o nome completo.');
+      if (!payload.email) throw new Error('Informe o e-mail.');
+      if (!selected && !form.password) throw new Error('Defina uma senha inicial.');
+      if (selected) {
+        await apiFetch(`/users/${selected.id}`, { method: 'PUT', body: JSON.stringify(payload) }, token);
+        setFeedback('Usuário atualizado com sucesso.');
       } else {
         await apiFetch('/users', { method: 'POST', body: JSON.stringify(payload) }, token);
-        setFeedback('Novo usuário administrativo cadastrado com sucesso.');
+        setFeedback('Usuário cadastrado com sucesso.');
       }
-      resetForm();
-      await loadUsers(token);
-    } catch (err) {
-      setError(parseError(err));
-    } finally {
-      setSaving(false);
-    }
+      reset(); await loadUsers(token);
+    } catch (e) { setError(parseError(e)); }
+    finally { setSaving(false); }
   }
 
-  async function handleDelete(userId: number) {
-    if (!token) return;
-    if (!window.confirm('Deseja remover este usuário administrativo?')) return;
-    setError('');
-    setFeedback('');
+  async function handleDelete(id: number) {
+    if (!token || !window.confirm('Remover este usuário?')) return;
+    setError(''); setFeedback('');
     try {
-      await apiFetch(`/users/${userId}`, { method: 'DELETE' }, token);
-      setFeedback('Usuário removido com sucesso.');
-      if (selectedUser?.id === userId) resetForm();
+      await apiFetch(`/users/${id}`, { method: 'DELETE' }, token);
+      setFeedback('Usuário removido.');
+      if (selected?.id === id) reset();
       await loadUsers(token);
-    } catch (err) {
-      setError(parseError(err));
-    }
+    } catch (e) { setError(parseError(e)); }
   }
+
+  const field = (k: keyof UserForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+    setForm((p) => ({ ...p, [k]: e.target.type === 'checkbox' ? (e.target as HTMLInputElement).checked : e.target.value }));
 
   return (
-    <PageShell title="Equipe administrativa">
-      {(guardError || error || feedback) && (
-        <div className="mb-6 space-y-3">
-          {(guardError || error) && <p className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{guardError || error}</p>}
-          {feedback && <p className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700">{feedback}</p>}
+    <PageShell
+      title="Equipe administrativa"
+      description="Gerencie administradores, operadores e perfis financeiros."
+      actions={
+        <Button onClick={reset} className="gap-2">
+          <Plus className="h-4 w-4" /> Novo usuário
+        </Button>
+      }
+    >
+      {/* Feedback */}
+      {(guardError || error) && (
+        <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-400">
+          {guardError || error}
+        </div>
+      )}
+      {feedback && (
+        <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-950/30 dark:text-emerald-400">
+          {feedback}
         </div>
       )}
 
-      {guardLoading && <p className="mb-4 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500">Validando sessão...</p>}
+      <div className="grid gap-6 xl:grid-cols-[1fr_380px]">
+        {/* Lista */}
+        <div className="space-y-4">
+          <div className="flex items-center gap-3">
+            <Input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Buscar por nome, e-mail ou perfil…"
+              className="max-w-xs"
+            />
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => token && loadUsers(token)}
+              disabled={loading}
+              className="gap-2"
+            >
+              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+              Atualizar
+            </Button>
+          </div>
 
-      <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+          {loading || guardLoading ? (
+            <TableSkeleton rows={5} cols={4} />
+          ) : filtered.length === 0 ? (
+            <EmptyState
+              icon={ShieldCheck}
+              title="Nenhum usuário encontrado"
+              description={search ? 'Tente outro termo de busca.' : 'Cadastre o primeiro usuário administrativo.'}
+              action={<Button onClick={reset} className="gap-2"><Plus className="h-4 w-4" /> Novo usuário</Button>}
+            />
+          ) : (
+            <Table>
+              <TableHead>
+                <Th>Usuário</Th>
+                <Th>Perfil</Th>
+                <Th>Status</Th>
+                <Th className="w-24" />
+              </TableHead>
+              <TableBody>
+                {filtered.map((u) => (
+                  <Tr key={u.id} onClick={() => startEdit(u)} selected={selected?.id === u.id}>
+                    <Td>
+                      <p className="font-medium text-slate-900 dark:text-white">{u.name}</p>
+                      <p className="text-xs text-slate-400">{u.email}</p>
+                    </Td>
+                    <Td>
+                      <Badge variant="brand">{roleLabel[u.role] ?? u.role}</Badge>
+                    </Td>
+                    <Td>
+                      <Badge variant={u.active ? 'success' : 'danger'}>
+                        {u.active ? 'Ativo' : 'Inativo'}
+                      </Badge>
+                    </Td>
+                    <Td>
+                      <div className="flex justify-end gap-1">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); startEdit(u); }}
+                          className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800"
+                          title="Editar"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleDelete(u.id); }}
+                          className="rounded-lg p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/40"
+                          title="Excluir"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </Td>
+                  </Tr>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </div>
+
+        {/* Formulário */}
         <Card>
           <div className="mb-5 flex items-center justify-between gap-3">
             <div>
-              <p className="text-xs uppercase tracking-[0.22em] text-brand-500">Acessos internos</p>
-              <h3 className="mt-2 text-2xl font-semibold text-slate-900">Administradores e perfis internos</h3>
-              <p className="mt-2 text-sm text-slate-500">Cadastre novos administradores, operadores e perfis do financeiro com acesso ao sistema.</p>
+              <p className="text-[11px] font-semibold uppercase tracking-widest text-brand-500 dark:text-brand-400">
+                {selected ? 'Editar' : 'Novo'}
+              </p>
+              <h3 className="mt-1 text-base font-semibold text-slate-900 dark:text-white">
+                {selected ? selected.name : 'Novo usuário'}
+              </h3>
             </div>
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-              <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Usuários</p>
-              <p className="mt-1 text-2xl font-semibold text-slate-900">{users.length}</p>
-            </div>
-          </div>
-
-          <div className="mb-4 grid gap-4 md:grid-cols-[1fr_auto]">
-            <label className="block">
-              <span className="mb-2 block text-sm font-medium text-slate-700">Buscar na equipe</span>
-              <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Nome, e-mail ou perfil" className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm" />
-            </label>
-            <div className="flex items-end"><Button type="button" onClick={() => token && loadUsers(token)} disabled={loading}>{loading ? 'Atualizando...' : 'Atualizar'}</Button></div>
-          </div>
-
-          <div className="space-y-3">
-            {filteredUsers.length === 0 ? <p className="text-sm text-slate-500">Nenhum usuário administrativo encontrado.</p> : filteredUsers.map((user) => (
-              <div key={user.id} className="flex flex-wrap items-start justify-between gap-3 rounded-3xl border border-slate-200 bg-slate-50 p-4">
-                <div>
-                  <p className="font-semibold text-slate-900">{user.name}</p>
-                  <p className="mt-1 text-sm text-slate-500">{user.email}</p>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold uppercase text-slate-600">{user.role}</span>
-                    <span className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase ${user.active ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-red-200 bg-red-50 text-red-700'}`}>{user.active ? 'ativo' : 'inativo'}</span>
-                  </div>
-                </div>
-                <div className="flex gap-2">
-                  <Button type="button" className="bg-slate-800 hover:bg-slate-900" onClick={() => editUser(user)}>Editar</Button>
-                  <Button type="button" className="bg-red-600 hover:bg-red-700" onClick={() => handleDelete(user.id)}>Excluir</Button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </Card>
-
-        <Card>
-          <div className="mb-5 flex items-center justify-between gap-3">
-            <div>
-              <p className="text-xs uppercase tracking-[0.22em] text-brand-500">Cadastro de acesso</p>
-              <h3 className="mt-2 text-2xl font-semibold text-slate-900">{selectedUser ? 'Editar usuário' : 'Novo administrador'}</h3>
-            </div>
-            {selectedUser && <button type="button" className="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700" onClick={resetForm}>Cancelar</button>}
+            {selected && (
+              <button
+                onClick={reset}
+                className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
+              >
+                Cancelar
+              </button>
+            )}
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-4">
-            <label className="block"><span className="mb-2 block text-sm font-medium text-slate-700">Nome completo</span><input value={form.name} onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value.slice(0, 120) }))} className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm" maxLength={120} required /></label>
-            <label className="block"><span className="mb-2 block text-sm font-medium text-slate-700">E-mail</span><input type="email" value={form.email} onChange={(e) => setForm((prev) => ({ ...prev, email: e.target.value.slice(0, 160) }))} className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm" maxLength={160} required /></label>
-            <label className="block"><span className="mb-2 block text-sm font-medium text-slate-700">Perfil</span><select value={form.role} onChange={(e) => setForm((prev) => ({ ...prev, role: e.target.value as InternalRole }))} className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm"><option value="admin">Administrador</option><option value="operacional">Operacional</option><option value="financeiro">Financeiro</option></select></label>
-            <label className="block"><span className="mb-2 block text-sm font-medium text-slate-700">{selectedUser ? 'Nova senha (opcional)' : 'Senha inicial'}</span><input type="password" value={form.password} onChange={(e) => setForm((prev) => ({ ...prev, password: e.target.value.slice(0, 80) }))} className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm" maxLength={80} placeholder={selectedUser ? 'Preencha apenas se quiser alterar' : 'Defina uma senha segura'} /></label>
-            <label className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700"><input type="checkbox" checked={form.active} onChange={(e) => setForm((prev) => ({ ...prev, active: e.target.checked }))} /> Usuário ativo</label>
-            <div className="flex justify-end gap-3 pt-2">
-              <Button type="button" className="bg-slate-800 hover:bg-slate-900" onClick={resetForm}>Limpar</Button>
-              <Button type="submit" disabled={saving}>{saving ? 'Salvando...' : selectedUser ? 'Atualizar usuário' : 'Cadastrar usuário'}</Button>
+            <FormField label="Nome completo" required>
+              <Input
+                value={form.name}
+                onChange={field('name')}
+                placeholder="Nome e sobrenome"
+                maxLength={120}
+                required
+              />
+            </FormField>
+
+            <FormField label="E-mail" required>
+              <Input
+                type="email"
+                value={form.email}
+                onChange={field('email')}
+                placeholder="usuario@empresa.com"
+                maxLength={160}
+                required
+              />
+            </FormField>
+
+            <FormGrid cols={2}>
+              <FormField label="Perfil" required>
+                <Select value={form.role} onChange={field('role')}>
+                  <option value="admin">Administrador</option>
+                  <option value="operacional">Operacional</option>
+                  <option value="financeiro">Financeiro</option>
+                </Select>
+              </FormField>
+
+              <FormField label={selected ? 'Nova senha (opcional)' : 'Senha inicial'} required={!selected}>
+                <Input
+                  type="password"
+                  value={form.password}
+                  onChange={field('password')}
+                  placeholder={selected ? 'Deixe em branco para manter' : 'Defina uma senha segura'}
+                  maxLength={80}
+                />
+              </FormField>
+            </FormGrid>
+
+            <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-700 dark:bg-slate-900/50">
+              <input
+                type="checkbox"
+                checked={form.active}
+                onChange={field('active')}
+                className="h-4 w-4 rounded accent-brand-700"
+              />
+              <span className="text-sm text-slate-700 dark:text-slate-300">Usuário ativo</span>
+            </label>
+
+            <div className="flex justify-end gap-2 pt-1">
+              <Button type="button" variant="secondary" onClick={reset}>Limpar</Button>
+              <Button type="submit" disabled={saving}>
+                {saving ? 'Salvando…' : selected ? 'Atualizar' : 'Cadastrar'}
+              </Button>
             </div>
           </form>
         </Card>

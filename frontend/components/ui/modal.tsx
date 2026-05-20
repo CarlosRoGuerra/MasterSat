@@ -1,39 +1,85 @@
 'use client';
 
 import { ReactNode, useEffect } from 'react';
+import { X } from 'lucide-react';
 import clsx from 'clsx';
 
-export function Modal({ open, onClose, title, description, children, size = 'lg' }: { open: boolean; onClose: () => void; title: string; description?: string; children: ReactNode; size?: 'md' | 'lg' | 'xl' | '2xl'; }) {
+export function Modal({
+  open,
+  onClose,
+  title,
+  description,
+  subtitle,
+  children,
+  size = 'lg',
+  footer,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  description?: string;
+  subtitle?: string;
+  children: ReactNode;
+  size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl';
+  footer?: ReactNode;
+}) {
   useEffect(() => {
     if (!open) return;
-    const previous = document.body.style.overflow;
+    const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => {
-      document.body.style.overflow = previous;
-      window.removeEventListener('keydown', onKey);
-    };
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', handler);
+    return () => { document.body.style.overflow = prev; window.removeEventListener('keydown', handler); };
   }, [open, onClose]);
 
   if (!open) return null;
 
-  const sizeClass = { md: 'max-w-2xl', lg: 'max-w-4xl', xl: 'max-w-5xl', '2xl': 'max-w-6xl' }[size];
+  const widths = { sm: 'max-w-xl', md: 'max-w-2xl', lg: 'max-w-3xl', xl: 'max-w-5xl', '2xl': 'max-w-6xl' };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/50 px-4 py-6 backdrop-blur-sm" onMouseDown={onClose}>
-      <div className={clsx('w-full overflow-hidden rounded-[32px] border border-slate-200/80 bg-white/95 shadow-[0_28px_120px_-48px_rgba(15,23,42,0.55)] dark:border-slate-800 dark:bg-slate-900/95', sizeClass)} onMouseDown={(event) => event.stopPropagation()}>
-        <div className="flex items-start justify-between gap-4 border-b border-slate-200/80 px-6 py-5 dark:border-slate-800">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.28em] text-brand-500 dark:text-cyan-300">Cadastro e edição</p>
-            <h3 className="mt-2 text-2xl font-semibold text-slate-900 dark:text-white">{title}</h3>
-            {description ? <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500 dark:text-slate-400">{description}</p> : null}
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/40 px-4 py-6 backdrop-blur-sm"
+      onMouseDown={onClose}
+    >
+      <div
+        className={clsx(
+          'flex max-h-[90vh] w-full flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-elevated dark:border-slate-800 dark:bg-slate-900',
+          widths[size],
+        )}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-100 px-6 py-4 dark:border-slate-800">
+          <div className="min-w-0">
+            {subtitle && (
+              <p className="mb-1 text-[11px] font-semibold uppercase tracking-widest text-brand-500 dark:text-brand-400">
+                {subtitle}
+              </p>
+            )}
+            <h3 className="text-lg font-semibold text-slate-900 dark:text-white">{title}</h3>
+            {description && (
+              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{description}</p>
+            )}
           </div>
-          <button type="button" onClick={onClose} className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 text-slate-500 transition hover:border-brand-500 hover:text-brand-600 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-400 dark:hover:border-cyan-400 dark:hover:text-cyan-300" aria-label="Fechar modal">✕</button>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Fechar"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+          >
+            <X className="h-4 w-4" />
+          </button>
         </div>
-        <div className="max-h-[calc(100vh-9rem)] overflow-y-auto px-6 py-6">{children}</div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto px-6 py-5">{children}</div>
+
+        {/* Footer */}
+        {footer && (
+          <div className="shrink-0 border-t border-slate-100 px-6 py-4 dark:border-slate-800">
+            {footer}
+          </div>
+        )}
       </div>
     </div>
   );
