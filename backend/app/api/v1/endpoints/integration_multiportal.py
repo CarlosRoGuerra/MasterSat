@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 from uuid import uuid4
@@ -20,7 +20,7 @@ from app.schemas.integration import (
     IntegrationStatusOut,
     ManufacturerOut,
 )
-from app.services.multiportal import CallResult, MultiportalError, multiportal_service
+from app.services.multiportal import CallResult, MultiportalError, SIM_STATUS_MAP, multiportal_service
 from app.services.multiportal_messages import interpret_multiportal_response
 
 router = APIRouter()
@@ -301,3 +301,82 @@ def sync_flow(tracker_id: int, db: Session = Depends(get_db), _: object = Depend
         overall_success=overall_success,
         steps=[_serialize_step(step) for step in steps],
     )
+
+
+@router.post('/trackers/{tracker_id}/sync-chip', response_model=IntegrationFlowOut)
+def sync_chip(
+    tracker_id: int,
+    chip_status: int = Body(..., embed=True, description='1=Ativo 2=Bloqueado 3=Cancelado 4=Suspenso'),
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*EDIT_ROLES)),
+):
+    tracker = _require_tracker(tracker_id, db)
+    if chip_status not in (1, 2, 3, 4):
+        raise HTTPException(status_code=400, detail='chip_status inválido. Use 1=Ativo 2=Bloqueado 3=Cancelado 4=Suspenso')
+    batch_id = uuid4().hex
+    try:
+        result = multiportal_service.sync_chip_status(tracker, chip_status)
+    except MultiportalError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _save_log(db=db, batch_id=batch_id, entity_type='tracker', entity_id=tracker.id, result=result)
+    sim_status_reverse = {v: k for k, v in SIM_STATUS_MAP.items()}
+    tracker.sim_status = sim_status_reverse.get(chip_status, tracker.sim_status)
+    tracker.integration_status = 'sincronizado' if result.success else 'erro'
+    tracker.integration_last_code = result.status_code
+    tracker.integration_last_description = result.status_description
+    tracker.integration_last_transaction_id = result.transaction_id
+    db.commit()
+    return IntegrationFlowOut(provider='multiportal', entity_type='tracker', entity_id=tracker.id, overall_success=result.success, steps=[_serialize_step(result)])
+
+
+@router.get('/trackers/{tracker_id}/query-link', response_model=IntegrationFlowOut)
+def query_tracker_link(
+    tracker_id: int,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*VIEW_ROLES)),
+):
+    tracker = _require_tracker(tracker_id, db)
+    serial = (tracker.serial_number or tracker.imei or '').strip()
+    manufacturer = tracker.external_manufacturer_id
+    if not serial or not manufacturer:
+        raise HTTPException(status_code=400, detail='Rastreador sem serial ou fabricante externo configurado.')
+    chave = f'{serial};{manufacturer}'
+    batch_id = uuid4().hex
+    try:
+        result = multiportal_service.query_equipment_link(by_serial_and_manufacturer=chave)
+    except MultiportalError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _save_log(db=db, batch_id=batch_id, entity_type='tracker', entity_id=tracker.id, result=result)
+    db.commit()
+    return IntegrationFlowOut(provider='multiportal', entity_type='tracker', entity_id=tracker.id, overall_success=result.success, steps=[_serialize_step(result)])
+
+
+@router.post('/trackers/swap-equipment', response_model=IntegrationFlowOut)
+def swap_equipment(
+    old_tracker_id: int = Body(...),
+    new_tracker_id: int = Body(...),
+    vehicle_id: int = Body(...),
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*EDIT_ROLES)),
+):
+    old_tracker = _require_tracker(old_tracker_id, db)
+    new_tracker = _require_tracker(new_tracker_id, db)
+    vehicle = _require_vehicle(vehicle_id, db)
+    if not vehicle.chassis:
+        raise HTTPException(status_code=400, detail='Veículo sem chassi não pode ser usado na troca.')
+    batch_id = uuid4().hex
+    try:
+        result = multiportal_service.swap_equipment_vehicle(
+            chassis=vehicle.chassis,
+            old_tracker=old_tracker,
+            new_tracker=new_tracker,
+        )
+    except MultiportalError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _save_log(db=db, batch_id=batch_id, entity_type='tracker', entity_id=new_tracker.id, result=result)
+    new_tracker.integration_status = 'sincronizado' if result.success else 'erro'
+    new_tracker.integration_last_code = result.status_code
+    new_tracker.integration_last_description = result.status_description
+    new_tracker.integration_last_transaction_id = result.transaction_id
+    db.commit()
+    return IntegrationFlowOut(provider='multiportal', entity_type='tracker', entity_id=new_tracker.id, overall_success=result.success, steps=[_serialize_step(result)])

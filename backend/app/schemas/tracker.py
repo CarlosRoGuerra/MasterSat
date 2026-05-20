@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from app.models.enums import TrackerStatus
 
@@ -99,20 +99,35 @@ class TrackerUpdate(BaseModel):
     client_id: int | None = None
     vehicle_id: int | None = None
 
-    _normalize_imei = field_validator('imei')(TrackerBase.normalize_imei)
-    _normalize_text = field_validator(
-        'brand',
-        'model',
-        'carrier',
-        'sim_status',
-        'notes',
-        'firmware',
-        'external_manufacturer_label',
-        'ip_address',
-        'install_location',
-        'service_plan_name',
-    )(TrackerBase.normalize_text)
-    _normalize_digits = field_validator('sim_number', 'sim_iccid')(TrackerBase.normalize_digits)
+    @field_validator('imei')
+    @classmethod
+    def normalize_imei(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        digits = ''.join(filter(str.isdigit, value or ''))
+        if len(digits) < 5:
+            raise ValueError('Número de série / ID inválido')
+        return digits
+
+    @field_validator(
+        'brand', 'model', 'carrier', 'sim_status', 'notes',
+        'firmware', 'external_manufacturer_label', 'ip_address',
+        'install_location', 'service_plan_name',
+    )
+    @classmethod
+    def normalize_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
+    @field_validator('sim_number', 'sim_iccid')
+    @classmethod
+    def normalize_digits(cls, value: str | None) -> str | None:
+        if value is None or value == '':
+            return None
+        digits = ''.join(filter(str.isdigit, value))
+        return digits or None
 
 
 class TrackerOut(BaseModel):
@@ -145,6 +160,8 @@ class TrackerOut(BaseModel):
     client_name: str | None = None
     vehicle_plate: str | None = None
     vehicle_model: str | None = None
+    active_plan_id: int | None = None
+    active_plan_name: str | None = None
     integration_status: str | None = None
     integration_last_code: str | None = None
     integration_last_description: str | None = None
@@ -171,3 +188,14 @@ class TrackerHistoryOut(BaseModel):
     created_at: datetime | None = None
 
     model_config = {'from_attributes': True}
+
+
+class TrackerLinkPayload(BaseModel):
+    vehicle_id: int
+    plan_id: int | None = None
+    start_date: date = Field(default_factory=date.today)
+    billing_day: int | None = Field(default=None, ge=1, le=28)
+    payment_method: str | None = None
+    notes: str | None = None
+    auto_generate_billings: bool = True
+    billing_cycles: int = Field(default=12, ge=1, le=60)

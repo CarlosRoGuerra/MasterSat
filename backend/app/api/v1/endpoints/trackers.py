@@ -8,13 +8,18 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_roles
 from app.db.session import get_db
+from app.models.billing import Billing
 from app.models.client import Client
-from app.models.enums import TrackerStatus, UserRole
+from app.models.contract import Contract
+from app.models.enums import BillingStatus, TrackerStatus, UserRole
+from app.models.plan import Plan
 from app.models.tracker import Tracker
 from app.models.tracker_history import TrackerHistory
 from app.models.user import User
 from app.models.vehicle import Vehicle
-from app.schemas.tracker import TrackerCreate, TrackerHistoryOut, TrackerOut, TrackerUpdate
+from app.schemas.contract import ContractOut
+from app.schemas.tracker import TrackerCreate, TrackerHistoryOut, TrackerLinkPayload, TrackerOut, TrackerUpdate
+from app.services.financial import generate_monthly_billings
 
 router = APIRouter()
 
@@ -26,6 +31,8 @@ def _tracker_to_out(tracker: Tracker, db: Session) -> TrackerOut:
     client_name = None
     vehicle_plate = None
     vehicle_model = None
+    active_plan_id = None
+    active_plan_name = None
     if tracker.client_id:
         client = db.get(Client, tracker.client_id)
         if client and not client.is_deleted:
@@ -35,6 +42,20 @@ def _tracker_to_out(tracker: Tracker, db: Session) -> TrackerOut:
         if vehicle and not vehicle.is_deleted:
             vehicle_plate = vehicle.plate
             vehicle_model = vehicle.model
+    active_contract = db.scalar(
+        select(Contract)
+        .where(
+            Contract.tracker_id == tracker.id,
+            Contract.is_deleted.is_(False),
+            Contract.status == 'ativo',
+        )
+        .order_by(Contract.id.desc())
+    )
+    if active_contract:
+        plan = db.get(Plan, active_contract.plan_id)
+        if plan and not plan.is_deleted:
+            active_plan_id = plan.id
+            active_plan_name = plan.name
     return TrackerOut(
         id=tracker.id,
         imei=tracker.imei,
@@ -65,6 +86,8 @@ def _tracker_to_out(tracker: Tracker, db: Session) -> TrackerOut:
         client_name=client_name,
         vehicle_plate=vehicle_plate,
         vehicle_model=vehicle_model,
+        active_plan_id=active_plan_id,
+        active_plan_name=active_plan_name,
         integration_status=tracker.integration_status,
         integration_last_code=tracker.integration_last_code,
         integration_last_description=tracker.integration_last_description,
@@ -110,17 +133,9 @@ def _ensure_imei_available(imei: str, db: Session, ignore_id: int | None = None)
 
 
 def _ensure_vehicle_assignment_available(vehicle_id: int | None, db: Session, ignore_tracker_id: int | None = None) -> None:
-    if not vehicle_id:
-        return
-    stmt = select(Tracker).where(
-        Tracker.vehicle_id == vehicle_id,
-        Tracker.is_deleted.is_(False),
-    )
-    if ignore_tracker_id is not None:
-        stmt = stmt.where(Tracker.id != ignore_tracker_id)
-    existing = db.scalar(stmt)
-    if existing:
-        raise HTTPException(status_code=409, detail='Já existe outro rastreador vinculado a este veículo')
+    # Múltiplos rastreadores por veículo são permitidos (cada um com seu plano/contrato).
+    # Mantemos a função para compatibilidade mas sem bloquear.
+    pass
 
 
 
@@ -343,3 +358,121 @@ def delete_item(
     tracker.client_id = None
     db.commit()
     return {'message': 'Rastreador removido com soft delete'}
+
+
+def _serialize_contract(db: Session, contract: Contract) -> ContractOut:
+    from app.models.client import Client as ClientModel
+    client = db.get(ClientModel, contract.client_id)
+    plan = db.get(Plan, contract.plan_id)
+    vehicle = db.get(Vehicle, contract.vehicle_id) if contract.vehicle_id else None
+    tracker = db.get(Tracker, contract.tracker_id) if contract.tracker_id else None
+    open_billings = (
+        db.query(Billing.id)
+        .filter(
+            Billing.is_deleted.is_(False),
+            Billing.contract_id == contract.id,
+            Billing.status.in_([BillingStatus.PENDING, BillingStatus.OVERDUE]),
+        )
+        .count()
+    )
+    next_due = db.scalar(
+        select(Billing.due_date)
+        .where(
+            Billing.is_deleted.is_(False),
+            Billing.contract_id == contract.id,
+            Billing.status.in_([BillingStatus.PENDING, BillingStatus.OVERDUE]),
+        )
+        .order_by(Billing.due_date.asc())
+    )
+    return ContractOut(
+        id=contract.id,
+        client_id=contract.client_id,
+        plan_id=contract.plan_id,
+        vehicle_id=contract.vehicle_id,
+        tracker_id=contract.tracker_id,
+        start_date=contract.start_date,
+        end_date=contract.end_date,
+        status=contract.status,
+        billing_day=contract.billing_day,
+        payment_method=contract.payment_method,
+        notes=contract.notes,
+        client_name=client.name if client else None,
+        plan_name=plan.name if plan else None,
+        vehicle_plate=vehicle.plate if vehicle else None,
+        tracker_identifier=tracker.imei if tracker else None,
+        monthly_value=float(plan.price) if plan else None,
+        open_billings=open_billings,
+        next_due_date=next_due,
+    )
+
+
+@router.post('/{item_id}/link-vehicle', response_model=dict)
+def link_vehicle(
+    item_id: int,
+    payload: TrackerLinkPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(*EDIT_ROLES)),
+):
+    """Vincula rastreador a um veículo e, opcionalmente, cria o contrato com plano."""
+    tracker = _get_tracker_or_404(item_id, db)
+    vehicle = _get_vehicle_or_404(payload.vehicle_id, db)
+
+    if not vehicle.client_id:
+        raise HTTPException(status_code=400, detail='O veículo não possui cliente vinculado.')
+
+    previous_vehicle_id = tracker.vehicle_id
+    previous_client_id = tracker.client_id
+    previous_status = tracker.status.value if isinstance(tracker.status, TrackerStatus) else str(tracker.status)
+
+    tracker.vehicle_id = vehicle.id
+    tracker.client_id = vehicle.client_id
+    tracker.serial_number = tracker.serial_number or tracker.imei
+    if tracker.status == TrackerStatus.STOCK:
+        tracker.status = TrackerStatus.INSTALLED
+        tracker.install_date = tracker.install_date or date.today()
+
+    _register_history(
+        db, tracker,
+        action='linked',
+        previous_vehicle_id=previous_vehicle_id,
+        new_vehicle_id=vehicle.id,
+        previous_client_id=previous_client_id,
+        new_client_id=vehicle.client_id,
+        previous_status=previous_status,
+        new_status=tracker.status.value if isinstance(tracker.status, TrackerStatus) else str(tracker.status),
+        created_by_user_id=current_user.id,
+        notes=f'Vinculado ao veículo {vehicle.plate}' + (f' com plano #{payload.plan_id}' if payload.plan_id else ''),
+    )
+
+    contract_out: ContractOut | None = None
+    if payload.plan_id:
+        plan = db.get(Plan, payload.plan_id)
+        if not plan or plan.is_deleted:
+            raise HTTPException(status_code=404, detail='Plano não encontrado.')
+        billing_day = payload.billing_day or (payload.start_date.day if payload.start_date.day <= 28 else 28)
+        contract = Contract(
+            client_id=vehicle.client_id,
+            plan_id=payload.plan_id,
+            vehicle_id=vehicle.id,
+            tracker_id=tracker.id,
+            start_date=payload.start_date,
+            status='ativo',
+            billing_day=billing_day,
+            payment_method=payload.payment_method,
+            notes=payload.notes,
+        )
+        db.add(contract)
+        db.flush()
+        if payload.auto_generate_billings:
+            generate_monthly_billings(db, contract, payload.billing_cycles)
+        db.flush()
+        contract_out = _serialize_contract(db, contract)
+
+    db.commit()
+    db.refresh(tracker)
+
+    return {
+        'tracker': _tracker_to_out(tracker, db),
+        'contract': contract_out,
+        'message': f'Rastreador vinculado ao veículo {vehicle.plate}' + (' com contrato criado.' if contract_out else '.'),
+    }

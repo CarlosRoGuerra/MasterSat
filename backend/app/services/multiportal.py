@@ -106,7 +106,9 @@ class MultiportalService:
         return self._client
 
     def _next_transaction_id(self) -> str:
-        return datetime.utcnow().strftime('%Y%m%d%H%M%S%f')
+        # idTransacao é Java Long (max 19 dígitos) — não incluir microssegundos
+        from datetime import timezone
+        return datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')
 
     def _call(self, operation: str, **params: Any) -> CallResult:
         client = self._get_client()
@@ -240,6 +242,88 @@ class MultiportalService:
         )
         return result
 
+    def sync_chip_status(self, tracker: LocalTracker, chip_status: int) -> CallResult:
+        """sincronizaChip — altera status do chip pelo ICCID ou serial+fabricante."""
+        params: dict[str, Any] = {
+            'id': settings.multiportal_id,
+            'senha': settings.multiportal_password,
+            'statusChip': chip_status,
+        }
+        if tracker.sim_iccid:
+            params['serialChip'] = tracker.sim_iccid.strip()
+        elif tracker.serial_number or tracker.imei:
+            serial = (tracker.serial_number or tracker.imei).strip()
+            if not tracker.external_manufacturer_id:
+                raise MultiportalError('Rastreador sem fabricante externo para alterar status do chip.')
+            params['serialEquipamento'] = serial
+            params['fabricante'] = tracker.external_manufacturer_id
+        else:
+            raise MultiportalError('Rastreador sem ICCID ou serial para alterar status do chip.')
+        return self._call('sincronizaChip', **params)
+
+    def query_equipment_link(self, *, by_vehicle_chassis: str | None = None, by_serial_and_manufacturer: str | None = None) -> CallResult:
+        """consultaVinculoEquipamento — consulta vínculos por chassi ou serial+fabricante."""
+        if by_vehicle_chassis:
+            return self._call(
+                'consultaVinculoEquipamento',
+                id=settings.multiportal_id,
+                senha=settings.multiportal_password,
+                codigoOperacao=2,
+                chave=by_vehicle_chassis.strip().upper(),
+            )
+        if by_serial_and_manufacturer:
+            return self._call(
+                'consultaVinculoEquipamento',
+                id=settings.multiportal_id,
+                senha=settings.multiportal_password,
+                codigoOperacao=3,
+                chave=by_serial_and_manufacturer,
+            )
+        raise MultiportalError('Informe chassi ou serial+fabricante para consultar o vínculo.')
+
+    def swap_equipment_vehicle(
+        self,
+        *,
+        chassis: str,
+        old_tracker: LocalTracker,
+        new_tracker: LocalTracker,
+        when: datetime | None = None,
+    ) -> CallResult:
+        """trocaEquipamentoVeiculo — troca equipamento em um veículo em uma chamada."""
+        return self._call(
+            'trocaEquipamentoVeiculo',
+            id=settings.multiportal_id,
+            senha=settings.multiportal_password,
+            chassi=chassis.strip().upper(),
+            equipamentoAntigo=self._build_equipment_reference(old_tracker),
+            equipamentoNovo=self._build_equipment_reference(new_tracker),
+            data=(when or datetime.utcnow()).strftime('%Y%m%d%H%M%S'),
+        )
+
+    def unlink_equipment_vehicle(self, tracker: LocalTracker, vehicle: LocalVehicle, when: datetime | None = None) -> CallResult:
+        """vinculoEquipamentoVeiculo codigoOperacao=2 — desvincula equipamento do veículo."""
+        return self._call(
+            'vinculoEquipamentoVeiculo',
+            id=settings.multiportal_id,
+            senha=settings.multiportal_password,
+            codigoOperacao=2,
+            chassi=(vehicle.chassis or '').strip().upper(),
+            equipamento=self._build_equipment_reference(tracker),
+            data=(when or datetime.utcnow()).strftime('%Y%m%d%H%M%S'),
+        )
+
+    def unlink_vehicle_client(self, vehicle: LocalVehicle, local_client: LocalClient, when: datetime | None = None) -> CallResult:
+        """vinculoVeiculoCliente codigoOperacao=2 — desvincula veículo do cliente."""
+        return self._call(
+            'vinculoVeiculoCliente',
+            id=settings.multiportal_id,
+            senha=settings.multiportal_password,
+            codigoOperacao=2,
+            chassi=(vehicle.chassis or '').strip(),
+            cliente=self._build_client_reference(local_client),
+            data=(when or datetime.utcnow()).strftime('%Y%m%d%H%M%S'),
+        )
+
     def full_sync_for_tracker(
         self,
         *,
@@ -300,20 +384,32 @@ class MultiportalService:
         chassis = (vehicle.chassis or '').strip().upper()
         if not chassis:
             raise MultiportalError('Veículo sem chassi não pode ser sincronizado com a Multiportal.')
-        payload = {
+        payload: dict[str, Any] = {
             'codigoIntegracao': vehicle.id,
             'chassi': chassis,
             'placa': (vehicle.plate or '').strip().upper() or None,
             'tipoVeiculo': vehicle_type,
-            'marca': vehicle.brand,
-            'modelo': vehicle.model,
-            'anoModelo': vehicle.model_year or vehicle.year,
-            'anoFabricacao': vehicle.manufacture_year,
-            'cor': vehicle.color,
-            'codigoRenavam': self._safe_int(vehicle.renavam),
-            'codigoFipe': self._safe_int(vehicle.fipe_code),
             'apelido': vehicle.contract_number or vehicle.plate,
         }
+        # Campos de texto opcionais: omite quando None para não apagar dados já existentes no Multiportal
+        if vehicle.brand:
+            payload['marca'] = vehicle.brand
+        if vehicle.model:
+            payload['modelo'] = vehicle.model
+        if vehicle.color:
+            payload['cor'] = vehicle.color
+        # Campos inteiros opcionais: omite quando não preenchidos para evitar envio de 0
+        ano_modelo = vehicle.model_year or vehicle.year
+        if ano_modelo:
+            payload['anoModelo'] = ano_modelo
+        if vehicle.manufacture_year:
+            payload['anoFabricacao'] = vehicle.manufacture_year
+        renavam = self._safe_int(vehicle.renavam)
+        if renavam:
+            payload['codigoRenavam'] = renavam
+        fipe = self._safe_int(vehicle.fipe_code)
+        if fipe:
+            payload['codigoFipe'] = fipe
         return payload
 
     def _build_equipment_reference(self, tracker: LocalTracker) -> dict[str, Any]:
@@ -369,22 +465,10 @@ class MultiportalService:
         }
 
     def _build_addresses(self, local_client: LocalClient) -> list[dict[str, Any]]:
-        if not local_client.address_line or not local_client.city or not local_client.state or not local_client.zip_code:
-            return []
-        return [
-            {
-                'codigoIntegracao': local_client.id,
-                'tipoEndereco': 1,
-                'tipoLogradouro': self._logradouro_code(local_client.address_line),
-                'logradouro': local_client.address_line,
-                'numero': self._safe_int(local_client.address_number) or 0,
-                'bairro': local_client.neighborhood or 'NÃO INFORMADO',
-                'cidade': local_client.city,
-                'uf': local_client.state,
-                'cep': self._safe_int(local_client.zip_code) or 0,
-                'complemento': local_client.address_complement,
-            }
-        ]
+        # Este servidor rejeita endereços com latitude/longitude = 0.0 (código 1111),
+        # mas aceita clientes sem listaEnderecos (retorna 200).
+        # Como o sistema não armazena coordenadas GPS, não enviamos endereço.
+        return []
 
     def _build_contacts(self, local_client: LocalClient) -> list[dict[str, Any]]:
         contacts: list[dict[str, Any]] = []
@@ -398,21 +482,31 @@ class MultiportalService:
                     'valor': local_client.phone,
                 }
             )
-        emails = []
-        if local_client.email:
-            emails.append(local_client.email)
-        if local_client.extra_emails:
-            emails.extend([item for item in local_client.extra_emails if item])
-        for idx, email in enumerate(dict.fromkeys(emails).keys(), start=1):
-            contacts.append(
-                {
-                    'codigoIntegracao': int(f'{local_client.id}{idx}'),
-                    'nome': local_client.name,
-                    'tipoContato': 5,
-                    'relacao': 7,
-                    'valor': email,
-                }
-            )
+        # Additional structured contacts (new contacts JSON field)
+        extra_contacts = local_client.contacts or []
+        for idx, c in enumerate(extra_contacts, start=1):
+            if isinstance(c, dict):
+                phone = (c.get('phone') or '').strip()
+                email = (c.get('email') or '').strip()
+                name = (c.get('name') or local_client.name).strip()
+                if phone:
+                    contacts.append({
+                        'codigoIntegracao': int(f'{local_client.id}9{idx}1'),
+                        'nome': name,
+                        'tipoContato': 2,
+                        'relacao': 7,  # Proprietário — relacao 9 rejeitado pelo servidor
+                        'valor': phone,
+                    })
+                if email:
+                    contacts.append({
+                        'codigoIntegracao': int(f'{local_client.id}9{idx}2'),
+                        'nome': name,
+                        'tipoContato': 5,
+                        'relacao': 7,  # Proprietário
+                        'valor': email,
+                    })
+        # tipoContato 5 (E-mail) rejeitado por esta versão do servidor.
+        # E-mails são enviados no campo `email` do cliente, não como contato separado.
         return contacts
 
     def _chip_status_to_code(self, value: str | None) -> int | None:

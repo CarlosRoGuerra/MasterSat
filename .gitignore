@@ -1,0 +1,29 @@
+# ─── Frontend ───────────────────────────────────────────────────────────────
+frontend/node_modules/
+frontend/.next/
+frontend/.env*.local
+
+# ─── Backend ────────────────────────────────────────────────────────────────
+backend/__pycache__/
+backend/**/__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+backend/.env
+backend/.pytest_cache/
+backend/htmlcov/
+backend/.coverage
+backend/dist/
+backend/build/
+
+# ─── Ambiente ────────────────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+*.env
+
+# ─── IDEs e SO ───────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.DS_Store
+Thumbs.db

@@ -1,7 +1,7 @@
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_roles
@@ -90,6 +90,8 @@ def list_items(
     vehicle_id: int | None = None,
     tracker_id: int | None = None,
     status: str | None = None,
+    search: str | None = None,
+    limit: int = Query(default=100, le=300),
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL)),
 ):
@@ -105,7 +107,22 @@ def list_items(
         query = query.filter(Contract.tracker_id == tracker_id)
     if status:
         query = query.filter(Contract.status == status)
-    items = query.order_by(Contract.created_at.desc()).all()
+    if search:
+        term = f'%{search.strip()}%'
+        client_ids = db.scalars(
+            select(Client.id).where(Client.name.ilike(term), Client.is_deleted.is_(False))
+        ).all()
+        vehicle_ids = db.scalars(
+            select(Vehicle.id).where(Vehicle.plate.ilike(term), Vehicle.is_deleted.is_(False))
+        ).all()
+        from sqlalchemy import or_
+        query = query.filter(
+            or_(
+                Contract.client_id.in_(client_ids),
+                Contract.vehicle_id.in_(vehicle_ids),
+            )
+        )
+    items = query.order_by(Contract.created_at.desc()).limit(limit).all()
     return [serialize_contract(db, item) for item in items]
 
 
