@@ -9,6 +9,7 @@ import { Modal } from '@/components/ui/modal';
 import { StatCard } from '@/components/ui/stat-card';
 import { SectionHeader } from '@/components/ui/section-header';
 import { Badge, statusVariant, statusLabel } from '@/components/ui/badge';
+import { ClientAutocomplete } from '@/components/ui/client-autocomplete';
 import { Table, TableHead, Th, TableBody, Tr, Td } from '@/components/ui/table';
 import { EmptyState, TableSkeleton } from '@/components/ui/empty-state';
 import { Input } from '@/components/ui/input';
@@ -182,7 +183,7 @@ export default function VeiculosPage() {
   const [uninstallServiceProductId, setUninstallServiceProductId] = useState('');
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [detailsTab, setDetailsTab] = useState<'dados' | 'documentos' | 'rastreador'>('dados');
-  const [linkedTracker, setLinkedTracker] = useState<TrackerOption | null>(null);
+  const [linkedTrackers, setLinkedTrackers] = useState<TrackerOption[]>([]);
   const [stockTrackers, setStockTrackers] = useState<TrackerOption[]>([]);
   const [plans, setPlans] = useState<PlanOption[]>([]);
   const [linkTrackerOpen, setLinkTrackerOpen] = useState(false);
@@ -226,11 +227,11 @@ export default function VeiculosPage() {
     setDetailsOpen(true);
     if (token) {
       const [trackers, plansData] = await Promise.all([
-        apiFetch<TrackerOption[]>(`/trackers?vehicle_id=${vehicle.id}&limit=10`, {}, token).catch(() => []),
+        apiFetch<TrackerOption[]>(`/trackers?vehicle_id=${vehicle.id}&limit=20`, {}, token).catch(() => []),
         apiFetch<PlanOption[]>('/plans', {}, token).catch(() => []),
         loadDocuments(token, vehicle.id),
       ]);
-      setLinkedTracker(trackers[0] ?? null);
+      setLinkedTrackers(trackers);
       setPlans(plansData);
     }
   }
@@ -261,7 +262,7 @@ export default function VeiculosPage() {
       setLinkForm({ tracker_id: '', plan_id: '', billing_cycles: '12' });
       await loadVehicles(token);
       const updated = await apiFetch<TrackerOption[]>(`/trackers?vehicle_id=${selectedVehicle.id}`, {}, token).catch(() => []);
-      setLinkedTracker(updated[0] ?? null);
+      setLinkedTrackers(updated);
     } catch (err) { setError(parseError(err)); }
     finally { setLinking(false); }
   }
@@ -612,7 +613,7 @@ export default function VeiculosPage() {
       {/* Modal de detalhes */}
       <Modal
         open={detailsOpen}
-        onClose={() => { setDetailsOpen(false); setSelectedVehicle(null); setLinkedTracker(null); }}
+        onClose={() => { setDetailsOpen(false); setSelectedVehicle(null); setLinkedTrackers([]); }}
         title={selectedVehicle?.plate ?? ''}
         subtitle="Detalhes do veículo"
         size="xl"
@@ -655,25 +656,33 @@ export default function VeiculosPage() {
             {/* Aba Rastreador */}
             {detailsTab === 'rastreador' && (
               <div className="space-y-4">
-                {linkedTracker ? (
-                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900/40 dark:bg-emerald-950/30">
-                    <p className="text-xs font-semibold uppercase tracking-widest text-emerald-600 dark:text-emerald-400">Rastreador vinculado</p>
-                    <p className="mt-2 font-semibold text-slate-900 dark:text-white">{linkedTracker.imei}</p>
-                    <p className="mt-0.5 text-xs text-slate-500">{[linkedTracker.brand, linkedTracker.model].filter(Boolean).join(' ')}</p>
-                    {canEdit && (
-                      <div className="mt-3 flex gap-2">
-                        <Button variant="danger" onClick={() => setUninstallOpen(true)} className="text-xs px-3 py-1.5">Desvincular / Desinstalar</Button>
-                      </div>
-                    )}
-                  </div>
-                ) : (
+                {linkedTrackers.length === 0 ? (
                   <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-900/40 dark:bg-amber-950/30">
                     <p className="text-sm font-medium text-amber-700 dark:text-amber-400">Nenhum rastreador vinculado a este veículo.</p>
                   </div>
+                ) : (
+                  <div className="space-y-2">
+                    {linkedTrackers.map((t) => (
+                      <div key={t.id} className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900/40 dark:bg-emerald-950/30">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="font-mono font-semibold text-slate-900 dark:text-white">{t.imei}</p>
+                            <p className="mt-0.5 text-xs text-slate-500">{[t.brand, t.model].filter(Boolean).join(' ')}</p>
+                            <Badge variant={statusVariant(t.status)} className="mt-1">{statusLabel(t.status)}</Badge>
+                          </div>
+                          {canEdit && (
+                            <Button variant="danger" onClick={() => { setSelectedVehicle(selectedVehicle); setUninstallOpen(true); }} className="text-xs px-3 py-1.5 shrink-0">
+                              Desinstalar
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 )}
-                {canEdit && !linkedTracker && (
+                {canEdit && (
                   <Button onClick={() => { loadStockTrackers(); setLinkTrackerOpen(true); }} className="gap-2 w-full justify-center">
-                    Vincular rastreador
+                    + Vincular rastreador
                   </Button>
                 )}
               </div>
@@ -756,10 +765,13 @@ export default function VeiculosPage() {
         <form className="space-y-6" onSubmit={submitVehicle}>
           {modalError && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>}
           <div className="grid gap-4 md:grid-cols-3">
-            <select className={fieldClass} value={form.client_id} onChange={(e) => setForm((prev) => ({ ...prev, client_id: e.target.value }))} required>
-              <option value="">Selecione o cliente</option>
-              {clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}
-            </select>
+            <ClientAutocomplete
+              clients={clients}
+              value={form.client_id}
+              onChange={(id) => setForm((prev) => ({ ...prev, client_id: id }))}
+              placeholder="Digite nome ou CPF/CNPJ do cliente…"
+              required
+            />
             <label className="flex items-center gap-2 rounded-2xl border border-slate-200 px-4 py-3 text-sm text-slate-700 dark:border-slate-700 dark:text-slate-200"><input type="checkbox" onChange={(e) => populateFromClient(form.client_id, e.target.checked)} /> Usar endereço do cliente</label>
             <select className={fieldClass} value={form.status} onChange={(e) => setForm((prev) => ({ ...prev, status: e.target.value as VehicleStatus }))}>{['ativo','sem_rastreador','retirado','bloqueado','pendente_validacao','em_analise','aprovado','reprovado','correcao_solicitada'].map((option) => <option key={option} value={option}>{option.replace(/_/g, ' ')}</option>)}</select>
           </div>

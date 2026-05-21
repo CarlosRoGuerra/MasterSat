@@ -8,6 +8,10 @@ import { Button } from '@/components/ui/button';
 import { Modal } from '@/components/ui/modal';
 import { StatCard } from '@/components/ui/stat-card';
 import { SectionHeader } from '@/components/ui/section-header';
+import { Badge, statusVariant, statusLabel } from '@/components/ui/badge';
+import { Table, TableHead, Th, TableBody, Tr, Td } from '@/components/ui/table';
+import { EmptyState, TableSkeleton } from '@/components/ui/empty-state';
+import { usePagination, Pagination } from '@/components/ui/pagination';
 import { apiFetch } from '@/lib/api';
 import { onlyDigits, formatCpfCnpj } from '@/lib/format';
 import { useAuthGuard } from '@/lib/use-auth-guard';
@@ -104,24 +108,10 @@ function parseError(error: unknown) {
   return error instanceof Error ? error.message : 'Ocorreu um erro inesperado.';
 }
 
-function statusBadge(status: TrackerStatus) {
-  switch (status) {
-    case 'instalado':
-      return 'border-emerald-200 bg-emerald-50 text-emerald-700';
-    case 'em_manutencao':
-      return 'border-amber-200 bg-amber-50 text-amber-700';
-    case 'extraviado':
-    case 'descartado':
-      return 'border-rose-200 bg-rose-50 text-rose-700';
-    default:
-      return 'border-slate-200 bg-slate-50 text-slate-700';
-  }
-}
-
-function integrationBadge(status?: string | null) {
-  if (status === 'sincronizado') return 'border-emerald-200 bg-emerald-50 text-emerald-700';
-  if (status === 'erro') return 'border-rose-200 bg-rose-50 text-rose-700';
-  return 'border-slate-200 bg-slate-50 text-slate-700';
+function integrationVariant(status?: string | null): 'success' | 'danger' | 'default' {
+  if (status === 'sincronizado') return 'success';
+  if (status === 'erro') return 'danger';
+  return 'default';
 }
 
 function friendlyAction(value: string) {
@@ -137,11 +127,71 @@ function friendlyAction(value: string) {
 }
 
 
-function cardKeyHandler(event: React.KeyboardEvent<HTMLElement>, callback: () => void) {
-  if (event.key === 'Enter' || event.key === ' ') {
-    event.preventDefault();
-    callback();
-  }
+// ---------------------------------------------------------------------------
+// Sub-component para isolar o hook de paginação
+// ---------------------------------------------------------------------------
+
+function RastreadoresTableContent({
+  trackers,
+  loading,
+  canEdit,
+  onDetails,
+  onEdit,
+}: {
+  trackers: Tracker[];
+  loading: boolean;
+  canEdit: boolean;
+  onDetails: (t: Tracker) => void;
+  onEdit: (t: Tracker) => void;
+}) {
+  const pg = usePagination(trackers, 20);
+
+  if (loading) return <TableSkeleton rows={8} cols={5} />;
+  if (trackers.length === 0) return <EmptyState title="Nenhum rastreador encontrado" description="Ajuste os filtros ou adicione um novo rastreador." />;
+
+  return (
+    <>
+      <Table>
+        <TableHead>
+          <Th>IMEI / ID</Th>
+          <Th>Equipamento</Th>
+          <Th>Cliente / Veículo</Th>
+          <Th>Status</Th>
+          <Th className="w-36" />
+        </TableHead>
+        <TableBody>
+          {pg.slice.map((tracker) => (
+            <Tr key={tracker.id}>
+              <Td className="font-mono text-sm">{tracker.imei}</Td>
+              <Td>
+                <p>{[tracker.brand, tracker.model].filter(Boolean).join(' ') || '—'}</p>
+                {tracker.active_plan_name && <p className="text-xs text-brand-600 dark:text-brand-400">{tracker.active_plan_name}</p>}
+              </Td>
+              <Td>
+                <p className="text-sm">{tracker.client_name ?? '—'}</p>
+                <p className="text-xs text-slate-400">{tracker.vehicle_plate ? `Placa ${tracker.vehicle_plate}` : ''}</p>
+              </Td>
+              <Td>
+                <div className="flex flex-wrap gap-1">
+                  <Badge variant={statusVariant(tracker.status)}>{statusLabel(tracker.status)}</Badge>
+                  {tracker.integration_status && (
+                    <Badge variant={integrationVariant(tracker.integration_status)}>{tracker.integration_status}</Badge>
+                  )}
+                </div>
+              </Td>
+              <Td>
+                <div className="flex justify-end gap-1.5">
+                  <Button variant="secondary" onClick={() => onDetails(tracker)} className="px-3 py-1.5 text-xs">Detalhes</Button>
+                  {canEdit && <Button variant="secondary" onClick={() => onEdit(tracker)} className="px-3 py-1.5 text-xs">Editar</Button>}
+                </div>
+              </Td>
+            </Tr>
+          ))}
+        </TableBody>
+      </Table>
+      <Pagination {...pg} onPage={pg.setPage} className="mt-2" />
+    </>
+  );
 }
 
 export default function RastreadoresPage() {
@@ -157,6 +207,8 @@ export default function RastreadoresPage() {
   const [trackerContract, setTrackerContract] = useState<ContractInfo | null>(null);
   const [vehicleTrackers, setVehicleTrackers] = useState<Tracker[]>([]);
   const [selectedTracker, setSelectedTracker] = useState<Tracker | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [detailsTab, setDetailsTab] = useState<'dados' | 'historico' | 'contrato'>('dados');
   const [form, setForm] = useState<TrackerFormState>(initialForm);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
@@ -410,101 +462,153 @@ export default function RastreadoresPage() {
         <StatCard label="Em manutenção" value={stats.maintenance} hint="Exigem acompanhamento" tone="warning" icon="🛠️" />
       </section>
 
-      <section className="mt-6 grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-        <div className="space-y-6">
-          <Card>
-            <SectionHeader eyebrow="Cadastro" title="Controle de rastreadores" description="Separe listagem de formulários para manter o módulo técnico mais limpo e profissional." actions={canEdit ? <Button type="button" onClick={openCreateModal}>Adicionar rastreador</Button> : null} />
-            <div className="mt-5 grid gap-4 md:grid-cols-4">
-              <input className={fieldClass} placeholder="Buscar por número de série / ID, modelo ou placa" value={search} onChange={(e) => setSearch(e.target.value)} />
-              <select className={fieldClass} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}><option value="">Todos os status</option>{statusOptions.map((option) => <option key={option} value={option}>{option.replace(/_/g, ' ')}</option>)}</select>
-              <select className={fieldClass} value={clientFilter} onChange={(e) => setClientFilter(e.target.value)}><option value="">Todos os clientes</option>{clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select>
-              <Button type="button" onClick={() => token && loadBaseData(token)} disabled={loading}>{loading ? 'Atualizando...' : 'Aplicar filtros'}</Button>
-            </div>
-            <div className="mt-5 grid gap-3">
-              {trackers.length === 0 ? <p className="rounded-2xl border border-dashed border-slate-300 px-4 py-6 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">Nenhum rastreador encontrado.</p> : trackers.map((tracker) => (
-                <div key={tracker.id} role="button" tabIndex={0} onClick={() => setSelectedTracker(tracker)} onKeyDown={(event) => cardKeyHandler(event, () => setSelectedTracker(tracker))} className={`cursor-pointer rounded-[24px] border p-5 text-left transition ${selectedTracker?.id === tracker.id ? 'border-brand-500 bg-brand-50/60 shadow-sm dark:border-cyan-400 dark:bg-cyan-400/10' : 'border-slate-200 bg-white hover:-translate-y-0.5 hover:border-brand-400 hover:shadow-lg dark:border-slate-800 dark:bg-slate-900'}`}>
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className="text-lg font-semibold text-slate-900 dark:text-white">{tracker.imei}</p>
-                        <span className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase ${statusBadge(tracker.status)}`}>{tracker.status.replace(/_/g, ' ')}</span>
-                        <span className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase ${integrationBadge(tracker.integration_status)}`}>{tracker.integration_status || 'sem sync'}</span>
-                      </div>
-                      <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">{[tracker.brand, tracker.model].filter(Boolean).join(' • ') || 'Sem marca/modelo'}</p>
-                      <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{tracker.client_name || 'Sem cliente'} • {tracker.vehicle_plate ? `Veículo ${tracker.vehicle_plate}` : 'Sem veículo'}</p>
-                      {tracker.active_plan_name && <p className="mt-1 text-xs font-medium text-brand-600 dark:text-cyan-400">{tracker.active_plan_name}</p>}
-                    </div>
-                    {canEdit ? <Button type="button" onClick={(event) => { event.stopPropagation(); openEditModal(tracker); }}>Editar</Button> : null}
-                  </div>
-                </div>
+      <section className="mt-6">
+        <Card>
+          <SectionHeader
+            eyebrow="Cadastro"
+            title="Controle de rastreadores"
+            actions={canEdit ? <Button onClick={openCreateModal}>Adicionar rastreador</Button> : null}
+          />
+          <div className="mt-4 flex flex-wrap gap-3">
+            <input className={fieldClass} style={{ maxWidth: 280 }} placeholder="IMEI, modelo ou placa" value={search} onChange={(e) => setSearch(e.target.value)} />
+            <select className={fieldClass} style={{ width: 180 }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+              <option value="">Todos os status</option>
+              {statusOptions.map((o) => <option key={o} value={o}>{o.replace(/_/g, ' ')}</option>)}
+            </select>
+            <select className={fieldClass} style={{ width: 220 }} value={clientFilter} onChange={(e) => setClientFilter(e.target.value)}>
+              <option value="">Todos os clientes</option>
+              {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <Button variant="secondary" onClick={() => token && loadBaseData(token)} disabled={loading}>
+              {loading ? 'Atualizando…' : 'Filtrar'}
+            </Button>
+          </div>
+          <div className="mt-4">
+            <RastreadoresTableContent
+              trackers={trackers}
+              loading={loading}
+              canEdit={canEdit}
+              onDetails={(t) => { setSelectedTracker(t); setDetailsTab('dados'); setDetailsOpen(true); }}
+              onEdit={openEditModal}
+            />
+          </div>
+        </Card>
+      </section>
+
+      {/* Modal de detalhes */}
+      <Modal
+        open={detailsOpen}
+        onClose={() => { setDetailsOpen(false); setSelectedTracker(null); }}
+        title={selectedTracker?.imei ?? ''}
+        subtitle="Detalhes do rastreador"
+        size="lg"
+        footer={canEdit && selectedTracker ? (
+          <div className="flex justify-end">
+            <Button variant="danger" onClick={() => { setDetailsOpen(false); deleteTracker(); }} className="text-xs">
+              Excluir rastreador
+            </Button>
+          </div>
+        ) : undefined}
+      >
+        {selectedTracker && (
+          <div className="space-y-4">
+            <div className="flex gap-1 border-b border-slate-100 dark:border-slate-800">
+              {(['dados', 'historico', 'contrato'] as const).map((tab) => (
+                <button key={tab} type="button" onClick={() => setDetailsTab(tab)}
+                  className={`px-4 py-2 text-sm font-medium transition-colors ${detailsTab === tab ? 'border-b-2 border-brand-600 text-brand-700 dark:border-brand-400 dark:text-brand-300' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
+                >
+                  {tab === 'dados' ? 'Dados' : tab === 'historico' ? 'Histórico' : 'Contrato'}
+                </button>
               ))}
             </div>
-          </Card>
-        </div>
 
-        <div className="space-y-6">
-          <Card>
-            <SectionHeader eyebrow="Detalhes" title={selectedTracker ? selectedTracker.imei || 'Rastreador selecionado' : 'Selecione um rastreador'} description={selectedTracker ? 'Resumo do vínculo técnico, identificação do cliente e situação do equipamento.' : 'Escolha um rastreador para consultar o detalhamento.'} actions={selectedTracker && canEdit ? <button type="button" onClick={deleteTracker} className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm font-semibold text-rose-700">Excluir</button> : null} />
-            {selectedTracker ? (
-              <div className="mt-5 space-y-5">
-                <div className="grid gap-3 md:grid-cols-2">
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60"><p className="text-xs uppercase tracking-[0.2em] text-slate-400">Cliente</p><p className="mt-2 font-semibold text-slate-900 dark:text-white">{selectedTracker.client_name || 'Não vinculado'}</p><p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{selectedTracker.client_cpf_cnpj ? formatCpfCnpj(selectedTracker.client_cpf_cnpj) : 'Sem documento'}</p></div>
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60"><p className="text-xs uppercase tracking-[0.2em] text-slate-400">Veículo</p><p className="mt-2 font-semibold text-slate-900 dark:text-white">{selectedTracker.vehicle_plate || 'Sem vínculo'}</p><p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{selectedTracker.integration_last_code || '-'} • {selectedTracker.integration_last_description || 'Sem retorno externo'}</p></div>
-                </div>
-                <div className="grid gap-3 md:grid-cols-2">
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60"><p className="text-xs uppercase tracking-[0.2em] text-slate-400">Fabricante</p><p className="mt-2 font-semibold text-slate-900 dark:text-white">{selectedTracker.external_manufacturer_label || selectedTracker.brand || 'Não informado'}</p></div>
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60"><p className="text-xs uppercase tracking-[0.2em] text-slate-400">SIM / ICCID</p><p className="mt-2 text-sm text-slate-600 dark:text-slate-300">{selectedTracker.sim_number || 'Sem linha'} • {selectedTracker.sim_iccid || 'Sem ICCID'}</p></div>
-                </div>
-                <div className={`rounded-2xl border p-4 ${trackerContract ? 'border-emerald-200 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/40' : 'border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-950/60'}`}>
-                  <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Plano contratado</p>
-                  {trackerContract ? (
-                    <>
-                      <p className="mt-2 font-semibold text-slate-900 dark:text-white">{trackerContract.plan_name || 'Plano ativo'}</p>
-                      <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                        {trackerContract.monthly_value != null ? `R$ ${trackerContract.monthly_value.toFixed(2)}/mês` : ''}{trackerContract.next_due_date ? ` • Próx. venc: ${trackerContract.next_due_date}` : ''}
-                      </p>
-                    </>
-                  ) : (
-                    <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">{selectedTracker.vehicle_id ? 'Nenhum contrato ativo — cadastre em Contratos' : 'Vincule a um veículo para ver o plano'}</p>
-                  )}
-                </div>
+            {detailsTab === 'dados' && (
+              <div className="grid gap-3 sm:grid-cols-2">
+                {[
+                  ['Status', <Badge key="s" variant={statusVariant(selectedTracker.status)}>{statusLabel(selectedTracker.status)}</Badge>],
+                  ['Integração', <Badge key="i" variant={integrationVariant(selectedTracker.integration_status)}>{selectedTracker.integration_status ?? 'sem sync'}</Badge>],
+                  ['Marca / Modelo', [selectedTracker.brand, selectedTracker.model].filter(Boolean).join(' ') || '—'],
+                  ['Fabricante', selectedTracker.external_manufacturer_label ?? selectedTracker.brand ?? '—'],
+                  ['Cliente', selectedTracker.client_name ?? '—'],
+                  ['Veículo', selectedTracker.vehicle_plate ?? '—'],
+                  ['Linha SIM', selectedTracker.sim_number ?? '—'],
+                  ['ICCID', selectedTracker.sim_iccid ?? '—'],
+                  ['Firmware', selectedTracker.firmware ?? '—'],
+                  ['Data instalação', selectedTracker.install_date ?? '—'],
+                  ['Garantia até', selectedTracker.warranty_until ?? '—'],
+                  ['Aquisição', selectedTracker.acquisition_date ?? '—'],
+                ].map(([label, value]) => (
+                  <div key={String(label)} className="rounded-xl border border-slate-100 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/50">
+                    <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">{label}</p>
+                    <div className="mt-1 text-sm text-slate-800 dark:text-slate-200">{value}</div>
+                  </div>
+                ))}
+                {selectedTracker.notes && (
+                  <div className="col-span-2 rounded-xl border border-slate-100 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/50">
+                    <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">Observações</p>
+                    <p className="mt-1 text-sm text-slate-700 dark:text-slate-300">{selectedTracker.notes}</p>
+                  </div>
+                )}
                 {vehicleTrackers.length > 0 && (
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60">
-                    <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Outros equipamentos neste veículo</p>
-                    <ul className="mt-3 space-y-2">
-                      {vehicleTrackers.map((t) => (
-                        <li
-                          key={t.id}
-                          role="button"
-                          tabIndex={0}
-                          onClick={() => setSelectedTracker(t)}
-                          onKeyDown={(e) => cardKeyHandler(e, () => setSelectedTracker(t))}
-                          className="flex cursor-pointer items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm transition hover:border-brand-400 dark:border-slate-700 dark:bg-slate-900 dark:hover:border-cyan-500"
-                        >
-                          <span className="font-medium text-slate-800 dark:text-white">{t.imei}</span>
-                          <span className="text-xs text-slate-500 dark:text-slate-400">{t.active_plan_name || 'sem plano'}</span>
-                        </li>
-                      ))}
-                    </ul>
+                  <div className="col-span-2 space-y-1.5">
+                    <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">Outros rastreadores neste veículo</p>
+                    {vehicleTrackers.map((t) => (
+                      <div key={t.id} className="flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 dark:border-slate-800 dark:bg-slate-900/50">
+                        <span className="font-mono text-sm">{t.imei}</span>
+                        <span className="text-xs text-slate-400">{t.active_plan_name ?? 'sem plano'}</span>
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
-            ) : null}
-          </Card>
+            )}
 
-          <Card>
-            <SectionHeader eyebrow="Histórico" title="Linha do tempo do equipamento" description="Movimentações de vínculo e alterações relevantes do rastreador selecionado." />
-            <div className="mt-5 space-y-3">
-              {!selectedTracker ? <p className="text-sm text-slate-500 dark:text-slate-400">Selecione um rastreador para consultar o histórico.</p> : history.length === 0 ? <p className="text-sm text-slate-500 dark:text-slate-400">Nenhum evento registrado até o momento.</p> : history.map((entry) => (
-                <div key={entry.id} className="rounded-[24px] border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60">
-                  <div className="flex items-start justify-between gap-3"><div><p className="font-semibold text-slate-900 dark:text-white">{friendlyAction(entry.action)}</p><p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{entry.created_at ? new Date(entry.created_at).toLocaleString('pt-BR') : entry.event_date || '-'}</p></div><span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold uppercase text-slate-600 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300">{entry.new_status || '-'}</span></div>
-                  {entry.notes ? <p className="mt-3 text-sm text-slate-600 dark:text-slate-300">{entry.notes}</p> : null}
-                </div>
-              ))}
-            </div>
-          </Card>
-        </div>
-      </section>
+            {detailsTab === 'historico' && (
+              <div>
+                {history.length === 0 ? (
+                  <EmptyState title="Sem histórico" description="Nenhum evento registrado." />
+                ) : (
+                  <ol className="relative border-l border-slate-200 dark:border-slate-700">
+                    {history.map((entry) => (
+                      <li key={entry.id} className="mb-4 ml-5">
+                        <span className="absolute -left-[14px] flex h-7 w-7 items-center justify-center rounded-full bg-slate-100 ring-2 ring-white dark:bg-slate-800 dark:ring-slate-950">
+                          <span className="h-2 w-2 rounded-full bg-brand-500" />
+                        </span>
+                        <div className="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2 dark:border-slate-800 dark:bg-slate-950/60">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-xs font-semibold text-slate-900 dark:text-white">{friendlyAction(entry.action)}</p>
+                            {entry.new_status && <Badge variant={statusVariant(entry.new_status)}>{statusLabel(entry.new_status)}</Badge>}
+                          </div>
+                          <time className="mt-0.5 block text-[10px] text-slate-400">{entry.created_at ? new Date(entry.created_at).toLocaleString('pt-BR') : entry.event_date ?? '—'}</time>
+                          {entry.notes && <p className="mt-1 text-xs text-slate-500">{entry.notes}</p>}
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </div>
+            )}
+
+            {detailsTab === 'contrato' && (
+              <div>
+                {trackerContract ? (
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900/40 dark:bg-emerald-950/30">
+                    <p className="text-xs font-semibold uppercase tracking-widest text-emerald-600 dark:text-emerald-400">Contrato ativo</p>
+                    <p className="mt-2 text-lg font-semibold text-slate-900 dark:text-white">{trackerContract.plan_name ?? 'Plano'}</p>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2 text-sm text-slate-600 dark:text-slate-300">
+                      {trackerContract.monthly_value != null && <div><span className="font-medium">Valor:</span> R$ {trackerContract.monthly_value.toFixed(2)}/mês</div>}
+                      {trackerContract.start_date && <div><span className="font-medium">Início:</span> {trackerContract.start_date}</div>}
+                      {trackerContract.next_due_date && <div><span className="font-medium">Próx. venc.:</span> {trackerContract.next_due_date}</div>}
+                    </div>
+                  </div>
+                ) : (
+                  <EmptyState title="Sem contrato ativo" description={selectedTracker.vehicle_id ? 'Nenhum contrato ativo — gerencie em Financeiro.' : 'Vincule o rastreador a um veículo pela página de Veículos.'} />
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
 
       <Modal open={modalOpen} onClose={() => { setModalOpen(false); resetForm(); setModalError(''); }} title={isEditing ? 'Editar rastreador' : 'Novo rastreador'} description="Cadastre o equipamento em um fluxo mais limpo, com foco no identificador técnico, vínculo e dados essenciais." size="xl">
         <form className="space-y-6" onSubmit={submitTracker}>

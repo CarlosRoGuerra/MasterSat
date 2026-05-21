@@ -10,6 +10,10 @@ import { Modal } from '@/components/ui/modal';
 import { StatCard } from '@/components/ui/stat-card';
 import { SectionHeader } from '@/components/ui/section-header';
 import { BarChart } from '@/components/ui/bar-chart';
+import { Badge, statusVariant, statusLabel } from '@/components/ui/badge';
+import { Table, TableHead, Th, TableBody, Tr, Td } from '@/components/ui/table';
+import { EmptyState, TableSkeleton } from '@/components/ui/empty-state';
+import { usePagination, Pagination } from '@/components/ui/pagination';
 import { API_URL, apiFetch } from '@/lib/api';
 import { useAuthGuard } from '@/lib/use-auth-guard';
 
@@ -47,7 +51,6 @@ const initialAdjustForm: AdjustFormState = { amount: '', due_date: '', justifica
 function parseError(error: unknown) { return error instanceof Error ? error.message : 'Ocorreu um erro inesperado.'; }
 function formatCurrency(value: number) { return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value || 0); }
 function intervalLabel(months: number) { return ({ 1: 'Mensal', 3: 'Trimestral', 6: 'Semestral', 12: 'Anual' } as Record<number, string>)[months] || `${months} meses`; }
-function statusBadge(status: string) { switch (status) { case 'paga': return 'border-emerald-200 bg-emerald-50 text-emerald-700'; case 'vencida': return 'border-rose-200 bg-rose-50 text-rose-700'; case 'cancelada': return 'border-amber-200 bg-amber-50 text-amber-700'; default: return 'border-slate-200 bg-slate-50 text-slate-700'; } }
 async function downloadProtectedFile(path: string, token: string, filename: string): Promise<void> {
   const url = `${API_URL.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
   let response: Response;
@@ -74,11 +77,116 @@ async function downloadProtectedFile(path: string, token: string, filename: stri
 
 
 
-function cardKeyHandler(event: React.KeyboardEvent<HTMLElement>, callback: () => void) {
+function _unused(event: React.KeyboardEvent<HTMLElement>, callback: () => void) {
   if (event.key === 'Enter' || event.key === ' ') {
     event.preventDefault();
     callback();
   }
+}
+
+function BillingTableSection({
+  billings,
+  loading,
+  billingView,
+  billingSearch,
+  billingStatusFilter,
+  onViewToggle,
+  onSearchChange,
+  onStatusFilterChange,
+  onRefresh,
+  onSelect,
+  selectedId,
+}: {
+  billings: Billing[];
+  loading: boolean;
+  billingView: 'alert' | 'all';
+  billingSearch: string;
+  billingStatusFilter: string;
+  onViewToggle: () => void;
+  onSearchChange: (v: string) => void;
+  onStatusFilterChange: (v: string) => void;
+  onRefresh: () => void;
+  onSelect: (b: Billing) => void;
+  selectedId?: number;
+}) {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const in7 = new Date(today); in7.setDate(in7.getDate() + 7);
+
+  const list = billingView === 'alert'
+    ? billings.filter((b) => b.status === 'vencida' || (b.status === 'pendente' && new Date(b.due_date) <= in7))
+      .sort((a, b) => b.overdue_days - a.overdue_days || new Date(a.due_date).getTime() - new Date(b.due_date).getTime())
+    : billings;
+
+  const pg = usePagination(list, 25);
+
+  const fieldClass = 'w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-white';
+
+  return (
+    <Card>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <SectionHeader eyebrow="Cobranças" title={billingView === 'alert' ? 'Atenção imediata' : 'Carteira completa'} />
+        <div className="flex gap-2">
+          <Button variant="secondary" onClick={onViewToggle} className="text-xs px-3 py-1.5">
+            {billingView === 'alert' ? `Ver todas (${billings.length})` : 'Ver urgentes'}
+          </Button>
+          <Button variant="secondary" onClick={onRefresh} disabled={loading} className="text-xs px-3 py-1.5">
+            {loading ? 'Atualizando…' : 'Atualizar'}
+          </Button>
+        </div>
+      </div>
+      {billingView === 'all' && (
+        <div className="mt-3 flex flex-wrap gap-3">
+          <input className={fieldClass} style={{ maxWidth: 260 }} placeholder="Buscar por cliente ou título" value={billingSearch} onChange={(e) => onSearchChange(e.target.value)} />
+          <select className={fieldClass} style={{ width: 160 }} value={billingStatusFilter} onChange={(e) => onStatusFilterChange(e.target.value)}>
+            <option value="">Todos os status</option>
+            <option value="pendente">Pendente</option>
+            <option value="paga">Paga</option>
+            <option value="vencida">Vencida</option>
+            <option value="cancelada">Cancelada</option>
+          </select>
+        </div>
+      )}
+      <div className="mt-4">
+        {loading ? <TableSkeleton rows={8} cols={5} /> : list.length === 0 ? (
+          <EmptyState icon={CheckCircle2} title={billingView === 'alert' ? 'Nenhuma cobrança urgente' : 'Nenhuma cobrança encontrada'} description={billingView === 'alert' ? 'Todas as cobranças estão em dia.' : 'Tente ajustar os filtros.'} />
+        ) : (
+          <>
+            <Table>
+              <TableHead>
+                <Th>Cliente</Th>
+                <Th>Título</Th>
+                <Th>Vencimento</Th>
+                <Th>Valor</Th>
+                <Th>Status</Th>
+                <Th className="w-24" />
+              </TableHead>
+              <TableBody>
+                {pg.slice.map((b) => (
+                  <Tr key={b.id} selected={b.id === selectedId}>
+                    <Td>
+                      <p className="font-medium">{b.client_name ?? '—'}</p>
+                      <p className="text-xs text-slate-400">{b.vehicle_plate ?? ''}</p>
+                    </Td>
+                    <Td className="text-xs text-slate-500">{b.title ?? b.plan_name ?? b.billing_type}</Td>
+                    <Td>
+                      <p className="text-sm">{b.due_date}</p>
+                      {b.overdue_days > 0 && <p className="text-xs font-medium text-rose-600 dark:text-rose-400">{b.overdue_days}d atraso</p>}
+                    </Td>
+                    <Td className="font-mono font-semibold">{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(b.amount)}</Td>
+                    <Td><Badge variant={statusVariant(b.status)}>{statusLabel(b.status)}</Badge></Td>
+                    <Td>
+                      <Button variant="secondary" onClick={() => onSelect(b)} className="px-3 py-1.5 text-xs">Detalhes</Button>
+                    </Td>
+                  </Tr>
+                ))}
+              </TableBody>
+            </Table>
+            <Pagination {...pg} onPage={pg.setPage} className="mt-2" />
+          </>
+        )}
+      </div>
+    </Card>
+  );
 }
 
 export default function FinanceiroPage() {
@@ -397,20 +505,20 @@ export default function FinanceiroPage() {
         <StatCard label="Contratos ativos" value={summary?.active_contracts ?? 0}                  hint={`${summary?.active_plans ?? 0} plano(s) em uso`}             icon={<FileText className="h-5 w-5" />} />
       </section>
 
-      <section className="mt-6 grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-        <div className="space-y-6">
-          <Card>
-            <SectionHeader
-              eyebrow="Ações rápidas"
-              title="Cadastros e lançamentos"
-              description="Todas as ações principais do módulo financeiro agora ficam em modais, preservando foco visual na operação."
-              actions={<>
-                <Button type="button" onClick={openCreatePlan}>Novo plano</Button>
-                <Button type="button" className="bg-brand-700 hover:bg-brand-600 dark:bg-cyan-400 dark:text-slate-950" onClick={openCreateProduct}>Novo serviço/produto</Button>
-                <Button type="button" className="bg-slate-900 hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-950 dark:hover:bg-white" onClick={openCreateContract}>Novo contrato</Button>
-                <Button type="button" onClick={() => setChargeModal(true)}>Novo lançamento</Button>
-              </>}
-            />
+      <section className="mt-6 space-y-6">
+        <Card>
+          <SectionHeader
+            eyebrow="Ações rápidas"
+            title="Cadastros e lançamentos"
+            actions={
+              <div className="flex flex-wrap gap-2">
+                <Button onClick={openCreatePlan} variant="secondary">Novo plano</Button>
+                <Button onClick={openCreateProduct} variant="secondary">Novo serviço</Button>
+                <Button onClick={openCreateContract} variant="secondary">Novo contrato</Button>
+                <Button onClick={() => setChargeModal(true)}>Novo lançamento</Button>
+              </div>
+            }
+          />
             <div className="mt-6 grid gap-4 lg:grid-cols-2">
               <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-5 dark:border-slate-800 dark:bg-slate-950/60">
                 <p className="mb-1 text-xs font-bold uppercase tracking-widest text-slate-500">Faturamento mensal</p>
@@ -441,231 +549,135 @@ export default function FinanceiroPage() {
             </div>
           </Card>
 
-          <Card>
-            <SectionHeader
-              eyebrow="Cobranças"
-              title={billingView === 'alert' ? 'Carteira — atenção imediata' : 'Carteira completa'}
-              description={billingView === 'alert' ? 'Vencidas e próximas de vencer (≤ 7 dias). Selecione para registrar pagamento ou ajustar.' : 'Todas as cobranças carregadas. Use os filtros para refinar a listagem.'}
-              actions={
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setBillingView(billingView === 'alert' ? 'all' : 'alert')}
-                    className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600 transition hover:border-brand-500 hover:text-brand-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
-                  >
-                    {billingView === 'alert' ? `Ver todas (${billings.length})` : 'Ver somente urgentes'}
-                  </button>
-                  <Button type="button" onClick={() => token && loadData(token)} disabled={loading}>
-                    {loading ? 'Atualizando…' : 'Atualizar'}
-                  </Button>
-                </div>
-              }
-            />
+        <BillingTableSection
+          billings={billings}
+          loading={loading}
+          billingView={billingView}
+          billingSearch={billingSearch}
+          billingStatusFilter={billingStatusFilter}
+          onViewToggle={() => setBillingView(billingView === 'alert' ? 'all' : 'alert')}
+          onSearchChange={setBillingSearch}
+          onStatusFilterChange={setBillingStatusFilter}
+          onRefresh={() => token && loadData(token)}
+          onSelect={(b) => setSelectedBilling(b)}
+          selectedId={selectedBilling?.id}
+        />
 
-            {billingView === 'all' && (
-              <div className="mt-4 grid gap-3 md:grid-cols-3">
-                <input className={fieldClass} placeholder="Buscar por cliente ou título" value={billingSearch} onChange={(e) => setBillingSearch(e.target.value)} />
-                <select className={fieldClass} value={billingStatusFilter} onChange={(e) => setBillingStatusFilter(e.target.value)}>
-                  <option value="">Todos os status</option>
-                  <option value="pendente">Pendente</option>
-                  <option value="paga">Paga</option>
-                  <option value="vencida">Vencida</option>
-                  <option value="cancelada">Cancelada</option>
-                </select>
-                <Button type="button" onClick={() => token && loadData(token)} disabled={loading}>Aplicar filtros</Button>
+        <Card>
+          <SectionHeader eyebrow="Cadastros" title="Planos, serviços e contratos" />
+          <div className="mt-4 space-y-6">
+            {/* Planos */}
+            <div>
+              <div className="mb-3 flex items-center justify-between">
+                <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Planos ({plans.length})</p>
+                <Button variant="secondary" onClick={openCreatePlan} className="text-xs px-3 py-1.5">Adicionar plano</Button>
+              </div>
+              {plans.length === 0 ? <EmptyState title="Nenhum plano" description="Crie o primeiro plano de serviço." /> : (
+                <Table>
+                  <TableHead>
+                    <Th>Nome</Th><Th>Periodicidade</Th><Th>Valor</Th><Th>Contratos</Th><Th className="w-28" />
+                  </TableHead>
+                  <TableBody>
+                    {plans.map((p) => (
+                      <Tr key={p.id}>
+                        <Td><p className="font-medium">{p.name}</p></Td>
+                        <Td>{intervalLabel(p.billing_interval_months)}</Td>
+                        <Td className="font-mono">{formatCurrency(p.price)}</Td>
+                        <Td><Badge variant={p.active ? 'success' : 'default'}>{p.active ? 'Ativo' : 'Inativo'} · {p.active_contracts}</Badge></Td>
+                        <Td><div className="flex justify-end gap-1.5">
+                          <Button variant="secondary" onClick={() => openEditPlan(p)} className="px-2 py-1 text-xs">Editar</Button>
+                          <Button variant="danger" onClick={() => handleDeletePlan(p)} className="px-2 py-1 text-xs">Excluir</Button>
+                        </div></Td>
+                      </Tr>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </div>
+
+            {/* Contratos */}
+            <div>
+              <div className="mb-3 flex items-center justify-between">
+                <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Contratos ({contracts.length})</p>
+                <Button variant="secondary" onClick={openCreateContract} className="text-xs px-3 py-1.5">Adicionar contrato</Button>
+              </div>
+              {contracts.length === 0 ? <EmptyState title="Nenhum contrato" description="Crie o primeiro contrato." /> : (
+                <Table>
+                  <TableHead>
+                    <Th>Cliente</Th><Th>Plano</Th><Th>Vencimento</Th><Th>Status</Th><Th className="w-28" />
+                  </TableHead>
+                  <TableBody>
+                    {contracts.slice(0, 10).map((c) => (
+                      <Tr key={c.id}>
+                        <Td><p className="text-sm font-medium">{c.client_name ?? '—'}</p><p className="text-xs text-slate-400">{c.vehicle_plate ?? ''}</p></Td>
+                        <Td className="text-sm">{c.plan_name ?? '—'}</Td>
+                        <Td className="text-xs text-slate-500">{c.next_due_date ?? '—'}</Td>
+                        <Td><Badge variant={statusVariant(c.status)}>{statusLabel(c.status)}</Badge></Td>
+                        <Td><div className="flex justify-end gap-1.5">
+                          <Button variant="secondary" onClick={() => openEditContract(c)} className="px-2 py-1 text-xs">Editar</Button>
+                          <Button variant="danger" onClick={() => handleDeleteContract(c)} className="px-2 py-1 text-xs">Excluir</Button>
+                        </div></Td>
+                      </Tr>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </div>
+          </div>
+        </Card>
+      </section>
+
+      {/* Modal de detalhes da cobrança */}
+      <Modal
+        open={!!selectedBilling}
+        onClose={() => setSelectedBilling(null)}
+        title={selectedBilling?.title ?? selectedBilling?.client_name ?? 'Cobrança'}
+        subtitle="Detalhes da cobrança"
+        size="md"
+      >
+        {selectedBilling && (
+          <div className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-2">
+              {[
+                ['Cliente', selectedBilling.client_name ?? '—'],
+                ['Status', <Badge key="s" variant={statusVariant(selectedBilling.status)}>{statusLabel(selectedBilling.status)}</Badge>],
+                ['Valor', formatCurrency(selectedBilling.amount)],
+                ['Vencimento', selectedBilling.due_date],
+                ['Veículo', selectedBilling.vehicle_plate ?? '—'],
+                ['Período', selectedBilling.period_label ?? '—'],
+                ...(selectedBilling.installment_number ? [['Parcela', `${selectedBilling.installment_number}/${selectedBilling.installment_total}`] as [string, string]] : []),
+                ...(selectedBilling.paid_amount != null ? [['Valor pago', formatCurrency(selectedBilling.paid_amount)] as [string, string]] : []),
+              ].map(([label, value]) => (
+                <div key={String(label)} className="rounded-xl border border-slate-100 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/50">
+                  <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">{label}</p>
+                  <div className="mt-1 text-sm text-slate-800 dark:text-slate-200">{value}</div>
+                </div>
+              ))}
+            </div>
+            {selectedBilling.overdue_days > 0 && (
+              <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700 dark:border-rose-900/40 dark:bg-rose-950/30 dark:text-rose-400">
+                {selectedBilling.overdue_days} dia(s) em atraso
               </div>
             )}
-
-            <div className="mt-4 space-y-2">
-              {(() => {
-                const today = new Date();
-                today.setHours(0, 0, 0, 0);
-                const in7 = new Date(today);
-                in7.setDate(in7.getDate() + 7);
-
-                const list = billingView === 'alert'
-                  ? billings
-                      .filter((b) => {
-                        if (b.status === 'vencida') return true;
-                        if (b.status === 'pendente') {
-                          const due = new Date(b.due_date);
-                          return due <= in7;
-                        }
-                        return false;
-                      })
-                      .sort((a, b) => {
-                        if (a.overdue_days > 0 && b.overdue_days <= 0) return -1;
-                        if (b.overdue_days > 0 && a.overdue_days <= 0) return 1;
-                        if (a.overdue_days > 0 && b.overdue_days > 0) return b.overdue_days - a.overdue_days;
-                        return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
-                      })
-                  : billings;
-
-                if (list.length === 0) {
-                  return (
-                    <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-slate-200 py-8 text-center dark:border-slate-700">
-                      <CheckCircle2 className="h-8 w-8 text-emerald-400" />
-                      <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
-                        {billingView === 'alert' ? 'Nenhuma cobrança urgente no momento.' : 'Nenhuma cobrança encontrada.'}
-                      </p>
-                      <p className="text-xs text-slate-400">
-                        {billingView === 'alert' ? 'Todas as cobranças estão em dia ou fora do período de atenção.' : 'Tente ajustar os filtros.'}
-                      </p>
-                    </div>
-                  );
-                }
-
-                return list.map((billing) => {
-                  const isOverdue = billing.overdue_days > 0;
-                  const isDuesSoon = billing.status === 'pendente' && !isOverdue;
-                  return (
-                    <div
-                      key={billing.id}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => setSelectedBilling(billing)}
-                      onKeyDown={(e) => cardKeyHandler(e, () => setSelectedBilling(billing))}
-                      className={`cursor-pointer rounded-xl border p-4 text-left transition ${
-                        selectedBilling?.id === billing.id
-                          ? 'border-brand-500 bg-brand-50/60 dark:border-brand-400 dark:bg-brand-900/20'
-                          : isOverdue
-                          ? 'border-rose-200 bg-rose-50/60 hover:border-rose-300 dark:border-rose-900/60 dark:bg-rose-950/20'
-                          : isDuesSoon
-                          ? 'border-amber-200 bg-amber-50/60 hover:border-amber-300 dark:border-amber-900/60 dark:bg-amber-950/20'
-                          : 'border-slate-200 bg-white hover:border-slate-300 dark:border-slate-800 dark:bg-slate-900'
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <p className="font-semibold text-slate-900 dark:text-white">{billing.client_name || 'Cliente'}</p>
-                            <span className={`rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${statusBadge(billing.status)}`}>
-                              {billing.status}
-                            </span>
-                          </div>
-                          <p className="mt-1 truncate text-xs text-slate-500">{billing.title || billing.plan_name || billing.billing_type}</p>
-                          <p className="mt-1 text-xs text-slate-400">
-                            Venc. {billing.due_date}
-                            {billing.vehicle_plate ? ` • ${billing.vehicle_plate}` : ''}
-                            {billing.installment_number ? ` • Parcela ${billing.installment_number}/${billing.installment_total}` : ''}
-                          </p>
-                        </div>
-                        <div className="shrink-0 text-right">
-                          <p className="font-bold text-slate-900 dark:text-white">{formatCurrency(billing.amount)}</p>
-                          {isOverdue && (
-                            <p className="mt-0.5 text-xs font-semibold text-rose-600 dark:text-rose-400">{billing.overdue_days}d em atraso</p>
-                          )}
-                          {isDuesSoon && (
-                            <p className="mt-0.5 text-xs font-semibold text-amber-600 dark:text-amber-400">Vence em breve</p>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                });
-              })()}
+            <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-4 dark:border-slate-800">
+              <Button disabled={!canEdit || processing || selectedBilling.status === 'paga' || selectedBilling.status === 'cancelada'} onClick={() => setReceiveModal(true)}>
+                Registrar pagamento
+              </Button>
+              <Button variant="secondary" disabled={!canEdit || processing || selectedBilling.status === 'cancelada'} onClick={() => setAdjustModal(true)}>
+                Ajustar cobrança
+              </Button>
+              <Button variant="danger" disabled={!canEdit || processing || selectedBilling.status === 'cancelada'} onClick={handleCancel}>
+                Cancelar
+              </Button>
+              {selectedBilling.status === 'paga' && selectedBilling.receipt_number && (
+                <Button variant="secondary" onClick={() => { if (!token) return; downloadProtectedFile(`/billings/${selectedBilling.id}/receipt`, token, `recibo-${selectedBilling.receipt_number}.pdf`).catch((e) => setError(parseError(e))); }}>
+                  Baixar recibo
+                </Button>
+              )}
             </div>
-          </Card>
-        </div>
-
-        <div className="space-y-6">
-          <Card>
-            <SectionHeader eyebrow="Resumo operacional" title="Indicadores de gestão" description="Leitura rápida dos cadastros financeiros e itens lançados no cliente." />
-            <div className="mt-5 grid gap-3">
-              <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60"><p className="text-xs uppercase tracking-[0.2em] text-slate-400">Planos cadastrados</p><p className="mt-2 text-2xl font-semibold text-slate-900 dark:text-white">{plans.length}</p><p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{plans.filter((item) => item.active).length} ativos</p></div>
-              <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60"><p className="text-xs uppercase tracking-[0.2em] text-slate-400">Serviços / produtos</p><p className="mt-2 text-2xl font-semibold text-slate-900 dark:text-white">{serviceProducts.length}</p><p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{serviceProducts.filter((item) => item.active).length} ativos</p></div>
-              <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60"><p className="text-xs uppercase tracking-[0.2em] text-slate-400">Lançamentos adicionais</p><p className="mt-2 text-2xl font-semibold text-slate-900 dark:text-white">{chargeItems.length}</p><p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{chargeItems.filter((item) => item.active).length} em aberto/ativos</p></div>
-            </div>
-          </Card>
-
-          <Card>
-            <SectionHeader eyebrow="Cadastros financeiros" title="Planos, serviços e contratos" description="Edite ou exclua rapidamente os registros estruturais do financeiro sem sair da operação." />
-            <div className="mt-5 space-y-5">
-              <div>
-                <div className="mb-3 flex items-center justify-between gap-3"><p className="text-sm font-semibold text-slate-900 dark:text-white">Planos</p><Button type="button" onClick={openCreatePlan}>Adicionar plano</Button></div>
-                <div className="space-y-3">
-                  {plans.length === 0 ? <p className="rounded-2xl border border-dashed border-slate-300 px-4 py-4 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">Nenhum plano cadastrado.</p> : plans.map((plan) => (
-                    <div key={plan.id} className="rounded-[24px] border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60">
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div>
-                          <p className="font-semibold text-slate-900 dark:text-white">{plan.name}</p>
-                          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{intervalLabel(plan.billing_interval_months)} • {formatCurrency(plan.price)} • {plan.active ? 'Ativo' : 'Inativo'}</p>
-                          <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">{plan.active_contracts} contrato(s) ativo(s)</p>
-                        </div>
-                        <div className="flex gap-2">
-                          <button type="button" onClick={() => openEditPlan(plan)} className="rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-600 dark:border-slate-700 dark:text-slate-200 dark:hover:border-cyan-400 dark:hover:text-cyan-300">Editar</button>
-                          <button type="button" onClick={() => handleDeletePlan(plan)} className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700">Excluir</button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <div className="mb-3 flex items-center justify-between gap-3"><p className="text-sm font-semibold text-slate-900 dark:text-white">Serviços e produtos</p><Button type="button" className="bg-brand-700 hover:bg-brand-600 dark:bg-cyan-400 dark:text-slate-950" onClick={openCreateProduct}>Adicionar item</Button></div>
-                <div className="space-y-3">
-                  {serviceProducts.length === 0 ? <p className="rounded-2xl border border-dashed border-slate-300 px-4 py-4 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">Nenhum serviço/produto cadastrado.</p> : serviceProducts.map((product) => (
-                    <div key={product.id} className="rounded-[24px] border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60">
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div>
-                          <p className="font-semibold text-slate-900 dark:text-white">{product.name}</p>
-                          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{product.category} • {formatCurrency(product.default_price)} • {product.active ? 'Ativo' : 'Inativo'}</p>
-                        </div>
-                        <div className="flex gap-2">
-                          <button type="button" onClick={() => openEditProduct(product)} className="rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-600 dark:border-slate-700 dark:text-slate-200 dark:hover:border-cyan-400 dark:hover:text-cyan-300">Editar</button>
-                          <button type="button" onClick={() => handleDeleteProduct(product)} className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700">Excluir</button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <div className="mb-3 flex items-center justify-between gap-3"><p className="text-sm font-semibold text-slate-900 dark:text-white">Contratos</p><Button type="button" className="bg-slate-900 hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-950 dark:hover:bg-white" onClick={openCreateContract}>Adicionar contrato</Button></div>
-                <div className="space-y-3">
-                  {contracts.length === 0 ? <p className="rounded-2xl border border-dashed border-slate-300 px-4 py-4 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">Nenhum contrato cadastrado.</p> : contracts.slice(0, 8).map((contract) => (
-                    <div key={contract.id} className="rounded-[24px] border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60">
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div>
-                          <p className="font-semibold text-slate-900 dark:text-white">{contract.client_name || 'Cliente'} • {contract.plan_name || 'Sem plano'}</p>
-                          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Início {contract.start_date} • Próximo vencimento {contract.next_due_date || '—'} • {contract.status}</p>
-                          <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">{contract.open_billings} cobrança(s) em aberto</p>
-                        </div>
-                        <div className="flex gap-2">
-                          <button type="button" onClick={() => openEditContract(contract)} className="rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-600 dark:border-slate-700 dark:text-slate-200 dark:hover:border-cyan-400 dark:hover:text-cyan-300">Editar</button>
-                          <button type="button" onClick={() => handleDeleteContract(contract)} className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700">Excluir</button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </Card>
-
-          <Card>
-            <SectionHeader eyebrow="Detalhes" title={selectedBilling ? (selectedBilling.title || selectedBilling.client_name || 'Cobrança selecionada') : 'Selecione uma cobrança'} description={selectedBilling ? 'Ações rápidas de recebimento, ajuste, cancelamento e emissão de recibo.' : 'Escolha uma cobrança na listagem para ver o painel de ações.'} />
-            {selectedBilling ? (
-              <div className="mt-5 space-y-5">
-                <div className="grid gap-3 md:grid-cols-2">
-                  <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60"><p className="text-xs uppercase tracking-[0.2em] text-slate-400">Cliente</p><p className="mt-2 font-semibold text-slate-900 dark:text-white">{selectedBilling.client_name || 'Não informado'}</p></div>
-                  <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60"><p className="text-xs uppercase tracking-[0.2em] text-slate-400">Valor</p><p className="mt-2 font-semibold text-slate-900 dark:text-white">{formatCurrency(selectedBilling.amount)}</p></div>
-                  <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60"><p className="text-xs uppercase tracking-[0.2em] text-slate-400">Vencimento</p><p className="mt-2 font-semibold text-slate-900 dark:text-white">{selectedBilling.due_date}</p></div>
-                  <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60"><p className="text-xs uppercase tracking-[0.2em] text-slate-400">Status</p><p className="mt-2 font-semibold text-slate-900 dark:text-white">{selectedBilling.status}</p></div>
-                </div>
-                <div className="flex flex-wrap gap-3">
-                  <Button type="button" disabled={!canEdit || processing || selectedBilling.status === 'paga' || selectedBilling.status === 'cancelada'} onClick={() => setReceiveModal(true)}>Registrar pagamento</Button>
-                  <button type="button" disabled={!canEdit || processing || selectedBilling.status === 'cancelada'} onClick={() => setAdjustModal(true)} className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-600 disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:border-cyan-400 dark:hover:text-cyan-300">Ajustar cobrança</button>
-                  <button type="button" disabled={!canEdit || processing || selectedBilling.status === 'cancelada'} onClick={handleCancel} className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm font-semibold text-rose-700 disabled:opacity-50">Cancelar</button>
-                  {selectedBilling.status === 'paga' && selectedBilling.receipt_number ? <Button type="button" className="bg-slate-900 hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-950 dark:hover:bg-white" onClick={() => { if (!token) return; downloadProtectedFile(`/billings/${selectedBilling.id}/receipt`, token, `recibo-${selectedBilling.receipt_number}.pdf`).catch((err) => setError(parseError(err))); }}>Baixar recibo</Button> : null}
-                </div>
-              </div>
-            ) : null}
-          </Card>
-        </div>
-      </section>
+          </div>
+        )}
+      </Modal>
 
       <Modal open={planModal} onClose={() => { setPlanModal(false); setEditingPlanId(null); setPlanForm(initialPlanForm); setModalError(''); }} title={editingPlanId ? "Editar plano" : "Novo plano"} description="Cadastre planos com periodicidade mensal, trimestral, semestral ou anual." size="lg">
         <form className="space-y-5" onSubmit={submitPlan}>
