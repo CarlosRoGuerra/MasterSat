@@ -14,6 +14,7 @@ import {
   LogOut,
   Satellite,
   PlugZap,
+  ScrollText,
 } from 'lucide-react';
 
 import { clearSession } from '@/lib/auth';
@@ -28,6 +29,7 @@ const items = [
   { href: '/financeiro',     label: 'Financeiro',          icon: Wallet },
   { href: '/usuarios',       label: 'Equipe',              icon: ShieldCheck },
   { href: '/integracao',     label: 'Integração',          icon: PlugZap },
+  { href: '/auditoria',      label: 'Auditoria',           icon: ScrollText },
 ];
 
 export function Sidebar() {

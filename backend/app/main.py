@@ -6,7 +6,8 @@ from app.api.v1.api import api_router
 from app.core.config import settings
 from app.core.security import get_password_hash
 from app.db.session import Base, SessionLocal, engine
-from app.models import billing, billing_change_log, client, client_charge_item, contract, document, integration_log, password_reset_token, plan, service_order, service_order_status_log, service_product, tracker, tracker_history, user, vehicle
+from app.models import audit_log, billing, billing_change_log, client, client_charge_item, contract, document, integration_log, password_reset_token, plan, service_order, service_order_status_log, service_product, tracker, tracker_history, user, vehicle  # noqa: F401 — side-effect imports that register models with SQLAlchemy Base
+from app.core.audit import AuditMiddleware
 from app.models.enums import UserRole
 from app.models.user import User
 from app.services.storage import ensure_bucket
@@ -24,6 +25,7 @@ app.add_middleware(
     allow_methods=['*'],
     allow_headers=['*'],
 )
+app.add_middleware(AuditMiddleware)
 
 app.include_router(api_router, prefix=settings.api_v1_prefix)
 

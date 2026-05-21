@@ -8,6 +8,12 @@ import { Button } from '@/components/ui/button';
 import { Modal } from '@/components/ui/modal';
 import { StatCard } from '@/components/ui/stat-card';
 import { SectionHeader } from '@/components/ui/section-header';
+import { Badge, statusVariant, statusLabel } from '@/components/ui/badge';
+import { Table, TableHead, Th, TableBody, Tr, Td } from '@/components/ui/table';
+import { EmptyState, TableSkeleton } from '@/components/ui/empty-state';
+import { Input } from '@/components/ui/input';
+import { Select } from '@/components/ui/select';
+import { FormField, FormGrid } from '@/components/ui/form-field';
 import { apiFetch } from '@/lib/api';
 import { fetchAddressByCep } from '@/lib/cep';
 import { formatZipCode, onlyDigits } from '@/lib/format';
@@ -28,6 +34,8 @@ type ClientOption = {
 
 type ServiceProductOption = { id: number; name: string; auto_add_on_uninstall?: boolean };
 type ContractOption = { id: number; client_id: number; plan_name?: string | null; status: string };
+type TrackerOption = { id: number; imei: string; brand?: string | null; model?: string | null; status: string };
+type PlanOption = { id: number; name: string; price: number };
 type VehicleStatus = 'pendente_validacao' | 'em_analise' | 'aprovado' | 'reprovado' | 'correcao_solicitada' | 'ativo' | 'sem_rastreador' | 'retirado' | 'bloqueado';
 
 type Vehicle = {
@@ -145,31 +153,6 @@ function formatPlate(value: string) { return value.toUpperCase().replace(/[^A-Z0
 function formatRenavam(value: string) { return value.replace(/\D/g, '').slice(0, 11); }
 function formatChassis(value: string) { return value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 17); }
 
-function statusBadge(status: string) {
-  switch (status) {
-    case 'ativo':
-    case 'aprovado':
-      return 'border-emerald-200 bg-emerald-50 text-emerald-700';
-    case 'retirado':
-    case 'bloqueado':
-      return 'border-rose-200 bg-rose-50 text-rose-700';
-    case 'sem_rastreador':
-    case 'correcao_solicitada':
-      return 'border-amber-200 bg-amber-50 text-amber-700';
-    case 'em_analise':
-      return 'border-cyan-200 bg-cyan-50 text-cyan-700';
-    default:
-      return 'border-slate-200 bg-slate-50 text-slate-700';
-  }
-}
-
-
-function cardKeyHandler(event: React.KeyboardEvent<HTMLElement>, callback: () => void) {
-  if (event.key === 'Enter' || event.key === ' ') {
-    event.preventDefault();
-    callback();
-  }
-}
 
 export default function VeiculosPage() {
   const { token, user, loading: guardLoading, error: guardError } = useAuthGuard(['admin', 'operacional', 'financeiro'], '/login/admin');
@@ -197,6 +180,14 @@ export default function VeiculosPage() {
   const [uninstallDate, setUninstallDate] = useState(new Date().toISOString().slice(0, 10));
   const [destinationContractId, setDestinationContractId] = useState('');
   const [uninstallServiceProductId, setUninstallServiceProductId] = useState('');
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [detailsTab, setDetailsTab] = useState<'dados' | 'documentos' | 'rastreador'>('dados');
+  const [linkedTracker, setLinkedTracker] = useState<TrackerOption | null>(null);
+  const [stockTrackers, setStockTrackers] = useState<TrackerOption[]>([]);
+  const [plans, setPlans] = useState<PlanOption[]>([]);
+  const [linkTrackerOpen, setLinkTrackerOpen] = useState(false);
+  const [linkForm, setLinkForm] = useState({ tracker_id: '', plan_id: '', billing_cycles: '12' });
+  const [linking, setLinking] = useState(false);
   const [error, setError] = useState('');
   const [feedback, setFeedback] = useState('');
   const [modalError, setModalError] = useState('');
@@ -227,6 +218,52 @@ export default function VeiculosPage() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function openDetails(vehicle: Vehicle) {
+    setSelectedVehicle(vehicle);
+    setDetailsTab('dados');
+    setDetailsOpen(true);
+    if (token) {
+      const [trackers, plansData] = await Promise.all([
+        apiFetch<TrackerOption[]>(`/trackers?vehicle_id=${vehicle.id}&limit=10`, {}, token).catch(() => []),
+        apiFetch<PlanOption[]>('/plans', {}, token).catch(() => []),
+        loadDocuments(token, vehicle.id),
+      ]);
+      setLinkedTracker(trackers[0] ?? null);
+      setPlans(plansData);
+    }
+  }
+
+  async function loadStockTrackers() {
+    if (!token) return;
+    try {
+      const trackers = await apiFetch<TrackerOption[]>('/trackers?status=em_estoque&limit=200', {}, token);
+      setStockTrackers(trackers);
+    } catch { setStockTrackers([]); }
+  }
+
+  async function linkTracker() {
+    if (!token || !selectedVehicle || !linkForm.tracker_id) return;
+    setLinking(true);
+    try {
+      await apiFetch(`/trackers/${linkForm.tracker_id}/link-vehicle`, {
+        method: 'POST',
+        body: JSON.stringify({
+          vehicle_id: selectedVehicle.id,
+          plan_id: linkForm.plan_id ? Number(linkForm.plan_id) : null,
+          billing_cycles: Number(linkForm.billing_cycles) || 12,
+          auto_generate_billings: true,
+        }),
+      }, token);
+      setFeedback('Rastreador vinculado com sucesso.');
+      setLinkTrackerOpen(false);
+      setLinkForm({ tracker_id: '', plan_id: '', billing_cycles: '12' });
+      await loadVehicles(token);
+      const updated = await apiFetch<TrackerOption[]>(`/trackers?vehicle_id=${selectedVehicle.id}`, {}, token).catch(() => []);
+      setLinkedTracker(updated[0] ?? null);
+    } catch (err) { setError(parseError(err)); }
+    finally { setLinking(false); }
   }
 
   async function loadDocuments(currentToken: string, vehicleId: number) {
@@ -499,95 +536,221 @@ export default function VeiculosPage() {
         <StatCard label="Retirados" value={stats.removed} hint="Veículos desinstalados" tone="danger" icon="↩️" />
       </section>
 
-      <section className="mt-6 grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
-        <div className="space-y-6">
-          <Card>
-            <SectionHeader eyebrow="Cadastro" title="Base de veículos" description="Use filtros para localizar ativos rapidamente e mantenha o cadastro técnico limpo no modal." actions={canEdit ? <Button type="button" onClick={openCreateModal}>Adicionar veículo</Button> : null} />
-            <div className="mt-5 grid gap-4 md:grid-cols-4">
-              <input className={fieldClass} placeholder="Buscar por placa, chassi, modelo ou Renavam" value={search} onChange={(e) => setSearch(e.target.value)} />
-              <select className={fieldClass} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-                <option value="">Todos os status</option>
-                <option value="ativo">Ativo</option><option value="sem_rastreador">Sem rastreador</option><option value="retirado">Retirado</option><option value="bloqueado">Bloqueado</option>
-              </select>
-              <select className={fieldClass} value={clientFilter} onChange={(e) => setClientFilter(e.target.value)}>
-                <option value="">Todos os clientes</option>
-                {clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}
-              </select>
-              <Button type="button" onClick={() => token && loadVehicles(token)} disabled={loading}>{loading ? 'Atualizando...' : 'Aplicar filtros'}</Button>
-            </div>
-            <div className="mt-5 grid gap-3">
-              {vehicles.length === 0 ? <p className="rounded-2xl border border-dashed border-slate-300 px-4 py-6 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">Nenhum veículo encontrado.</p> : vehicles.map((vehicle) => {
-                const client = clients.find((item) => item.id === vehicle.client_id);
-                return (
-                  <div key={vehicle.id} role="button" tabIndex={0} onClick={() => setSelectedVehicle(vehicle)} onKeyDown={(event) => cardKeyHandler(event, () => setSelectedVehicle(vehicle))} className={`cursor-pointer rounded-[24px] border p-5 text-left transition ${selectedVehicle?.id === vehicle.id ? 'border-brand-500 bg-brand-50/60 shadow-sm dark:border-cyan-400 dark:bg-cyan-400/10' : 'border-slate-200 bg-white hover:-translate-y-0.5 hover:border-brand-400 hover:shadow-lg dark:border-slate-800 dark:bg-slate-900'}`}>
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="text-lg font-semibold text-slate-900 dark:text-white">{vehicle.plate}</p>
-                          <span className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase ${statusBadge(vehicle.status)}`}>{vehicle.status.replace(/_/g, ' ')}</span>
-                        </div>
-                        <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">{[vehicle.brand, vehicle.model].filter(Boolean).join(' • ') || 'Modelo não informado'} {vehicle.model_year ? `• ${vehicle.model_year}` : ''}</p>
-                        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Cliente: {client?.name || 'não identificado'} • Chassi: {vehicle.chassis || 'não informado'}</p>
-                      </div>
-                      {canEdit ? <div className="flex gap-2"><Button type="button" onClick={(event) => { event.stopPropagation(); openEditModal(vehicle); }}>Editar</Button><button type="button" onClick={(event) => { event.stopPropagation(); deleteVehicle(vehicle.id); }} className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm font-semibold text-rose-700">Excluir</button></div> : null}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </Card>
-        </div>
+      <section className="mt-6">
+        <Card>
+          <SectionHeader
+            eyebrow="Cadastro"
+            title="Frota cadastrada"
+            description="Gestão completa de veículos, rastreadores vinculados e documentação."
+            actions={canEdit ? <Button type="button" onClick={openCreateModal}>Adicionar veículo</Button> : null}
+          />
+          <div className="mt-4 flex flex-wrap gap-3">
+            <input className={fieldClass} style={{ maxWidth: 280 }} placeholder="Buscar por placa, chassi ou modelo" value={search} onChange={(e) => setSearch(e.target.value)} />
+            <select className={fieldClass} style={{ width: 180 }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+              <option value="">Todos os status</option>
+              <option value="ativo">Ativo</option>
+              <option value="sem_rastreador">Sem rastreador</option>
+              <option value="retirado">Retirado</option>
+              <option value="bloqueado">Bloqueado</option>
+            </select>
+            <select className={fieldClass} style={{ width: 220 }} value={clientFilter} onChange={(e) => setClientFilter(e.target.value)}>
+              <option value="">Todos os clientes</option>
+              {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <Button type="button" variant="secondary" onClick={() => token && loadVehicles(token)} disabled={loading}>
+              {loading ? 'Atualizando…' : 'Filtrar'}
+            </Button>
+          </div>
 
-        <div className="space-y-6">
-          <Card>
-            <SectionHeader eyebrow="Detalhes" title={selectedVehicle ? selectedVehicle.plate : 'Selecione um veículo'} description={selectedVehicle ? 'Veja dados cadastrais, documentos e ações operacionais.' : 'Escolha um veículo na lista para detalhar a gestão do ativo.'} actions={selectedVehicle && canEdit ? <Button type="button" onClick={() => setUninstallOpen(true)}>Gerar desinstalação</Button> : null} />
-            {selectedVehicle ? (
-              <div className="mt-5 space-y-5">
-                <div className="grid gap-3 md:grid-cols-2">
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60"><p className="text-xs uppercase tracking-[0.2em] text-slate-400">Cliente</p><p className="mt-2 font-semibold text-slate-900 dark:text-white">{clients.find((item) => item.id === selectedVehicle.client_id)?.name || 'Não encontrado'}</p></div>
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60"><p className="text-xs uppercase tracking-[0.2em] text-slate-400">Contrato</p><p className="mt-2 font-semibold text-slate-900 dark:text-white">{selectedVehicle.contract_number || 'Não informado'}</p></div>
-                </div>
-                <div className="grid gap-3 md:grid-cols-2">
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60"><p className="text-xs uppercase tracking-[0.2em] text-slate-400">Chassi / Renavam</p><p className="mt-2 text-sm text-slate-600 dark:text-slate-300">{selectedVehicle.chassis || '—'} • {selectedVehicle.renavam || '—'}</p></div>
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60"><p className="text-xs uppercase tracking-[0.2em] text-slate-400">Endereço de atendimento</p><p className="mt-2 text-sm text-slate-600 dark:text-slate-300">{[selectedVehicle.address_line, selectedVehicle.address_number, selectedVehicle.city, selectedVehicle.state].filter(Boolean).join(' • ') || 'Não informado'}</p></div>
-                </div>
-              </div>
-            ) : null}
-          </Card>
-
-          <Card>
-            <SectionHeader eyebrow="Documentação" title="Documentos do veículo" description="Centralize CRLV, fotos e comprovantes do ativo em um único lugar." />
-            {selectedVehicle ? (
-              <>
-                <div className="mt-5 grid gap-3 md:grid-cols-[1fr_1fr_auto]">
-                  <select className={fieldClass} value={docCategory} onChange={(e) => setDocCategory(e.target.value)}>{documentCategoryOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select>
-                  <input type="file" multiple className={`${fieldClass} file:mr-4 file:rounded-xl file:border-0 file:bg-slate-950 file:px-3 file:py-2 file:text-white dark:file:bg-cyan-400 dark:file:text-slate-950`} onChange={(e) => setDocFiles(Array.from(e.target.files || []))} />
-                  <Button type="button" disabled={!canEdit || !docFiles.length || uploading} onClick={uploadDocuments}>{uploading ? 'Enviando...' : 'Enviar'}</Button>
-                </div>
-                <div className="mt-5 space-y-3">
-                  {vehicleDocuments.length === 0 ? <p className="text-sm text-slate-500 dark:text-slate-400">Nenhum documento vinculado.</p> : vehicleDocuments.map((document) => (
-                    <div key={document.id} className="rounded-[24px] border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60">
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div>
-                          <p className="font-semibold text-slate-900 dark:text-white">{document.file_name}</p>
-                          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Categoria: {document.category}</p>
-                          {document.review_notes ? <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Obs.: {document.review_notes}</p> : null}
-                        </div>
-                        <span className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase ${statusBadge(document.review_status || 'enviado')}`}>{(document.review_status || 'enviado').replace(/_/g, ' ')}</span>
-                      </div>
-                      <div className="mt-4 flex flex-wrap gap-2">
-                        <a href={document.url} target="_blank" rel="noreferrer" className="rounded-2xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-600 dark:border-slate-700 dark:text-slate-200 dark:hover:border-cyan-400 dark:hover:text-cyan-300">Visualizar</a>
-                        <a href={document.download_url} target="_blank" rel="noreferrer" className="rounded-2xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-600 dark:border-slate-700 dark:text-slate-200 dark:hover:border-cyan-400 dark:hover:text-cyan-300">Baixar</a>
-                        {canEdit ? <><button type="button" onClick={() => reviewDocument(document.id, 'aprovado')} className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700">Aprovar</button><button type="button" onClick={() => reviewDocument(document.id, 'reenvio_solicitado')} className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-700">Solicitar ajuste</button><button type="button" onClick={() => removeDocument(document.id)} className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700">Excluir</button></> : null}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </>
-            ) : <p className="mt-4 text-sm text-slate-500 dark:text-slate-400">Selecione um veículo para ver os documentos.</p>}
-          </Card>
-        </div>
+          <div className="mt-4">
+            {loading ? (
+              <TableSkeleton rows={7} cols={5} />
+            ) : vehicles.length === 0 ? (
+              <EmptyState title="Nenhum veículo encontrado" description="Ajuste os filtros ou cadastre o primeiro veículo." action={canEdit ? <Button onClick={openCreateModal}>Adicionar veículo</Button> : undefined} />
+            ) : (
+              <Table>
+                <TableHead>
+                  <Th>Placa</Th>
+                  <Th>Veículo</Th>
+                  <Th>Cliente</Th>
+                  <Th>Status</Th>
+                  <Th className="w-44" />
+                </TableHead>
+                <TableBody>
+                  {vehicles.map((vehicle) => {
+                    const client = clients.find((c) => c.id === vehicle.client_id);
+                    return (
+                      <Tr key={vehicle.id}>
+                        <Td className="font-mono font-semibold">{vehicle.plate}</Td>
+                        <Td>
+                          <p>{[vehicle.brand, vehicle.model].filter(Boolean).join(' ')}</p>
+                          <p className="text-xs text-slate-400">{vehicle.model_year ?? vehicle.manufacture_year ?? '—'} · {vehicle.type ?? '—'}</p>
+                        </Td>
+                        <Td>{client?.name ?? '—'}</Td>
+                        <Td><Badge variant={statusVariant(vehicle.status)}>{statusLabel(vehicle.status)}</Badge></Td>
+                        <Td>
+                          <div className="flex justify-end gap-1.5">
+                            <Button variant="secondary" onClick={() => openDetails(vehicle)} className="px-3 py-1.5 text-xs">Detalhes</Button>
+                            {canEdit && (
+                              <>
+                                <Button variant="secondary" onClick={() => openEditModal(vehicle)} className="px-3 py-1.5 text-xs">Editar</Button>
+                                <Button variant="danger" onClick={() => deleteVehicle(vehicle.id)} className="px-3 py-1.5 text-xs">Excluir</Button>
+                              </>
+                            )}
+                          </div>
+                        </Td>
+                      </Tr>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            )}
+          </div>
+        </Card>
       </section>
+
+      {/* Modal de detalhes */}
+      <Modal
+        open={detailsOpen}
+        onClose={() => { setDetailsOpen(false); setSelectedVehicle(null); setLinkedTracker(null); }}
+        title={selectedVehicle?.plate ?? ''}
+        subtitle="Detalhes do veículo"
+        size="xl"
+      >
+        {selectedVehicle && (
+          <div className="space-y-4">
+            {/* Abas */}
+            <div className="flex gap-1 border-b border-slate-100 dark:border-slate-800">
+              {(['dados', 'rastreador', 'documentos'] as const).map((tab) => (
+                <button key={tab} type="button" onClick={() => setDetailsTab(tab)}
+                  className={`px-4 py-2 text-sm font-medium transition-colors ${detailsTab === tab ? 'border-b-2 border-brand-600 text-brand-700 dark:border-brand-400 dark:text-brand-300' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
+                >
+                  {tab === 'dados' ? 'Dados' : tab === 'rastreador' ? 'Rastreador' : 'Documentos'}
+                </button>
+              ))}
+            </div>
+
+            {/* Aba Dados */}
+            {detailsTab === 'dados' && (
+              <div className="grid gap-3 sm:grid-cols-2">
+                {[
+                  ['Cliente', clients.find((c) => c.id === selectedVehicle.client_id)?.name ?? '—'],
+                  ['Contrato', selectedVehicle.contract_number ?? '—'],
+                  ['Chassi', selectedVehicle.chassis ?? '—'],
+                  ['Renavam', selectedVehicle.renavam ?? '—'],
+                  ['Marca / Modelo', [selectedVehicle.brand, selectedVehicle.model].filter(Boolean).join(' ') || '—'],
+                  ['Ano', `${selectedVehicle.manufacture_year ?? '—'} / ${selectedVehicle.model_year ?? '—'}`],
+                  ['Cor', selectedVehicle.color ?? '—'],
+                  ['Combustível', selectedVehicle.fuel_type ?? '—'],
+                  ['Endereço', [selectedVehicle.address_line, selectedVehicle.address_number, selectedVehicle.city, selectedVehicle.state].filter(Boolean).join(', ') || '—'],
+                ].map(([label, value]) => (
+                  <div key={label} className="rounded-xl border border-slate-100 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/50">
+                    <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">{label}</p>
+                    <p className="mt-1 text-sm text-slate-800 dark:text-slate-200">{value}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Aba Rastreador */}
+            {detailsTab === 'rastreador' && (
+              <div className="space-y-4">
+                {linkedTracker ? (
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900/40 dark:bg-emerald-950/30">
+                    <p className="text-xs font-semibold uppercase tracking-widest text-emerald-600 dark:text-emerald-400">Rastreador vinculado</p>
+                    <p className="mt-2 font-semibold text-slate-900 dark:text-white">{linkedTracker.imei}</p>
+                    <p className="mt-0.5 text-xs text-slate-500">{[linkedTracker.brand, linkedTracker.model].filter(Boolean).join(' ')}</p>
+                    {canEdit && (
+                      <div className="mt-3 flex gap-2">
+                        <Button variant="danger" onClick={() => setUninstallOpen(true)} className="text-xs px-3 py-1.5">Desvincular / Desinstalar</Button>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-900/40 dark:bg-amber-950/30">
+                    <p className="text-sm font-medium text-amber-700 dark:text-amber-400">Nenhum rastreador vinculado a este veículo.</p>
+                  </div>
+                )}
+                {canEdit && !linkedTracker && (
+                  <Button onClick={() => { loadStockTrackers(); setLinkTrackerOpen(true); }} className="gap-2 w-full justify-center">
+                    Vincular rastreador
+                  </Button>
+                )}
+              </div>
+            )}
+
+            {/* Aba Documentos */}
+            {detailsTab === 'documentos' && (
+              <div className="space-y-4">
+                {canEdit && (
+                  <div className="flex flex-wrap gap-2">
+                    <select className={fieldClass} style={{ width: 180 }} value={docCategory} onChange={(e) => setDocCategory(e.target.value)}>
+                      {documentCategoryOptions.map((o) => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                    <input type="file" multiple className={`${fieldClass} file:mr-3 file:rounded-lg file:border-0 file:bg-brand-700 file:px-3 file:py-1.5 file:text-xs file:text-white`} onChange={(e) => setDocFiles(Array.from(e.target.files || []))} />
+                    <Button disabled={!docFiles.length || uploading} onClick={uploadDocuments}>{uploading ? 'Enviando…' : 'Enviar'}</Button>
+                  </div>
+                )}
+                {vehicleDocuments.length === 0 ? (
+                  <EmptyState title="Nenhum documento" description="Nenhum documento foi anexado a este veículo." />
+                ) : (
+                  <div className="space-y-2">
+                    {vehicleDocuments.map((doc) => (
+                      <div key={doc.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/50">
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div>
+                            <p className="text-sm font-medium text-slate-900 dark:text-white">{doc.file_name}</p>
+                            <p className="text-xs text-slate-400">{doc.category}{doc.review_notes ? ` · ${doc.review_notes}` : ''}</p>
+                          </div>
+                          <Badge variant={statusVariant(doc.review_status ?? 'enviado')}>{statusLabel(doc.review_status ?? 'enviado')}</Badge>
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          <a href={doc.url} target="_blank" rel="noreferrer" className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300">Visualizar</a>
+                          <a href={doc.download_url} target="_blank" rel="noreferrer" className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300">Baixar</a>
+                          {canEdit && (
+                            <>
+                              <button type="button" onClick={() => reviewDocument(doc.id, 'aprovado')} className="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100 dark:border-emerald-900/40 dark:bg-emerald-950/30 dark:text-emerald-400">Aprovar</button>
+                              <button type="button" onClick={() => reviewDocument(doc.id, 'reenvio_solicitado')} className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700 hover:bg-amber-100 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-400">Solicitar ajuste</button>
+                              <button type="button" onClick={() => removeDocument(doc.id)} className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-medium text-rose-700 hover:bg-rose-100 dark:border-rose-900/40 dark:bg-rose-950/30 dark:text-rose-400">Excluir</button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
+
+      {/* Modal vincular rastreador */}
+      <Modal open={linkTrackerOpen} onClose={() => setLinkTrackerOpen(false)} title="Vincular rastreador" subtitle="Veículo" size="md">
+        <div className="space-y-4">
+          <FormField label="Rastreador (em estoque)" required>
+            <select className={fieldClass} value={linkForm.tracker_id} onChange={(e) => setLinkForm((p) => ({ ...p, tracker_id: e.target.value }))} required>
+              <option value="">Selecione o rastreador</option>
+              {stockTrackers.map((t) => <option key={t.id} value={t.id}>{t.imei} — {[t.brand, t.model].filter(Boolean).join(' ')}</option>)}
+            </select>
+          </FormField>
+          <FormField label="Plano (opcional)">
+            <select className={fieldClass} value={linkForm.plan_id} onChange={(e) => setLinkForm((p) => ({ ...p, plan_id: e.target.value }))}>
+              <option value="">Sem plano agora</option>
+              {plans.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </FormField>
+          {linkForm.plan_id && (
+            <FormField label="Ciclos de cobrança">
+              <input className={fieldClass} type="number" min={1} max={60} value={linkForm.billing_cycles} onChange={(e) => setLinkForm((p) => ({ ...p, billing_cycles: e.target.value }))} />
+            </FormField>
+          )}
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="secondary" onClick={() => setLinkTrackerOpen(false)}>Cancelar</Button>
+            <Button disabled={!linkForm.tracker_id || linking} onClick={linkTracker}>{linking ? 'Vinculando…' : 'Vincular'}</Button>
+          </div>
+        </div>
+      </Modal>
 
       <Modal open={modalOpen} onClose={() => { setModalOpen(false); resetForm(); setModalError(''); }} title={isEditing ? 'Editar veículo' : 'Novo veículo'} description="Mantenha o cadastro técnico e documental do veículo em um fluxo de preenchimento mais limpo." size="2xl">
         <form className="space-y-6" onSubmit={submitVehicle}>

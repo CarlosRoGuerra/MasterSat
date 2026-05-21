@@ -14,6 +14,7 @@ import { Select } from '@/components/ui/select';
 import { FormField, FormGrid, FormSection, FormDivider } from '@/components/ui/form-field';
 import { Badge, statusVariant, statusLabel } from '@/components/ui/badge';
 import { EmptyState, TableSkeleton } from '@/components/ui/empty-state';
+import { Table, TableHead, Th, TableBody, Tr, Td } from '@/components/ui/table';
 import { apiFetch, API_URL } from '@/lib/api';
 import { fetchAddressByCep } from '@/lib/cep';
 import { formatCpfCnpj, formatPhone, formatZipCode, onlyDigits } from '@/lib/format';
@@ -152,6 +153,8 @@ export default function ClientesPage() {
   const [statusFilter, setStatusFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [detailsTab, setDetailsTab] = useState<'cadastro' | 'historico' | 'documentos'>('cadastro');
   const [isEditing, setIsEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -514,126 +517,192 @@ export default function ClientesPage() {
         <StatCard label="Empresas (PJ)"        value={stats.company}    hint="Cadastros PJ na base"    tone="brand"   icon={<Building2 className="h-5 w-5" />} />
       </section>
 
-      <section className="mt-6 grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
-        <div className="space-y-6">
-          <Card>
-            <SectionHeader
-              eyebrow="Cadastro"
-              title="Base de clientes"
-              description="Pesquise, selecione e acompanhe rapidamente o status cadastral da carteira."
-              actions={canEdit ? <Button type="button" onClick={openCreateModal}>Adicionar cliente</Button> : null}
-            />
-            <div className="mt-4 flex flex-wrap gap-3">
-              <Input placeholder="Buscar por nome, CPF/CNPJ ou e-mail" value={search} onChange={(e) => setSearch(e.target.value)} className="max-w-xs" />
-              <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="w-44">
-                <option value="">Todos os status</option>
-                <option value="ativo">Ativo</option>
-                <option value="inativo">Inativo</option>
-                <option value="inadimplente">Inadimplente</option>
-                <option value="suspenso">Suspenso</option>
-              </Select>
-              <Select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="w-40">
-                <option value="">Todos os tipos</option>
-                <option value="pf">Pessoa física</option>
-                <option value="pj">Pessoa jurídica</option>
-              </Select>
-              <Button type="button" variant="secondary" onClick={() => token && loadClients(token)} disabled={loading}>
-                {loading ? 'Atualizando…' : 'Filtrar'}
-              </Button>
-            </div>
+      <section className="mt-6">
+        <Card>
+          <SectionHeader
+            eyebrow="Cadastro"
+            title="Base de clientes"
+            description="Pesquise e gerencie a carteira completa de clientes."
+            actions={canEdit ? <Button type="button" onClick={openCreateModal} className="gap-2"><Plus className="h-4 w-4" />Adicionar cliente</Button> : null}
+          />
+          <div className="mt-4 flex flex-wrap gap-3">
+            <Input placeholder="Buscar por nome, CPF/CNPJ ou e-mail" value={search} onChange={(e) => setSearch(e.target.value)} className="max-w-xs" />
+            <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="w-44">
+              <option value="">Todos os status</option>
+              <option value="ativo">Ativo</option>
+              <option value="inativo">Inativo</option>
+              <option value="inadimplente">Inadimplente</option>
+              <option value="suspenso">Suspenso</option>
+            </Select>
+            <Select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="w-40">
+              <option value="">Todos os tipos</option>
+              <option value="pf">Pessoa física</option>
+              <option value="pj">Pessoa jurídica</option>
+            </Select>
+            <Button type="button" variant="secondary" onClick={() => token && loadClients(token)} disabled={loading}>
+              {loading ? 'Atualizando…' : 'Filtrar'}
+            </Button>
+          </div>
 
-            <div className="mt-4">
-              {loading ? (
-                <TableSkeleton rows={6} cols={4} />
-              ) : clients.length === 0 ? (
-                <EmptyState icon={Users} title="Nenhum cliente encontrado" description="Ajuste os filtros ou cadastre o primeiro cliente." action={canEdit ? <Button onClick={openCreateModal}>Adicionar cliente</Button> : undefined} />
-              ) : (
-                <div className="space-y-2">
+          <div className="mt-4">
+            {loading ? (
+              <TableSkeleton rows={7} cols={5} />
+            ) : clients.length === 0 ? (
+              <EmptyState icon={Users} title="Nenhum cliente encontrado" description="Ajuste os filtros ou cadastre o primeiro cliente." action={canEdit ? <Button onClick={openCreateModal} className="gap-2"><Plus className="h-4 w-4" />Adicionar cliente</Button> : undefined} />
+            ) : (
+              <Table>
+                <TableHead>
+                  <Th>Cliente</Th>
+                  <Th>Documento</Th>
+                  <Th>Contato</Th>
+                  <Th>Status</Th>
+                  <Th className="w-40" />
+                </TableHead>
+                <TableBody>
                   {clients.map((client) => {
                     const vehicles = vehiclesByClient[client.id] || [];
-                    const isSelected = selectedClient?.id === client.id;
                     return (
-                      <div
-                        key={client.id}
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => setSelectedClient(client)}
-                        onKeyDown={(e) => cardKeyHandler(e, () => setSelectedClient(client))}
-                        className={`cursor-pointer rounded-xl border p-4 text-left transition-colors ${isSelected ? 'border-brand-400 bg-brand-50/60 dark:border-brand-600 dark:bg-brand-950/30' : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:hover:bg-slate-800/60'}`}
-                      >
-                        <div className="flex flex-wrap items-center justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <p className="font-semibold text-slate-900 dark:text-white">{client.name}</p>
-                              <Badge variant={statusVariant(client.status)}>{statusLabel(client.status)}</Badge>
-                              <Badge variant="default">{client.type === 'pj' ? 'PJ' : 'PF'}</Badge>
-                            </div>
-                            <p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">
-                              {formatCpfCnpj(client.cpf_cnpj)} · {client.email || 'sem e-mail'} · {vehicles.length} veículo(s)
-                            </p>
-                          </div>
-                          {canEdit && (
-                            <Button type="button" variant="secondary" onClick={(e) => { e.stopPropagation(); openEditModal(client); }}>
-                              Editar
+                      <Tr key={client.id}>
+                        <Td>
+                          <p className="font-medium text-slate-900 dark:text-white">{client.name}</p>
+                          <p className="text-xs text-slate-400">{client.type === 'pj' ? 'Pessoa Jurídica' : 'Pessoa Física'} · {vehicles.length} veículo(s)</p>
+                        </Td>
+                        <Td className="font-mono text-xs">{formatCpfCnpj(client.cpf_cnpj)}</Td>
+                        <Td>
+                          <p className="text-sm">{client.email || '—'}</p>
+                          <p className="text-xs text-slate-400">{client.phone ? formatPhone(client.phone) : ''}</p>
+                        </Td>
+                        <Td>
+                          <Badge variant={statusVariant(client.status)}>{statusLabel(client.status)}</Badge>
+                        </Td>
+                        <Td>
+                          <div className="flex justify-end gap-1.5">
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              onClick={() => { setSelectedClient(client); setDetailsOpen(true); setDetailsTab('cadastro'); }}
+                              className="px-3 py-1.5 text-xs"
+                            >
+                              Detalhes
                             </Button>
-                          )}
-                        </div>
-                      </div>
+                            {canEdit && (
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                onClick={() => openEditModal(client)}
+                                className="px-3 py-1.5 text-xs"
+                              >
+                                Editar
+                              </Button>
+                            )}
+                          </div>
+                        </Td>
+                      </Tr>
                     );
                   })}
-                </div>
-              )}
-            </div>
-          </Card>
-        </div>
+                </TableBody>
+              </Table>
+            )}
+          </div>
+        </Card>
+      </section>
 
-        <div className="space-y-6">
-          <Card>
-            <SectionHeader eyebrow="Detalhes" title={selectedClient ? selectedClient.name : 'Selecione um cliente'} description={selectedClient ? 'Resumo cadastral, veículos vinculados e documentação.' : 'Escolha um cliente na listagem para ver o detalhamento completo.'} />
-            {selectedClient ? (
-              <div className="mt-5 space-y-5">
-                <div className="grid gap-3 md:grid-cols-2">
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60"><p className="text-xs uppercase tracking-[0.2em] text-slate-400">Documento</p><p className="mt-2 font-semibold text-slate-900 dark:text-white">{formatCpfCnpj(selectedClient.cpf_cnpj)}</p></div>
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60"><p className="text-xs uppercase tracking-[0.2em] text-slate-400">Contato principal</p><p className="mt-2 font-semibold text-slate-900 dark:text-white">{selectedClient.email || 'Não informado'}</p><p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{selectedClient.phone ? formatPhone(selectedClient.phone) : 'Sem telefone'}</p></div>
+      {/* Modal de detalhes */}
+      <Modal
+        open={detailsOpen}
+        onClose={() => { setDetailsOpen(false); setSelectedClient(null); }}
+        title={selectedClient?.name ?? ''}
+        subtitle="Detalhes do cliente"
+        size="xl"
+      >
+        {selectedClient && (
+          <div className="space-y-4">
+            {/* Abas */}
+            <div className="flex gap-1 border-b border-slate-100 dark:border-slate-800">
+              {(['cadastro', 'historico', 'documentos'] as const).map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => setDetailsTab(tab)}
+                  className={`px-4 py-2 text-sm font-medium transition-colors ${detailsTab === tab ? 'border-b-2 border-brand-600 text-brand-700 dark:border-brand-400 dark:text-brand-300' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
+                >
+                  {tab === 'cadastro' ? 'Cadastro' : tab === 'historico' ? 'Histórico' : 'Documentos'}
+                </button>
+              ))}
+            </div>
+
+            {/* Aba Cadastro */}
+            {detailsTab === 'cadastro' && (
+              <div className="space-y-4">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-xl border border-slate-100 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/50">
+                    <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">Documento</p>
+                    <p className="mt-2 font-semibold text-slate-900 dark:text-white">{formatCpfCnpj(selectedClient.cpf_cnpj)}</p>
+                  </div>
+                  <div className="rounded-xl border border-slate-100 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/50">
+                    <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">Status</p>
+                    <div className="mt-2"><Badge variant={statusVariant(selectedClient.status)}>{statusLabel(selectedClient.status)}</Badge></div>
+                  </div>
+                  <div className="rounded-xl border border-slate-100 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/50">
+                    <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">E-mail</p>
+                    <p className="mt-2 text-sm text-slate-700 dark:text-slate-300">{selectedClient.email || 'Não informado'}</p>
+                  </div>
+                  <div className="rounded-xl border border-slate-100 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/50">
+                    <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">Telefone</p>
+                    <p className="mt-2 text-sm text-slate-700 dark:text-slate-300">{selectedClient.phone ? formatPhone(selectedClient.phone) : 'Não informado'}</p>
+                  </div>
+                </div>
+                <div className="rounded-xl border border-slate-100 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/50">
+                  <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">Endereço</p>
+                  <p className="mt-2 text-sm leading-6 text-slate-700 dark:text-slate-300">
+                    {[selectedClient.address_line, selectedClient.address_number, selectedClient.neighborhood, selectedClient.city, selectedClient.state].filter(Boolean).join(', ') || 'Não informado'}
+                  </p>
                 </div>
                 {(selectedClient.contacts || []).length > 0 && (
                   <div>
-                    <p className="text-sm font-semibold text-slate-900 dark:text-white">Contatos adicionais</p>
-                    <div className="mt-3 space-y-2">
-                      {(selectedClient.contacts || []).map((contact, i) => (
-                        <div key={i} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/60">
-                          <p className="font-medium text-slate-900 dark:text-white">{contact.name}{contact.role ? <span className="ml-2 text-xs font-normal text-slate-500">({contact.role})</span> : null}</p>
-                          {contact.phone ? <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">{formatPhone(contact.phone)}</p> : null}
-                          {contact.email ? <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">{contact.email}</p> : null}
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-widest text-slate-400">Contatos adicionais</p>
+                    <div className="space-y-2">
+                      {(selectedClient.contacts || []).map((c, i) => (
+                        <div key={i} className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 dark:border-slate-800 dark:bg-slate-900/50">
+                          <p className="font-medium text-slate-900 dark:text-white">{c.name}{c.role && <span className="ml-2 text-xs font-normal text-slate-400">({c.role})</span>}</p>
+                          <p className="mt-0.5 text-xs text-slate-500">{[c.phone && formatPhone(c.phone), c.email].filter(Boolean).join(' · ')}</p>
                         </div>
                       ))}
                     </div>
                   </div>
                 )}
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60">
-                  <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Endereço</p>
-                  <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">{[selectedClient.address_line, selectedClient.address_number, selectedClient.neighborhood, selectedClient.city, selectedClient.state].filter(Boolean).join(' • ') || 'Não informado'}</p>
-                </div>
                 <div>
-                  <p className="text-sm font-semibold text-slate-900 dark:text-white">Veículos vinculados</p>
-                  <div className="mt-3 space-y-2">
-                    {(vehiclesByClient[selectedClient.id] || []).length === 0 ? <p className="text-sm text-slate-500 dark:text-slate-400">Nenhum veículo vinculado.</p> : (vehiclesByClient[selectedClient.id] || []).map((vehicle) => <div key={vehicle.id} className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm dark:border-slate-800 dark:bg-slate-950/60"><span className="font-medium text-slate-900 dark:text-white">{vehicle.plate}</span><span className="text-slate-500 dark:text-slate-400">{vehicle.status}</span></div>)}
-                  </div>
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-widest text-slate-400">Veículos vinculados</p>
+                  {(vehiclesByClient[selectedClient.id] || []).length === 0 ? (
+                    <p className="text-sm text-slate-400">Nenhum veículo vinculado.</p>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {(vehiclesByClient[selectedClient.id] || []).map((v) => (
+                        <div key={v.id} className="flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50 px-4 py-2.5 dark:border-slate-800 dark:bg-slate-900/50">
+                          <span className="font-medium text-slate-900 dark:text-white">{v.plate}</span>
+                          <Badge variant={statusVariant(v.status)}>{statusLabel(v.status)}</Badge>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
-            ) : null}
-          </Card>
+            )}
 
-          <Card>
-            <SectionHeader eyebrow="Histórico" title="Linha do tempo" description="Contratos, ordens de serviço e cobranças do cliente em ordem cronológica." actions={selectedClient ? <button type="button" onClick={downloadTimelinePdf} className="flex items-center gap-1.5 rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-600 dark:border-slate-700 dark:text-slate-200 dark:hover:border-cyan-400 dark:hover:text-cyan-300"><Download className="h-4 w-4" />PDF</button> : null} />
-            {selectedClient ? (
-              <div className="mt-4">
+            {/* Aba Histórico */}
+            {detailsTab === 'historico' && (
+              <div>
+                <div className="mb-3 flex justify-end">
+                  <Button type="button" variant="secondary" onClick={downloadTimelinePdf} className="gap-1.5">
+                    <Download className="h-4 w-4" /> Exportar PDF
+                  </Button>
+                </div>
                 {timelineLoading ? (
-                  <div className="space-y-3 pt-1">
+                  <div className="space-y-3">
                     {[1,2,3].map((i) => <div key={i} className="flex gap-3"><div className="h-7 w-7 shrink-0 animate-pulse rounded-full bg-slate-100 dark:bg-slate-800" /><div className="flex-1 space-y-1.5 pt-1"><div className="h-3 w-3/4 animate-pulse rounded bg-slate-100 dark:bg-slate-800" /><div className="h-3 w-1/2 animate-pulse rounded bg-slate-100 dark:bg-slate-800" /></div></div>)}
                   </div>
                 ) : clientTimeline.length === 0 ? (
-                  <p className="mt-2 text-sm text-slate-400 dark:text-slate-500">Nenhum evento registrado.</p>
+                  <p className="text-sm text-slate-400">Nenhum evento registrado.</p>
                 ) : (
                   <ol className="relative border-l border-slate-200 dark:border-slate-700">
                     {clientTimeline.map((event) => {
@@ -644,12 +713,9 @@ export default function ClientesPage() {
                         billing_overdue: { bg: 'bg-rose-100 dark:bg-rose-900/50',       icon: <AlertCircle className="h-3.5 w-3.5 text-rose-600 dark:text-rose-300" /> },
                         billing_pending: { bg: 'bg-amber-100 dark:bg-amber-900/50',     icon: <Clock className="h-3.5 w-3.5 text-amber-600 dark:text-amber-300" /> },
                       }[event.kind];
-
                       return (
                         <li key={event.key} className="mb-4 ml-5">
-                          <span className={`absolute -left-[14px] flex h-7 w-7 items-center justify-center rounded-full ring-2 ring-white dark:ring-slate-950 ${cfg.bg}`}>
-                            {cfg.icon}
-                          </span>
+                          <span className={`absolute -left-[14px] flex h-7 w-7 items-center justify-center rounded-full ring-2 ring-white dark:ring-slate-950 ${cfg.bg}`}>{cfg.icon}</span>
                           <div className="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2 dark:border-slate-800 dark:bg-slate-950/60">
                             <p className="text-xs font-semibold text-slate-900 dark:text-white">{event.title}</p>
                             <p className="mt-0.5 text-xs text-slate-500">{event.subtitle}</p>
@@ -661,52 +727,54 @@ export default function ClientesPage() {
                   </ol>
                 )}
               </div>
-            ) : (
-              <p className="mt-4 text-sm text-slate-400">Selecione um cliente para ver o histórico.</p>
             )}
-          </Card>
 
-          <Card>
-            <SectionHeader eyebrow="Documentação" title="Documentos do cliente" description="Anexe, revise e acompanhe o status documental diretamente no módulo administrativo." />
-            {selectedClient ? (
-              <>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <Select value={docCategory} onChange={(e) => setDocCategory(e.target.value)} className="w-44">
-                    {documentCategoryOptions.map((o) => <option key={o} value={o}>{o}</option>)}
-                  </Select>
-                  <input type="file" multiple className={fileInputClass} onChange={(e) => setDocFiles(Array.from(e.target.files || []))} />
-                  <Button type="button" disabled={!canEdit || uploading || !docFiles.length} onClick={uploadDocuments}>{uploading ? 'Enviando…' : 'Enviar'}</Button>
-                </div>
-                <div className="mt-5 space-y-3">
-                  {clientDocuments.length === 0 ? <p className="text-sm text-slate-500 dark:text-slate-400">Nenhum documento anexado até o momento.</p> : clientDocuments.map((document) => (
-                    <div key={document.id} className="rounded-[24px] border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60">
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div>
-                          <p className="font-semibold text-slate-900 dark:text-white">{document.file_name}</p>
-                          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Categoria: {document.category}</p>
-                          {document.review_notes ? <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Obs.: {document.review_notes}</p> : null}
+            {/* Aba Documentos */}
+            {detailsTab === 'documentos' && (
+              <div className="space-y-4">
+                {canEdit && (
+                  <div className="flex flex-wrap gap-2">
+                    <Select value={docCategory} onChange={(e) => setDocCategory(e.target.value)} className="w-44">
+                      {documentCategoryOptions.map((o) => <option key={o} value={o}>{o}</option>)}
+                    </Select>
+                    <input type="file" multiple className={fileInputClass} onChange={(e) => setDocFiles(Array.from(e.target.files || []))} />
+                    <Button type="button" disabled={uploading || !docFiles.length} onClick={uploadDocuments}>{uploading ? 'Enviando…' : 'Enviar'}</Button>
+                  </div>
+                )}
+                {clientDocuments.length === 0 ? (
+                  <EmptyState icon={FileText} title="Nenhum documento" description="Nenhum documento foi anexado a este cliente." />
+                ) : (
+                  <div className="space-y-3">
+                    {clientDocuments.map((doc) => (
+                      <div key={doc.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/50">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <p className="font-medium text-slate-900 dark:text-white">{doc.file_name}</p>
+                            <p className="mt-0.5 text-xs text-slate-400">Categoria: {doc.category}</p>
+                            {doc.review_notes && <p className="mt-0.5 text-xs text-slate-400">Obs.: {doc.review_notes}</p>}
+                          </div>
+                          <Badge variant={statusVariant(doc.review_status)}>{statusLabel(doc.review_status)}</Badge>
                         </div>
-                        <Badge variant={statusVariant(document.review_status)}>{statusLabel(document.review_status)}</Badge>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <a href={doc.url} target="_blank" rel="noreferrer" className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Visualizar</a>
+                          <a href={doc.download_url} target="_blank" rel="noreferrer" className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Baixar</a>
+                          {canEdit && (
+                            <>
+                              <button type="button" onClick={() => reviewDocument(doc.id, 'aprovado')} className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100 dark:border-emerald-900/40 dark:bg-emerald-950/30 dark:text-emerald-400">Aprovar</button>
+                              <button type="button" onClick={() => reviewDocument(doc.id, 'reenvio_solicitado')} className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-100 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-400">Solicitar ajuste</button>
+                              <button type="button" onClick={() => deleteDocument(doc.id)} className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-100 dark:border-rose-900/40 dark:bg-rose-950/30 dark:text-rose-400">Excluir</button>
+                            </>
+                          )}
+                        </div>
                       </div>
-                      <div className="mt-4 flex flex-wrap gap-2">
-                        <a href={document.url} target="_blank" rel="noreferrer" className="rounded-2xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-600 dark:border-slate-700 dark:text-slate-200 dark:hover:border-cyan-400 dark:hover:text-cyan-300">Visualizar</a>
-                        <a href={document.download_url} target="_blank" rel="noreferrer" className="rounded-2xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-600 dark:border-slate-700 dark:text-slate-200 dark:hover:border-cyan-400 dark:hover:text-cyan-300">Baixar</a>
-                        {canEdit ? (
-                          <>
-                            <button type="button" onClick={() => reviewDocument(document.id, 'aprovado')} className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700">Aprovar</button>
-                            <button type="button" onClick={() => reviewDocument(document.id, 'reenvio_solicitado')} className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-700">Solicitar ajuste</button>
-                            <button type="button" onClick={() => deleteDocument(document.id)} className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700">Excluir</button>
-                          </>
-                        ) : null}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </>
-            ) : <p className="mt-4 text-sm text-slate-500 dark:text-slate-400">Selecione um cliente para visualizar ou enviar documentos.</p>}
-          </Card>
-        </div>
-      </section>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
 
       <Modal
         open={modalOpen}
