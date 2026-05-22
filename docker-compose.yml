@@ -12,9 +12,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
   redis:
     image: redis:7-alpine
     ports: ["6379:6379"]
+
   minio:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
@@ -23,6 +25,7 @@ services:
       MINIO_ROOT_PASSWORD: minioadmin
     ports: ["9000:9000", "9001:9001"]
     volumes: ["minio_data:/data"]
+
   backend:
     build: { context: ./backend }
     env_file: [.env]
@@ -32,12 +35,65 @@ services:
       redis: { condition: service_started }
       minio: { condition: service_started }
     volumes: ["./backend:/app"]
+
   frontend:
     build: { context: ./frontend }
     env_file: [.env]
     ports: ["3000:3000"]
     depends_on: [backend]
     volumes: ["./frontend:/app", "/app/node_modules"]
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Serviço de backup automático
+  # Executa pg_dump diariamente às 02:00 e sobe os arquivos para a nuvem.
+  # Configurar no .env:
+  #   BACKUP_KEEP_DAYS=30
+  #   RCLONE_REMOTE=b2:mastersat-backups   (ou s3:bucket, gdrive:pasta, etc.)
+  #   ALERT_WEBHOOK=https://...             (Discord/Slack webhook, opcional)
+  # ─────────────────────────────────────────────────────────────────────────
+  backup:
+    image: ghcr.io/offen/docker-volume-backup:v2
+    restart: unless-stopped
+    environment:
+      # Banco de dados
+      BACKUP_SOURCES: /backup/db
+      BACKUP_FILENAME: "mastersat_db_%Y%m%d_%H%M%S.tar.gz"
+      BACKUP_CRON_EXPRESSION: "0 2 * * *"     # 02:00 todos os dias
+      BACKUP_RETENTION_DAYS: "${BACKUP_KEEP_DAYS:-30}"
+      BACKUP_COMPRESSION: gz
+      # Notificação em caso de falha (opcional)
+      NOTIFICATION_URLS: "${ALERT_WEBHOOK:-}"
+    volumes:
+      - backup_data:/backup/db
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      db: { condition: service_healthy }
+
+  # pg_dump dedicado — executa antes do backup acima capturar os arquivos
+  pg_dump:
+    image: postgres:16
+    restart: "no"
+    environment:
+      PGPASSWORD: "${POSTGRES_PASSWORD:-postgres}"
+      POSTGRES_USER: "${POSTGRES_USER:-postgres}"
+      POSTGRES_DB: "${POSTGRES_DB:-rastreamento}"
+    volumes:
+      - backup_data:/backup
+      - ./backup/backup.sh:/backup.sh:ro
+    entrypoint: >
+      sh -c "
+        export PGPASSWORD=$$PGPASSWORD &&
+        mkdir -p /backup/db &&
+        pg_dump -h db -U $$POSTGRES_USER -d $$POSTGRES_DB --format=custom |
+        gzip -9 > /backup/db/mastersat_db_$$(date +%Y%m%d_%H%M%S).sql.gz &&
+        find /backup/db -name '*.sql.gz' -mtime +${BACKUP_KEEP_DAYS:-30} -delete &&
+        echo 'pg_dump concluído'
+      "
+    depends_on:
+      db: { condition: service_healthy }
+    profiles: ["backup"]   # execute com: docker compose --profile backup run pg_dump
+
 volumes:
   postgres_data:
   minio_data:
+  backup_data:
