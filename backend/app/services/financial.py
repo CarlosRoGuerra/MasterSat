@@ -72,14 +72,74 @@ def _quantize_amount(value: float | Decimal) -> Decimal:
     return Decimal(str(value)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
 
-def generate_monthly_billings(db: Session, contract: Contract, cycles: int = 12, force: bool = False) -> list[Billing]:
+def generate_prorated_first_billing(
+    db: Session,
+    contract: Contract,
+    plan: Plan,
+    install_date: date,
+    installation_fee: float = 0.0,
+) -> Billing:
+    """
+    Gera a primeira fatura proporcional ao período de instalação.
+
+    Lógica:
+      - Calcula os dias restantes do mês de instalação (incluindo o próprio dia)
+      - Aplica proporção: (valor_plano / dias_no_mês) × dias_restantes
+      - Soma a taxa de instalação informada pelo operador
+      - A fatura mensal recorrente começa somente a partir do mês seguinte
+    """
+    days_in_month = monthrange(install_date.year, install_date.month)[1]
+    remaining_days = days_in_month - install_date.day + 1
+
+    plan_price = Decimal(str(plan.price))
+    prorated = (plan_price * Decimal(remaining_days) / Decimal(days_in_month)).quantize(
+        Decimal('0.01'), rounding=ROUND_HALF_UP
+    )
+    fee = _quantize_amount(installation_fee)
+    total = prorated + fee
+
+    # Vencimento no billing_day do contrato, dentro do mês de instalação
+    billing_day = contract.billing_day or install_date.day
+    billing_day = min(billing_day, days_in_month)
+    due_date = date(install_date.year, install_date.month, billing_day)
+    # Se o dia de vencimento já passou este mês, move para o próximo
+    if due_date < install_date:
+        due_date = add_months(due_date, 1)
+
+    period_label = install_date.strftime('%m/%Y')
+
+    notes_parts = [f'Pró-rata: {remaining_days} de {days_in_month} dias do mês']
+    if installation_fee > 0:
+        notes_parts.append(f'Taxa de instalação: R$ {installation_fee:.2f}')
+
+    billing = Billing(
+        contract_id=contract.id,
+        client_id=contract.client_id,
+        vehicle_id=getattr(contract, 'vehicle_id', None),
+        tracker_id=getattr(contract, 'tracker_id', None),
+        amount=total,
+        due_date=due_date,
+        status=BillingStatus.PENDING if due_date >= date.today() else BillingStatus.OVERDUE,
+        period_label=period_label,
+        payment_method=contract.payment_method,
+        notes=' | '.join(notes_parts),
+        title=f'1ª fatura pró-rata — {period_label}',
+        billing_type='prorata',
+    )
+    db.add(billing)
+    db.commit()
+    db.refresh(billing)
+    return billing
+
+
+def generate_monthly_billings(db: Session, contract: Contract, cycles: int = 12, force: bool = False, start_cycle: int = 0) -> list[Billing]:
     plan = db.get(Plan, contract.plan_id)
     if not plan:
         raise ValueError('Plano não encontrado para o contrato informado.')
 
     interval = max(int(getattr(plan, 'billing_interval_months', 1) or 1), 1)
     created: list[Billing] = []
-    for cycle in range(cycles):
+    for cycle in range(start_cycle, start_cycle + cycles):
         due_date = normalize_due_date(contract.start_date, cycle, contract.billing_day, interval)
         if contract.end_date and due_date > contract.end_date:
             break

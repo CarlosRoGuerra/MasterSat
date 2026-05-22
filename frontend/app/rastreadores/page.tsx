@@ -653,7 +653,10 @@ export default function RastreadoresPage() {
                   <option value="">Sem contrato agora</option>
                   {plans.map((p) => <option key={p.id} value={p.id}>{p.name} — R$ {Number(p.price ?? 0).toFixed(2)}/mês</option>)}
                 </select>
-                <input type="date" className={fieldClass} value={form.link_start_date} onChange={(e) => setForm((prev) => ({ ...prev, link_start_date: e.target.value }))} title="Início do contrato" />
+                <label className="block">
+                  <span className="mb-1 block text-xs font-semibold text-slate-500 dark:text-slate-400">Início do contrato</span>
+                  <input type="date" className={fieldClass} value={form.link_start_date} onChange={(e) => setForm((prev) => ({ ...prev, link_start_date: e.target.value }))} />
+                </label>
                 {form.link_plan_id && (
                   <>
                     <select className={fieldClass} value={form.link_payment_method} onChange={(e) => setForm((prev) => ({ ...prev, link_payment_method: e.target.value }))}>
@@ -690,9 +693,18 @@ export default function RastreadoresPage() {
             <input className={fieldClass} placeholder="Firmware" value={form.firmware} onChange={(e) => setForm((prev) => ({ ...prev, firmware: e.target.value.slice(0, 60) }))} />
             <input className={fieldClass} placeholder="Linha / MSISDN" value={form.sim_number} onChange={(e) => setForm((prev) => ({ ...prev, sim_number: onlyDigits(e.target.value).slice(0, 20) }))} />
             <input className={fieldClass} placeholder="ICCID" value={form.sim_iccid} onChange={(e) => setForm((prev) => ({ ...prev, sim_iccid: onlyDigits(e.target.value).slice(0, 22) }))} />
-            <input type="date" className={fieldClass} value={form.acquisition_date} onChange={(e) => setForm((prev) => ({ ...prev, acquisition_date: e.target.value }))} />
-            <input type="date" className={fieldClass} value={form.install_date} onChange={(e) => setForm((prev) => ({ ...prev, install_date: e.target.value }))} />
-            <input type="date" className={fieldClass} value={form.warranty_until} onChange={(e) => setForm((prev) => ({ ...prev, warranty_until: e.target.value }))} />
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold text-slate-500 dark:text-slate-400">Data de aquisição</span>
+              <input type="date" className={fieldClass} value={form.acquisition_date} onChange={(e) => setForm((prev) => ({ ...prev, acquisition_date: e.target.value }))} />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold text-slate-500 dark:text-slate-400">Data de instalação</span>
+              <input type="date" className={fieldClass} value={form.install_date} onChange={(e) => setForm((prev) => ({ ...prev, install_date: e.target.value }))} />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold text-slate-500 dark:text-slate-400">Garantia válida até</span>
+              <input type="date" className={fieldClass} value={form.warranty_until} onChange={(e) => setForm((prev) => ({ ...prev, warranty_until: e.target.value }))} />
+            </label>
             <textarea className={`${areaClass} md:col-span-3`} placeholder="Observações técnicas" value={form.notes} onChange={(e) => setForm((prev) => ({ ...prev, notes: e.target.value.slice(0, 500) }))} />
           </div>
 

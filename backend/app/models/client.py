@@ -1,4 +1,4 @@
-from sqlalchemy import Enum, JSON, String, Text
+from sqlalchemy import Enum, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -27,3 +27,4 @@ class Client(Base, TimestampMixin, SoftDeleteMixin):
     state: Mapped[str | None] = mapped_column(String(2), nullable=True)
     address: Mapped[str | None] = mapped_column(Text, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    billing_day: Mapped[int | None] = mapped_column(Integer, nullable=True)

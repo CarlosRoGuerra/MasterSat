@@ -178,7 +178,10 @@ class TestTrackerLinkPayload:
         p = TrackerLinkPayload(vehicle_id=1)
         assert p.vehicle_id == 1
         assert p.auto_generate_billings is True
-        assert p.billing_cycles == 12
+        assert p.billing_cycles == 60       # default mudou para boleto (60 meses)
+        assert p.billing_modality == 'boleto'
+        assert p.installation_fee == 0.0
+        assert p.generate_prorated is True
 
     def test_billing_day_min(self):
         p = TrackerLinkPayload(vehicle_id=1, billing_day=1)
@@ -205,16 +208,34 @@ class TestTrackerLinkPayload:
         assert p.billing_cycles == 1
 
     def test_billing_cycles_max(self):
-        p = TrackerLinkPayload(vehicle_id=1, billing_cycles=60)
-        assert p.billing_cycles == 60
+        # Limite agora é 999 (carnê de longo prazo ou boleto recorrente)
+        p = TrackerLinkPayload(vehicle_id=1, billing_cycles=999)
+        assert p.billing_cycles == 999
 
     def test_billing_cycles_zero_rejected(self):
         with pytest.raises(ValidationError):
             TrackerLinkPayload(vehicle_id=1, billing_cycles=0)
 
-    def test_billing_cycles_61_rejected(self):
+    def test_billing_cycles_above_max_rejected(self):
         with pytest.raises(ValidationError):
-            TrackerLinkPayload(vehicle_id=1, billing_cycles=61)
+            TrackerLinkPayload(vehicle_id=1, billing_cycles=1000)
+
+    def test_billing_modality_boleto(self):
+        p = TrackerLinkPayload(vehicle_id=1, billing_modality='boleto')
+        assert p.billing_modality == 'boleto'
+
+    def test_billing_modality_carne(self):
+        p = TrackerLinkPayload(vehicle_id=1, billing_modality='carne', billing_cycles=12)
+        assert p.billing_modality == 'carne'
+        assert p.billing_cycles == 12
+
+    def test_installation_fee_positivo(self):
+        p = TrackerLinkPayload(vehicle_id=1, installation_fee=80.0)
+        assert p.installation_fee == 80.0
+
+    def test_installation_fee_negativo_rejeitado(self):
+        with pytest.raises(ValidationError):
+            TrackerLinkPayload(vehicle_id=1, installation_fee=-1.0)
 
     def test_start_date_defaults_to_today(self):
         p = TrackerLinkPayload(vehicle_id=1)

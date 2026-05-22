@@ -1,4 +1,4 @@
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from app.models.enums import ClientStatus
 
@@ -43,6 +43,7 @@ class ClientBase(BaseModel):
     state: str | None = None
     address: str | None = None
     notes: str | None = None
+    billing_day: int | None = Field(default=None, ge=1, le=28)
 
     @field_validator('cpf_cnpj')
     @classmethod
@@ -120,6 +121,7 @@ class ClientUpdate(BaseModel):
     state: str | None = None
     address: str | None = None
     notes: str | None = None
+    billing_day: int | None = Field(default=None, ge=1, le=28)
 
     @field_validator('cpf_cnpj')
     @classmethod

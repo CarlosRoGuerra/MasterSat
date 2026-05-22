@@ -19,4 +19,5 @@ class Contract(Base, TimestampMixin, SoftDeleteMixin):
     status: Mapped[str] = mapped_column(String(30), default='ativo')
     billing_day: Mapped[int | None] = mapped_column(Integer, nullable=True)
     payment_method: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    billing_modality: Mapped[str] = mapped_column(String(20), default='boleto')
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)

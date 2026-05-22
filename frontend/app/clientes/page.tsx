@@ -44,6 +44,7 @@ type Client = {
   city?: string | null;
   state?: string | null;
   notes?: string | null;
+  billing_day?: number | null;
 };
 
 type ClientDocument = {
@@ -97,6 +98,7 @@ type ClientFormState = {
   city: string;
   state: string;
   notes: string;
+  billing_day: string;
 };
 
 const initialForm: ClientFormState = {
@@ -116,6 +118,7 @@ const initialForm: ClientFormState = {
   city: '',
   state: '',
   notes: '',
+  billing_day: '',
 };
 
 const documentCategoryOptions = ['cnh', 'rg', 'cpf', 'contrato', 'comprovante_endereco', 'cartao_cnpj', 'contrato_social', 'outro'];
@@ -328,6 +331,7 @@ export default function ClientesPage() {
       city: client.city || '',
       state: client.state || '',
       notes: client.notes || '',
+      billing_day: client.billing_day != null ? String(client.billing_day) : '',
     });
     setDocFiles([]);
     setModalOpen(true);
@@ -428,6 +432,7 @@ export default function ClientesPage() {
         city: form.city.trim() || null,
         state: form.state.trim() || null,
         notes: form.notes.trim() || null,
+        billing_day: form.billing_day ? Number(form.billing_day) : null,
       };
 
       const saved = isEditing && selectedClient
@@ -650,6 +655,13 @@ export default function ClientesPage() {
                   <div className="rounded-xl border border-slate-100 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/50">
                     <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">Telefone</p>
                     <p className="mt-2 text-sm text-slate-700 dark:text-slate-300">{selectedClient.phone ? formatPhone(selectedClient.phone) : 'Não informado'}</p>
+                  </div>
+                  <div className="rounded-xl border border-brand-100 bg-brand-50/60 p-4 dark:border-brand-900/40 dark:bg-brand-950/30">
+                    <p className="text-[11px] font-semibold uppercase tracking-widest text-brand-500 dark:text-brand-400">Dia de vencimento</p>
+                    <p className="mt-2 text-sm font-semibold text-brand-800 dark:text-brand-200">
+                      {selectedClient.billing_day ? `Todo dia ${selectedClient.billing_day}` : 'Não configurado'}
+                    </p>
+                    <p className="mt-0.5 text-xs text-brand-500/70 dark:text-brand-400/60">Padrão para novos contratos</p>
                   </div>
                 </div>
                 <div className="rounded-xl border border-slate-100 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/50">
@@ -881,6 +893,20 @@ export default function ClientesPage() {
                 <Input placeholder="SP" value={form.state} onChange={(e) => handleChange('state', e.target.value)} maxLength={2} />
               </FormField>
             </FormGrid>
+            <FormField
+              label="Dia de vencimento preferido"
+              hint="1 a 28 — usado como padrão ao gerar contratos e cobranças para este cliente"
+            >
+              <Input
+                type="number"
+                min={1}
+                max={28}
+                placeholder="Ex.: 20"
+                value={form.billing_day}
+                onChange={(e) => setForm((p) => ({ ...p, billing_day: e.target.value.slice(0, 2) }))}
+                className="max-w-[120px]"
+              />
+            </FormField>
             <FormField label="Observações">
               <Textarea placeholder="Anotações administrativas internas" value={form.notes} onChange={(e) => handleChange('notes', e.target.value)} />
             </FormField>

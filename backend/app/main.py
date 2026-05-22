@@ -163,6 +163,16 @@ def ensure_schema_updates():
             if 'uninstalled_at' not in vehicle_columns:
                 conn.execute(text('ALTER TABLE vehicles ADD COLUMN uninstalled_at DATE'))
 
+        if inspector.has_table('clients'):
+            client_columns = {column['name'] for column in inspector.get_columns('clients')}
+            if 'billing_day' not in client_columns:
+                conn.execute(text('ALTER TABLE clients ADD COLUMN billing_day INTEGER'))
+
+        if inspector.has_table('contracts'):
+            contract_columns = {column['name'] for column in inspector.get_columns('contracts')}
+            if 'billing_modality' not in contract_columns:
+                conn.execute(text("ALTER TABLE contracts ADD COLUMN billing_modality VARCHAR(20) DEFAULT 'boleto'"))
+
 
 @app.on_event('startup')
 def on_startup():

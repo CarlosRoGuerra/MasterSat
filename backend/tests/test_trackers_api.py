@@ -450,6 +450,12 @@ class TestLinkVeiculo:
         assert contract is not None
 
     def test_link_with_plan_generates_billings(self, http, db, rastreador, veiculo, plan):
+        """
+        Com pró-rata ativo (padrão) e instalação em dia > 1:
+        - 1 fatura pró-rata (mês atual)
+        - billing_cycles faturas mensais (a partir do mês seguinte)
+        Total = 1 + billing_cycles
+        """
         from app.models.billing import Billing
         r = http.post(f"{PREFIX}/{rastreador.id}/link-vehicle", json={
             "vehicle_id": veiculo.id,
@@ -457,7 +463,22 @@ class TestLinkVeiculo:
             "billing_cycles": 3,
         })
         assert r.status_code == 200
-        # Get contract ID from response
+        contract_id = r.json()["contract"]["id"]
+        billings = db.query(Billing).filter(Billing.contract_id == contract_id).all()
+        # Se pró-rata ativo e dia de instalação > 1: 1 prorata + 3 mensais = 4
+        # Se dia de instalação == 1: apenas 3 mensais
+        assert len(billings) >= 3
+
+    def test_link_sem_prorata_gera_exato(self, http, db, rastreador, veiculo, plan):
+        """Desativando pró-rata gera exatamente billing_cycles faturas."""
+        from app.models.billing import Billing
+        r = http.post(f"{PREFIX}/{rastreador.id}/link-vehicle", json={
+            "vehicle_id": veiculo.id,
+            "plan_id": plan.id,
+            "billing_cycles": 3,
+            "generate_prorated": False,
+        })
+        assert r.status_code == 200
         contract_id = r.json()["contract"]["id"]
         billings = db.query(Billing).filter(Billing.contract_id == contract_id).all()
         assert len(billings) == 3

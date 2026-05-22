@@ -155,6 +155,166 @@ function formatRenavam(value: string) { return value.replace(/\D/g, '').slice(0,
 function formatChassis(value: string) { return value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 17); }
 
 
+// ---------------------------------------------------------------------------
+// Componente do formulário de vínculo (isolado para usar useMemo limpo)
+// ---------------------------------------------------------------------------
+function LinkTrackerForm({
+  stockTrackers,
+  plans,
+  form,
+  onChange,
+  onSubmit,
+  onCancel,
+  linking,
+  fieldClass,
+}: {
+  stockTrackers: TrackerOption[];
+  plans: PlanOption[];
+  form: { tracker_id: string; plan_id: string; billing_modality: string; billing_cycles: string; installation_fee: string; start_date: string };
+  onChange: (f: typeof form) => void;
+  onSubmit: () => void;
+  onCancel: () => void;
+  linking: boolean;
+  fieldClass: string;
+}) {
+  const set = (key: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+    onChange({ ...form, [key]: e.target.value });
+
+  const isCarne = form.billing_modality === 'carne';
+
+  // Pré-visualização do pró-rata
+  const preview = (() => {
+    const plan = plans.find((p) => String(p.id) === form.plan_id);
+    if (!plan || !form.start_date) return null;
+    const d = new Date(form.start_date + 'T12:00:00');
+    const day = d.getDate();
+    if (day === 1) return null; // não há pró-rata no dia 1
+    const daysInMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+    const remaining = daysInMonth - day + 1;
+    const prorated = (plan.price / daysInMonth) * remaining;
+    const fee = Number(form.installation_fee) || 0;
+    return { prorated, fee, total: prorated + fee, remaining, daysInMonth };
+  })();
+
+  return (
+    <div className="space-y-4">
+      <FormField label="Rastreador (em estoque)" required>
+        <select className={fieldClass} value={form.tracker_id} onChange={set('tracker_id')} required>
+          <option value="">Selecione o rastreador</option>
+          {stockTrackers.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.imei} — {[t.brand, t.model].filter(Boolean).join(' ')}
+            </option>
+          ))}
+        </select>
+      </FormField>
+
+      <FormField label="Data de início do contrato" required>
+        <input className={fieldClass} type="date" value={form.start_date} onChange={set('start_date')} />
+      </FormField>
+
+      <FormField label="Plano de cobrança">
+        <select className={fieldClass} value={form.plan_id} onChange={set('plan_id')}>
+          <option value="">Sem plano agora</option>
+          {plans.map((p) => <option key={p.id} value={p.id}>{p.name} — R$ {Number(p.price).toFixed(2)}/mês</option>)}
+        </select>
+      </FormField>
+
+      {form.plan_id && (
+        <>
+          {/* Modalidade */}
+          <div>
+            <p className="mb-2 text-xs font-semibold text-slate-600 dark:text-slate-400">Modalidade de faturamento</p>
+            <div className="grid grid-cols-2 gap-2">
+              {(['boleto', 'carne'] as const).map((mod) => (
+                <button
+                  key={mod}
+                  type="button"
+                  onClick={() => onChange({ ...form, billing_modality: mod })}
+                  className={[
+                    'rounded-xl border px-4 py-3 text-left text-sm font-medium transition-colors',
+                    form.billing_modality === mod
+                      ? 'border-brand-500 bg-brand-50 text-brand-700 dark:border-brand-400 dark:bg-brand-950/30 dark:text-brand-300'
+                      : 'border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800',
+                  ].join(' ')}
+                >
+                  <span className="block font-semibold">{mod === 'boleto' ? 'Boleto' : 'Carnê'}</span>
+                  <span className="mt-0.5 block text-xs text-slate-400 dark:text-slate-500">
+                    {mod === 'boleto' ? 'Recorrência contínua' : 'Prazo fixo de parcelas'}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Parcelas (somente carnê) */}
+          {isCarne && (
+            <FormField label="Quantidade de parcelas" hint="Número de mensalidades do carnê">
+              <input
+                className={fieldClass}
+                type="number"
+                min={1}
+                max={999}
+                placeholder="Ex.: 12"
+                value={form.billing_cycles}
+                onChange={set('billing_cycles')}
+              />
+            </FormField>
+          )}
+
+          {/* Taxa de instalação */}
+          <FormField label="Taxa de instalação (R$)" hint="Cobrada uma única vez na primeira fatura, somada ao valor pró-rata">
+            <input
+              className={fieldClass}
+              type="number"
+              min={0}
+              step={0.01}
+              placeholder="0,00"
+              value={form.installation_fee}
+              onChange={set('installation_fee')}
+            />
+          </FormField>
+
+          {/* Pré-visualização da primeira fatura */}
+          {preview && (
+            <div className="rounded-xl border border-brand-200 bg-brand-50/60 p-4 text-sm dark:border-brand-800/60 dark:bg-brand-950/30">
+              <p className="mb-2 text-xs font-bold uppercase tracking-widest text-brand-600 dark:text-brand-400">
+                Pré-visualização — 1ª fatura pró-rata
+              </p>
+              <div className="space-y-1 text-slate-700 dark:text-slate-300">
+                <div className="flex justify-between">
+                  <span>Pró-rata ({preview.remaining} de {preview.daysInMonth} dias)</span>
+                  <span className="font-mono">R$ {preview.prorated.toFixed(2)}</span>
+                </div>
+                {preview.fee > 0 && (
+                  <div className="flex justify-between">
+                    <span>Taxa de instalação</span>
+                    <span className="font-mono">R$ {preview.fee.toFixed(2)}</span>
+                  </div>
+                )}
+                <div className="mt-2 flex justify-between border-t border-brand-200 pt-2 font-bold dark:border-brand-800/60">
+                  <span>Total 1ª fatura</span>
+                  <span className="font-mono text-brand-700 dark:text-brand-300">R$ {preview.total.toFixed(2)}</span>
+                </div>
+              </div>
+              <p className="mt-2 text-xs text-slate-400 dark:text-slate-500">
+                A partir do {isCarne ? '2º mês' : 'mês seguinte'}: R$ {plans.find((p) => String(p.id) === form.plan_id)?.price.toFixed(2)}/mês
+              </p>
+            </div>
+          )}
+        </>
+      )}
+
+      <div className="flex justify-end gap-2 border-t border-slate-100 pt-4 dark:border-slate-800">
+        <Button variant="secondary" onClick={onCancel}>Cancelar</Button>
+        <Button disabled={!form.tracker_id || linking} onClick={onSubmit}>
+          {linking ? 'Vinculando…' : 'Confirmar vínculo'}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export default function VeiculosPage() {
   const { token, user, loading: guardLoading, error: guardError } = useAuthGuard(['admin', 'operacional', 'financeiro'], '/login/admin');
   const canEdit = !!user && user.role !== 'financeiro';
@@ -187,7 +347,14 @@ export default function VeiculosPage() {
   const [stockTrackers, setStockTrackers] = useState<TrackerOption[]>([]);
   const [plans, setPlans] = useState<PlanOption[]>([]);
   const [linkTrackerOpen, setLinkTrackerOpen] = useState(false);
-  const [linkForm, setLinkForm] = useState({ tracker_id: '', plan_id: '', billing_cycles: '12' });
+  const [linkForm, setLinkForm] = useState({
+    tracker_id: '',
+    plan_id: '',
+    billing_modality: 'boleto',  // 'boleto' ou 'carne'
+    billing_cycles: '12',        // usado só para carnê
+    installation_fee: '',        // taxa de instalação (digitada pelo operador)
+    start_date: new Date().toISOString().slice(0, 10),
+  });
   const [linking, setLinking] = useState(false);
   const [error, setError] = useState('');
   const [feedback, setFeedback] = useState('');
@@ -248,18 +415,27 @@ export default function VeiculosPage() {
     if (!token || !selectedVehicle || !linkForm.tracker_id) return;
     setLinking(true);
     try {
+      const isCarne = linkForm.billing_modality === 'carne';
       await apiFetch(`/trackers/${linkForm.tracker_id}/link-vehicle`, {
         method: 'POST',
         body: JSON.stringify({
           vehicle_id: selectedVehicle.id,
           plan_id: linkForm.plan_id ? Number(linkForm.plan_id) : null,
-          billing_cycles: Number(linkForm.billing_cycles) || 12,
+          billing_modality: linkForm.billing_modality,
+          billing_cycles: isCarne ? Number(linkForm.billing_cycles) || 12 : 60,
+          installation_fee: Number(linkForm.installation_fee) || 0,
+          generate_prorated: true,
+          start_date: linkForm.start_date,
           auto_generate_billings: true,
         }),
       }, token);
       setFeedback('Rastreador vinculado com sucesso.');
       setLinkTrackerOpen(false);
-      setLinkForm({ tracker_id: '', plan_id: '', billing_cycles: '12' });
+      setLinkForm({
+        tracker_id: '', plan_id: '', billing_modality: 'boleto',
+        billing_cycles: '12', installation_fee: '',
+        start_date: new Date().toISOString().slice(0, 10),
+      });
       await loadVehicles(token);
       const updated = await apiFetch<TrackerOption[]>(`/trackers?vehicle_id=${selectedVehicle.id}`, {}, token).catch(() => []);
       setLinkedTrackers(updated);
@@ -735,30 +911,17 @@ export default function VeiculosPage() {
       </Modal>
 
       {/* Modal vincular rastreador */}
-      <Modal open={linkTrackerOpen} onClose={() => setLinkTrackerOpen(false)} title="Vincular rastreador" subtitle="Veículo" size="md">
-        <div className="space-y-4">
-          <FormField label="Rastreador (em estoque)" required>
-            <select className={fieldClass} value={linkForm.tracker_id} onChange={(e) => setLinkForm((p) => ({ ...p, tracker_id: e.target.value }))} required>
-              <option value="">Selecione o rastreador</option>
-              {stockTrackers.map((t) => <option key={t.id} value={t.id}>{t.imei} — {[t.brand, t.model].filter(Boolean).join(' ')}</option>)}
-            </select>
-          </FormField>
-          <FormField label="Plano (opcional)">
-            <select className={fieldClass} value={linkForm.plan_id} onChange={(e) => setLinkForm((p) => ({ ...p, plan_id: e.target.value }))}>
-              <option value="">Sem plano agora</option>
-              {plans.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-          </FormField>
-          {linkForm.plan_id && (
-            <FormField label="Ciclos de cobrança">
-              <input className={fieldClass} type="number" min={1} max={60} value={linkForm.billing_cycles} onChange={(e) => setLinkForm((p) => ({ ...p, billing_cycles: e.target.value }))} />
-            </FormField>
-          )}
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="secondary" onClick={() => setLinkTrackerOpen(false)}>Cancelar</Button>
-            <Button disabled={!linkForm.tracker_id || linking} onClick={linkTracker}>{linking ? 'Vinculando…' : 'Vincular'}</Button>
-          </div>
-        </div>
+      <Modal open={linkTrackerOpen} onClose={() => setLinkTrackerOpen(false)} title="Vincular rastreador" subtitle="Veículo" size="lg">
+        <LinkTrackerForm
+          stockTrackers={stockTrackers}
+          plans={plans}
+          form={linkForm}
+          onChange={setLinkForm}
+          onSubmit={linkTracker}
+          onCancel={() => setLinkTrackerOpen(false)}
+          linking={linking}
+          fieldClass={fieldClass}
+        />
       </Modal>
 
       <Modal open={modalOpen} onClose={() => { setModalOpen(false); resetForm(); setModalError(''); }} title={isEditing ? 'Editar veículo' : 'Novo veículo'} description="Mantenha o cadastro técnico e documental do veículo em um fluxo de preenchimento mais limpo." size="2xl">
