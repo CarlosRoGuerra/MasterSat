@@ -15,6 +15,7 @@ import { EmptyState, TableSkeleton } from '@/components/ui/empty-state';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { FormField, FormGrid } from '@/components/ui/form-field';
+import { Eye, DollarSign, ClipboardList, Pencil } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import { fetchAddressByCep } from '@/lib/cep';
 import { formatZipCode, onlyDigits } from '@/lib/format';
@@ -33,9 +34,18 @@ type ClientOption = {
   state?: string | null;
 };
 
-type ServiceProductOption = { id: number; name: string; auto_add_on_uninstall?: boolean };
+type ServiceProductOption = { id: number; name: string; default_price: number; auto_add_on_uninstall?: boolean };
 type ContractOption = { id: number; client_id: number; plan_name?: string | null; status: string };
-type TrackerOption = { id: number; imei: string; brand?: string | null; model?: string | null; status: string };
+type TrackerOption = {
+  id: number;
+  imei: string;
+  brand?: string | null;
+  model?: string | null;
+  status: string;
+  install_date?: string | null;
+  active_plan_name?: string | null;
+  active_plan_id?: number | null;
+};
 type PlanOption = { id: number; name: string; price: number };
 type VehicleStatus = 'pendente_validacao' | 'em_analise' | 'aprovado' | 'reprovado' | 'correcao_solicitada' | 'ativo' | 'sem_rastreador' | 'retirado' | 'bloqueado';
 
@@ -156,13 +166,16 @@ function formatChassis(value: string) { return value.toUpperCase().replace(/[^A-
 
 
 // ---------------------------------------------------------------------------
-// Componente do formulário de vínculo (isolado para usar useMemo limpo)
+// "Editar vínculo completo com veículo" — componente isolado para useMemo limpo
 // ---------------------------------------------------------------------------
 function LinkTrackerForm({
   stockTrackers,
   plans,
+  serviceProducts,
   form,
   onChange,
+  selectedProductIds,
+  onProductToggle,
   onSubmit,
   onCancel,
   linking,
@@ -170,8 +183,11 @@ function LinkTrackerForm({
 }: {
   stockTrackers: TrackerOption[];
   plans: PlanOption[];
-  form: { tracker_id: string; plan_id: string; billing_modality: string; billing_cycles: string; installation_fee: string; start_date: string };
+  serviceProducts: ServiceProductOption[];
+  form: { tracker_id: string; plan_id: string; billing_modality: string; billing_cycles: string; billing_day: string; start_date: string };
   onChange: (f: typeof form) => void;
+  selectedProductIds: number[];
+  onProductToggle: (id: number) => void;
   onSubmit: () => void;
   onCancel: () => void;
   linking: boolean;
@@ -182,127 +198,203 @@ function LinkTrackerForm({
 
   const isCarne = form.billing_modality === 'carne';
 
-  // Pré-visualização do pró-rata
+  const totalProductsFee = selectedProductIds.reduce((sum, pid) => {
+    const p = serviceProducts.find((sp) => sp.id === pid);
+    return sum + (p?.default_price ?? 0);
+  }, 0);
+
+  // Pré-visualização da 1ª fatura (pró-rata)
   const preview = (() => {
     const plan = plans.find((p) => String(p.id) === form.plan_id);
     if (!plan || !form.start_date) return null;
     const d = new Date(form.start_date + 'T12:00:00');
     const day = d.getDate();
-    if (day === 1) return null; // não há pró-rata no dia 1
+    if (day === 1) return null;
     const daysInMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
     const remaining = daysInMonth - day + 1;
     const prorated = (plan.price / daysInMonth) * remaining;
-    const fee = Number(form.installation_fee) || 0;
-    return { prorated, fee, total: prorated + fee, remaining, daysInMonth };
+    return { prorated, totalProductsFee, total: prorated + totalProductsFee, remaining, daysInMonth };
   })();
 
   return (
-    <div className="space-y-4">
-      <FormField label="Rastreador (em estoque)" required>
-        <select className={fieldClass} value={form.tracker_id} onChange={set('tracker_id')} required>
-          <option value="">Selecione o rastreador</option>
-          {stockTrackers.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.imei} — {[t.brand, t.model].filter(Boolean).join(' ')}
+    <div className="space-y-6">
+      {/* ── Equipamento ──────────────────────────────────────────────────── */}
+      <div>
+        <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">Equipamento</p>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <FormField label="Rastreador (em estoque)" required>
+            <select className={fieldClass} value={form.tracker_id} onChange={set('tracker_id')} required>
+              <option value="">Selecione o rastreador</option>
+              {stockTrackers.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.imei} — {[t.brand, t.model].filter(Boolean).join(' ')}
+                </option>
+              ))}
+            </select>
+          </FormField>
+          <FormField label="Data de instalação" required>
+            <input className={fieldClass} type="date" value={form.start_date} onChange={set('start_date')} />
+          </FormField>
+        </div>
+      </div>
+
+      {/* ── Grupo de faturamento ─────────────────────────────────────────── */}
+      <div>
+        <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">Grupo de faturamento</p>
+        <select className={fieldClass} value={form.plan_id} onChange={set('plan_id')}>
+          <option value="">Sem plano agora</option>
+          {plans.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name} — R$ {Number(p.price).toFixed(2)}/mês
             </option>
           ))}
         </select>
-      </FormField>
+      </div>
 
-      <FormField label="Data de início do contrato" required>
-        <input className={fieldClass} type="date" value={form.start_date} onChange={set('start_date')} />
-      </FormField>
-
-      <FormField label="Plano de cobrança">
-        <select className={fieldClass} value={form.plan_id} onChange={set('plan_id')}>
-          <option value="">Sem plano agora</option>
-          {plans.map((p) => <option key={p.id} value={p.id}>{p.name} — R$ {Number(p.price).toFixed(2)}/mês</option>)}
-        </select>
-      </FormField>
-
-      {form.plan_id && (
-        <>
-          {/* Modalidade */}
-          <div>
-            <p className="mb-2 text-xs font-semibold text-slate-600 dark:text-slate-400">Modalidade de faturamento</p>
-            <div className="grid grid-cols-2 gap-2">
-              {(['boleto', 'carne'] as const).map((mod) => (
-                <button
-                  key={mod}
-                  type="button"
-                  onClick={() => onChange({ ...form, billing_modality: mod })}
+      {/* ── Produtos / Serviços adicionais ────────────────────────────────── */}
+      {serviceProducts.length > 0 && (
+        <div>
+          <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">Produtos</p>
+          <p className="mb-3 text-xs text-slate-400 dark:text-slate-500">
+            Marque os serviços adicionais cobrados junto à primeira fatura.
+          </p>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {serviceProducts.map((prod) => {
+              const checked = selectedProductIds.includes(prod.id);
+              return (
+                <label
+                  key={prod.id}
                   className={[
-                    'rounded-xl border px-4 py-3 text-left text-sm font-medium transition-colors',
-                    form.billing_modality === mod
-                      ? 'border-brand-500 bg-brand-50 text-brand-700 dark:border-brand-400 dark:bg-brand-950/30 dark:text-brand-300'
-                      : 'border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800',
+                    'flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 text-sm transition-colors',
+                    checked
+                      ? 'border-brand-400 bg-brand-50 dark:border-brand-600 dark:bg-brand-950/30'
+                      : 'border-slate-200 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800/60',
                   ].join(' ')}
                 >
-                  <span className="block font-semibold">{mod === 'boleto' ? 'Boleto' : 'Carnê'}</span>
-                  <span className="mt-0.5 block text-xs text-slate-400 dark:text-slate-500">
-                    {mod === 'boleto' ? 'Recorrência contínua' : 'Prazo fixo de parcelas'}
-                  </span>
-                </button>
-              ))}
-            </div>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => onProductToggle(prod.id)}
+                    className="h-4 w-4 rounded accent-brand-700"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-medium text-slate-800 dark:text-slate-200">{prod.name}</p>
+                    <p className="text-xs text-slate-400">
+                      R$ {Number(prod.default_price).toFixed(2)}
+                    </p>
+                  </div>
+                </label>
+              );
+            })}
           </div>
+        </div>
+      )}
 
-          {/* Parcelas (somente carnê) */}
-          {isCarne && (
-            <FormField label="Quantidade de parcelas" hint="Número de mensalidades do carnê">
-              <input
-                className={fieldClass}
-                type="number"
-                min={1}
-                max={999}
-                placeholder="Ex.: 12"
-                value={form.billing_cycles}
-                onChange={set('billing_cycles')}
-              />
-            </FormField>
-          )}
-
-          {/* Taxa de instalação */}
-          <FormField label="Taxa de instalação (R$)" hint="Cobrada uma única vez na primeira fatura, somada ao valor pró-rata">
+      {/* ── Informações de fechamento ─────────────────────────────────────── */}
+      <div>
+        <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">Informações de fechamento</p>
+        <FormField label="Dia do vencimento" hint="Herdado do cadastro do cliente — pode ser ajustado para este contrato">
+          <div className="flex items-center gap-3">
             <input
               className={fieldClass}
               type="number"
-              min={0}
-              step={0.01}
-              placeholder="0,00"
-              value={form.installation_fee}
-              onChange={set('installation_fee')}
+              min={1}
+              max={28}
+              placeholder="Ex.: 20"
+              value={form.billing_day}
+              onChange={set('billing_day')}
+              style={{ maxWidth: 120 }}
             />
-          </FormField>
+            {form.billing_day && (
+              <span className="text-sm text-slate-500 dark:text-slate-400">
+                Todo dia {form.billing_day}
+              </span>
+            )}
+          </div>
+        </FormField>
+      </div>
 
-          {/* Pré-visualização da primeira fatura */}
-          {preview && (
-            <div className="rounded-xl border border-brand-200 bg-brand-50/60 p-4 text-sm dark:border-brand-800/60 dark:bg-brand-950/30">
-              <p className="mb-2 text-xs font-bold uppercase tracking-widest text-brand-600 dark:text-brand-400">
-                Pré-visualização — 1ª fatura pró-rata
-              </p>
-              <div className="space-y-1 text-slate-700 dark:text-slate-300">
-                <div className="flex justify-between">
-                  <span>Pró-rata ({preview.remaining} de {preview.daysInMonth} dias)</span>
-                  <span className="font-mono">R$ {preview.prorated.toFixed(2)}</span>
-                </div>
-                {preview.fee > 0 && (
-                  <div className="flex justify-between">
-                    <span>Taxa de instalação</span>
-                    <span className="font-mono">R$ {preview.fee.toFixed(2)}</span>
-                  </div>
-                )}
-                <div className="mt-2 flex justify-between border-t border-brand-200 pt-2 font-bold dark:border-brand-800/60">
-                  <span>Total 1ª fatura</span>
-                  <span className="font-mono text-brand-700 dark:text-brand-300">R$ {preview.total.toFixed(2)}</span>
-                </div>
+      {/* ── Informações financeiras ───────────────────────────────────────── */}
+      {form.plan_id && (
+        <div>
+          <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">Informações financeiras</p>
+          <div className="space-y-4">
+            {/* Formato do boleto */}
+            <FormField label="Formato de geração do boleto">
+              <div className="grid grid-cols-2 gap-2">
+                {(['boleto', 'carne'] as const).map((mod) => (
+                  <button
+                    key={mod}
+                    type="button"
+                    onClick={() => onChange({ ...form, billing_modality: mod })}
+                    className={[
+                      'rounded-xl border px-4 py-3 text-left text-sm font-medium transition-colors',
+                      form.billing_modality === mod
+                        ? 'border-brand-500 bg-brand-50 text-brand-700 dark:border-brand-400 dark:bg-brand-950/30 dark:text-brand-300'
+                        : 'border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800',
+                    ].join(' ')}
+                  >
+                    <span className="block font-semibold">{mod === 'boleto' ? 'Boleto' : 'Carnê'}</span>
+                    <span className="mt-0.5 block text-xs text-slate-400 dark:text-slate-500">
+                      {mod === 'boleto' ? 'Recorrência contínua' : 'Prazo fixo de parcelas'}
+                    </span>
+                  </button>
+                ))}
               </div>
-              <p className="mt-2 text-xs text-slate-400 dark:text-slate-500">
-                A partir do {isCarne ? '2º mês' : 'mês seguinte'}: R$ {plans.find((p) => String(p.id) === form.plan_id)?.price.toFixed(2)}/mês
-              </p>
-            </div>
-          )}
-        </>
+            </FormField>
+
+            {/* Quantidade de parcelas (somente Carnê) */}
+            {isCarne && (
+              <FormField label="Quantidade de parcelas" hint="Número total de mensalidades do carnê">
+                <input
+                  className={fieldClass}
+                  type="number"
+                  min={1}
+                  max={999}
+                  placeholder="Ex.: 12"
+                  value={form.billing_cycles}
+                  onChange={set('billing_cycles')}
+                  style={{ maxWidth: 160 }}
+                />
+              </FormField>
+            )}
+
+            {/* Pré-visualização da 1ª fatura */}
+            {preview && (
+              <div className="rounded-xl border border-brand-200 bg-brand-50/60 p-4 text-sm dark:border-brand-800/60 dark:bg-brand-950/30">
+                <p className="mb-2 text-xs font-bold uppercase tracking-widest text-brand-600 dark:text-brand-400">
+                  1ª fatura — pró-rata ({preview.remaining} de {preview.daysInMonth} dias)
+                </p>
+                <div className="space-y-1 text-slate-700 dark:text-slate-300">
+                  <div className="flex justify-between">
+                    <span>Mensalidade proporcional</span>
+                    <span className="font-mono">R$ {preview.prorated.toFixed(2)}</span>
+                  </div>
+                  {selectedProductIds.map((pid) => {
+                    const prod = serviceProducts.find((sp) => sp.id === pid);
+                    if (!prod) return null;
+                    return (
+                      <div key={pid} className="flex justify-between text-slate-500">
+                        <span>{prod.name}</span>
+                        <span className="font-mono">R$ {Number(prod.default_price).toFixed(2)}</span>
+                      </div>
+                    );
+                  })}
+                  <div className="mt-2 flex justify-between border-t border-brand-200 pt-2 font-bold dark:border-brand-800/60">
+                    <span>Total 1ª fatura</span>
+                    <span className="font-mono text-brand-700 dark:text-brand-300">R$ {preview.total.toFixed(2)}</span>
+                  </div>
+                </div>
+                <p className="mt-2 text-xs text-slate-400">
+                  {isCarne
+                    ? `A partir do 2º mês (${form.billing_cycles} parcelas): `
+                    : 'A partir do mês seguinte: '}
+                  R$ {plans.find((p) => String(p.id) === form.plan_id)?.price.toFixed(2)}/mês
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
       )}
 
       <div className="flex justify-end gap-2 border-t border-slate-100 pt-4 dark:border-slate-800">
@@ -341,18 +433,29 @@ export default function VeiculosPage() {
   const [uninstallDate, setUninstallDate] = useState(new Date().toISOString().slice(0, 10));
   const [destinationContractId, setDestinationContractId] = useState('');
   const [uninstallServiceProductId, setUninstallServiceProductId] = useState('');
+  // Detalhes (abas)
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [detailsTab, setDetailsTab] = useState<'dados' | 'documentos' | 'rastreador'>('dados');
+  // Modal "Ver rastreadores do veículo" (botão 🟢)
+  const [trackerViewOpen, setTrackerViewOpen] = useState(false);
+  // Modal boletos do veículo (botão 🔵)
+  const [billingViewOpen, setBillingViewOpen] = useState(false);
+  const [vehicleBillings, setVehicleBillings] = useState<{ id: number; title?: string | null; amount: number; due_date: string; status: string }[]>([]);
+  // Modal ordens de serviço do veículo (botão 🟣)
+  const [ordersViewOpen, setOrdersViewOpen] = useState(false);
+  const [vehicleOrders, setVehicleOrders] = useState<{ id: number; number: string; type: string; status: string; scheduled_at?: string | null }[]>([]);
+  // Rastreadores e vínculo
   const [linkedTrackers, setLinkedTrackers] = useState<TrackerOption[]>([]);
   const [stockTrackers, setStockTrackers] = useState<TrackerOption[]>([]);
   const [plans, setPlans] = useState<PlanOption[]>([]);
   const [linkTrackerOpen, setLinkTrackerOpen] = useState(false);
+  const [selectedProductIds, setSelectedProductIds] = useState<number[]>([]);
   const [linkForm, setLinkForm] = useState({
     tracker_id: '',
     plan_id: '',
-    billing_modality: 'boleto',  // 'boleto' ou 'carne'
-    billing_cycles: '12',        // usado só para carnê
-    installation_fee: '',        // taxa de instalação (digitada pelo operador)
+    billing_modality: 'boleto',
+    billing_cycles: '12',
+    billing_day: '',             // herdado do cliente, editável
     start_date: new Date().toISOString().slice(0, 10),
   });
   const [linking, setLinking] = useState(false);
@@ -403,6 +506,52 @@ export default function VeiculosPage() {
     }
   }
 
+  async function openTrackerView(vehicle: Vehicle) {
+    setSelectedVehicle(vehicle);
+    setTrackerViewOpen(true);
+    if (token) {
+      const [trackers, plansData] = await Promise.all([
+        apiFetch<TrackerOption[]>(`/trackers?vehicle_id=${vehicle.id}&limit=20`, {}, token).catch(() => []),
+        apiFetch<PlanOption[]>('/plans', {}, token).catch(() => []),
+      ]);
+      setLinkedTrackers(trackers);
+      setPlans(plansData);
+      // Pré-carregar cliente para billing_day
+      const clientObj = clients.find((c) => c.id === vehicle.client_id);
+      if (clientObj && (clientObj as any).billing_day) {
+        setLinkForm((p) => ({ ...p, billing_day: String((clientObj as any).billing_day) }));
+      }
+    }
+  }
+
+  async function openBillingView(vehicle: Vehicle) {
+    setSelectedVehicle(vehicle);
+    setBillingViewOpen(true);
+    if (token) {
+      const bills = await apiFetch<typeof vehicleBillings>(
+        `/billings?vehicle_id=${vehicle.id}&limit=30`, {}, token
+      ).catch(() => []);
+      setVehicleBillings(bills);
+    }
+  }
+
+  async function openOrdersView(vehicle: Vehicle) {
+    setSelectedVehicle(vehicle);
+    setOrdersViewOpen(true);
+    if (token) {
+      const orders = await apiFetch<typeof vehicleOrders>(
+        `/service-orders?vehicle_id=${vehicle.id}&limit=20`, {}, token
+      ).catch(() => []);
+      setVehicleOrders(orders);
+    }
+  }
+
+  function openLinkFromTrackerView() {
+    setTrackerViewOpen(false);
+    loadStockTrackers();
+    setLinkTrackerOpen(true);
+  }
+
   async function loadStockTrackers() {
     if (!token) return;
     try {
@@ -416,6 +565,11 @@ export default function VeiculosPage() {
     setLinking(true);
     try {
       const isCarne = linkForm.billing_modality === 'carne';
+      // Soma os preços dos produtos selecionados como taxa de instalação
+      const installationFee = selectedProductIds.reduce((sum, pid) => {
+        const prod = serviceProducts.find((p) => p.id === pid);
+        return sum + (prod?.default_price ?? 0);
+      }, 0);
       await apiFetch(`/trackers/${linkForm.tracker_id}/link-vehicle`, {
         method: 'POST',
         body: JSON.stringify({
@@ -423,7 +577,8 @@ export default function VeiculosPage() {
           plan_id: linkForm.plan_id ? Number(linkForm.plan_id) : null,
           billing_modality: linkForm.billing_modality,
           billing_cycles: isCarne ? Number(linkForm.billing_cycles) || 12 : 60,
-          installation_fee: Number(linkForm.installation_fee) || 0,
+          installation_fee: installationFee,
+          billing_day: linkForm.billing_day ? Number(linkForm.billing_day) : undefined,
           generate_prorated: true,
           start_date: linkForm.start_date,
           auto_generate_billings: true,
@@ -431,9 +586,10 @@ export default function VeiculosPage() {
       }, token);
       setFeedback('Rastreador vinculado com sucesso.');
       setLinkTrackerOpen(false);
+      setSelectedProductIds([]);
       setLinkForm({
         tracker_id: '', plan_id: '', billing_modality: 'boleto',
-        billing_cycles: '12', installation_fee: '',
+        billing_cycles: '12', billing_day: '',
         start_date: new Date().toISOString().slice(0, 10),
       });
       await loadVehicles(token);
@@ -766,13 +922,40 @@ export default function VeiculosPage() {
                         <Td>{client?.name ?? '—'}</Td>
                         <Td><Badge variant={statusVariant(vehicle.status)}>{statusLabel(vehicle.status)}</Badge></Td>
                         <Td>
-                          <div className="flex justify-end gap-1.5">
-                            <Button variant="secondary" onClick={() => openDetails(vehicle)} className="px-3 py-1.5 text-xs">Detalhes</Button>
+                          <div className="flex justify-end gap-1">
+                            {/* 🟢 Ver rastreadores */}
+                            <button
+                              title="Ver rastreadores vinculados"
+                              onClick={() => openTrackerView(vehicle)}
+                              className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:text-emerald-400 dark:hover:bg-emerald-950/60"
+                            >
+                              <Eye className="h-4 w-4" />
+                            </button>
+                            {/* 🔵 Boletos */}
+                            <button
+                              title="Boletos do veículo"
+                              onClick={() => openBillingView(vehicle)}
+                              className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-50 text-blue-600 hover:bg-blue-100 dark:bg-blue-950/40 dark:text-blue-400 dark:hover:bg-blue-950/60"
+                            >
+                              <DollarSign className="h-4 w-4" />
+                            </button>
+                            {/* 🟣 Ordens de serviço */}
+                            <button
+                              title="Ordens de serviço do veículo"
+                              onClick={() => openOrdersView(vehicle)}
+                              className="flex h-8 w-8 items-center justify-center rounded-lg bg-purple-50 text-purple-600 hover:bg-purple-100 dark:bg-purple-950/40 dark:text-purple-400 dark:hover:bg-purple-950/60"
+                            >
+                              <ClipboardList className="h-4 w-4" />
+                            </button>
+                            {/* Editar cadastro */}
                             {canEdit && (
-                              <>
-                                <Button variant="secondary" onClick={() => openEditModal(vehicle)} className="px-3 py-1.5 text-xs">Editar</Button>
-                                <Button variant="danger" onClick={() => deleteVehicle(vehicle.id)} className="px-3 py-1.5 text-xs">Excluir</Button>
-                              </>
+                              <button
+                                title="Editar veículo"
+                                onClick={() => openEditModal(vehicle)}
+                                className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400 dark:hover:bg-slate-800"
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </button>
                             )}
                           </div>
                         </Td>
@@ -910,18 +1093,175 @@ export default function VeiculosPage() {
         )}
       </Modal>
 
-      {/* Modal vincular rastreador */}
-      <Modal open={linkTrackerOpen} onClose={() => setLinkTrackerOpen(false)} title="Vincular rastreador" subtitle="Veículo" size="lg">
+      {/* Modal: Editar vínculo completo com veículo */}
+      <Modal
+        open={linkTrackerOpen}
+        onClose={() => { setLinkTrackerOpen(false); setSelectedProductIds([]); }}
+        title="Editar vínculo completo com veículo"
+        subtitle={selectedVehicle?.plate ?? 'Vínculo'}
+        size="xl"
+      >
         <LinkTrackerForm
           stockTrackers={stockTrackers}
           plans={plans}
+          serviceProducts={serviceProducts}
           form={linkForm}
           onChange={setLinkForm}
+          selectedProductIds={selectedProductIds}
+          onProductToggle={(id) => setSelectedProductIds((prev) =>
+            prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+          )}
           onSubmit={linkTracker}
-          onCancel={() => setLinkTrackerOpen(false)}
+          onCancel={() => { setLinkTrackerOpen(false); setSelectedProductIds([]); }}
           linking={linking}
           fieldClass={fieldClass}
         />
+      </Modal>
+
+      {/* ── Modal: Ver rastreadores do veículo (🟢) ─────────────────────── */}
+      <Modal
+        open={trackerViewOpen}
+        onClose={() => { setTrackerViewOpen(false); setSelectedVehicle(null); setLinkedTrackers([]); }}
+        title={`Rastreadores — ${selectedVehicle?.plate ?? ''}`}
+        subtitle="Visualizar rastreadores do veículo"
+        size="xl"
+      >
+        {selectedVehicle && (
+          <div className="space-y-4">
+            {linkedTrackers.length === 0 ? (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-700 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-400">
+                Nenhum rastreador vinculado a este veículo.
+              </div>
+            ) : (
+              <Table>
+                <TableHead>
+                  <Th>Equipamento / IMEI</Th>
+                  <Th>Grupo de faturamento</Th>
+                  <Th>Tipo</Th>
+                  <Th>Data de instalação</Th>
+                  <Th className="w-24" />
+                </TableHead>
+                <TableBody>
+                  {linkedTrackers.map((t) => (
+                    <Tr key={t.id}>
+                      <Td>
+                        <p className="font-mono font-semibold text-slate-900 dark:text-white">{t.imei}</p>
+                      </Td>
+                      <Td>
+                        {t.active_plan_name ? (
+                          <span className="font-medium text-slate-700 dark:text-slate-300">{t.active_plan_name}</span>
+                        ) : (
+                          <span className="text-slate-400">Sem plano</span>
+                        )}
+                      </Td>
+                      <Td className="text-sm">{[t.brand, t.model].filter(Boolean).join(' ') || '—'}</Td>
+                      <Td>
+                        {t.install_date ? (
+                          <span className="font-medium text-slate-700 dark:text-slate-300">
+                            {new Date(t.install_date + 'T12:00:00').toLocaleDateString('pt-BR')}
+                          </span>
+                        ) : '—'}
+                      </Td>
+                      <Td>
+                        {canEdit && (
+                          <button
+                            onClick={() => {
+                              setLinkForm((p) => ({
+                                ...p,
+                                tracker_id: String(t.id),
+                                plan_id: t.active_plan_id ? String(t.active_plan_id) : '',
+                              }));
+                              setTrackerViewOpen(false);
+                              loadStockTrackers();
+                              setLinkTrackerOpen(true);
+                            }}
+                            className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
+                            title="Editar vínculo"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </Td>
+                    </Tr>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+            {canEdit && (
+              <div className="flex justify-end border-t border-slate-100 pt-4 dark:border-slate-800">
+                <Button onClick={openLinkFromTrackerView} className="gap-2">
+                  + Vincular rastreador
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
+
+      {/* ── Modal: Boletos do veículo (🔵) ──────────────────────────────── */}
+      <Modal
+        open={billingViewOpen}
+        onClose={() => { setBillingViewOpen(false); setSelectedVehicle(null); setVehicleBillings([]); }}
+        title={`Boletos — ${selectedVehicle?.plate ?? ''}`}
+        subtitle="Cobranças do veículo"
+        size="lg"
+      >
+        {vehicleBillings.length === 0 ? (
+          <p className="py-8 text-center text-sm text-slate-400">Nenhuma cobrança encontrada para este veículo.</p>
+        ) : (
+          <Table>
+            <TableHead>
+              <Th>Descrição</Th>
+              <Th>Vencimento</Th>
+              <Th>Valor</Th>
+              <Th>Status</Th>
+            </TableHead>
+            <TableBody>
+              {vehicleBillings.map((b) => (
+                <Tr key={b.id}>
+                  <Td className="text-sm">{b.title ?? '—'}</Td>
+                  <Td className="text-sm">{b.due_date}</Td>
+                  <Td className="font-mono font-semibold">
+                    {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(b.amount)}
+                  </Td>
+                  <Td><Badge variant={statusVariant(b.status)}>{statusLabel(b.status)}</Badge></Td>
+                </Tr>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </Modal>
+
+      {/* ── Modal: Ordens de serviço do veículo (🟣) ────────────────────── */}
+      <Modal
+        open={ordersViewOpen}
+        onClose={() => { setOrdersViewOpen(false); setSelectedVehicle(null); setVehicleOrders([]); }}
+        title={`Agendas — ${selectedVehicle?.plate ?? ''}`}
+        subtitle="Ordens de serviço do veículo"
+        size="lg"
+      >
+        {vehicleOrders.length === 0 ? (
+          <p className="py-8 text-center text-sm text-slate-400">Nenhuma ordem de serviço encontrada para este veículo.</p>
+        ) : (
+          <Table>
+            <TableHead>
+              <Th>Número</Th>
+              <Th>Tipo</Th>
+              <Th>Agendado</Th>
+              <Th>Status</Th>
+            </TableHead>
+            <TableBody>
+              {vehicleOrders.map((o) => (
+                <Tr key={o.id}>
+                  <Td className="font-mono font-semibold">{o.number}</Td>
+                  <Td className="text-sm capitalize">{o.type.replace(/_/g, ' ')}</Td>
+                  <Td className="text-sm">{o.scheduled_at ? new Date(o.scheduled_at).toLocaleDateString('pt-BR') : '—'}</Td>
+                  <Td><Badge variant={statusVariant(o.status)}>{statusLabel(o.status)}</Badge></Td>
+                </Tr>
+              ))}
+            </TableBody>
+          </Table>
+        )}
       </Modal>
 
       <Modal open={modalOpen} onClose={() => { setModalOpen(false); resetForm(); setModalError(''); }} title={isEditing ? 'Editar veículo' : 'Novo veículo'} description="Mantenha o cadastro técnico e documental do veículo em um fluxo de preenchimento mais limpo." size="2xl">
