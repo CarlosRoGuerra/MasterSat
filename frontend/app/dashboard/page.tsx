@@ -31,6 +31,12 @@ type DashboardData = {
   finance: { pending_count: number; overdue_count: number; received_month: number };
 };
 
+type DelinquencyStatus = {
+  clientes_inadimplentes: number;
+  cobrancas_vencidas: number;
+  valor_total_vencido: number;
+};
+
 const modules = [
   { href: '/clientes',       label: 'Clientes',             description: 'Cadastro, documentação e histórico.',      icon: Users },
   { href: '/veiculos',       label: 'Veículos',             description: 'Ativos, vínculos e desinstalação.',         icon: Car },
@@ -59,6 +65,7 @@ function ProgressBar({ value, tone = 'brand' }: { value: number; tone?: 'brand' 
 
 export default function DashboardPage() {
   const [data, setData] = useState<DashboardData | null>(null);
+  const [delinquency, setDelinquency] = useState<DelinquencyStatus | null>(null);
   const [error, setError] = useState('');
   const { token, loading, error: guardError } = useAuthGuard(['admin', 'operacional', 'financeiro'], '/login/admin');
 
@@ -67,6 +74,10 @@ export default function DashboardPage() {
     apiFetch<DashboardData>('/dashboard', {}, token)
       .then(setData)
       .catch((err) => setError(err instanceof Error ? err.message : 'Não foi possível carregar o dashboard.'));
+    // Carrega status de inadimplência em paralelo
+    apiFetch<DelinquencyStatus>('/delinquency/status', {}, token)
+      .then(setDelinquency)
+      .catch(() => null); // não bloqueia se falhar
   }, [token]);
 
   const totals = useMemo(() => {
@@ -223,6 +234,30 @@ export default function DashboardPage() {
         {/* Right column */}
         <div className="space-y-6">
           {/* Alertas */}
+          {/* Alerta de inadimplência — destaque prominente */}
+          {delinquency && delinquency.clientes_inadimplentes > 0 && (
+            <div className="rounded-xl border border-rose-300 bg-rose-50 p-4 dark:border-rose-800/60 dark:bg-rose-950/30">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-rose-600 dark:text-rose-400" />
+                  <div>
+                    <p className="text-sm font-bold text-rose-800 dark:text-rose-300">
+                      {delinquency.clientes_inadimplentes} cliente(s) inadimplente(s)
+                    </p>
+                    <p className="mt-0.5 text-xs text-rose-600 dark:text-rose-400">
+                      {delinquency.cobrancas_vencidas} cobrança(s) vencida(s) · Total em aberto:{' '}
+                      <strong>{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(delinquency.valor_total_vencido)}</strong>
+                    </p>
+                  </div>
+                </div>
+                <Link href="/relatorios" className="shrink-0 rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700">
+                  Ver relatório
+                  <ArrowRight className="ml-1 inline h-3 w-3" />
+                </Link>
+              </div>
+            </div>
+          )}
+
           {(data && (data.finance.overdue_count > 0 || data.service_orders.open > 0)) && (
             <Card>
               <SectionHeader eyebrow="Alertas" title="Itens que precisam de atenção" />

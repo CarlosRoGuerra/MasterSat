@@ -16,6 +16,7 @@ import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { FormField, FormGrid } from '@/components/ui/form-field';
 import { Eye, DollarSign, ClipboardList, Pencil } from 'lucide-react';
+import { ExportButton } from '@/components/ui/export-button';
 import { apiFetch } from '@/lib/api';
 import { fetchAddressByCep } from '@/lib/cep';
 import { formatZipCode, onlyDigits } from '@/lib/format';
@@ -902,7 +903,12 @@ export default function VeiculosPage() {
             eyebrow="Cadastro"
             title="Frota cadastrada"
             description="Gestão completa de veículos, rastreadores vinculados e documentação."
-            actions={canEdit ? <Button type="button" onClick={openCreateModal}>Adicionar veículo</Button> : null}
+            actions={
+              <div className="flex items-center gap-2">
+                {token && <ExportButton path="exports/vehicles" basename="veiculos" token={token} params={{ status: statusFilter, client_id: clientFilter }} />}
+                {canEdit && <Button type="button" onClick={openCreateModal}>Adicionar veículo</Button>}
+              </div>
+            }
           />
           <div className="mt-4 flex flex-wrap gap-3">
             <input className={fieldClass} style={{ maxWidth: 280 }} placeholder="Buscar por placa, chassi ou modelo" value={search} onChange={(e) => setSearch(e.target.value)} />

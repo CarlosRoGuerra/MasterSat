@@ -15,6 +15,7 @@ import {
   Satellite,
   PlugZap,
   ScrollText,
+  BarChart2,
 } from 'lucide-react';
 
 import { clearSession } from '@/lib/auth';
@@ -28,6 +29,7 @@ const items = [
   { href: '/ordens-servico', label: 'Ordens de serviço',   icon: ClipboardList },
   { href: '/financeiro',     label: 'Financeiro',          icon: Wallet },
   { href: '/usuarios',       label: 'Equipe',              icon: ShieldCheck },
+  { href: '/relatorios',     label: 'Relatórios',          icon: BarChart2 },
   { href: '/integracao',     label: 'Integração',          icon: PlugZap },
   { href: '/auditoria',      label: 'Auditoria',           icon: ScrollText },
 ];

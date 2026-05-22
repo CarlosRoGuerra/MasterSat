@@ -63,6 +63,59 @@ def refresh_overdue_statuses(db: Session) -> None:
         db.commit()
 
 
+def mark_delinquent_clients(db: Session) -> dict:
+    """
+    Atualiza status dos clientes com base em cobranças vencidas:
+    - ATIVO com cobranças vencidas → INADIMPLENTE
+    - INADIMPLENTE sem cobranças vencidas → ATIVO
+
+    Retorna um resumo das alterações realizadas.
+    """
+    from sqlalchemy import select as sa_select
+    from app.models.client import Client
+    from app.models.enums import ClientStatus
+
+    # Atualiza billings primeiro
+    refresh_overdue_statuses(db)
+
+    # Clientes com cobranças vencidas
+    overdue_client_ids: set[int] = set(
+        db.scalars(
+            sa_select(Billing.client_id)
+            .where(
+                Billing.is_deleted.is_(False),
+                Billing.status == BillingStatus.OVERDUE,
+            )
+            .distinct()
+        ).all()
+    )
+
+    marked_delinquent = 0
+    restored_active = 0
+
+    clients = db.query(Client).filter(
+        Client.is_deleted.is_(False),
+        Client.status.in_([ClientStatus.ACTIVE, ClientStatus.DELINQUENT]),
+    ).all()
+
+    for client in clients:
+        if client.id in overdue_client_ids and client.status == ClientStatus.ACTIVE:
+            client.status = ClientStatus.DELINQUENT
+            marked_delinquent += 1
+        elif client.id not in overdue_client_ids and client.status == ClientStatus.DELINQUENT:
+            client.status = ClientStatus.ACTIVE
+            restored_active += 1
+
+    if marked_delinquent or restored_active:
+        db.commit()
+
+    return {
+        'marcados_inadimplentes': marked_delinquent,
+        'restaurados_ativos': restored_active,
+        'total_inadimplentes_agora': len(overdue_client_ids),
+    }
+
+
 def generate_receipt_number(billing_id: int) -> str:
     now = datetime.now().strftime('%Y%m%d')
     return f'RCB-{now}-{billing_id:05d}'

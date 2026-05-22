@@ -15,6 +15,7 @@ import { FormField, FormGrid, FormSection, FormDivider } from '@/components/ui/f
 import { Badge, statusVariant, statusLabel } from '@/components/ui/badge';
 import { EmptyState, TableSkeleton } from '@/components/ui/empty-state';
 import { Table, TableHead, Th, TableBody, Tr, Td } from '@/components/ui/table';
+import { ExportButton } from '@/components/ui/export-button';
 import { apiFetch, API_URL } from '@/lib/api';
 import { fetchAddressByCep } from '@/lib/cep';
 import { formatCpfCnpj, formatPhone, formatZipCode, onlyDigits } from '@/lib/format';
@@ -637,7 +638,12 @@ export default function ClientesPage() {
             eyebrow="Cadastro"
             title="Base de clientes"
             description="Pesquise e gerencie a carteira completa de clientes."
-            actions={canEdit ? <Button type="button" onClick={openCreateModal} className="gap-2"><Plus className="h-4 w-4" />Adicionar cliente</Button> : null}
+            actions={
+              <div className="flex items-center gap-2">
+                {token && <ExportButton path="exports/clients" basename="clientes" token={token} params={{ status: statusFilter, type: typeFilter }} />}
+                {canEdit && <Button type="button" onClick={openCreateModal} className="gap-2"><Plus className="h-4 w-4" />Adicionar cliente</Button>}
+              </div>
+            }
           />
           <div className="mt-4 flex flex-wrap gap-3">
             <Input placeholder="Buscar por nome, CPF/CNPJ ou e-mail" value={search} onChange={(e) => setSearch(e.target.value)} className="max-w-xs" />

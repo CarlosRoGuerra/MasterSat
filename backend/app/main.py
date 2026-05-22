@@ -179,6 +179,16 @@ def on_startup():
     Base.metadata.create_all(bind=engine)
     ensure_schema_updates()
     ensure_bucket()
+    # Executa verificação inicial de inadimplência ao subir o servidor
+    try:
+        from app.services.financial import mark_delinquent_clients
+        startup_db = SessionLocal()
+        try:
+            mark_delinquent_clients(startup_db)
+        finally:
+            startup_db.close()
+    except Exception:  # noqa: BLE001
+        pass  # Não bloqueia o startup se falhar
     db = SessionLocal()
     try:
         admin = db.query(User).filter(User.email == 'admin@rastreamento.local').first()

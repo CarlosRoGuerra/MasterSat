@@ -3,6 +3,9 @@ from fastapi import APIRouter
 from app.api.v1.endpoints import (
     audit_logs,
     auth,
+    delinquency,
+    exports,
+    reports,
     billings,
     client_charge_items,
     clients,
@@ -38,3 +41,6 @@ api_router.include_router(integration_multiportal.router, prefix='/integrations/
 api_router.include_router(service_products.router, prefix='/service-products', tags=['service-products'])
 api_router.include_router(client_charge_items.router, prefix='/client-charge-items', tags=['client-charge-items'])
 api_router.include_router(audit_logs.router, prefix='/audit-logs', tags=['audit-logs'])
+api_router.include_router(exports.router, prefix='/exports', tags=['exports'])
+api_router.include_router(reports.router, prefix='/reports', tags=['reports'])
+api_router.include_router(delinquency.router, prefix='/delinquency', tags=['delinquency'])

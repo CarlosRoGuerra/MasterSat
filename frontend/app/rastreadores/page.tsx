@@ -12,6 +12,7 @@ import { Badge, statusVariant, statusLabel } from '@/components/ui/badge';
 import { Table, TableHead, Th, TableBody, Tr, Td } from '@/components/ui/table';
 import { EmptyState, TableSkeleton } from '@/components/ui/empty-state';
 import { usePagination, Pagination } from '@/components/ui/pagination';
+import { ExportButton } from '@/components/ui/export-button';
 import { apiFetch } from '@/lib/api';
 import { onlyDigits, formatCpfCnpj } from '@/lib/format';
 import { useAuthGuard } from '@/lib/use-auth-guard';
@@ -467,7 +468,12 @@ export default function RastreadoresPage() {
           <SectionHeader
             eyebrow="Cadastro"
             title="Controle de rastreadores"
-            actions={canEdit ? <Button onClick={openCreateModal}>Adicionar rastreador</Button> : null}
+            actions={
+              <div className="flex items-center gap-2">
+                {token && <ExportButton path="exports/trackers" basename="rastreadores" token={token} params={{ status: statusFilter, client_id: clientFilter }} />}
+                {canEdit && <Button onClick={openCreateModal}>Adicionar rastreador</Button>}
+              </div>
+            }
           />
           <div className="mt-4 flex flex-wrap gap-3">
             <input className={fieldClass} style={{ maxWidth: 280 }} placeholder="IMEI, modelo ou placa" value={search} onChange={(e) => setSearch(e.target.value)} />
