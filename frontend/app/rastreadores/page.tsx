@@ -45,7 +45,7 @@ type Tracker = {
   integration_last_description?: string | null;
 };
 
-type ClientOption = { id: number; name: string; cpf_cnpj: string };
+type ClientOption = { id: number; name: string; cpf_cnpj: string; billing_day?: number | null };
 type VehicleOption = { id: number; client_id: number; plate: string; model?: string | null };
 type ManufacturerOption = { code: string; description: string };
 type PlanOption = { id: number; name: string; price: number };
@@ -629,7 +629,13 @@ export default function RastreadoresPage() {
             </div>
             <div className="mt-4 grid gap-4 md:grid-cols-2">
               <select className={fieldClass} value={form.client_id} onChange={(e) => setForm((prev) => ({ ...prev, client_id: e.target.value, vehicle_id: '', link_plan_id: '' }))}><option value="">Sem cliente</option>{clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select>
-              <select className={fieldClass} value={form.vehicle_id} onChange={(e) => setForm((prev) => ({ ...prev, vehicle_id: e.target.value }))}><option value="">Sem veículo</option>{filteredVehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.plate} {vehicle.model ? `• ${vehicle.model}` : ''}</option>)}</select>
+              <select className={fieldClass} value={form.vehicle_id} onChange={(e) => {
+                const vid = e.target.value;
+                const veh = filteredVehicles.find((v) => String(v.id) === vid);
+                const cli = veh ? clients.find((c) => c.id === veh.client_id) : null;
+                const autoDay = cli?.billing_day ? String(cli.billing_day) : '';
+                setForm((prev) => ({ ...prev, vehicle_id: vid, link_billing_day: autoDay }));
+              }}><option value="">Sem veículo</option>{filteredVehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.plate} {vehicle.model ? `• ${vehicle.model}` : ''}</option>)}</select>
             </div>
           </div>
 
@@ -667,10 +673,28 @@ export default function RastreadoresPage() {
                       <option value="deposito">Depósito</option>
                       <option value="dinheiro">Dinheiro</option>
                     </select>
-                    <div className="grid grid-cols-2 gap-3">
-                      <input className={fieldClass} placeholder="Dia venc. (1-28)" type="number" min={1} max={28} value={form.link_billing_day} onChange={(e) => setForm((prev) => ({ ...prev, link_billing_day: e.target.value }))} />
-                      <input className={fieldClass} placeholder="Ciclos (meses)" type="number" min={1} max={60} value={form.link_billing_cycles} onChange={(e) => setForm((prev) => ({ ...prev, link_billing_cycles: e.target.value }))} />
+                    {/* Dia de vencimento: herdado do cliente */}
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-700 dark:bg-slate-900/50">
+                      <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">Dia do vencimento</p>
+                      {form.link_billing_day ? (
+                        <p className="mt-1 text-sm font-bold text-slate-900 dark:text-white">
+                          Todo dia <span className="text-brand-700 dark:text-brand-300">{form.link_billing_day}</span>
+                          <span className="ml-2 text-xs font-normal text-slate-400"> · herdado do cliente</span>
+                        </p>
+                      ) : (
+                        <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                          Selecione um veículo para herdar automaticamente ou
+                          <input
+                            type="number" min={1} max={28}
+                            placeholder=" informe o dia"
+                            value={form.link_billing_day}
+                            onChange={(e) => setForm((prev) => ({ ...prev, link_billing_day: e.target.value }))}
+                            className="ml-1 w-20 rounded border border-amber-300 bg-white px-2 py-0.5 text-xs text-slate-700 dark:border-amber-700 dark:bg-slate-800 dark:text-white"
+                          />
+                        </p>
+                      )}
                     </div>
+                    <input className={fieldClass} placeholder="Ciclos (meses)" type="number" min={1} max={60} value={form.link_billing_cycles} onChange={(e) => setForm((prev) => ({ ...prev, link_billing_cycles: e.target.value }))} />
                   </>
                 )}
               </div>

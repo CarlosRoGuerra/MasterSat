@@ -25,6 +25,7 @@ type ClientOption = {
   id: number;
   name: string;
   cpf_cnpj: string;
+  billing_day?: number | null;  // dia de vencimento preferido do cliente
   address_zip_code?: string | null;
   address_line?: string | null;
   address_number?: string | null;
@@ -293,25 +294,48 @@ function LinkTrackerForm({
       {/* ── Informações de fechamento ─────────────────────────────────────── */}
       <div>
         <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">Informações de fechamento</p>
-        <FormField label="Dia do vencimento" hint="Herdado do cadastro do cliente — pode ser ajustado para este contrato">
-          <div className="flex items-center gap-3">
-            <input
-              className={fieldClass}
-              type="number"
-              min={1}
-              max={28}
-              placeholder="Ex.: 20"
-              value={form.billing_day}
-              onChange={set('billing_day')}
-              style={{ maxWidth: 120 }}
-            />
-            {form.billing_day && (
-              <span className="text-sm text-slate-500 dark:text-slate-400">
-                Todo dia {form.billing_day}
-              </span>
-            )}
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-700 dark:bg-slate-900/50">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">Dia do vencimento</p>
+              {form.billing_day ? (
+                <p className="mt-1 text-base font-bold text-slate-900 dark:text-white">
+                  Todo dia <span className="text-brand-700 dark:text-brand-300">{form.billing_day}</span>
+                </p>
+              ) : (
+                <p className="mt-1 text-sm text-amber-600 dark:text-amber-400">
+                  Não configurado no cadastro do cliente
+                </p>
+              )}
+              <p className="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
+                Definido no cadastro geral do cliente · unifica todos os veículos
+              </p>
+            </div>
+            {/* Override pontual (só mostrado se necessário) */}
+            <div className="shrink-0">
+              {!form.billing_day ? (
+                <input
+                  className={fieldClass}
+                  type="number"
+                  min={1}
+                  max={28}
+                  placeholder="Informar dia"
+                  value={form.billing_day}
+                  onChange={set('billing_day')}
+                  style={{ width: 120 }}
+                />
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => onChange({ ...form, billing_day: '' })}
+                  className="text-xs text-slate-400 underline hover:text-slate-600 dark:hover:text-slate-200"
+                >
+                  Usar outro dia
+                </button>
+              )}
+            </div>
           </div>
-        </FormField>
+        </div>
       </div>
 
       {/* ── Informações financeiras ───────────────────────────────────────── */}
@@ -506,9 +530,16 @@ export default function VeiculosPage() {
     }
   }
 
+  function _billingDayFromClient(vehicleClientId: number): string {
+    const c = clients.find((cl) => cl.id === vehicleClientId);
+    return c?.billing_day ? String(c.billing_day) : '';
+  }
+
   async function openTrackerView(vehicle: Vehicle) {
     setSelectedVehicle(vehicle);
     setTrackerViewOpen(true);
+    // Pré-popula billing_day do cliente assim que abre o modal
+    setLinkForm((p) => ({ ...p, billing_day: _billingDayFromClient(vehicle.client_id) }));
     if (token) {
       const [trackers, plansData] = await Promise.all([
         apiFetch<TrackerOption[]>(`/trackers?vehicle_id=${vehicle.id}&limit=20`, {}, token).catch(() => []),
@@ -516,11 +547,6 @@ export default function VeiculosPage() {
       ]);
       setLinkedTrackers(trackers);
       setPlans(plansData);
-      // Pré-carregar cliente para billing_day
-      const clientObj = clients.find((c) => c.id === vehicle.client_id);
-      if (clientObj && (clientObj as any).billing_day) {
-        setLinkForm((p) => ({ ...p, billing_day: String((clientObj as any).billing_day) }));
-      }
     }
   }
 
@@ -549,6 +575,7 @@ export default function VeiculosPage() {
   function openLinkFromTrackerView() {
     setTrackerViewOpen(false);
     loadStockTrackers();
+    // billing_day já foi populado no openTrackerView — mantém o valor
     setLinkTrackerOpen(true);
   }
 
