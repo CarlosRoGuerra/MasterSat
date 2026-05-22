@@ -1,33 +1,45 @@
 """
-Middleware de auditoria.
+Middleware de auditoria — implementação ASGI pura.
 
-Registra toda requisição autenticada na tabela audit_logs.
+Por que não BaseHTTPMiddleware:
+  BaseHTTPMiddleware tem um bug documentado no Starlette onde response.background
+  definido dentro de dispatch pode ser silenciosamente ignorado dependendo da versão.
 
-Correções aplicadas em relação à versão anterior:
-- name e role agora são lidos diretamente do JWT (não há mais query extra ao banco)
-- A escrita no banco ocorre via BackgroundTask, fora do event loop asyncio
-  (evita deadlocks do connection pool com psycopg3 em contexto async)
-- Erros de escrita são logados em stderr em vez de engolidos silenciosamente
+Esta implementação:
+  - Usa o protocolo ASGI diretamente (nenhuma dependência de BaseHTTPMiddleware)
+  - Captura o status_code do próprio cabeçalho da resposta
+  - Registra o log APÓS a resposta ser enviada ao cliente
+  - Usa asyncio.create_task + asyncio.to_thread para não bloquear o event loop
+  - Nunca interrompe a resposta principal; erros de auditoria vão apenas ao log
 """
 from __future__ import annotations
 
+import asyncio
 import logging
-import re
-from typing import Any
 
 from jose import JWTError, jwt
-from starlette.background import BackgroundTask
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-_SKIP_PATHS = re.compile(
-    r'^(/api/v1/audit-logs|/|/docs|/openapi\.json|/redoc|/favicon\.ico)'
+# ---------------------------------------------------------------------------
+# Paths excluídos do registro
+# ---------------------------------------------------------------------------
+# Paths que nunca devem gerar registro de auditoria.
+# ATENÇÃO: evitar o padrão '/' solto — casaria com QUALQUER caminho.
+_SKIP_PREFIXES = (
+    '/api/v1/audit-logs',
+    '/docs',
+    '/redoc',
+    '/openapi',
 )
+_SKIP_EXACT = {'/', '/favicon.ico'}
 
+# ---------------------------------------------------------------------------
+# Mapeamento URL → entidade legível
+# ---------------------------------------------------------------------------
 _ENTITY_MAP: dict[str, str] = {
     'clients':        'cliente',
     'vehicles':       'veiculo',
@@ -75,18 +87,15 @@ def _build_description(method: str, entity_type: str | None, entity_id: int | No
     if entity_id:
         return f'{action} {entity_type} #{entity_id}'
     for kw in ('link-vehicle', 'generate-billings', 'sync-flow', 'sync-equipment',
-               'sync-chip', 'review', 'timeline-pdf', 'uninstall'):
+               'sync-chip', 'review', 'timeline-pdf', 'uninstall', 'generate-document'):
         if kw in path:
             return f'{action} {entity_type} ({kw})'
     return f'{action} {entity_type}'
 
 
-def _get_ip(request: Request) -> str | None:
-    forwarded = request.headers.get('x-forwarded-for')
-    if forwarded:
-        return forwarded.split(',')[0].strip()
-    return request.client.host if request.client else None
-
+# ---------------------------------------------------------------------------
+# Escrita síncrona no banco — executada em thread pool pelo asyncio
+# ---------------------------------------------------------------------------
 
 def _write_log(
     user_id: int | None,
@@ -96,52 +105,112 @@ def _write_log(
     path: str,
     entity_type: str | None,
     entity_id: int | None,
-    status_code: int | None,
+    status_code: int,
     ip_address: str | None,
     description: str,
 ) -> None:
-    """Executa em BackgroundTask (thread separada) — nunca bloqueia o event loop."""
+    """
+    Função síncrona executada em thread pool (via asyncio.to_thread).
+
+    Se name/role não estiverem no token (tokens antigos), busca no banco
+    antes de persistir o log — tudo em uma única sessão.
+    """
     from app.db.session import SessionLocal
     from app.models.audit_log import AuditLog
+    from app.models.user import User
 
+    db = SessionLocal()
     try:
-        db = SessionLocal()
-        try:
-            log = AuditLog(
-                user_id=user_id,
-                user_name=user_name,
-                user_role=user_role,
-                method=method,
-                path=path,
-                entity_type=entity_type,
-                entity_id=entity_id,
-                status_code=status_code,
-                ip_address=ip_address,
-                description=description,
-            )
-            db.add(log)
-            db.commit()
-        finally:
-            db.close()
+        # Enriquece com dados do usuário caso o token antigo não os contenha
+        if user_id and (user_name is None or user_role is None):
+            user_obj = db.get(User, user_id)
+            if user_obj:
+                _user_name = user_name or user_obj.name
+                _user_role = user_role or (
+                    user_obj.role.value if hasattr(user_obj.role, 'value') else str(user_obj.role)
+                )
+            else:
+                _user_name, _user_role = user_name, user_role
+        else:
+            _user_name, _user_role = user_name, user_role
+
+        db.add(AuditLog(
+            user_id=user_id,
+            user_name=_user_name,
+            user_role=_user_role,
+            method=method,
+            path=path,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            status_code=status_code,
+            ip_address=ip_address,
+            description=description,
+        ))
+        db.commit()
     except Exception:
-        logger.exception('Falha ao gravar registro de auditoria')
+        logger.exception('Erro ao gravar log de auditoria no banco')
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    finally:
+        db.close()
 
 
-class AuditMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        response = await call_next(request)
+# ---------------------------------------------------------------------------
+# Middleware ASGI puro
+# ---------------------------------------------------------------------------
 
-        path = request.url.path
-        if _SKIP_PATHS.match(path):
-            return response
+class AuditMiddleware:
+    """
+    Middleware ASGI puro que não usa BaseHTTPMiddleware.
 
-        auth_header = request.headers.get('Authorization', '')
+    Fluxo:
+    1. Extrai Authorization dos headers ANTES de chamar o app
+    2. Captura o status_code do message 'http.response.start'
+    3. Após a resposta ser enviada, agenda asyncio.create_task com o log
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope['type'] != 'http':
+            await self.app(scope, receive, send)
+            return
+
+        # Lê headers da requisição (bytes)
+        raw_headers: dict[bytes, bytes] = {
+            k.lower(): v for k, v in scope.get('headers', [])
+        }
+        auth_bytes = raw_headers.get(b'authorization', b'')
+        auth_header = auth_bytes.decode('latin-1', errors='replace')
+
+        path: str = scope.get('path', '')
+        method: str = scope.get('method', 'GET').upper()
+
+        # Captura status_code do response.start
+        status_code = 0
+
+        async def send_capture(message: dict) -> None:
+            nonlocal status_code
+            if message.get('type') == 'http.response.start':
+                status_code = message.get('status', 0)
+            await send(message)
+
+        # Executa a aplicação
+        await self.app(scope, receive, send_capture)
+
+        # ── A partir daqui a resposta já foi enviada ao cliente ──
+
+        if path in _SKIP_EXACT or any(path.startswith(p) for p in _SKIP_PREFIXES):
+            return
+
         if not auth_header.startswith('Bearer '):
-            return response
+            return
 
         token = auth_header[7:]
 
-        # Decodifica o JWT — name e role estão embutidos desde a versão corrigida
         try:
             payload = jwt.decode(
                 token,
@@ -149,42 +218,32 @@ class AuditMiddleware(BaseHTTPMiddleware):
                 algorithms=[settings.algorithm],
             )
             if payload.get('type') != 'access':
-                return response
+                return
         except JWTError:
-            return response
+            return
 
         raw_id = payload.get('sub')
         user_id: int | None = int(raw_id) if raw_id else None
         user_name: str | None = payload.get('name')
         user_role: str | None = payload.get('role')
 
-        method = request.method.upper()
         entity_type, entity_id = _extract_entity(path)
         description = _build_description(method, entity_type, entity_id, path)
-        ip_address = _get_ip(request)
 
-        # Agenda escrita em BackgroundTask — roda após a resposta, em thread separada
-        # BackgroundTask executa funções síncronas via run_in_threadpool (sem bloquear o event loop)
-        audit_task = BackgroundTask(
+        # IP do cliente
+        client = scope.get('client')
+        ip_address: str | None = client[0] if client else None
+        xff = raw_headers.get(b'x-forwarded-for', b'').decode('latin-1', errors='replace')
+        if xff:
+            ip_address = xff.split(',')[0].strip()
+
+        # A resposta já foi enviada ao cliente no await acima.
+        # Rodamos o log em thread pool (asyncio.to_thread) sem bloquear o event loop
+        # e sem depender de fire-and-forget (mais confiável em todos os servidores).
+        await asyncio.to_thread(
             _write_log,
             user_id, user_name, user_role,
             method, path,
             entity_type, entity_id,
-            response.status_code,
-            ip_address, description,
+            status_code, ip_address, description,
         )
-
-        existing = getattr(response, 'background', None)
-        if existing is None:
-            response.background = audit_task
-        else:
-            # Encadeia preservando a task original
-            _prev = existing
-
-            async def _chain() -> None:
-                await _prev()
-                await audit_task()
-
-            response.background = _chain  # type: ignore[assignment]
-
-        return response
