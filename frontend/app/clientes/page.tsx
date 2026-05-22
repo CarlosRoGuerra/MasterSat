@@ -1,7 +1,7 @@
 'use client';
 
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { Users, AlertTriangle, Building2, CheckCircle2, FileText, Wrench, CheckCircle, Clock, AlertCircle, Download, Plus, Trash2 } from 'lucide-react';
+import { Users, AlertTriangle, Building2, CheckCircle2, FileText, Wrench, CheckCircle, Clock, AlertCircle, Download, Plus, Trash2, Car, DollarSign, Pencil, Receipt } from 'lucide-react';
 
 import { PageShell } from '@/components/page-shell';
 import { Card } from '@/components/ui/card';
@@ -58,6 +58,36 @@ type ClientDocument = {
 };
 
 type VehicleSummary = { id: number; client_id: number; plate: string; status: string };
+
+type VehicleDetailed = {
+  id: number;
+  plate: string;
+  type?: string | null;
+  brand?: string | null;
+  model?: string | null;
+  status: string;
+  // campos de rastreador enriquecidos após join
+  tracker_imei?: string | null;
+  tracker_brand?: string | null;
+  tracker_model?: string | null;
+  tracker_plan?: string | null;
+};
+
+type BillingItem = {
+  id: number;
+  title?: string | null;
+  billing_type: string;
+  due_date: string;
+  amount: number;
+  paid_amount?: number | null;
+  status: string;
+  period_label?: string | null;
+  installment_number?: number | null;
+  installment_total?: number | null;
+  payment_date?: string | null;
+  created_at?: string | null;
+  vehicle_plate?: string | null;
+};
 
 type TimelineContract = { id: number; start_date: string; plan_name?: string | null; status: string };
 type TimelineOrder    = { id: number; number: string; type: string; status: string; executed_at?: string | null; scheduled_at?: string | null; created_at?: string | null; vehicle_plate?: string | null };
@@ -136,6 +166,29 @@ function parseExtraEmails(value: string) {
   return value.split(/[,;\n]/).map((item) => item.trim().toLowerCase()).filter(Boolean);
 }
 
+// Botão de ação colorido — padrão visual do sistema de referência
+const COLOR_CLASSES: Record<string, string> = {
+  blue:   'bg-blue-500 text-white hover:bg-blue-600',
+  green:  'bg-emerald-500 text-white hover:bg-emerald-600',
+  purple: 'bg-purple-500 text-white hover:bg-purple-600',
+  slate:  'bg-slate-500 text-white hover:bg-slate-600',
+  red:    'bg-red-500 text-white hover:bg-red-600',
+  yellow: 'bg-amber-400 text-white hover:bg-amber-500',
+};
+
+function ActionBtn({ color, icon: Icon, title, onClick }: { color: string; icon: React.ElementType; title: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      className={`flex h-7 w-7 items-center justify-center rounded text-xs transition-colors ${COLOR_CLASSES[color] ?? COLOR_CLASSES.slate}`}
+    >
+      <Icon className="h-3.5 w-3.5" />
+    </button>
+  );
+}
+
 function cardKeyHandler(event: React.KeyboardEvent<HTMLElement>, callback: () => void) {
   if (event.key === 'Enter' || event.key === ' ') {
     event.preventDefault();
@@ -170,6 +223,19 @@ export default function ClientesPage() {
   const [uploading, setUploading] = useState(false);
   const [clientTimeline, setClientTimeline] = useState<TimelineEvent[]>([]);
   const [timelineLoading, setTimelineLoading] = useState(false);
+
+  // Modal "Veículos vinculados ao cliente"
+  const [vehiclesModalOpen, setVehiclesModalOpen] = useState(false);
+  const [vehiclesModalClient, setVehiclesModalClient] = useState<Client | null>(null);
+  const [vehiclesDetailed, setVehiclesDetailed] = useState<VehicleDetailed[]>([]);
+  const [vehiclesModalLoading, setVehiclesModalLoading] = useState(false);
+
+  // Modal "Boletos do cliente"
+  const [billingsModalOpen, setBillingsModalOpen] = useState(false);
+  const [billingsModalClient, setBillingsModalClient] = useState<Client | null>(null);
+  const [clientBillings, setClientBillings] = useState<BillingItem[]>([]);
+  const [billingsLoading, setBillingsLoading] = useState(false);
+  const [billingSummaryExpanded, setBillingSummaryExpanded] = useState(false);
 
   async function loadClients(currentToken: string) {
     setLoading(true);
@@ -273,6 +339,49 @@ export default function ClientesPage() {
     if (!token) return;
     loadClients(token);
   }, [token]);
+
+  async function openVehiclesModal(client: Client) {
+    setVehiclesModalClient(client);
+    setVehiclesModalOpen(true);
+    setVehiclesModalLoading(true);
+    try {
+      const [vehs, trackers] = await Promise.all([
+        apiFetch<{ id: number; plate: string; type?: string | null; brand?: string | null; model?: string | null; status: string }[]>(
+          `/vehicles?client_id=${client.id}&limit=100`, {}, token!
+        ).catch(() => []),
+        apiFetch<{ id: number; vehicle_id?: number | null; imei: string; brand?: string | null; model?: string | null; active_plan_name?: string | null }[]>(
+          `/trackers?client_id=${client.id}&limit=100`, {}, token!
+        ).catch(() => []),
+      ]);
+      const enriched: VehicleDetailed[] = vehs.map((v) => {
+        const t = trackers.find((tr) => tr.vehicle_id === v.id);
+        return {
+          ...v,
+          tracker_imei: t?.imei ?? null,
+          tracker_brand: t?.brand ?? null,
+          tracker_model: t?.model ?? null,
+          tracker_plan: t?.active_plan_name ?? null,
+        };
+      });
+      setVehiclesDetailed(enriched);
+    } finally {
+      setVehiclesModalLoading(false);
+    }
+  }
+
+  async function openBillingsModal(client: Client) {
+    setBillingsModalClient(client);
+    setBillingsModalOpen(true);
+    setBillingsLoading(true);
+    try {
+      const data = await apiFetch<BillingItem[]>(
+        `/billings?client_id=${client.id}&limit=100`, {}, token!
+      ).catch(() => []);
+      setClientBillings(data);
+    } finally {
+      setBillingsLoading(false);
+    }
+  }
 
   useEffect(() => {
     if (!token || !selectedClient) {
@@ -581,24 +690,18 @@ export default function ClientesPage() {
                           <Badge variant={statusVariant(client.status)}>{statusLabel(client.status)}</Badge>
                         </Td>
                         <Td>
-                          <div className="flex justify-end gap-1.5">
-                            <Button
-                              type="button"
-                              variant="secondary"
-                              onClick={() => { setSelectedClient(client); setDetailsOpen(true); setDetailsTab('cadastro'); }}
-                              className="px-3 py-1.5 text-xs"
-                            >
-                              Detalhes
-                            </Button>
+                          <div className="flex justify-end gap-1">
+                            {/* 🚗 Veículos vinculados */}
+                            <ActionBtn color="blue" icon={Car} title="Veículos vinculados ao cliente" onClick={() => openVehiclesModal(client)} />
+                            {/* 💲 Boletos do cliente */}
+                            <ActionBtn color="green" icon={DollarSign} title="Boletos do cliente" onClick={() => openBillingsModal(client)} />
+                            {/* 📄 Detalhes / documentos */}
+                            <ActionBtn color="purple" icon={Receipt} title="Detalhes e documentos" onClick={() => { setSelectedClient(client); setDetailsOpen(true); setDetailsTab('cadastro'); }} />
                             {canEdit && (
-                              <Button
-                                type="button"
-                                variant="secondary"
-                                onClick={() => openEditModal(client)}
-                                className="px-3 py-1.5 text-xs"
-                              >
-                                Editar
-                              </Button>
+                              <>
+                                <ActionBtn color="slate" icon={Pencil} title="Editar cliente" onClick={() => openEditModal(client)} />
+                                <ActionBtn color="red" icon={Trash2} title="Excluir cliente" onClick={() => {/* TODO */}} />
+                              </>
                             )}
                           </div>
                         </Td>
@@ -933,6 +1036,133 @@ export default function ClientesPage() {
             <Button type="submit" disabled={!canEdit || saving}>{saving ? 'Salvando…' : isEditing ? 'Atualizar cliente' : 'Cadastrar cliente'}</Button>
           </div>
         </form>
+      </Modal>
+
+      {/* ══ Modal: Veículos vinculados ao cliente ══════════════════════════ */}
+      <Modal
+        open={vehiclesModalOpen}
+        onClose={() => { setVehiclesModalOpen(false); setVehiclesModalClient(null); setVehiclesDetailed([]); }}
+        title={vehiclesModalClient ? `Veículos vinculados ao cliente — ${vehiclesModalClient.name}` : 'Veículos vinculados ao cliente'}
+        size="2xl"
+      >
+        {vehiclesModalLoading ? (
+          <TableSkeleton rows={5} cols={7} />
+        ) : vehiclesDetailed.length === 0 ? (
+          <EmptyState icon={Car} title="Nenhum veículo vinculado" description="Este cliente não possui veículos cadastrados." />
+        ) : (
+          <Table>
+            <TableHead>
+              <Th>Tipo</Th>
+              <Th>Placa</Th>
+              <Th>Marca</Th>
+              <Th>Modelo</Th>
+              <Th>Situação</Th>
+              <Th>Tipo Equip.</Th>
+              <Th>Modelo Equip.</Th>
+              <Th>IMEI</Th>
+            </TableHead>
+            <TableBody>
+              {vehiclesDetailed.map((v) => (
+                <Tr key={v.id}>
+                  <Td className="text-xs capitalize">{v.type ?? '—'}</Td>
+                  <Td className="font-mono font-semibold">{v.plate}</Td>
+                  <Td className="text-sm">{v.brand ?? '—'}</Td>
+                  <Td className="text-sm">{v.model ?? '—'}</Td>
+                  <Td><Badge variant={statusVariant(v.status)}>{statusLabel(v.status)}</Badge></Td>
+                  <Td className="text-xs text-slate-500">{v.tracker_plan ?? (v.tracker_imei ? 'BÁSICO' : '—')}</Td>
+                  <Td className="text-xs text-slate-500">{v.tracker_model ? `${v.tracker_brand ?? ''} ${v.tracker_model}`.trim() : '—'}</Td>
+                  <Td className="font-mono text-xs">{v.tracker_imei ?? '—'}</Td>
+                </Tr>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+        <p className="mt-3 text-xs text-slate-400">
+          Mostrando {vehiclesDetailed.length} registro(s)
+        </p>
+      </Modal>
+
+      {/* ══ Modal: Boletos do cliente ══════════════════════════════════════ */}
+      <Modal
+        open={billingsModalOpen}
+        onClose={() => { setBillingsModalOpen(false); setBillingsModalClient(null); setClientBillings([]); setBillingSummaryExpanded(false); }}
+        title={billingsModalClient ? `Boletos do cliente — ${billingsModalClient.name}` : 'Boletos do cliente'}
+        size="2xl"
+      >
+        {/* Resumo financeiro */}
+        <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-900/50">
+          <div className="flex items-center justify-between px-4 py-3">
+            <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">Resumo financeiro</p>
+            <button
+              type="button"
+              onClick={() => setBillingSummaryExpanded((p) => !p)}
+              className="rounded-lg bg-purple-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-purple-700"
+            >
+              {billingSummaryExpanded ? 'Ocultar' : 'Exibir'}
+            </button>
+          </div>
+          {billingSummaryExpanded && !billingsLoading && (
+            <div className="grid gap-3 px-4 pb-4 sm:grid-cols-3">
+              {[
+                { label: 'Total cobrado', value: clientBillings.reduce((s, b) => s + b.amount, 0) },
+                { label: 'Total pago', value: clientBillings.reduce((s, b) => s + (b.paid_amount ?? 0), 0) },
+                { label: 'Pendente / vencido', value: clientBillings.filter((b) => ['pendente', 'vencida'].includes(b.status)).reduce((s, b) => s + b.amount, 0) },
+              ].map(({ label, value }) => (
+                <div key={label} className="rounded-lg border border-slate-200 bg-white p-3 text-center dark:border-slate-700 dark:bg-slate-800">
+                  <p className="text-xs text-slate-400">{label}</p>
+                  <p className="mt-1 text-base font-bold text-slate-900 dark:text-white">
+                    {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value)}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {billingsLoading ? (
+          <TableSkeleton rows={5} cols={8} />
+        ) : clientBillings.length === 0 ? (
+          <EmptyState icon={DollarSign} title="Nenhuma cobrança encontrada" description="Não há boletos registrados para este cliente." />
+        ) : (
+          <Table>
+            <TableHead>
+              <Th>Nº</Th>
+              <Th>Tipo</Th>
+              <Th>Emissão</Th>
+              <Th>Vencimento</Th>
+              <Th>Pagamento</Th>
+              <Th>Valor</Th>
+              <Th>Valor Pago</Th>
+              <Th>Parcela</Th>
+              <Th>Mês Ref.</Th>
+              <Th>Situação</Th>
+            </TableHead>
+            <TableBody>
+              {clientBillings.map((b) => {
+                const fmt = (v: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v);
+                return (
+                  <Tr key={b.id}>
+                    <Td className="text-xs text-slate-500">{b.id}</Td>
+                    <Td className="text-xs capitalize">{b.billing_type === 'prorata' ? 'Pró-rata' : b.billing_type === 'recorrente' ? 'Mensalidade' : b.billing_type}</Td>
+                    <Td className="text-xs">{b.created_at ? new Date(b.created_at).toLocaleDateString('pt-BR') : '—'}</Td>
+                    <Td className="text-sm font-medium">{b.due_date}</Td>
+                    <Td className="text-xs">{b.payment_date ?? '—'}</Td>
+                    <Td className="font-mono font-semibold">{fmt(b.amount)}</Td>
+                    <Td className="font-mono text-emerald-700 dark:text-emerald-400">{fmt(b.paid_amount ?? 0)}</Td>
+                    <Td className="text-xs text-center">
+                      {b.installment_number ? `${b.installment_number}/${b.installment_total}` : '1/1'}
+                    </Td>
+                    <Td className="text-xs">{b.period_label ?? '—'}</Td>
+                    <Td><Badge variant={statusVariant(b.status)}>{statusLabel(b.status)}</Badge></Td>
+                  </Tr>
+                );
+              })}
+            </TableBody>
+          </Table>
+        )}
+        <p className="mt-3 text-xs text-slate-400">
+          Mostrando {clientBillings.length} registro(s)
+        </p>
       </Modal>
     </PageShell>
   );
