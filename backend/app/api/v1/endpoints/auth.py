@@ -1,13 +1,14 @@
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from jose import JWTError, jwt
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.config import settings
+from app.core.limiter import limiter
 from app.core.security import create_access_token, create_refresh_token, get_password_hash, verify_password
 from app.db.session import get_db
 from app.models.client import Client
@@ -42,7 +43,8 @@ def build_full_address(payload: RegisterClientRequest) -> str:
 
 
 @router.post('/login', response_model=TokenResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db)):
+@limiter.limit('5/minute')
+def login(request: Request, payload: LoginRequest, db: Session = Depends(get_db)):
     normalized_email = payload.email.strip().lower()
     user = db.scalar(select(User).where(User.email == normalized_email, User.is_deleted.is_(False)))
     if not user or not user.active or not verify_password(payload.password, user.password_hash):

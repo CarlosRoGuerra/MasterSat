@@ -1,9 +1,14 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from sqlalchemy import inspect, text
 
 from app.api.v1.api import api_router
 from app.core.config import settings
+from app.core.limiter import limiter
 from app.core.security import get_password_hash
 from app.db.session import Base, SessionLocal, engine
 from app.models import audit_log, billing, billing_change_log, client, client_charge_item, contract, document, integration_log, password_reset_token, plan, service_order, service_order_status_log, service_product, tracker, tracker_history, user, vehicle  # noqa: F401 — side-effect imports that register models with SQLAlchemy Base
@@ -14,6 +19,12 @@ from app.services.storage import ensure_bucket
 
 app = FastAPI(title=settings.app_name)
 
+# ── Rate limiting ─────────────────────────────────────────────────────────────
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
+# ── CORS ──────────────────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -25,6 +36,8 @@ app.add_middleware(
     allow_methods=['*'],
     allow_headers=['*'],
 )
+
+# ── Auditoria ─────────────────────────────────────────────────────────────────
 app.add_middleware(AuditMiddleware)
 
 app.include_router(api_router, prefix=settings.api_v1_prefix)

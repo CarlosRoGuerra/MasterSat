@@ -14,10 +14,12 @@ import csv
 import io
 from datetime import date
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+
+from app.core.limiter import limiter
 
 from app.api.deps import require_roles
 from app.db.session import get_db
@@ -94,7 +96,9 @@ def _build_response(fmt: str, headers: list[str], rows: list[list], name: str) -
 # ---------------------------------------------------------------------------
 
 @router.get('/clients')
+@limiter.limit('10/minute')
 def export_clients(
+    request: Request,
     fmt: str = Query(default='csv', pattern='^(csv|xlsx)$'),
     status: str | None = None,
     type: str | None = None,
