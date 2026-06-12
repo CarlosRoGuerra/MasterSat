@@ -1,0 +1,72 @@
+# =============================================================================
+# docker-compose.caddy.yml — produção com Caddy (HTTPS automático)
+#
+# Alternativa ao docker-compose.prod.yml: usa Caddy no lugar de nginx+certbot.
+# O Caddy emite e renova os certificados sozinho via DNS-01 da Cloudflare.
+#
+# Uso:
+#   docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d --build
+#
+# Pré-requisitos no .env:
+#   CF_API_TOKEN=<token Cloudflare com permissão Zone:DNS:Edit>
+# =============================================================================
+
+services:
+
+  # ── Caddy: proxy reverso + HTTPS automático (HTTP-01) ───────────────────────
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data       # certificados (persistente — não re-emitir à toa)
+      - caddy_config:/config
+    depends_on:
+      - backend
+      - frontend
+
+  # ── Backend em produção (sem porta direta — só via Caddy) ───────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: [.env]
+    ports: !reset []
+    expose: ["8000"]
+    volumes: !reset []
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips=*"]
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_started }
+      minio: { condition: service_started }
+
+  # ── Frontend em produção ────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: [.env]
+    ports: !reset []
+    expose: ["3000"]
+    volumes: !reset []
+
+  # ── Banco de dados (sem porta exposta externamente) ─────────────────────────
+  db:
+    restart: unless-stopped
+    ports: !reset []
+    expose: ["5432"]
+
+  # ── MinIO ───────────────────────────────────────────────────────────────────
+  minio:
+    restart: unless-stopped
+    ports: !reset []
+    expose: ["9000", "9001"]
+
+volumes:
+  caddy_data:
+  caddy_config:

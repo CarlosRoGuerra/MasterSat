@@ -1,0 +1,56 @@
+# =============================================================================
+# Caddyfile — Proxy reverso do Mastersat (substitui nginx + certbot)
+#
+# Arquitetura por subdomínio (DNS apontando DIRETO para a VPS, sem Cloudflare):
+#   Cliente → Caddy:443 → app.mastersat.com.br → frontend:3000
+#                        → api.mastersat.com.br → backend:8000
+#
+# HTTPS: automático via Let's Encrypt (desafio HTTP-01). Requer:
+#   - registros A de app. e api. apontando para 69.197.174.43 (sem proxy)
+#   - portas 80 e 443 abertas para a internet
+# =============================================================================
+
+{
+	# E-mail para avisos de expiração do Let's Encrypt
+	email contato.guerrait@gmail.com
+}
+
+# Cabeçalhos de segurança comuns aos dois sites
+(seguranca) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Frame-Options "SAMEORIGIN"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "geolocation=(), microphone=(), camera=()"
+		-Server
+	}
+	encode gzip zstd
+}
+
+# ── Frontend: app.mastersat.com.br ──────────────────────────────────────────
+app.mastersat.com.br {
+	import seguranca
+
+	# Uploads de documentos maiores (equivalente ao client_max_body_size 50M)
+	request_body {
+		max_size 50MB
+	}
+
+	reverse_proxy frontend:3000
+}
+
+# ── API: api.mastersat.com.br ───────────────────────────────────────────────
+api.mastersat.com.br {
+	import seguranca
+
+	request_body {
+		max_size 50MB
+	}
+
+	# Docs do FastAPI bloqueados em produção
+	@docs path /docs /redoc /openapi.json /docs/* /redoc/*
+	respond @docs 403
+
+	reverse_proxy backend:8000
+}

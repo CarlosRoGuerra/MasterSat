@@ -1,0 +1,12 @@
+{
+  "name": "MasterSat",
+  "short_name": "MasterSat",
+  "description": "Solução completa em Rastreamento",
+  "start_url": "/dashboard",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#FFB800",
+  "icons": [
+    { "src": "/logo.png", "sizes": "any", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
