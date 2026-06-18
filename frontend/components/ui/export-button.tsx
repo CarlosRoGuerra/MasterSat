@@ -26,7 +26,7 @@ export function ExportButton({
     setLoading(true);
     try {
       await downloadExport(
-        `/api/v1/${path}`,
+        path,
         { ...params, fmt },
         token,
         exportFilename(basename, fmt),

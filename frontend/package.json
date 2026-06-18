@@ -8,11 +8,14 @@
     "start": "next start -p 3000"
   },
   "dependencies": {
+    "@types/leaflet": "^1.9.21",
     "clsx": "^2.1.1",
+    "leaflet": "^1.9.4",
     "lucide-react": "^1.14.0",
     "next": "15.0.2",
     "react": "18.3.1",
-    "react-dom": "18.3.1"
+    "react-dom": "18.3.1",
+    "react-leaflet": "^4.2.1"
   },
   "devDependencies": {
     "@types/node": "^22.8.1",

@@ -40,3 +40,39 @@ html.dark body {
 html.dark ::selection {
   @apply bg-brand-700/60 text-white;
 }
+
+/* ── Home pública: tokens "fintech" (preto/dourado/branco) + glassmorphism ── */
+.fintech-home {
+  --fh-bg: #05060a;
+  --fh-surface: rgba(255, 255, 255, 0.04);
+  --fh-surface-strong: rgba(255, 255, 255, 0.07);
+  --fh-border: rgba(255, 255, 255, 0.08);
+  --fh-text-primary: #f8fafc;
+  --fh-text-secondary: rgba(248, 250, 252, 0.64);
+  --fh-text-muted: rgba(248, 250, 252, 0.48);
+  --fh-accent: #ffb800;
+  --fh-accent-soft: rgba(255, 184, 0, 0.12);
+  --fh-positive: #34d399;
+  --fh-negative: #fb7185;
+}
+
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.fintech-home .animate-shimmer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.06), transparent);
+  animation: shimmer 1.8s infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fintech-home .animate-shimmer::after {
+    animation: none;
+  }
+}

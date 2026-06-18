@@ -17,6 +17,13 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}, token
   });
 
   if (!response.ok) {
+    if (response.status === 401 && typeof window !== 'undefined') {
+      localStorage.removeItem('access_token');
+      localStorage.removeItem('refresh_token');
+      window.location.href = '/login/admin';
+      throw new Error('Sessão expirada.');
+    }
+
     let message = `HTTP ${response.status}`;
     try {
       const data = await response.json();

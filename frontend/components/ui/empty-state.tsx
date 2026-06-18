@@ -7,25 +7,40 @@ export function EmptyState({
   title,
   description,
   action,
+  tone = 'neutral',
   className,
 }: {
   icon?: LucideIcon;
   title: string;
   description?: string;
   action?: ReactNode;
+  /** 'neutral' = grey (default), 'success' = green check, 'warning' = amber alert */
+  tone?: 'neutral' | 'success' | 'warning';
   className?: string;
 }) {
+  const iconWrap = {
+    neutral: 'bg-slate-100 dark:bg-slate-800',
+    success: 'bg-emerald-50 dark:bg-emerald-950/30',
+    warning: 'bg-amber-50 dark:bg-amber-950/30',
+  }[tone];
+
+  const iconColor = {
+    neutral: 'text-slate-400 dark:text-slate-500',
+    success: 'text-emerald-500 dark:text-emerald-400',
+    warning: 'text-amber-500 dark:text-amber-400',
+  }[tone];
+
   return (
     <div className={clsx('flex flex-col items-center justify-center gap-3 py-16 text-center', className)}>
       {Icon && (
-        <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-100 dark:bg-slate-800">
-          <Icon className="h-6 w-6 text-slate-400 dark:text-slate-500" />
+        <div className={clsx('flex h-14 w-14 items-center justify-center rounded-2xl', iconWrap)}>
+          <Icon className={clsx('h-6 w-6', iconColor)} strokeWidth={1.5} />
         </div>
       )}
       <div>
-        <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">{title}</p>
+        <p className="text-[13px] font-semibold text-slate-700 dark:text-slate-300">{title}</p>
         {description && (
-          <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">{description}</p>
+          <p className="mt-1 text-[12px] text-slate-400 dark:text-slate-500">{description}</p>
         )}
       </div>
       {action && <div className="mt-2">{action}</div>}

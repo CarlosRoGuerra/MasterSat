@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 import { PageShell } from '@/components/page-shell';
 import { Card } from '@/components/ui/card';
@@ -15,12 +15,13 @@ import { EmptyState, TableSkeleton } from '@/components/ui/empty-state';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { FormField, FormGrid } from '@/components/ui/form-field';
-import { Eye, DollarSign, ClipboardList, Pencil } from 'lucide-react';
+import { Eye, DollarSign, ClipboardList, Pencil, CreditCard, Zap, Building2, Banknote, FileText as FileBillet, Search, X } from 'lucide-react';
 import { ExportButton } from '@/components/ui/export-button';
 import { apiFetch } from '@/lib/api';
 import { fetchAddressByCep } from '@/lib/cep';
 import { formatZipCode, onlyDigits } from '@/lib/format';
 import { useAuthGuard } from '@/lib/use-auth-guard';
+import { VehicleOnboardingWizard } from '@/components/vehicle-onboarding-wizard';
 
 type ClientOption = {
   id: number;
@@ -48,7 +49,7 @@ type TrackerOption = {
   active_plan_name?: string | null;
   active_plan_id?: number | null;
 };
-type PlanOption = { id: number; name: string; price: number };
+type PlanOption = { id: number; name: string; price: number; billing_interval_months?: number };
 type VehicleStatus = 'pendente_validacao' | 'em_analise' | 'aprovado' | 'reprovado' | 'correcao_solicitada' | 'ativo' | 'sem_rastreador' | 'retirado' | 'bloqueado';
 
 type Vehicle = {
@@ -154,10 +155,27 @@ const areaClass = `${fieldClass} min-h-[88px] resize-y`;
 const salesPointOptions = ['MASTERSAT RASTREAMENTO'];
 const classificationOptions = ['NAO INFORMADO', 'LEVE', 'UTILITARIO', 'PESADO'];
 const alertOptions = ['Nenhum', 'Alerta de inadimplência', 'Pendência documental', 'Atenção operacional'];
-const typeOptions = ['carro', 'moto', 'caminhao', 'outros'];
+const typeOptions = [
+  'Automóvel', 'Ambulância', 'Avião', 'Barco', 'Basculante', 'Bau', 'Bi-trem', 'Bicicleta', 'Caixa',
+  'Caminhonete', 'Caminhão', 'Caminhão Bomba de Concreto', 'Caminhão MUK', 'Caminhão de lixo', 'Caminhão tanque',
+  'Carregadeira de esteira', 'Carreta', 'Carreta Porta Container', 'Cavalo Mecânico', 'Container', 'Empilhadeira',
+  'Equipamento móvel', 'Escavadeira', 'Escavadeira de esteira', 'Gerador', 'Graneleiro', 'Guincho',
+  'Guindaste Móvel', 'Helicóptero', 'Jet', 'Lancha', 'Micro ônibus', 'Moto', 'Moto - Viatura', 'Máquina',
+  'Máquina Esteira', 'Patinete', 'Pessoa', 'Pet', 'Plataforma', 'Prancha', 'Pá carregadeira', 'Quadriciclo',
+  'Retroescavadeira', 'Rolo Compactador', 'Trator', 'Trator de esteira', 'Van', 'Viatura', 'Vírus de carga',
+  'ônibus', 'outros',
+];
 const fuelOptions = ['gasolina', 'etanol', 'flex', 'diesel', 'gnv', 'eletrico', 'hibrido', 'outro'];
 const colorOptions = ['preto', 'branco', 'prata', 'cinza', 'azul', 'vermelho', 'verde', 'amarelo', 'marrom', 'bege', 'outro'];
 const documentCategoryOptions = ['documento_veiculo', 'crlv', 'foto_frontal', 'foto_lateral', 'foto_traseira', 'comprovante_propriedade', 'outro'];
+
+const PAYMENT_METHODS = [
+  { value: 'boleto',    label: 'Boleto',      desc: 'Código de barras',      Icon: FileBillet   },
+  { value: 'cartao',   label: 'Cartão',       desc: 'Débito recorrente',     Icon: CreditCard   },
+  { value: 'pix',      label: 'PIX',          desc: 'Transferência rápida',  Icon: Zap          },
+  { value: 'deposito', label: 'Depósito',     desc: 'Depósito em conta',     Icon: Building2    },
+  { value: 'dinheiro', label: 'Dinheiro',     desc: 'Pagamento em espécie',  Icon: Banknote     },
+] as const;
 
 function parseError(error: unknown) {
   return error instanceof Error ? error.message : 'Ocorreu um erro inesperado.';
@@ -168,7 +186,134 @@ function formatChassis(value: string) { return value.toUpperCase().replace(/[^A-
 
 
 // ---------------------------------------------------------------------------
-// "Editar vínculo completo com veículo" — componente isolado para useMemo limpo
+// TrackerAutocomplete — busca em tempo real por IMEI, marca ou modelo
+// ---------------------------------------------------------------------------
+function TrackerAutocomplete({
+  trackers,
+  value,
+  onChange,
+  required,
+}: {
+  trackers: TrackerOption[];
+  value: string;
+  onChange: (id: string) => void;
+  required?: boolean;
+}) {
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const selected = trackers.find((t) => String(t.id) === value);
+
+  useEffect(() => { if (!value) setQuery(''); }, [value]);
+
+  useEffect(() => {
+    function handler(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false); setFocused(false);
+      }
+    }
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const filtered = query.trim()
+    ? trackers.filter((t) => {
+        const q = query.trim().toLowerCase();
+        return (
+          t.imei?.toLowerCase().includes(q) ||
+          t.brand?.toLowerCase().includes(q) ||
+          t.model?.toLowerCase().includes(q)
+        );
+      })
+    : trackers.slice(0, 15);
+
+  function select(t: TrackerOption) {
+    onChange(String(t.id));
+    setQuery(''); setOpen(false); setFocused(false);
+  }
+
+  function clear() {
+    onChange(''); setQuery('');
+    inputRef.current?.focus();
+  }
+
+  const label = (t: TrackerOption) => [t.brand, t.model].filter(Boolean).join(' ');
+
+  return (
+    <div ref={containerRef} className="relative w-full">
+      {/* Chip do rastreador selecionado */}
+      {selected && !focused ? (
+        <div className="flex items-center gap-2 rounded-xl border border-brand-300 bg-brand-50 px-3.5 py-2.5 dark:border-brand-700 dark:bg-brand-950/30">
+          <div className="min-w-0 flex-1">
+            <p className="font-mono text-sm font-semibold text-brand-800 dark:text-brand-200">{selected.imei}</p>
+            {label(selected) && <p className="text-xs text-brand-600 dark:text-brand-400">{label(selected)}</p>}
+          </div>
+          <button
+            type="button"
+            onClick={clear}
+            className="shrink-0 rounded p-0.5 text-brand-500 hover:bg-brand-100 hover:text-brand-700 dark:hover:bg-brand-900/60"
+            aria-label="Remover seleção"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      ) : (
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <input
+            ref={inputRef}
+            type="text"
+            value={query}
+            required={required && !value}
+            placeholder={selected ? selected.imei : 'Buscar por IMEI, marca ou modelo…'}
+            autoComplete="off"
+            onFocus={() => { setFocused(true); setOpen(true); }}
+            onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+            onBlur={() => {
+              setTimeout(() => {
+                if (!containerRef.current?.contains(document.activeElement)) {
+                  setOpen(false); setFocused(false);
+                }
+              }, 150);
+            }}
+            className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-9 pr-3.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-brand-400"
+          />
+        </div>
+      )}
+
+      {/* Dropdown de resultados */}
+      {open && focused && (
+        <div className="absolute z-50 mt-1 max-h-64 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-900">
+          {filtered.length === 0 ? (
+            <div className="px-4 py-3 text-sm text-slate-400">
+              {query.trim() ? `Nenhum rastreador encontrado para "${query}"` : 'Nenhum rastreador em estoque'}
+            </div>
+          ) : (
+            filtered.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onMouseDown={(e) => { e.preventDefault(); select(t); }}
+                className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-slate-50 dark:hover:bg-slate-800"
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="font-mono font-semibold text-slate-900 dark:text-white">{t.imei}</p>
+                  {label(t) && <p className="text-xs text-slate-400">{label(t)}</p>}
+                </div>
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// "Vincular rastreador ao veículo" — componente isolado para useMemo limpo
 // ---------------------------------------------------------------------------
 function LinkTrackerForm({
   stockTrackers,
@@ -186,7 +331,7 @@ function LinkTrackerForm({
   stockTrackers: TrackerOption[];
   plans: PlanOption[];
   serviceProducts: ServiceProductOption[];
-  form: { tracker_id: string; plan_id: string; billing_modality: string; billing_cycles: string; billing_day: string; start_date: string };
+  form: { tracker_id: string; plan_id: string; payment_method: string; billing_day: string; start_date: string };
   onChange: (f: typeof form) => void;
   selectedProductIds: number[];
   onProductToggle: (id: number) => void;
@@ -198,24 +343,30 @@ function LinkTrackerForm({
   const set = (key: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     onChange({ ...form, [key]: e.target.value });
 
-  const isCarne = form.billing_modality === 'carne';
+  const selectedPlan = plans.find((p) => String(p.id) === form.plan_id);
+  const isMonthlyPlan = !selectedPlan?.billing_interval_months || selectedPlan.billing_interval_months === 1;
 
-  const totalProductsFee = selectedProductIds.reduce((sum, pid) => {
-    const p = serviceProducts.find((sp) => sp.id === pid);
-    return sum + (p?.default_price ?? 0);
-  }, 0);
+  // Estimated first billing date (billing_day of next month)
+  const firstBillingDate = (() => {
+    const day = form.billing_day ? parseInt(form.billing_day) : 1;
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth() + 1, day).toLocaleDateString('pt-BR');
+  })();
 
   // Pré-visualização da 1ª fatura (pró-rata)
   const preview = (() => {
-    const plan = plans.find((p) => String(p.id) === form.plan_id);
-    if (!plan || !form.start_date) return null;
+    if (!selectedPlan || !form.start_date) return null;
     const d = new Date(form.start_date + 'T12:00:00');
     const day = d.getDate();
     if (day === 1) return null;
     const daysInMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
     const remaining = daysInMonth - day + 1;
-    const prorated = (plan.price / daysInMonth) * remaining;
-    return { prorated, totalProductsFee, total: prorated + totalProductsFee, remaining, daysInMonth };
+    const prorated = (selectedPlan.price / daysInMonth) * remaining;
+    const productsFee = selectedProductIds.reduce((sum, pid) => {
+      const p = serviceProducts.find((sp) => sp.id === pid);
+      return sum + (p?.default_price ?? 0);
+    }, 0);
+    return { prorated, productsFee, total: prorated + productsFee, remaining, daysInMonth };
   })();
 
   return (
@@ -224,15 +375,13 @@ function LinkTrackerForm({
       <div>
         <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">Equipamento</p>
         <div className="grid gap-4 sm:grid-cols-2">
-          <FormField label="Rastreador (em estoque)" required>
-            <select className={fieldClass} value={form.tracker_id} onChange={set('tracker_id')} required>
-              <option value="">Selecione o rastreador</option>
-              {stockTrackers.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.imei} — {[t.brand, t.model].filter(Boolean).join(' ')}
-                </option>
-              ))}
-            </select>
+          <FormField label="Rastreador disponível" required>
+            <TrackerAutocomplete
+              trackers={stockTrackers}
+              value={form.tracker_id}
+              onChange={(id) => onChange({ ...form, tracker_id: id })}
+              required
+            />
           </FormField>
           <FormField label="Data de instalação" required>
             <input className={fieldClass} type="date" value={form.start_date} onChange={set('start_date')} />
@@ -240,9 +389,9 @@ function LinkTrackerForm({
         </div>
       </div>
 
-      {/* ── Grupo de faturamento ─────────────────────────────────────────── */}
+      {/* ── Plano de monitoramento ───────────────────────────────────────── */}
       <div>
-        <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">Grupo de faturamento</p>
+        <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">Plano de monitoramento</p>
         <select className={fieldClass} value={form.plan_id} onChange={set('plan_id')}>
           <option value="">Sem plano agora</option>
           {plans.map((p) => (
@@ -256,9 +405,9 @@ function LinkTrackerForm({
       {/* ── Produtos / Serviços adicionais ────────────────────────────────── */}
       {serviceProducts.length > 0 && (
         <div>
-          <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">Produtos</p>
+          <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">Serviços adicionais</p>
           <p className="mb-3 text-xs text-slate-400 dark:text-slate-500">
-            Marque os serviços adicionais cobrados junto à primeira fatura.
+            Serviços cobrados uma única vez junto à primeira fatura.
           </p>
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {serviceProducts.map((prod) => {
@@ -281,9 +430,7 @@ function LinkTrackerForm({
                   />
                   <div className="min-w-0 flex-1">
                     <p className="truncate font-medium text-slate-800 dark:text-slate-200">{prod.name}</p>
-                    <p className="text-xs text-slate-400">
-                      R$ {Number(prod.default_price).toFixed(2)}
-                    </p>
+                    <p className="text-xs text-slate-400">R$ {Number(prod.default_price).toFixed(2)}</p>
                   </div>
                 </label>
               );
@@ -292,27 +439,25 @@ function LinkTrackerForm({
         </div>
       )}
 
-      {/* ── Informações de fechamento ─────────────────────────────────────── */}
+      {/* ── Dia do vencimento ────────────────────────────────────────────── */}
       <div>
-        <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">Informações de fechamento</p>
+        <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">Dia do vencimento</p>
         <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-700 dark:bg-slate-900/50">
           <div className="flex items-center justify-between gap-4">
             <div>
-              <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">Dia do vencimento</p>
               {form.billing_day ? (
-                <p className="mt-1 text-base font-bold text-slate-900 dark:text-white">
+                <p className="text-base font-bold text-slate-900 dark:text-white">
                   Todo dia <span className="text-brand-700 dark:text-brand-300">{form.billing_day}</span>
                 </p>
               ) : (
-                <p className="mt-1 text-sm text-amber-600 dark:text-amber-400">
+                <p className="text-sm text-amber-600 dark:text-amber-400">
                   Não configurado no cadastro do cliente
                 </p>
               )}
               <p className="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
-                Definido no cadastro geral do cliente · unifica todos os veículos
+                Definido no cadastro do cliente · unifica todos os veículos
               </p>
             </div>
-            {/* Override pontual (só mostrado se necessário) */}
             <div className="shrink-0">
               {!form.billing_day ? (
                 <input
@@ -339,61 +484,61 @@ function LinkTrackerForm({
         </div>
       </div>
 
-      {/* ── Informações financeiras ───────────────────────────────────────── */}
+      {/* ── Forma de pagamento ───────────────────────────────────────────── */}
       {form.plan_id && (
         <div>
-          <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">Informações financeiras</p>
+          <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">Como o cliente vai pagar?</p>
           <div className="space-y-4">
-            {/* Formato do boleto */}
-            <FormField label="Formato de geração do boleto">
-              <div className="grid grid-cols-2 gap-2">
-                {(['boleto', 'carne'] as const).map((mod) => (
-                  <button
-                    key={mod}
-                    type="button"
-                    onClick={() => onChange({ ...form, billing_modality: mod })}
-                    className={[
-                      'rounded-xl border px-4 py-3 text-left text-sm font-medium transition-colors',
-                      form.billing_modality === mod
-                        ? 'border-brand-500 bg-brand-50 text-brand-700 dark:border-brand-400 dark:bg-brand-950/30 dark:text-brand-300'
-                        : 'border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800',
-                    ].join(' ')}
-                  >
-                    <span className="block font-semibold">{mod === 'boleto' ? 'Boleto' : 'Carnê'}</span>
-                    <span className="mt-0.5 block text-xs text-slate-400 dark:text-slate-500">
-                      {mod === 'boleto' ? 'Recorrência contínua' : 'Prazo fixo de parcelas'}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </FormField>
+            {/* Opções de pagamento */}
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+              {PAYMENT_METHODS.map(({ value, label, desc, Icon }) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => onChange({ ...form, payment_method: value })}
+                  className={[
+                    'flex flex-col items-center gap-1.5 rounded-xl border px-2 py-3 text-center text-sm font-medium transition-colors',
+                    form.payment_method === value
+                      ? 'border-brand-500 bg-brand-50 text-brand-700 ring-1 ring-brand-500/20 dark:border-brand-400 dark:bg-brand-950/30 dark:text-brand-300'
+                      : 'border-slate-200 text-slate-600 hover:border-slate-300 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800',
+                  ].join(' ')}
+                >
+                  <Icon className={`h-5 w-5 ${form.payment_method === value ? 'text-brand-600 dark:text-brand-400' : 'text-slate-400 dark:text-slate-500'}`} />
+                  <span className="text-xs font-semibold leading-tight">{label}</span>
+                  <span className="text-[10px] text-slate-400 dark:text-slate-500 leading-tight">{desc}</span>
+                </button>
+              ))}
+            </div>
 
-            {/* Quantidade de parcelas (somente Carnê) */}
-            {isCarne && (
-              <FormField label="Quantidade de parcelas" hint="Número total de mensalidades do carnê">
-                <input
-                  className={fieldClass}
-                  type="number"
-                  min={1}
-                  max={999}
-                  placeholder="Ex.: 12"
-                  value={form.billing_cycles}
-                  onChange={set('billing_cycles')}
-                  style={{ maxWidth: 160 }}
-                />
-              </FormField>
+            {/* Plano mensal: exibe data estimada da 1ª cobrança */}
+            {isMonthlyPlan && (
+              <div className="flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50/60 px-4 py-3 text-sm dark:border-emerald-800/50 dark:bg-emerald-950/20">
+                <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-100 dark:bg-emerald-900/40">
+                  <svg className="h-3 w-3 text-emerald-600 dark:text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                </div>
+                <div>
+                  <p className="font-semibold text-emerald-700 dark:text-emerald-400">Cobrança mensal recorrente</p>
+                  <p className="mt-0.5 text-slate-600 dark:text-slate-400">
+                    1ª cobrança estimada: <strong className="text-slate-800 dark:text-slate-200">{firstBillingDate}</strong>
+                  </p>
+                  <p className="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
+                    A cobrança se repete automaticamente todo mês nessa data.
+                  </p>
+                </div>
+              </div>
             )}
 
-            {/* Pré-visualização da 1ª fatura */}
+
+            {/* Pré-visualização da 1ª fatura (pró-rata) */}
             {preview && (
               <div className="rounded-xl border border-brand-200 bg-brand-50/60 p-4 text-sm dark:border-brand-800/60 dark:bg-brand-950/30">
-                <p className="mb-2 text-xs font-bold uppercase tracking-widest text-brand-600 dark:text-brand-400">
+                <p className="mb-3 text-xs font-bold uppercase tracking-widest text-brand-600 dark:text-brand-400">
                   1ª fatura — pró-rata ({preview.remaining} de {preview.daysInMonth} dias)
                 </p>
-                <div className="space-y-1 text-slate-700 dark:text-slate-300">
+                <div className="space-y-1.5 text-slate-700 dark:text-slate-300">
                   <div className="flex justify-between">
                     <span>Mensalidade proporcional</span>
-                    <span className="font-mono">R$ {preview.prorated.toFixed(2)}</span>
+                    <span className="font-mono font-medium">R$ {preview.prorated.toFixed(2)}</span>
                   </div>
                   {selectedProductIds.map((pid) => {
                     const prod = serviceProducts.find((sp) => sp.id === pid);
@@ -405,16 +550,13 @@ function LinkTrackerForm({
                       </div>
                     );
                   })}
-                  <div className="mt-2 flex justify-between border-t border-brand-200 pt-2 font-bold dark:border-brand-800/60">
+                  <div className="mt-2 flex justify-between border-t border-brand-200 pt-2.5 font-bold dark:border-brand-800/60">
                     <span>Total 1ª fatura</span>
                     <span className="font-mono text-brand-700 dark:text-brand-300">R$ {preview.total.toFixed(2)}</span>
                   </div>
                 </div>
-                <p className="mt-2 text-xs text-slate-400">
-                  {isCarne
-                    ? `A partir do 2º mês (${form.billing_cycles} parcelas): `
-                    : 'A partir do mês seguinte: '}
-                  R$ {plans.find((p) => String(p.id) === form.plan_id)?.price.toFixed(2)}/mês
+                <p className="mt-2.5 text-xs text-slate-400 dark:text-slate-500">
+                  A partir do mês seguinte: R$ {selectedPlan?.price?.toFixed(2)}/mês
                 </p>
               </div>
             )}
@@ -458,6 +600,7 @@ export default function VeiculosPage() {
   const [uninstallDate, setUninstallDate] = useState(new Date().toISOString().slice(0, 10));
   const [destinationContractId, setDestinationContractId] = useState('');
   const [uninstallServiceProductId, setUninstallServiceProductId] = useState('');
+  const [uninstallFee, setUninstallFee] = useState('');
   // Detalhes (abas)
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [detailsTab, setDetailsTab] = useState<'dados' | 'documentos' | 'rastreador'>('dados');
@@ -478,15 +621,15 @@ export default function VeiculosPage() {
   const [linkForm, setLinkForm] = useState({
     tracker_id: '',
     plan_id: '',
-    billing_modality: 'boleto',
-    billing_cycles: '12',
-    billing_day: '',             // herdado do cliente, editável
+    payment_method: 'boleto',
+    billing_day: '',
     start_date: new Date().toISOString().slice(0, 10),
   });
   const [linking, setLinking] = useState(false);
   const [error, setError] = useState('');
   const [feedback, setFeedback] = useState('');
   const [modalError, setModalError] = useState('');
+  const [wizardOpen, setWizardOpen] = useState(false);
 
   async function loadVehicles(currentToken: string) {
     setLoading(true);
@@ -592,32 +735,57 @@ export default function VeiculosPage() {
     if (!token || !selectedVehicle || !linkForm.tracker_id) return;
     setLinking(true);
     try {
-      const isCarne = linkForm.billing_modality === 'carne';
-      // Soma os preços dos produtos selecionados como taxa de instalação
-      const installationFee = selectedProductIds.reduce((sum, pid) => {
-        const prod = serviceProducts.find((p) => p.id === pid);
-        return sum + (prod?.default_price ?? 0);
-      }, 0);
-      await apiFetch(`/trackers/${linkForm.tracker_id}/link-vehicle`, {
-        method: 'POST',
-        body: JSON.stringify({
-          vehicle_id: selectedVehicle.id,
-          plan_id: linkForm.plan_id ? Number(linkForm.plan_id) : null,
-          billing_modality: linkForm.billing_modality,
-          billing_cycles: isCarne ? Number(linkForm.billing_cycles) || 12 : 60,
-          installation_fee: installationFee,
-          billing_day: linkForm.billing_day ? Number(linkForm.billing_day) : undefined,
-          generate_prorated: true,
-          start_date: linkForm.start_date,
-          auto_generate_billings: true,
-        }),
-      }, token);
+      const result = await apiFetch<{ tracker: TrackerOption; contract: { id: number } | null; message: string }>(
+        `/trackers/${linkForm.tracker_id}/link-vehicle`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            vehicle_id: selectedVehicle.id,
+            plan_id: linkForm.plan_id ? Number(linkForm.plan_id) : null,
+            payment_method: linkForm.payment_method,
+            billing_day: linkForm.billing_day ? Number(linkForm.billing_day) : undefined,
+            billing_modality: 'boleto',
+            start_date: linkForm.start_date,
+          }),
+        },
+        token,
+      );
+
+      // Cria ClientChargeItem para cada serviço adicional selecionado
+      if (selectedProductIds.length > 0 && result.contract) {
+        await Promise.all(
+          selectedProductIds.map((pid) => {
+            const product = serviceProducts.find((sp) => sp.id === pid);
+            if (!product) return Promise.resolve();
+            return apiFetch(
+              '/client-charge-items',
+              {
+                method: 'POST',
+                body: JSON.stringify({
+                  client_id: selectedVehicle.client_id,
+                  contract_id: result.contract!.id,
+                  vehicle_id: selectedVehicle.id,
+                  service_product_id: pid,
+                  title: product.name,
+                  quantity: 1,
+                  unit_price: product.default_price,
+                  installment_count: 1,
+                  start_date: linkForm.start_date,
+                  remove_after_payment: true,
+                }),
+              },
+              token,
+            );
+          }),
+        );
+      }
+
       setFeedback('Rastreador vinculado com sucesso.');
       setLinkTrackerOpen(false);
       setSelectedProductIds([]);
       setLinkForm({
-        tracker_id: '', plan_id: '', billing_modality: 'boleto',
-        billing_cycles: '12', billing_day: '',
+        tracker_id: '', plan_id: '', payment_method: 'boleto',
+        billing_day: '',
         start_date: new Date().toISOString().slice(0, 10),
       });
       await loadVehicles(token);
@@ -869,8 +1037,10 @@ export default function VeiculosPage() {
       if (uninstallDate) params.set('uninstall_date', uninstallDate);
       if (destinationContractId) params.set('destination_contract_id', destinationContractId);
       if (uninstallServiceProductId) params.set('uninstall_service_product_id', uninstallServiceProductId);
+      if (uninstallFee && parseFloat(uninstallFee) > 0) params.set('uninstall_fee', uninstallFee);
       await apiFetch(`/vehicles/${selectedVehicle.id}/uninstall?${params.toString()}`, { method: 'POST' }, token);
       setFeedback('Desinstalação registrada com sucesso.');
+      setUninstallFee('');
       setUninstallOpen(false);
       await loadVehicles(token);
       const updated = await apiFetch<Vehicle>(`/vehicles/${selectedVehicle.id}`, {}, token);
@@ -906,7 +1076,7 @@ export default function VeiculosPage() {
             actions={
               <div className="flex items-center gap-2">
                 {token && <ExportButton path="exports/vehicles" basename="veiculos" token={token} params={{ status: statusFilter, client_id: clientFilter }} />}
-                {canEdit && <Button type="button" onClick={openCreateModal}>Adicionar veículo</Button>}
+                {canEdit && <Button type="button" onClick={() => setWizardOpen(true)}>Adicionar veículo</Button>}
               </div>
             }
           />
@@ -932,7 +1102,7 @@ export default function VeiculosPage() {
             {loading ? (
               <TableSkeleton rows={7} cols={5} />
             ) : vehicles.length === 0 ? (
-              <EmptyState title="Nenhum veículo encontrado" description="Ajuste os filtros ou cadastre o primeiro veículo." action={canEdit ? <Button onClick={openCreateModal}>Adicionar veículo</Button> : undefined} />
+              <EmptyState title="Nenhum veículo encontrado" description="Ajuste os filtros ou cadastre o primeiro veículo." action={canEdit ? <Button onClick={() => setWizardOpen(true)}>Adicionar veículo</Button> : undefined} />
             ) : (
               <Table>
                 <TableHead>
@@ -1126,12 +1296,12 @@ export default function VeiculosPage() {
         )}
       </Modal>
 
-      {/* Modal: Editar vínculo completo com veículo */}
+      {/* Modal: Vincular rastreador */}
       <Modal
         open={linkTrackerOpen}
         onClose={() => { setLinkTrackerOpen(false); setSelectedProductIds([]); }}
-        title="Editar vínculo completo com veículo"
-        subtitle={selectedVehicle?.plate ?? 'Vínculo'}
+        title="Vincular rastreador ao veículo"
+        subtitle={selectedVehicle ? `${selectedVehicle.plate} · ${[selectedVehicle.brand, selectedVehicle.model].filter(Boolean).join(' ') || 'Veículo'}` : 'Vínculo'}
         size="xl"
       >
         <LinkTrackerForm
@@ -1197,22 +1367,39 @@ export default function VeiculosPage() {
                       </Td>
                       <Td>
                         {canEdit && (
-                          <button
-                            onClick={() => {
-                              setLinkForm((p) => ({
-                                ...p,
-                                tracker_id: String(t.id),
-                                plan_id: t.active_plan_id ? String(t.active_plan_id) : '',
-                              }));
-                              setTrackerViewOpen(false);
-                              loadStockTrackers();
-                              setLinkTrackerOpen(true);
-                            }}
-                            className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
-                            title="Editar vínculo"
-                          >
-                            <Pencil className="h-3.5 w-3.5" />
-                          </button>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              onClick={() => {
+                                setLinkForm((p) => ({
+                                  ...p,
+                                  tracker_id: String(t.id),
+                                  plan_id: t.active_plan_id ? String(t.active_plan_id) : '',
+                                }));
+                                setTrackerViewOpen(false);
+                                loadStockTrackers();
+                                setLinkTrackerOpen(true);
+                              }}
+                              className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
+                              title="Editar vínculo"
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              onClick={() => {
+                                // Auto-fill uninstall modal with recommended product
+                                const recommended = serviceProducts.find(sp => sp.auto_add_on_uninstall);
+                                setUninstallServiceProductId(recommended ? String(recommended.id) : '');
+                                setUninstallFee(recommended ? '' : '');
+                                setUninstallDate(new Date().toISOString().slice(0, 10));
+                                setTrackerViewOpen(false);
+                                setUninstallOpen(true);
+                              }}
+                              className="flex h-7 items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 text-xs font-medium text-rose-600 hover:bg-rose-100 dark:border-rose-900/40 dark:bg-rose-950/30 dark:text-rose-400 dark:hover:bg-rose-950/50"
+                              title="Desvincular rastreador"
+                            >
+                              Desvincular
+                            </button>
+                          </div>
                         )}
                       </Td>
                     </Tr>
@@ -1360,16 +1547,76 @@ export default function VeiculosPage() {
         </form>
       </Modal>
 
-      <Modal open={uninstallOpen} onClose={() => { setUninstallOpen(false); setModalError(''); }} title="Registrar desinstalação" description="Gere a desinstalação do veículo com pró-rata, taxa de serviço e retorno do equipamento ao estoque." size="lg">
+      {/* ── Wizard: fluxo contínuo de cadastro novo ── */}
+      {token && (
+        <VehicleOnboardingWizard
+          open={wizardOpen}
+          token={token}
+          clients={clients}
+          onComplete={async () => {
+            setWizardOpen(false);
+            setFeedback('Veículo cadastrado com sucesso.');
+            if (token) await loadVehicles(token);
+          }}
+          onClose={() => setWizardOpen(false)}
+        />
+      )}
+
+      <Modal open={uninstallOpen} onClose={() => { setUninstallOpen(false); setModalError(''); setUninstallFee(''); setUninstallServiceProductId(''); }} title="Registrar desinstalação" description="Registre a retirada do rastreador. A taxa de desinstalação (se houver) será incluída no próximo fechamento." size="lg">
         <div className="space-y-5">
           {modalError && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>}
           <div className="grid gap-4 md:grid-cols-2">
-            <label className="block"><span className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-200">Data da desinstalação</span><input type="date" className={fieldClass} value={uninstallDate} onChange={(e) => setUninstallDate(e.target.value)} /></label>
-            <label className="block"><span className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-200">Taxa de desinstalação</span><select className={fieldClass} value={uninstallServiceProductId} onChange={(e) => setUninstallServiceProductId(e.target.value)}><option value="">Selecione um serviço</option>{serviceProducts.map((item) => <option key={item.id} value={item.id}>{item.name}{item.auto_add_on_uninstall ? ' • recomendado' : ''}</option>)}</select></label>
-            <label className="block md:col-span-2"><span className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-200">Contrato de destino (opcional)</span><select className={fieldClass} value={destinationContractId} onChange={(e) => setDestinationContractId(e.target.value)}><option value="">Sem transferência</option>{contracts.map((item) => <option key={item.id} value={item.id}>{item.client_id} • {item.plan_name || 'Contrato'}</option>)}</select></label>
+            <label className="block">
+              <span className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-200">Data da desinstalação</span>
+              <input type="date" className={`${fieldClass} w-full`} value={uninstallDate} onChange={(e) => setUninstallDate(e.target.value)} />
+            </label>
+            <label className="block">
+              <span className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-200">Taxa direta (R$) <span className="font-normal text-slate-400">opcional</span></span>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="0,00"
+                className={`${fieldClass} w-full`}
+                value={uninstallFee}
+                onChange={(e) => setUninstallFee(e.target.value)}
+              />
+            </label>
+            <label className="block md:col-span-2">
+              <span className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-200">Serviço de desinstalação <span className="font-normal text-slate-400">opcional</span></span>
+              <select
+                className={`${fieldClass} w-full`}
+                value={uninstallServiceProductId}
+                onChange={(e) => {
+                  setUninstallServiceProductId(e.target.value);
+                  const prod = serviceProducts.find(sp => String(sp.id) === e.target.value);
+                  if (prod) setUninstallFee(String(prod.default_price));
+                  else setUninstallFee('');
+                }}
+              >
+                <option value="">Sem taxa de desinstalação</option>
+                {serviceProducts.map((item) => (
+                  <option key={item.id} value={item.id}>{item.name} — R$ {item.default_price.toFixed(2)}{item.auto_add_on_uninstall ? ' ✓ recomendado' : ''}</option>
+                ))}
+              </select>
+            </label>
+            {uninstallServiceProductId && (
+              <div className="md:col-span-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-400">
+                Taxa de R$ {Number(uninstallFee || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} será incluída no fechamento do mês da desinstalação.
+              </div>
+            )}
+            <label className="block md:col-span-2">
+              <span className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-200">Contrato de destino <span className="font-normal text-slate-400">opcional — para transferência de período</span></span>
+              <select className={`${fieldClass} w-full`} value={destinationContractId} onChange={(e) => setDestinationContractId(e.target.value)}>
+                <option value="">Sem transferência</option>
+                {contracts.map((item) => (
+                  <option key={item.id} value={item.id}>{item.client_id} • {item.plan_name || 'Contrato'}</option>
+                ))}
+              </select>
+            </label>
           </div>
           <div className="flex justify-end gap-3">
-            <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-600 dark:border-slate-700 dark:text-slate-200 dark:hover:border-cyan-400 dark:hover:text-cyan-300" onClick={() => setUninstallOpen(false)}>Cancelar</button>
+            <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-600 dark:border-slate-700 dark:text-slate-200 dark:hover:border-cyan-400 dark:hover:text-cyan-300" onClick={() => { setUninstallOpen(false); setUninstallFee(''); }}>Cancelar</button>
             <Button type="button" onClick={confirmUninstall}>Confirmar desinstalação</Button>
           </div>
         </div>

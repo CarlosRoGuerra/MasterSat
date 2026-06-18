@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { ReactNode } from 'react';
 import { Radio, FileText, Wallet } from 'lucide-react';
+import Image from 'next/image';
 
 const features = [
   {
@@ -44,12 +45,15 @@ export function AuthShell({
 
           {/* Logo */}
           <div className="relative">
-            <div className="flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/15">
-                <Radio className="h-5 w-5 text-white" />
-              </div>
-              <span className="text-sm font-bold tracking-wide">Mastersat</span>
-            </div>
+            <Image
+              src="/logo.png"
+              alt="MasterSat"
+              width={180}
+              height={60}
+              className="h-12 w-auto object-contain brightness-0 invert"
+              draggable={false}
+              priority
+            />
           </div>
 
           {/* Headline */}
@@ -94,11 +98,16 @@ export function AuthShell({
         <section className="flex items-center justify-center border-l border-slate-200 bg-white px-8 py-12 dark:border-slate-800 dark:bg-slate-900">
           <div className="w-full max-w-sm">
             {/* Mobile logo */}
-            <div className="mb-8 flex items-center gap-2 lg:hidden">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-700">
-                <Radio className="h-4 w-4 text-white" />
-              </div>
-              <span className="text-sm font-bold text-slate-900 dark:text-white">Mastersat</span>
+            <div className="mb-8 lg:hidden">
+              <Image
+                src="/logo.png"
+                alt="MasterSat"
+                width={160}
+                height={54}
+                className="h-10 w-auto object-contain dark:brightness-0 dark:invert"
+                draggable={false}
+                priority
+              />
             </div>
 
             <div className="mb-8">

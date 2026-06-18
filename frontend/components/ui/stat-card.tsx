@@ -17,27 +17,49 @@ export function StatCard({
   hint,
   tone = 'default',
   icon,
+  delta,
 }: {
   label: string;
   value: ReactNode;
   hint?: string;
   tone?: Tone;
   icon?: ReactNode;
+  /** Optional month-over-month delta */
+  delta?: { value: number; pct?: number };
 }) {
   const cfg = toneConfig[tone];
+
+  const deltaColor = !delta ? '' :
+    delta.value > 0 ? 'text-emerald-600 dark:text-emerald-400' :
+    delta.value < 0 ? 'text-rose-500 dark:text-rose-400' :
+    'text-slate-400 dark:text-slate-500';
+
+  const deltaPrefix = !delta ? '' : delta.value > 0 ? '↑' : delta.value < 0 ? '↓' : '=';
+
   return (
     <div className={clsx('rounded-2xl border p-5 shadow-card', cfg.card)}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <p className="truncate text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
+          <p className="truncate text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500 dark:text-slate-400">
             {label}
           </p>
-          <p className={clsx('mt-3 text-3xl font-bold tabular-nums', cfg.value)}>
+          <p className={clsx('mt-2 text-[28px] font-medium leading-none tabular-nums', cfg.value)}>
             {value}
           </p>
-          {hint && (
-            <p className="mt-1.5 text-xs text-slate-500 dark:text-slate-400">{hint}</p>
-          )}
+          <div className="mt-1.5 flex items-center gap-2">
+            {hint && (
+              <p className="text-[12px] text-slate-500 dark:text-slate-400">{hint}</p>
+            )}
+            {delta && delta.value !== 0 && (
+              <span className={clsx('text-[11px] font-semibold tabular-nums', deltaColor)}>
+                {deltaPrefix} {Math.abs(delta.value)}
+                {delta.pct !== undefined && delta.pct !== 0 && (
+                  <span className="ml-0.5 font-normal opacity-70">({Math.abs(delta.pct)}%)</span>
+                )}
+                <span className="ml-0.5 font-normal opacity-60">vs mês ant.</span>
+              </span>
+            )}
+          </div>
         </div>
         {icon && (
           <div className={clsx('flex h-10 w-10 shrink-0 items-center justify-center rounded-xl', cfg.icon)}>

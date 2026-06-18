@@ -1142,10 +1142,12 @@ export default function ClientesPage() {
               <Th>Parcela</Th>
               <Th>Mês Ref.</Th>
               <Th>Situação</Th>
+              <Th className="w-24" />
             </TableHead>
             <TableBody>
               {clientBillings.map((b) => {
                 const fmt = (v: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v);
+                const isAberto = b.status === 'pendente' || b.status === 'vencida';
                 return (
                   <Tr key={b.id}>
                     <Td className="text-xs text-slate-500">{b.id}</Td>
@@ -1160,6 +1162,38 @@ export default function ClientesPage() {
                     </Td>
                     <Td className="text-xs">{b.period_label ?? '—'}</Td>
                     <Td><Badge variant={statusVariant(b.status)}>{statusLabel(b.status)}</Badge></Td>
+                    <Td>
+                      {isAberto && token && (
+                        <button
+                          type="button"
+                          title="Baixar boleto PDF"
+                          onClick={async () => {
+                            try {
+                              const resp = await fetch(
+                                `${API_URL.replace(/\/+$/, '')}/boletos/${b.id}/pdf`,
+                                { headers: { Authorization: `Bearer ${token}` } }
+                              );
+                              if (!resp.ok) throw new Error(`Erro ${resp.status}`);
+                              const blob = await resp.blob();
+                              const url = URL.createObjectURL(blob);
+                              const a = document.createElement('a');
+                              a.href = url;
+                              // Usa o filename do header Content-Disposition se disponível
+                              const cd = resp.headers.get('Content-Disposition') ?? '';
+                              const match = cd.match(/filename="?([^"]+)"?/);
+                              a.download = match?.[1] ?? `boleto-${b.id}.pdf`;
+                              a.click();
+                              URL.revokeObjectURL(url);
+                            } catch (e) {
+                              alert(e instanceof Error ? e.message : 'Erro ao baixar boleto');
+                            }
+                          }}
+                          className="flex items-center gap-1 rounded-lg border border-brand-200 bg-brand-50 px-2.5 py-1 text-[11px] font-semibold text-brand-700 transition hover:bg-brand-100 dark:border-brand-900/40 dark:bg-brand-950/30 dark:text-brand-400"
+                        >
+                          ⬇ Boleto
+                        </button>
+                      )}
+                    </Td>
                   </Tr>
                 );
               })}

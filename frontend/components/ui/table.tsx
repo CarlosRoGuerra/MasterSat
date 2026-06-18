@@ -72,7 +72,7 @@ export function Td({
 }: { children?: ReactNode } & TdHTMLAttributes<HTMLTableCellElement>) {
   return (
     <td
-      className={clsx('px-4 py-3 text-sm text-slate-700 dark:text-slate-300', className)}
+      className={clsx('px-4 py-3 text-[13px] text-slate-700 dark:text-slate-300', className)}
       {...props}
     >
       {children}
