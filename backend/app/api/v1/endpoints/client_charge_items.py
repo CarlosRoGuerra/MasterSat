@@ -15,7 +15,7 @@ from app.models.service_product import ServiceProduct
 from app.models.tracker import Tracker
 from app.models.vehicle import Vehicle
 from app.schemas.client_charge_item import ClientChargeItemCreate, ClientChargeItemOut, ClientChargeItemUpdate
-from app.services.financial import decimal_to_float, generate_item_billings
+from app.services.financial import decimal_to_float
 
 router = APIRouter()
 
@@ -102,8 +102,6 @@ def create_item(payload: ClientChargeItemCreate, db: Session = Depends(get_db), 
     db.add(obj)
     db.commit()
     db.refresh(obj)
-    if payload.auto_generate_billings:
-        generate_item_billings(db, obj)
     return serialize_item(db, obj)
 
 

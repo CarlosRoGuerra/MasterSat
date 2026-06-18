@@ -16,8 +16,7 @@ class ContractBase(BaseModel):
 
 
 class ContractCreate(ContractBase):
-    auto_generate_billings: bool = True
-    billing_cycles: int = Field(default=12, ge=1, le=60)
+    pass
 
 
 class ContractUpdate(BaseModel):

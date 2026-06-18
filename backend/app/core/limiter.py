@@ -20,6 +20,7 @@ from slowapi.util import get_remote_address
 limiter = Limiter(
     key_func=get_remote_address,
     default_limits=['200/minute'],
-    # Em produção com nginx: respeita X-Forwarded-For
-    headers_enabled=True,
+    # headers_enabled requer response: Response em cada endpoint — desabilitado para evitar
+    # "parameter `response` must be an instance of starlette.responses.Response"
+    headers_enabled=False,
 )

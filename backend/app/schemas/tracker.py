@@ -196,15 +196,5 @@ class TrackerLinkPayload(BaseModel):
     start_date: date = Field(default_factory=date.today)
     billing_day: int | None = Field(default=None, ge=1, le=28)
     payment_method: str | None = None
-    # 'boleto' = recorrência contínua (sem prazo fixo)
-    # 'carne'  = parcelado com quantidade definida pelo operador
     billing_modality: str = 'boleto'
-    # Taxa de instalação cobrada apenas na primeira fatura (pró-rata)
-    installation_fee: float = Field(default=0.0, ge=0)
-    # Se True, primeira fatura é calculada com pró-rata proporcional aos dias restantes
-    generate_prorated: bool = True
     notes: str | None = None
-    auto_generate_billings: bool = True
-    # Para 'boleto': usar 60 como padrão (5 anos); operador pode gerar mais depois
-    # Para 'carne': operador informa a quantidade exata de parcelas
-    billing_cycles: int = Field(default=60, ge=1, le=999)

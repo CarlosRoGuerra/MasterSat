@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 import time
 
@@ -31,6 +32,41 @@ from app.db.session import SessionLocal  # noqa: E402
 from app.models.ailos_integration import AilosIntegration  # noqa: E402
 from app.services import ailos_client  # noqa: E402
 from app.services.ailos_client import AilosApiError, AilosError  # noqa: E402
+
+
+def _diagnosticar_html(html: str) -> None:
+    """Extrai a mensagem de erro de login (LG003/LG006/BLOQUEADA) do HTML da Ailos."""
+    # Salva o corpo completo para inspeção manual, se necessário.
+    caminho = '/tmp/ailos_login_resposta.html'
+    try:
+        with open(caminho, 'w', encoding='utf-8') as fh:
+            fh.write(html)
+        print(f'  (HTML completo salvo em {caminho})')
+    except OSError:
+        pass
+
+    # Procura mensagens de erro conhecidas (validation summary do ASP.NET).
+    achados: list[str] = []
+    for padrao in (
+        r'LG0\d{2}[^<\n]*',                 # LG003, LG006, ...
+        r'[^<>\n]*BLOQUEAD[AO][^<\n]*',     # conta bloqueada
+        r'[^<>\n]*[Cc]ooperado n[ãa]o possui[^<\n]*',
+        r'[^<>\n]*[Cc]redencial[^<\n]*inv[áa]lid[^<\n]*',
+        r'[^<>\n]*[Dd]esenvolvedor[^<\n]*UUID[^<\n]*',
+        r'[^<>\n]*callback[^<\n]*inv[áa]lid[^<\n]*',
+    ):
+        for m in re.findall(padrao, html):
+            texto = m.strip()
+            if texto and texto not in achados:
+                achados.append(texto)
+
+    if achados:
+        print('\n  🔎 ERRO retornado pela Ailos:')
+        for a in achados:
+            print(f'     → {a}')
+    else:
+        print('\n  🔎 Nenhuma mensagem de erro LG00x encontrada no HTML.')
+        print('     (pode ser que o POST não foi processado como login — veja o arquivo salvo)')
 
 
 def main() -> None:
@@ -50,8 +86,16 @@ def main() -> None:
             sys.exit(1)
 
         print(f'Resposta do login/index: HTTP {resultado["status_code"]}')
-        corpo = resultado['json'] if resultado['json'] is not None else resultado['text']
-        print(f'  corpo: {corpo}\n')
+        if resultado['json'] is not None:
+            print(f'  corpo (JSON): {resultado["json"]}\n')
+        else:
+            html = resultado['text'] or ''
+            if '<html' in html.lower():
+                print('  corpo: página HTML de login (login NÃO concluído)')
+                _diagnosticar_html(html)
+            else:
+                print(f'  corpo: {html}')
+        print()
 
         print('Aguardando o callback da Ailos persistir o JWT...')
         for i in range(10):

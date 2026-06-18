@@ -47,9 +47,11 @@ def delinquency_status(
             func.count(Billing.id).label('qtd'),
             func.sum(Billing.amount).label('valor'),
         )
+        .join(Client, Client.id == Billing.client_id)
         .filter(
             Billing.is_deleted.is_(False),
             Billing.status == BillingStatus.OVERDUE,
+            Client.is_deleted.is_(False),
         )
         .first()
     )

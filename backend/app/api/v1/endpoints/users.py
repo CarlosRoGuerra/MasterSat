@@ -10,7 +10,7 @@ from app.core.security import get_password_hash
 router = APIRouter()
 @router.get('/', response_model=list[UserOut])
 def list_items(db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN))):
-    return db.scalars(select(User).where(User.is_deleted == False)).all()
+    return db.scalars(select(User).where(User.is_deleted.is_(False))).all()
 @router.post('/', response_model=UserOut)
 def create_item(payload: UserCreate, db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN))):
     data = payload.model_dump()

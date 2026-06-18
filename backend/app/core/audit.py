@@ -54,6 +54,7 @@ _ENTITY_MAP: dict[str, str] = {
     'integrations':   'integracao',
     'auth':           'autenticacao',
     'dashboard':      'dashboard',
+    'ailos':          'ailos',
 }
 
 _METHOD_DESC: dict[str, str] = {

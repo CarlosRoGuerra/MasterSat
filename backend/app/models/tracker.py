@@ -36,6 +36,7 @@ class Tracker(Base, TimestampMixin, SoftDeleteMixin):
 
     acquisition_date: Mapped[Date | None] = mapped_column(Date, nullable=True)
     install_date: Mapped[Date | None] = mapped_column(Date, nullable=True)
+    uninstall_date: Mapped[Date | None] = mapped_column(Date, nullable=True)
     warranty_until: Mapped[Date | None] = mapped_column(Date, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 

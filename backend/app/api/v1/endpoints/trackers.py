@@ -19,7 +19,6 @@ from app.models.user import User
 from app.models.vehicle import Vehicle
 from app.schemas.contract import ContractOut
 from app.schemas.tracker import TrackerCreate, TrackerHistoryOut, TrackerLinkPayload, TrackerOut, TrackerUpdate
-from app.services.financial import generate_monthly_billings, generate_prorated_first_billing
 
 router = APIRouter()
 
@@ -470,32 +469,6 @@ def link_vehicle(
             notes=payload.notes,
         )
         db.add(contract)
-        db.flush()
-
-        if payload.auto_generate_billings:
-            install_date = tracker.install_date or payload.start_date
-            use_prorated = (
-                payload.generate_prorated
-                and install_date.day > 1
-            )
-            if use_prorated:
-                # Primeira fatura: pró-rata + taxa de instalação
-                generate_prorated_first_billing(
-                    db, contract, plan,
-                    install_date=install_date,
-                    installation_fee=payload.installation_fee,
-                )
-                # Faturas recorrentes: começam do mês seguinte (start_cycle=1)
-                if payload.billing_modality == 'carne':
-                    # Carnê: gera exatamente N parcelas mensais (sem a do mês atual)
-                    generate_monthly_billings(db, contract, payload.billing_cycles, start_cycle=1)
-                else:
-                    # Boleto: gera os próximos ciclos começando do mês 2
-                    generate_monthly_billings(db, contract, payload.billing_cycles, start_cycle=1)
-            else:
-                # Instalação no dia 1 ou pró-rata desativado: gera normalmente
-                generate_monthly_billings(db, contract, payload.billing_cycles)
-
         db.flush()
         contract_out = _serialize_contract(db, contract)
 

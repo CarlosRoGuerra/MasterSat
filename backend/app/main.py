@@ -11,7 +11,7 @@ from app.core.config import settings
 from app.core.limiter import limiter
 from app.core.security import get_password_hash
 from app.db.session import Base, SessionLocal, engine
-from app.models import audit_log, billing, billing_change_log, client, client_charge_item, contract, document, integration_log, password_reset_token, plan, service_order, service_order_status_log, service_product, tracker, tracker_history, user, vehicle  # noqa: F401 — side-effect imports that register models with SQLAlchemy Base
+from app.models import ailos_api_log, ailos_boleto, ailos_client_token, ailos_integration, ailos_lote, ailos_retorno_arquivo, audit_log, billing, billing_change_log, client, client_charge_item, closure_job, contract, document, integration_log, password_reset_token, plan, service_order, service_order_status_log, service_product, tracker, tracker_history, uninstall_event, user, vehicle  # noqa: F401 — side-effect imports that register models with SQLAlchemy Base
 from app.core.audit import AuditMiddleware
 from app.models.enums import UserRole
 from app.models.user import User
@@ -112,6 +112,7 @@ def ensure_schema_updates():
                 'communication_type': 'ALTER TABLE trackers ADD COLUMN communication_type INTEGER',
                 'service_plan_name': 'ALTER TABLE trackers ADD COLUMN service_plan_name VARCHAR(120)',
                 'installation_fee': 'ALTER TABLE trackers ADD COLUMN installation_fee NUMERIC(12,2)',
+                'uninstall_date': 'ALTER TABLE trackers ADD COLUMN uninstall_date DATE',
                 'integration_status': 'ALTER TABLE trackers ADD COLUMN integration_status VARCHAR(30)',
                 'integration_last_code': 'ALTER TABLE trackers ADD COLUMN integration_last_code VARCHAR(20)',
                 'integration_last_description': 'ALTER TABLE trackers ADD COLUMN integration_last_description TEXT',
@@ -186,6 +187,153 @@ def ensure_schema_updates():
             if 'billing_modality' not in contract_columns:
                 conn.execute(text("ALTER TABLE contracts ADD COLUMN billing_modality VARCHAR(20) DEFAULT 'boleto'"))
 
+        # ── Uninstall events (taxa de desinstalação pendente para fechamento) ──
+        if not inspector.has_table('uninstall_events'):
+            conn.execute(text('''
+                CREATE TABLE IF NOT EXISTS uninstall_events (
+                    id SERIAL PRIMARY KEY,
+                    vehicle_id INTEGER NOT NULL REFERENCES vehicles(id),
+                    tracker_id INTEGER REFERENCES trackers(id),
+                    contract_id INTEGER REFERENCES contracts(id),
+                    client_id INTEGER NOT NULL REFERENCES clients(id),
+                    uninstall_date DATE NOT NULL,
+                    fee_amount NUMERIC(10,2),
+                    service_product_id INTEGER REFERENCES service_products(id),
+                    status VARCHAR(20) NOT NULL DEFAULT \'pending\',
+                    billing_id INTEGER REFERENCES billings(id),
+                    processed_at TIMESTAMP WITH TIME ZONE,
+                    notes TEXT,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now()
+                )
+            '''))
+
+        # ── Closure jobs (rastreamento de geração assíncrona de fechamento) ──
+        if not inspector.has_table('closure_jobs'):
+            conn.execute(text('''
+                CREATE TABLE IF NOT EXISTS closure_jobs (
+                    id SERIAL PRIMARY KEY,
+                    reference_month VARCHAR(7) NOT NULL,
+                    filter_type VARCHAR(20) NOT NULL DEFAULT \'all\',
+                    client_id INTEGER,
+                    status VARCHAR(20) NOT NULL DEFAULT \'queued\',
+                    result JSON,
+                    error TEXT,
+                    started_at TIMESTAMP WITH TIME ZONE,
+                    completed_at TIMESTAMP WITH TIME ZONE,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now()
+                )
+            '''))
+
+        # ── Integração Ailos — Cobrança Bancária API ──────────────────────────
+        # Ordem de criação respeita as dependências de FK abaixo.
+        if not inspector.has_table('ailos_lotes'):
+            conn.execute(text('''
+                CREATE TABLE IF NOT EXISTS ailos_lotes (
+                    id SERIAL PRIMARY KEY,
+                    tipo VARCHAR(10) NOT NULL,
+                    ticket VARCHAR(60) NOT NULL UNIQUE,
+                    numero_convenio VARCHAR(20) NOT NULL,
+                    billing_ids JSON,
+                    status VARCHAR(20) NOT NULL DEFAULT \'processing\',
+                    payload_response JSON,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now()
+                )
+            '''))
+
+        if not inspector.has_table('ailos_boletos'):
+            conn.execute(text('''
+                CREATE TABLE IF NOT EXISTS ailos_boletos (
+                    id SERIAL PRIMARY KEY,
+                    billing_id INTEGER NOT NULL UNIQUE REFERENCES billings(id),
+                    lote_id INTEGER REFERENCES ailos_lotes(id),
+                    numero_convenio VARCHAR(20) NOT NULL,
+                    numero_documento VARCHAR(40),
+                    nosso_numero VARCHAR(40),
+                    identificador_unico_titulo VARCHAR(60),
+                    linha_digitavel VARCHAR(60),
+                    codigo_barras VARCHAR(60),
+                    valor_nominal NUMERIC(10,2),
+                    data_vencimento DATE,
+                    status_ailos VARCHAR(40),
+                    payload_request JSON,
+                    payload_response JSON,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now()
+                )
+            '''))
+
+        if not inspector.has_table('ailos_api_logs'):
+            conn.execute(text('''
+                CREATE TABLE IF NOT EXISTS ailos_api_logs (
+                    id SERIAL PRIMARY KEY,
+                    endpoint VARCHAR(255) NOT NULL,
+                    method VARCHAR(10) NOT NULL,
+                    request_payload JSON,
+                    response_payload JSON,
+                    status_code INTEGER,
+                    success BOOLEAN NOT NULL DEFAULT FALSE,
+                    error_message TEXT,
+                    correlation_id VARCHAR(40),
+                    billing_id INTEGER REFERENCES billings(id),
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now()
+                )
+            '''))
+
+        if not inspector.has_table('ailos_integrations'):
+            conn.execute(text('''
+                CREATE TABLE IF NOT EXISTS ailos_integrations (
+                    id SERIAL PRIMARY KEY,
+                    numero_convenio VARCHAR(20) NOT NULL,
+                    codigo_carteira INTEGER NOT NULL DEFAULT 1,
+                    cooperativa_codigo VARCHAR(20),
+                    conta_numero VARCHAR(20),
+                    conta_digito VARCHAR(4),
+                    status VARCHAR(20) NOT NULL DEFAULT \'pending\',
+                    state VARCHAR(80),
+                    cooperado_token_encrypted TEXT,
+                    cooperado_token_expires_at TIMESTAMP WITH TIME ZONE,
+                    authorized_at TIMESTAMP WITH TIME ZONE,
+                    last_refresh_at TIMESTAMP WITH TIME ZONE,
+                    last_error TEXT,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now()
+                )
+            '''))
+
+        if not inspector.has_table('ailos_client_tokens'):
+            conn.execute(text('''
+                CREATE TABLE IF NOT EXISTS ailos_client_tokens (
+                    id SERIAL PRIMARY KEY,
+                    environment VARCHAR(20) NOT NULL UNIQUE,
+                    access_token_encrypted TEXT NOT NULL,
+                    token_type VARCHAR(40),
+                    scope VARCHAR(255),
+                    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now()
+                )
+            '''))
+
+        if not inspector.has_table('ailos_retorno_arquivos'):
+            conn.execute(text('''
+                CREATE TABLE IF NOT EXISTS ailos_retorno_arquivos (
+                    id SERIAL PRIMARY KEY,
+                    numero_convenio VARCHAR(20) NOT NULL,
+                    data_movimento DATE NOT NULL,
+                    ticket VARCHAR(60) UNIQUE,
+                    status VARCHAR(20) NOT NULL DEFAULT \'requested\',
+                    storage_object_key VARCHAR(255),
+                    requested_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
+                    downloaded_at TIMESTAMP WITH TIME ZONE,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now()
+                )
+            '''))
+
 
 @app.on_event('startup')
 def on_startup():
@@ -204,27 +352,22 @@ def on_startup():
         pass  # Não bloqueia o startup se falhar
     db = SessionLocal()
     try:
+        # Cria o admin padrão apenas na primeira execução (banco vazio).
+        # NUNCA sobrescreve um usuário existente — resetar a senha a cada
+        # restart criava uma porta dos fundos permanente com credenciais
+        # públicas (admin@rastreamento.local / Admin@123).
         admin = db.query(User).filter(User.email == 'admin@rastreamento.local').first()
-        admin_hash = get_password_hash('Admin@123')
-
         if not admin:
             db.add(
                 User(
                     name='Administrador',
                     email='admin@rastreamento.local',
-                    password_hash=admin_hash,
+                    password_hash=get_password_hash('Admin@123'),
                     role=UserRole.ADMIN,
                     active=True,
                 )
             )
-        else:
-            admin.name = 'Administrador'
-            admin.password_hash = admin_hash
-            admin.role = UserRole.ADMIN
-            admin.active = True
-            admin.is_deleted = False
-
-        db.commit()
+            db.commit()
     finally:
         db.close()
 

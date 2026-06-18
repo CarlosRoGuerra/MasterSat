@@ -14,7 +14,7 @@ from app.models.plan import Plan
 from app.models.tracker import Tracker
 from app.models.vehicle import Vehicle
 from app.schemas.contract import ContractCreate, ContractOut, ContractUpdate
-from app.services.financial import generate_monthly_billings, refresh_overdue_statuses
+from app.services.financial import refresh_overdue_statuses
 
 router = APIRouter()
 
@@ -56,11 +56,11 @@ def serialize_contract(db: Session, contract: Contract) -> ContractOut:
         billing_day=contract.billing_day,
         payment_method=contract.payment_method,
         notes=contract.notes,
-        client_name=client.name if client else None,
-        plan_name=plan.name if plan else None,
-        vehicle_plate=vehicle.plate if vehicle else None,
-        tracker_identifier=(tracker.imei if tracker else None),
-        monthly_value=float(plan.price) if plan else None,
+        client_name=client.name if (client and not client.is_deleted) else None,
+        plan_name=plan.name if (plan and not plan.is_deleted) else None,
+        vehicle_plate=vehicle.plate if (vehicle and not vehicle.is_deleted) else None,
+        tracker_identifier=(tracker.imei if (tracker and not tracker.is_deleted) else None),
+        monthly_value=float(plan.price) if (plan and not plan.is_deleted) else None,
         open_billings=open_billings,
         next_due_date=next_due[0] if next_due else None,
     )
@@ -135,25 +135,15 @@ def create_item(payload: ContractCreate, db: Session = Depends(get_db), _: objec
     if not plan or plan.is_deleted:
         raise HTTPException(status_code=404, detail='Plano não encontrado')
     validate_links(db, payload.client_id, payload.vehicle_id, payload.tracker_id)
-    data = payload.model_dump(exclude={'auto_generate_billings', 'billing_cycles'})
+    data = payload.model_dump()
     if not data.get('billing_day'):
         data['billing_day'] = payload.start_date.day if payload.start_date.day <= 28 else 28
     obj = Contract(**data)
     db.add(obj)
     db.commit()
     db.refresh(obj)
-    if payload.auto_generate_billings:
-        generate_monthly_billings(db, obj, payload.billing_cycles)
     return serialize_contract(db, obj)
 
-
-@router.post('/{item_id}/generate-billings', response_model=dict)
-def generate_billings(item_id: int, months: int = 12, db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
-    obj = db.get(Contract, item_id)
-    if not obj or obj.is_deleted:
-        raise HTTPException(status_code=404, detail='Contrato não encontrado')
-    created = generate_monthly_billings(db, obj, months)
-    return {'message': f'{len(created)} cobrança(s) gerada(s) para o contrato.', 'generated': len(created)}
 
 
 @router.get('/{item_id}', response_model=ContractOut)

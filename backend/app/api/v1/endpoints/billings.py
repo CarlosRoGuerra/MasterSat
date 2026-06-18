@@ -55,7 +55,14 @@ def base_query(db: Session):
         .outerjoin(Plan, Plan.id == Contract.plan_id)
         .outerjoin(Vehicle, Vehicle.id == Billing.vehicle_id)
         .outerjoin(Tracker, Tracker.id == Billing.tracker_id)
-        .filter(Billing.is_deleted == False)
+        .filter(
+            Billing.is_deleted.is_(False),
+            Client.is_deleted.is_(False),
+            or_(Contract.id.is_(None), Contract.is_deleted.is_(False)),
+            or_(Plan.id.is_(None), Plan.is_deleted.is_(False)),
+            or_(Vehicle.id.is_(None), Vehicle.is_deleted.is_(False)),
+            or_(Tracker.id.is_(None), Tracker.is_deleted.is_(False)),
+        )
     )
 
 

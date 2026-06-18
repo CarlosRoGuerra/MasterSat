@@ -19,7 +19,7 @@ class ClientChargeItemBase(BaseModel):
 
 
 class ClientChargeItemCreate(ClientChargeItemBase):
-    auto_generate_billings: bool = True
+    pass
 
 
 class ClientChargeItemUpdate(BaseModel):

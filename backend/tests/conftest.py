@@ -6,6 +6,7 @@ Strategy:
   inside endpoint handlers never bleed between tests.
 - FastAPI dependency overrides inject the test session and a fake user so no
   real PostgreSQL or JWT logic is needed.
+- slowapi rate limiter is disabled globally so login/auth tests don't hit limits.
 """
 from __future__ import annotations
 
@@ -16,6 +17,8 @@ import os
 # SQLAlchemy does not try to import psycopg at module level.
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 os.environ.setdefault("MULTIPORTAL_ENABLED", "false")
+os.environ.setdefault("SECRET_KEY", "test-secret-key-for-tests-only")
+os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
 from datetime import date  # noqa: E402
 from decimal import Decimal  # noqa: E402
@@ -29,14 +32,39 @@ from sqlalchemy.pool import StaticPool  # noqa: E402
 # Importing app registers all SQLAlchemy models with Base's metadata.
 from app.main import app  # noqa: F401, E402 (side-effect import)
 from app.api.deps import get_current_user  # noqa: E402
+from app.core.limiter import limiter  # noqa: E402
 from app.db.session import Base, get_db  # noqa: E402
+from app.models.billing import Billing
 from app.models.client import Client
 from app.models.contract import Contract
-from app.models.enums import ClientStatus, TrackerStatus, UserRole
+from app.models.enums import BillingStatus, ClientStatus, OrderStatus, OrderType, TrackerStatus, UserRole
 from app.models.plan import Plan
+from app.models.service_order import ServiceOrder
+from app.models.service_product import ServiceProduct
 from app.models.tracker import Tracker
+from app.models.uninstall_event import UninstallEvent
 from app.models.user import User
 from app.models.vehicle import Vehicle
+
+
+# ---------------------------------------------------------------------------
+# Disable slowapi rate limiting globally during tests
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _disable_rate_limiter():
+    limiter._enabled = False
+    yield
+    limiter._enabled = True
+
+
+@pytest.fixture(autouse=True)
+def _clear_ailos_fernet_cache():
+    """Avoid leaking a cached Fernet instance (built from one test's key) into another."""
+    from app.core.crypto import _fernet
+    _fernet.cache_clear()
+    yield
+    _fernet.cache_clear()
 
 
 # ---------------------------------------------------------------------------
@@ -270,3 +298,108 @@ def contrato(db, cliente, plan, veiculo, rastreador_instalado) -> Contract:
     db.commit()
     db.refresh(c)
     return c
+
+
+@pytest.fixture()
+def billing_pendente(db, contrato) -> Billing:
+    b = Billing(
+        contract_id=contrato.id,
+        client_id=contrato.client_id,
+        amount=Decimal("99.90"),
+        due_date=date(2099, 12, 31),
+        status=BillingStatus.PENDING,
+        billing_type="recorrente",
+        period_label="12/2099",
+        title="Plano Teste",
+    )
+    db.add(b)
+    db.commit()
+    db.refresh(b)
+    return b
+
+
+@pytest.fixture()
+def billing_vencida(db, contrato) -> Billing:
+    b = Billing(
+        contract_id=contrato.id,
+        client_id=contrato.client_id,
+        amount=Decimal("99.90"),
+        due_date=date(2020, 1, 1),
+        status=BillingStatus.OVERDUE,
+        billing_type="recorrente",
+        period_label="01/2020",
+        title="Plano Teste Vencida",
+    )
+    db.add(b)
+    db.commit()
+    db.refresh(b)
+    return b
+
+
+@pytest.fixture()
+def produto_servico(db) -> ServiceProduct:
+    p = ServiceProduct(
+        name="Taxa de Instalação",
+        category="taxa",
+        default_price=Decimal("150.00"),
+        description="Taxa padrão de instalação",
+        active=True,
+        allow_installments=False,
+        remove_after_payment=True,
+        auto_add_on_uninstall=False,
+    )
+    db.add(p)
+    db.commit()
+    db.refresh(p)
+    return p
+
+
+@pytest.fixture()
+def produto_desinstalacao(db) -> ServiceProduct:
+    p = ServiceProduct(
+        name="Taxa de Desinstalação",
+        category="taxa",
+        default_price=Decimal("120.00"),
+        description="Taxa padrão de desinstalação",
+        active=True,
+        allow_installments=False,
+        remove_after_payment=True,
+        auto_add_on_uninstall=True,
+    )
+    db.add(p)
+    db.commit()
+    db.refresh(p)
+    return p
+
+
+@pytest.fixture()
+def ordem_servico(db, cliente, veiculo) -> ServiceOrder:
+    o = ServiceOrder(
+        number="OS-2025-001",
+        type=OrderType.INSTALL,
+        status=OrderStatus.OPEN,
+        client_id=cliente.id,
+        vehicle_id=veiculo.id,
+    )
+    db.add(o)
+    db.commit()
+    db.refresh(o)
+    return o
+
+
+@pytest.fixture()
+def uninstall_event(db, cliente, veiculo, rastreador_instalado, contrato) -> UninstallEvent:
+    e = UninstallEvent(
+        vehicle_id=veiculo.id,
+        tracker_id=rastreador_instalado.id,
+        contract_id=contrato.id,
+        client_id=cliente.id,
+        uninstall_date=date(2025, 5, 10),
+        fee_amount=Decimal("120.00"),
+        status="pending",
+        notes="Desinstalação teste",
+    )
+    db.add(e)
+    db.commit()
+    db.refresh(e)
+    return e

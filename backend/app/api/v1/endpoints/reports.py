@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import extract, func, select
+from sqlalchemy import case, extract, func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_roles
@@ -54,10 +54,10 @@ def revenue_report(
             func.count(Billing.id).label('total_cobrancas'),
             func.sum(Billing.amount).label('total_emitido'),
             func.sum(
-                func.case((Billing.status == BillingStatus.PAID, Billing.paid_amount or Billing.amount), else_=0)
+                case((Billing.status == BillingStatus.PAID, func.coalesce(Billing.paid_amount, Billing.amount)), else_=0)
             ).label('total_recebido'),
             func.sum(
-                func.case(
+                case(
                     (Billing.status.in_([BillingStatus.PENDING, BillingStatus.OVERDUE]), Billing.amount),
                     else_=0,
                 )
@@ -253,7 +253,7 @@ def executive_summary(
     contracts_by_plan = (
         db.query(Plan.name, func.count(Contract.id).label('qtd'))
         .join(Contract, Contract.plan_id == Plan.id)
-        .filter(Contract.is_deleted.is_(False), Contract.status == 'ativo')
+        .filter(Contract.is_deleted.is_(False), Contract.status == 'ativo', Plan.is_deleted.is_(False))
         .group_by(Plan.name)
         .order_by(func.count(Contract.id).desc())
         .all()
@@ -265,7 +265,7 @@ def executive_summary(
             extract('year', Billing.due_date).label('ano'),
             extract('month', Billing.due_date).label('mes'),
             func.sum(
-                func.case((Billing.status == BillingStatus.PAID, Billing.paid_amount or Billing.amount), else_=0)
+                case((Billing.status == BillingStatus.PAID, func.coalesce(Billing.paid_amount, Billing.amount)), else_=0)
             ).label('recebido'),
         )
         .filter(

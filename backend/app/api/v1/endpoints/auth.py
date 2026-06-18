@@ -68,18 +68,25 @@ def register_client(payload: RegisterClientRequest, db: Session = Depends(get_db
 
 
 @router.post('/refresh', response_model=TokenResponse)
-def refresh(payload: RefreshRequest):
+def refresh(payload: RefreshRequest, db: Session = Depends(get_db)):
     try:
         decoded = jwt.decode(payload.refresh_token, settings.secret_key, algorithms=[settings.algorithm])
         if decoded.get('type') != 'refresh':
             raise HTTPException(status_code=401, detail='Token inválido')
         user_id = decoded.get('sub')
+        if not user_id:
+            raise HTTPException(status_code=401, detail='Token inválido')
     except JWTError as exc:
         raise HTTPException(status_code=401, detail='Refresh token inválido') from exc
 
+    user = db.scalar(select(User).where(User.id == int(user_id), User.is_deleted.is_(False)))
+    if not user or not user.active:
+        raise HTTPException(status_code=401, detail='Usuário não encontrado ou inativo')
+
+    role_value = user.role.value if hasattr(user.role, 'value') else str(user.role)
     return TokenResponse(
-        access_token=create_access_token(str(user_id)),
-        refresh_token=create_refresh_token(str(user_id)),
+        access_token=create_access_token(str(user.id), name=user.name, role=role_value),
+        refresh_token=create_refresh_token(str(user.id)),
     )
 
 
