@@ -5,12 +5,20 @@
 # Execute UMA VEZ no servidor após clonar o repositório:
 #   chmod +x deploy.sh && ./deploy.sh
 #
+# Pré-requisitos:
+#   - DNS já configurado: app.SEU_DOMINIO e api.SEU_DOMINIO apontando (proxy
+#     Cloudflare "laranja" ligado) para o IP desta VPS.
+#   - .env configurado a partir de .env.example, incluindo CLOUDFLARE_API_TOKEN
+#     (token com permissão Zone:DNS:Edit para o domínio, criado em
+#     https://dash.cloudflare.com/profile/api-tokens).
+#
 # O que este script faz:
 #   1. Valida configurações de segurança do .env
-#   2. Sobe os serviços sem HTTPS primeiro (necessário para certbot)
-#   3. Emite o certificado SSL via certbot
-#   4. Sobe tudo com HTTPS ativo
-#   5. Configura cron de backup automático
+#   2. Configura o domínio no nginx.conf
+#   3. Sobe os serviços de aplicação (sem nginx/certbot ainda)
+#   4. Emite o certificado SSL via certbot (DNS-01 / Cloudflare)
+#   5. Sobe nginx + renovação automática do certificado
+#   6. Configura cron de backup automático
 # =============================================================================
 
 set -euo pipefail
@@ -29,7 +37,7 @@ command -v git    >/dev/null || fail "Git não instalado"
 
 [ -f ".env" ] || fail ".env não encontrado — copie .env.example e configure"
 
-[ -z "$DOMAIN" ] && { read -p "Domínio (ex: mastersat.com.br): " DOMAIN; }
+[ -z "$DOMAIN" ] && { read -p "Domínio raiz (ex: mastersat.com.br): " DOMAIN; }
 [ -z "$EMAIL"  ] && { read -p "E-mail para Let's Encrypt: " EMAIL; }
 
 [ -z "$DOMAIN" ] && fail "Domínio não informado"
@@ -45,61 +53,71 @@ SECRET=$(grep '^SECRET_KEY=' .env | cut -d= -f2)
 DEBUG_TOKEN=$(grep '^DEBUG_RETURN_RESET_TOKEN=' .env | cut -d= -f2 || echo "false")
 [[ "$DEBUG_TOKEN" == "true" ]] && fail "DEBUG_RETURN_RESET_TOKEN=true — defina como false no .env"
 
+DB_URL=$(grep '^DATABASE_URL=' .env | cut -d= -f2-)
+[[ "$DB_URL" == *"postgres:postgres@"* ]] && fail "DATABASE_URL ainda usa a senha padrão do Postgres — troque antes de produção"
+
+MINIO_PASS=$(grep '^MINIO_ROOT_PASSWORD=' .env | cut -d= -f2- || echo "")
+[[ "$MINIO_PASS" == "minioadmin" || -z "$MINIO_PASS" ]] && fail "MINIO_ROOT_PASSWORD ainda é o valor padrão — troque antes de produção"
+
+CF_TOKEN=$(grep '^CLOUDFLARE_API_TOKEN=' .env | cut -d= -f2- || echo "")
+[ -z "$CF_TOKEN" ] && fail "CLOUDFLARE_API_TOKEN não definido no .env (necessário para emitir o certificado via DNS-01)"
+
 ok "Configurações de segurança OK"
 
-# ── 3. Substitui domínio no nginx.conf ───────────────────────────────────────
-log "Configurando nginx para o domínio $DOMAIN..."
+# ── 3. Configura domínio no nginx.conf ────────────────────────────────────────
+log "Configurando nginx para o domínio $DOMAIN (app.$DOMAIN / api.$DOMAIN)..."
 sed -i "s/SEU_DOMINIO.COM.BR/$DOMAIN/g" nginx/nginx.conf
 ok "nginx.conf atualizado"
 
-# ── 4. Sobe serviços SEM nginx inicialmente (certbot precisa de HTTP livre) ──
-log "Subindo serviços base (sem nginx)..."
-docker compose up -d db redis minio backend frontend
-sleep 10
+# ── 4. Credenciais da Cloudflare para o certbot (DNS-01) ─────────────────────
+log "Gerando credenciais do Cloudflare para o certbot..."
+cat > nginx/cloudflare.ini <<EOF
+dns_cloudflare_api_token = $CF_TOKEN
+EOF
+chmod 600 nginx/cloudflare.ini
+ok "nginx/cloudflare.ini criado (chmod 600)"
 
-# ── 5. Emite certificado SSL ──────────────────────────────────────────────────
-log "Emitindo certificado SSL para $DOMAIN..."
+# ── 5. Sobe serviços de aplicação (sem nginx/certbot ainda) ──────────────────
+# DNS-01 não precisa da porta 80 aberta, então a aplicação pode subir já no
+# modo de produção (sem portas publicadas para db/redis/minio/backend/frontend).
+log "Subindo serviços de aplicação..."
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d db redis minio backend frontend
+ok "Serviços de aplicação no ar"
 
-# Nginx básico só para o desafio HTTP do certbot
-docker run --rm \
-  -v "$(pwd)/nginx/nginx.conf:/etc/nginx/nginx.conf:ro" \
-  -v certbot-www:/var/www/certbot \
-  -p 80:80 \
-  nginx:1.25-alpine nginx -g "daemon off;" &
-NGINX_PID=$!
-sleep 3
-
-docker compose run --rm certbot \
-  certonly \
-  --webroot \
-  --webroot-path /var/www/certbot \
+# ── 6. Emite certificado SSL (DNS-01 via Cloudflare) ──────────────────────────
+log "Emitindo certificado SSL para app.$DOMAIN e api.$DOMAIN..."
+docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm --entrypoint "" certbot \
+  certbot certonly \
+  --dns-cloudflare \
+  --dns-cloudflare-credentials /etc/letsencrypt/cloudflare.ini \
+  --dns-cloudflare-propagation-seconds 30 \
   --email "$EMAIL" \
   --agree-tos \
   --no-eff-email \
-  -d "$DOMAIN" \
-  -d "www.$DOMAIN" || true
-
-kill $NGINX_PID 2>/dev/null || true
+  --non-interactive \
+  --keep-until-expiring \
+  -d "app.$DOMAIN" \
+  -d "api.$DOMAIN"
 ok "Certificado SSL emitido"
 
-# ── 6. Sobe tudo com HTTPS ────────────────────────────────────────────────────
-log "Subindo todos os serviços com HTTPS..."
+# ── 7. Sobe nginx + renovação automática ──────────────────────────────────────
+log "Subindo nginx (HTTPS) e o serviço de renovação do certificado..."
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 ok "Todos os serviços rodando"
 
-# ── 7. Configura cron de backup ───────────────────────────────────────────────
+# ── 8. Configura cron de backup ───────────────────────────────────────────────
 log "Configurando backup automático..."
 CRON_JOB="0 2 * * * cd $(pwd) && docker compose --profile backup run --rm pg_dump >> /var/log/mastersat-backup.log 2>&1"
 (crontab -l 2>/dev/null | grep -v 'mastersat'; echo "$CRON_JOB") | crontab -
 ok "Backup agendado para 02:00 diariamente"
 
-# ── 8. Teste de saúde ─────────────────────────────────────────────────────────
+# ── 9. Teste de saúde ─────────────────────────────────────────────────────────
 log "Testando a aplicação..."
 sleep 5
-HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" "https://$DOMAIN/" || echo "000")
+HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" "https://app.$DOMAIN/" || echo "000")
 [ "$HTTP_CODE" = "200" ] && ok "Frontend OK (HTTPS $HTTP_CODE)" || echo "⚠ Frontend retornou $HTTP_CODE — verifique os logs"
 
-API_CODE=$(curl -sk -o /dev/null -w "%{http_code}" "https://$DOMAIN/api/v1/auth/me" || echo "000")
+API_CODE=$(curl -sk -o /dev/null -w "%{http_code}" "https://api.$DOMAIN/api/v1/auth/me" || echo "000")
 [ "$API_CODE" = "401" ] && ok "API OK (retornou 401 sem token — correto)" || echo "⚠ API retornou $API_CODE"
 
 # ── Conclusão ──────────────────────────────────────────────────────────────────
@@ -107,10 +125,12 @@ echo ""
 echo "=================================================================="
 echo "  ✅ Deploy concluído!"
 echo ""
-echo "  Frontend: https://$DOMAIN"
-echo "  API:      https://$DOMAIN/api/v1"
-echo "  Docs:     https://$DOMAIN/docs"
+echo "  Frontend: https://app.$DOMAIN"
+echo "  API:      https://api.$DOMAIN/api/v1"
 echo ""
 echo "  Logs:     docker compose logs -f"
 echo "  Status:   docker compose ps"
+echo ""
+echo "  Próximo passo recomendado:"
+echo "    sudo ./scripts/harden-vps.sh   (firewall, fail2ban, SSH, atualizações)"
 echo "=================================================================="

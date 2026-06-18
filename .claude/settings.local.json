@@ -9,7 +9,9 @@
       "Bash(Select-Object Name)",
       "Bash(xargs grep -l \"pdf\\\\|PDF\\\\|reportlab\\\\|weasyprint\\\\|fpdf\")",
       "Bash(dir /s /b)",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(xargs grep -l \"BUILD\\\\|ARGS\")",
+      "Bash(docker compose *)"
     ]
   }
 }

@@ -19,24 +19,28 @@ services:
       - "443:443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - certbot_www:/var/www/certbot:ro
       - certbot_certs:/etc/letsencrypt:ro
     depends_on:
       - backend
       - frontend
 
-  # ── Certbot (renovação automática do certificado SSL) ────────────────────────
+  # ── Certbot (emissão/renovação via DNS-01 na Cloudflare) ─────────────────────
+  # Atrás do proxy da Cloudflare, o desafio HTTP-01 é frágil (a Cloudflare pode
+  # interceptar a porta 80). DNS-01 cria um registro TXT temporário via API da
+  # Cloudflare e funciona com o proxy ligado, sem precisar abrir porta 80.
+  # Credenciais em ./nginx/cloudflare.ini (gerado pelo deploy.sh, chmod 600).
   certbot:
-    image: certbot/certbot:latest
+    image: certbot/dns-cloudflare:latest
     restart: unless-stopped
     volumes:
-      - certbot_www:/var/www/certbot
       - certbot_certs:/etc/letsencrypt
+      - ./nginx/cloudflare.ini:/etc/letsencrypt/cloudflare.ini:ro
     # Verifica renovação a cada 12h (certbot só renova quando faltam < 30 dias)
+    # — o método dns-cloudflare usado na emissão inicial fica salvo no renewal conf.
     entrypoint: >
       sh -c "trap exit TERM;
              while :; do
-               certbot renew --webroot -w /var/www/certbot --quiet;
+               certbot renew --quiet;
                sleep 43200;
              done"
 
@@ -47,10 +51,15 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     env_file: [.env]
+    # !reset é necessário porque "ports"/"volumes" são listas: o Compose
+    # CONCATENA listas entre arquivos (não sobrescreve), então um simples
+    # "ports: []" aqui NÃO removeria o "8000:8000" do docker-compose.yml.
     # Remove mapeamento de porta direta — só expõe via nginx
-    ports: []
+    ports: !reset []
     expose: ["8000"]
-    volumes: []   # sem hot-reload em produção
+    volumes: !reset []   # sem bind-mount/hot-reload em produção
+    # Sem --reload em produção (overhead de file-watching desnecessário)
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips=*"]
     depends_on:
       db: { condition: service_healthy }
       redis: { condition: service_started }
@@ -63,22 +72,21 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     env_file: [.env]
-    ports: []
+    ports: !reset []
     expose: ["3000"]
-    volumes: []   # sem hot-reload em produção
+    volumes: !reset []   # sem bind-mount/hot-reload em produção
 
   # ── Banco de dados em produção (sem porta exposta externamente) ──────────────
   db:
     restart: unless-stopped
-    ports: []
+    ports: !reset []
     expose: ["5432"]
 
   # ── MinIO em produção ────────────────────────────────────────────────────────
   minio:
     restart: unless-stopped
-    ports: []
+    ports: !reset []
     expose: ["9000", "9001"]
 
 volumes:
-  certbot_www:
   certbot_certs:

@@ -22,6 +22,20 @@ backend/build/
 .env.*.local
 *.env
 
+# ─── Segredos de produção ───────────────────────────────────────────────────
+# Token da Cloudflare usado pelo certbot (DNS-01) — gerado pelo deploy.sh
+nginx/cloudflare.ini
+
+# ─── Tokens/credenciais da integração Ailos (NUNCA versionar) ────────────────
+backend/scripts/ailos_cooperado_jwt.json
+backend/scripts/ailos_login_gerado.json
+
+# ─── Artefatos gerados em testes (não versionar) ─────────────────────────────
+backend/nfse_rps_teste.xml
+backend/scripts/nfse_rps_teste.xml
+backend/teste_logo_barcode.pdf
+backend/scripts/tst.py
+
 # ─── IDEs e SO ───────────────────────────────────────────────────────────────
 .vscode/
 .idea/
