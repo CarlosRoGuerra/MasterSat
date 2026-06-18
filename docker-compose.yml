@@ -2,10 +2,15 @@ services:
   db:
     image: postgres:16
     environment:
-      POSTGRES_DB: rastreamento
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    ports: ["5432:5432"]
+      # Lê do .env (mesma fonte que a DATABASE_URL do backend) — evita o
+      # mismatch "password authentication failed". Default 'postgres' p/ dev.
+      POSTGRES_DB: ${POSTGRES_DB:-rastreamento}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    # Bind SÓ no localhost: o Docker abre portas via iptables furando o UFW, então
+    # "5432:5432" expunha o Postgres a 0.0.0.0 (internet) — vetor do ataque de wipe.
+    # 127.0.0.1 garante que, mesmo sem o override de produção, nada vaza pra fora.
+    ports: ["127.0.0.1:5432:5432"]
     volumes: ["postgres_data:/var/lib/postgresql/data"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d rastreamento"]
@@ -15,21 +20,24 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports: ["6379:6379"]
+    # Sem porta publicada: acessível apenas pela rede interna do Docker
+    # (backend usa "redis:6379"). Nunca exponha Redis sem senha à internet.
 
   minio:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
-    ports: ["9000:9000", "9001:9001"]
+      # Lê do .env (NUNCA deixe minioadmin em produção). Default só p/ dev local.
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    # Bind só no localhost (ver nota no serviço db). Em prod o override remove de vez.
+    ports: ["127.0.0.1:9000:9000", "127.0.0.1:9001:9001"]
     volumes: ["minio_data:/data"]
 
   backend:
     build: { context: ./backend }
     env_file: [.env]
-    ports: ["8000:8000"]
+    ports: ["127.0.0.1:8000:8000"]
     depends_on:
       db: { condition: service_healthy }
       redis: { condition: service_started }
@@ -39,7 +47,7 @@ services:
   frontend:
     build: { context: ./frontend }
     env_file: [.env]
-    ports: ["3000:3000"]
+    ports: ["127.0.0.1:3000:3000"]
     depends_on: [backend]
     volumes: ["./frontend:/app", "/app/node_modules"]
 
