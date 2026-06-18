@@ -1,8 +1,14 @@
 from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
+    ailos_auth,
+    ailos_boletos,
+    ailos_pagadores,
+    ailos_retorno,
     audit_logs,
     auth,
+    billing_closure,
+    boletos,
     delinquency,
     exports,
     reports,
@@ -13,6 +19,7 @@ from app.api.v1.endpoints import (
     dashboard,
     integration_multiportal,
     documents,
+    nfse,
     plans,
     service_products,
     service_orders,
@@ -44,3 +51,10 @@ api_router.include_router(audit_logs.router, prefix='/audit-logs', tags=['audit-
 api_router.include_router(exports.router, prefix='/exports', tags=['exports'])
 api_router.include_router(reports.router, prefix='/reports', tags=['reports'])
 api_router.include_router(delinquency.router, prefix='/delinquency', tags=['delinquency'])
+api_router.include_router(billing_closure.router, prefix='/billing-closure', tags=['billing-closure'])
+api_router.include_router(boletos.router, prefix='/boletos', tags=['boletos'])
+api_router.include_router(ailos_auth.router, prefix='/ailos', tags=['ailos'])
+api_router.include_router(ailos_boletos.router, prefix='/ailos', tags=['ailos'])
+api_router.include_router(ailos_pagadores.router, prefix='/ailos', tags=['ailos'])
+api_router.include_router(ailos_retorno.router, prefix='/ailos', tags=['ailos'])
+api_router.include_router(nfse.router, prefix='/nfse', tags=['nfse'])
