@@ -36,6 +36,11 @@ backend/scripts/nfse_rps_teste.xml
 backend/teste_logo_barcode.pdf
 backend/scripts/tst.py
 
+# ─── Manuais/PDFs de referência (pesados — manter fora do git) ───────────────
+*.pdf
+# Duplicatas de docs em backend/scripts (versiona-se só as cópias da raiz)
+backend/scripts/*.postman_collection.json
+
 # ─── IDEs e SO ───────────────────────────────────────────────────────────────
 .vscode/
 .idea/

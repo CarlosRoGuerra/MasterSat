@@ -1,0 +1,1262 @@
+{
+	"info": {
+		"_postman_id": "3d228e27-c091-4525-838c-60925cc5113a",
+		"name": "API de Cobrança - Ailos",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "32119127"
+	},
+	"item": [
+		{
+			"name": "Autenticações",
+			"item": [
+				{
+					"name": "Access Token",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Basic {Consumer Key:Consumer Secret}"
+							}
+						],
+						"body": {
+							"mode": "urlencoded",
+							"urlencoded": [
+								{
+									"key": "grant_type",
+									"value": "client_credentials",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{HostHomol}}/token",
+							"host": [
+								"{{HostHomol}}"
+							],
+							"path": [
+								"token"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "ID",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Accept",
+								"value": "text/plain"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{acess_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n\"urlCallback\": \"{urlCallback}\",\r\n\"ailosApiKeyDeveloper\": \"{UUID}\",\r\n\"state\": \"{Identificador da chamada}\"\r\n}"
+						},
+						"url": {
+							"raw": "{{HostHomol}}/ailos/identity/api/v1/autenticacao/login/obter/id",
+							"host": [
+								"{{HostHomol}}"
+							],
+							"path": [
+								"ailos",
+								"identity",
+								"api",
+								"v1",
+								"autenticacao",
+								"login",
+								"obter",
+								"id"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Autenticação",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"/*Códigos das cooperativas\r",
+									"Viacredi - 1\r",
+									"Acredicoop - 2\r",
+									"Acentra - 5\r",
+									"Credifiesc - 6\r",
+									"Credcrea - 7\r",
+									"Credelesc - 8\r",
+									"Transpocred - 9\r",
+									"Credifoz - 11\r",
+									"Credicomin - 10\r",
+									"Crevisc - 12\r",
+									"Civia - 13\r",
+									"Evolua - 14\r",
+									"Alto Vale - 16\r",
+									"/*"
+								],
+								"type": "text/javascript",
+								"packages": {},
+								"requests": {}
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{acess_token}}"
+							}
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "Login.CodigoCooperativa",
+									"value": "{cód cooperativa}",
+									"description": "Viacredi - 1\nAcredicoop - 2\nAcentra - 5\nCredifiesc - 6\nCredcrea - 7\nCredelesc - 8\nTranspocred - 9\nCredifoz - 11\nCredicomin - 10\nCrevisc - 12\nCivia - 13\nEvolua - 14\nAlto Vale - 16\n",
+									"type": "text"
+								},
+								{
+									"key": "Login.CodigoConta",
+									"value": "{conta}",
+									"type": "text"
+								},
+								{
+									"key": "Login.Senha",
+									"value": "aaaaa11111@",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{HostHomol}}/ailos/identity/api/v1/login/index?id={{ID}}",
+							"host": [
+								"{{HostHomol}}"
+							],
+							"path": [
+								"ailos",
+								"identity",
+								"api",
+								"v1",
+								"login",
+								"index"
+							],
+							"query": [
+								{
+									"key": "id",
+									"value": "{{ID}}"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Refresh",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{acess_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{HostHomol}}/ailos/identity/api/v1/autenticacao/token/refresh?code={{x-ailos-authentication}}",
+							"host": [
+								"{{HostHomol}}"
+							],
+							"path": [
+								"ailos",
+								"identity",
+								"api",
+								"v1",
+								"autenticacao",
+								"token",
+								"refresh"
+							],
+							"query": [
+								{
+									"key": "code",
+									"value": "{{x-ailos-authentication}}"
+								}
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Emissão e consulta",
+			"item": [
+				{
+					"name": "Emissão - V1",
+					"item": [
+						{
+							"name": "Gerar Boleto - Único",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "accept",
+										"value": "application/json"
+									},
+									{
+										"key": "x-ailos-authentication",
+										"value": "Bearer {{x-ailos-authentication}}"
+									},
+									{
+										"key": "Authorization",
+										"value": "Bearer {{acess_token}}"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\r\n  \"convenioCobranca\": {\r\n    \"numeroConvenioCobranca\": 0,\r\n    \"codigoCarteiraCobranca\": 0\r\n  },\r\n  \"documento\": {\r\n    \"numeroDocumento\": 0,\r\n    \"descricaoDocumento\": \"string\",\r\n    \"especieDocumento\": 1\r\n  },\r\n  \"emissao\": {\r\n    \"formaEmissao\": 1,\r\n    \"dataEmissaoDocumento\": \"2025-04-16T17:42:29.543Z\"\r\n  },\r\n  \"pagador\": {\r\n    \"entidadeLegal\": {\r\n      \"identificadorReceitaFederal\": \"string\",\r\n      \"tipoPessoa\": 1,\r\n      \"nome\": \"string\"\r\n    },\r\n    \"telefone\": {\r\n      \"ddi\": \"string\",\r\n      \"ddd\": \"string\",\r\n      \"numero\": \"string\"\r\n    },\r\n    \"emails\": [\r\n      {\r\n        \"endereco\": \"string\"\r\n      }\r\n    ],\r\n    \"endereco\": {\r\n      \"cep\": \"string\",\r\n      \"logradouro\": \"string\",\r\n      \"numero\": \"string\",\r\n      \"complemento\": \"string\",\r\n      \"bairro\": \"string\",\r\n      \"cidade\": \"string\",\r\n      \"uf\": \"string\"\r\n    },\r\n    \"mensagemPagador\": [\r\n      \"string\"\r\n    ],\r\n    \"dda\": true\r\n  },\r\n  \"numeroParcelas\": 0,\r\n  \"vencimento\": {\r\n    \"dataVencimento\": \"2025-04-16T17:42:29.543Z\"\r\n  },\r\n  \"instrucoes\": {\r\n    \"tipoDesconto\": 1,\r\n    \"valorDesconto\": 0,\r\n    \"percentualDesconto\": 0,\r\n    \"tipoMulta\": 1,\r\n    \"valorMulta\": 0,\r\n    \"percentualMulta\": 0,\r\n    \"tipoJurosMora\": 1,\r\n    \"valorJurosMora\": 0,\r\n    \"percentualJurosMora\": 0,\r\n    \"valorAbatimento\": 0,\r\n    \"diasNegativacaoSerasa\": 0,\r\n    \"diasProtesto\": 0\r\n  },\r\n  \"valorBoleto\": {\r\n    \"valorTitulo\": 0\r\n  },\r\n  \"avisoSMS\": {\r\n    \"enviarAvisoVencimentoSms\": 0,\r\n    \"enviarAvisoVencimentoSmsAntesVencimento\": true,\r\n    \"enviarAvisoVencimentoSmsDiaVencimento\": true,\r\n    \"enviarAvisoVencimentoSmsAposVencimento\": true\r\n  },\r\n  \"pagamentoDivergente\": {\r\n    \"tipoPagamentoDivergente\": 0,\r\n    \"valorMinimoParaPagamentoDivergente\": 0\r\n  },\r\n  \"avalista\": {\r\n    \"entidadeLegal\": {\r\n      \"identificadorReceitaFederal\": \"string\",\r\n      \"tipoPessoa\": 1,\r\n      \"nome\": \"string\"\r\n    }\r\n  },\r\n  \"reciboBeneficiario\": true,\r\n  \"indicadorRegistroCip\": 1\r\n}"
+								},
+								"url": {
+									"raw": "{{HostHomol}}/ailos/cobranca/api/v1/boletos/gerar/boleto/convenios/{{convenio}}",
+									"host": [
+										"{{HostHomol}}"
+									],
+									"path": [
+										"ailos",
+										"cobranca",
+										"api",
+										"v1",
+										"boletos",
+										"gerar",
+										"boleto",
+										"convenios",
+										"{{convenio}}"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "Consulta de boleto único",
+							"request": {
+								"auth": {
+									"type": "noauth"
+								},
+								"method": "GET",
+								"header": [
+									{
+										"key": "accept",
+										"value": "application/json"
+									},
+									{
+										"key": "x-ailos-authentication",
+										"value": "Bearer {{x-ailos-authentication}}"
+									},
+									{
+										"key": "Authorization",
+										"value": "Bearer {{acess_token}}"
+									}
+								],
+								"url": {
+									"raw": "{{HostHomol}}/ailos/cobranca/api/v1/boletos/consultar/boleto/convenios/{{convenio}}/{num boleto}",
+									"host": [
+										"{{HostHomol}}"
+									],
+									"path": [
+										"ailos",
+										"cobranca",
+										"api",
+										"v1",
+										"boletos",
+										"consultar",
+										"boleto",
+										"convenios",
+										"{{convenio}}",
+										"{num boleto}"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "Gerar boleto - Lote",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "accept",
+										"value": "application/json"
+									},
+									{
+										"key": "x-ailos-authentication",
+										"value": "Bearer {{x-ailos-authentication}}"
+									},
+									{
+										"key": "Authorization",
+										"value": "Bearer {{acess_token}}"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\r\n  \"contaCorrente\": {\r\n    \"codigoBanco\": 0,\r\n    \"codigo\": 0,\r\n    \"codigoCooperativa\": 0\r\n  },\r\n  \"convenioCobranca\": {\r\n    \"numeroConvenioCobranca\": 0,\r\n    \"codigoCarteiraCobranca\": 0\r\n  },\r\n  \"boletos\": [\r\n    {\r\n      \"convenioCobranca\": {\r\n        \"numeroConvenioCobranca\": 0,\r\n        \"codigoCarteiraCobranca\": 0\r\n      },\r\n      \"documento\": {\r\n        \"numeroDocumento\": 0,\r\n        \"descricaoDocumento\": \"string\",\r\n        \"especieDocumento\": 1\r\n      },\r\n      \"emissao\": {\r\n        \"formaEmissao\": 1,\r\n        \"dataEmissaoDocumento\": \"2025-04-16T17:42:55.113Z\"\r\n      },\r\n      \"pagador\": {\r\n        \"entidadeLegal\": {\r\n          \"identificadorReceitaFederal\": \"string\",\r\n          \"tipoPessoa\": 1,\r\n          \"nome\": \"string\"\r\n        },\r\n        \"telefone\": {\r\n          \"ddi\": \"string\",\r\n          \"ddd\": \"string\",\r\n          \"numero\": \"string\"\r\n        },\r\n        \"emails\": [\r\n          {\r\n            \"endereco\": \"string\"\r\n          }\r\n        ],\r\n        \"endereco\": {\r\n          \"cep\": \"string\",\r\n          \"logradouro\": \"string\",\r\n          \"numero\": \"string\",\r\n          \"complemento\": \"string\",\r\n          \"bairro\": \"string\",\r\n          \"cidade\": \"string\",\r\n          \"uf\": \"string\"\r\n        },\r\n        \"mensagemPagador\": [\r\n          \"string\"\r\n        ],\r\n        \"dda\": true\r\n      },\r\n      \"numeroParcelas\": 0,\r\n      \"vencimento\": {\r\n        \"dataVencimento\": \"2025-04-16T17:42:55.113Z\"\r\n      },\r\n      \"instrucoes\": {\r\n        \"tipoDesconto\": 1,\r\n        \"valorDesconto\": 0,\r\n        \"percentualDesconto\": 0,\r\n        \"tipoMulta\": 1,\r\n        \"valorMulta\": 0,\r\n        \"percentualMulta\": 0,\r\n        \"tipoJurosMora\": 1,\r\n        \"valorJurosMora\": 0,\r\n        \"percentualJurosMora\": 0,\r\n        \"valorAbatimento\": 0,\r\n        \"diasNegativacaoSerasa\": 0,\r\n        \"diasProtesto\": 0\r\n      },\r\n      \"valorBoleto\": {\r\n        \"valorTitulo\": 0\r\n      },\r\n      \"avisoSMS\": {\r\n        \"enviarAvisoVencimentoSms\": 0,\r\n        \"enviarAvisoVencimentoSmsAntesVencimento\": true,\r\n        \"enviarAvisoVencimentoSmsDiaVencimento\": true,\r\n        \"enviarAvisoVencimentoSmsAposVencimento\": true\r\n      },\r\n      \"pagamentoDivergente\": {\r\n        \"tipoPagamentoDivergente\": 0,\r\n        \"valorMinimoParaPagamentoDivergente\": 0\r\n      },\r\n      \"avalista\": {\r\n        \"entidadeLegal\": {\r\n          \"identificadorReceitaFederal\": \"string\",\r\n          \"tipoPessoa\": 1,\r\n          \"nome\": \"string\"\r\n        }\r\n      },\r\n      \"reciboBeneficiario\": true,\r\n      \"indicadorRegistroCip\": 1\r\n    }\r\n  ]\r\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{HostHomol}}/ailos/cobranca/api/v1/boletos/gerar/boleto/lote/convenios/{{convenio}}",
+									"host": [
+										"{{HostHomol}}"
+									],
+									"path": [
+										"ailos",
+										"cobranca",
+										"api",
+										"v1",
+										"boletos",
+										"gerar",
+										"boleto",
+										"lote",
+										"convenios",
+										"{{convenio}}"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "Consulta - Retorno Lote",
+							"request": {
+								"auth": {
+									"type": "noauth"
+								},
+								"method": "GET",
+								"header": [
+									{
+										"key": "accept",
+										"value": "application/json"
+									},
+									{
+										"key": "x-ailos-authentication",
+										"value": "Bearer {{x-ailos-authentication}}"
+									},
+									{
+										"key": "Authorization",
+										"value": "Bearer {{acess_token}}"
+									}
+								],
+								"url": {
+									"raw": "{{HostHomol}}/ailos/cobranca/api/v1/boletos/consultar/boleto/lote/convenios/{{convenio}}/{ticket}",
+									"host": [
+										"{{HostHomol}}"
+									],
+									"path": [
+										"ailos",
+										"cobranca",
+										"api",
+										"v1",
+										"boletos",
+										"consultar",
+										"boleto",
+										"lote",
+										"convenios",
+										"{{convenio}}",
+										"{ticket}"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "Gerar boleto - Carnê",
+							"request": {
+								"auth": {
+									"type": "noauth"
+								},
+								"method": "POST",
+								"header": [
+									{
+										"key": "accept",
+										"value": "application/json"
+									},
+									{
+										"key": "x-ailos-authentication",
+										"value": "Bearer {{x-ailos-authentication}}"
+									},
+									{
+										"key": "Authorization",
+										"value": "Bearer {{acess_token}}"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\r\n  \"convenioCobranca\": {\r\n    \"numeroConvenioCobranca\": 0,\r\n    \"codigoCarteiraCobranca\": 0\r\n  },\r\n  \"documento\": {\r\n    \"numeroDocumento\": 0,\r\n    \"descricaoDocumento\": \"string\",\r\n    \"especieDocumento\": 1\r\n  },\r\n  \"emissao\": {\r\n    \"formaEmissao\": 1,\r\n    \"dataEmissaoDocumento\": \"2025-04-16T17:43:33.875Z\"\r\n  },\r\n  \"pagador\": {\r\n    \"entidadeLegal\": {\r\n      \"identificadorReceitaFederal\": \"string\",\r\n      \"tipoPessoa\": 1,\r\n      \"nome\": \"string\"\r\n    },\r\n    \"telefone\": {\r\n      \"ddi\": \"string\",\r\n      \"ddd\": \"string\",\r\n      \"numero\": \"string\"\r\n    },\r\n    \"emails\": [\r\n      {\r\n        \"endereco\": \"string\"\r\n      }\r\n    ],\r\n    \"endereco\": {\r\n      \"cep\": \"string\",\r\n      \"logradouro\": \"string\",\r\n      \"numero\": \"string\",\r\n      \"complemento\": \"string\",\r\n      \"bairro\": \"string\",\r\n      \"cidade\": \"string\",\r\n      \"uf\": \"string\"\r\n    },\r\n    \"mensagemPagador\": [\r\n      \"string\"\r\n    ],\r\n    \"dda\": true\r\n  },\r\n  \"numeroParcelas\": 0,\r\n  \"vencimento\": {\r\n    \"dataVencimento\": \"2025-04-16T17:43:33.875Z\"\r\n  },\r\n  \"instrucoes\": {\r\n    \"tipoDesconto\": 1,\r\n    \"valorDesconto\": 0,\r\n    \"percentualDesconto\": 0,\r\n    \"tipoMulta\": 1,\r\n    \"valorMulta\": 0,\r\n    \"percentualMulta\": 0,\r\n    \"tipoJurosMora\": 1,\r\n    \"valorJurosMora\": 0,\r\n    \"percentualJurosMora\": 0,\r\n    \"valorAbatimento\": 0,\r\n    \"diasNegativacaoSerasa\": 0,\r\n    \"diasProtesto\": 0\r\n  },\r\n  \"valorBoleto\": {\r\n    \"valorTitulo\": 0\r\n  },\r\n  \"avisoSMS\": {\r\n    \"enviarAvisoVencimentoSms\": 0,\r\n    \"enviarAvisoVencimentoSmsAntesVencimento\": true,\r\n    \"enviarAvisoVencimentoSmsDiaVencimento\": true,\r\n    \"enviarAvisoVencimentoSmsAposVencimento\": true\r\n  },\r\n  \"pagamentoDivergente\": {\r\n    \"tipoPagamentoDivergente\": 0,\r\n    \"valorMinimoParaPagamentoDivergente\": 0\r\n  },\r\n  \"avalista\": {\r\n    \"entidadeLegal\": {\r\n      \"identificadorReceitaFederal\": \"string\",\r\n      \"tipoPessoa\": 1,\r\n      \"nome\": \"string\"\r\n    }\r\n  },\r\n  \"reciboBeneficiario\": true,\r\n  \"indicadorRegistroCip\": 1\r\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{HostHomol}}/ailos/cobranca/api/v1/boletos/gerar/carne/convenios/{{convenio}}",
+									"host": [
+										"{{HostHomol}}"
+									],
+									"path": [
+										"ailos",
+										"cobranca",
+										"api",
+										"v1",
+										"boletos",
+										"gerar",
+										"carne",
+										"convenios",
+										"{{convenio}}"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "Gerar boleto - Carnês Lote",
+							"request": {
+								"auth": {
+									"type": "noauth"
+								},
+								"method": "POST",
+								"header": [
+									{
+										"key": "accept",
+										"value": "application/json"
+									},
+									{
+										"key": "x-ailos-authentication",
+										"value": "Bearer {{x-ailos-authentication}}"
+									},
+									{
+										"key": "Authorization",
+										"value": "Bearer {{acess_token}}"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\r\n  \"contaCorrente\": {\r\n    \"codigoBanco\": 0,\r\n    \"codigo\": 0,\r\n    \"codigoCooperativa\": 0\r\n  },\r\n  \"convenioCobranca\": {\r\n    \"numeroConvenioCobranca\": 0,\r\n    \"codigoCarteiraCobranca\": 0\r\n  },\r\n  \"carnes\": [\r\n    {\r\n      \"convenioCobranca\": {\r\n        \"numeroConvenioCobranca\": 0,\r\n        \"codigoCarteiraCobranca\": 0\r\n      },\r\n      \"documento\": {\r\n        \"numeroDocumento\": 0,\r\n        \"descricaoDocumento\": \"string\",\r\n        \"especieDocumento\": 1\r\n      },\r\n      \"emissao\": {\r\n        \"formaEmissao\": 1,\r\n        \"dataEmissaoDocumento\": \"2025-04-16T18:07:46.770Z\"\r\n      },\r\n      \"pagador\": {\r\n        \"entidadeLegal\": {\r\n          \"identificadorReceitaFederal\": \"string\",\r\n          \"tipoPessoa\": 1,\r\n          \"nome\": \"string\"\r\n        },\r\n        \"telefone\": {\r\n          \"ddi\": \"string\",\r\n          \"ddd\": \"string\",\r\n          \"numero\": \"string\"\r\n        },\r\n        \"emails\": [\r\n          {\r\n            \"endereco\": \"string\"\r\n          }\r\n        ],\r\n        \"endereco\": {\r\n          \"cep\": \"string\",\r\n          \"logradouro\": \"string\",\r\n          \"numero\": \"string\",\r\n          \"complemento\": \"string\",\r\n          \"bairro\": \"string\",\r\n          \"cidade\": \"string\",\r\n          \"uf\": \"string\"\r\n        },\r\n        \"mensagemPagador\": [\r\n          \"string\"\r\n        ],\r\n        \"dda\": true\r\n      },\r\n      \"numeroParcelas\": 0,\r\n      \"vencimento\": {\r\n        \"dataVencimento\": \"2025-04-16T18:07:46.770Z\"\r\n      },\r\n      \"instrucoes\": {\r\n        \"tipoDesconto\": 1,\r\n        \"valorDesconto\": 0,\r\n        \"percentualDesconto\": 0,\r\n        \"tipoMulta\": 1,\r\n        \"valorMulta\": 0,\r\n        \"percentualMulta\": 0,\r\n        \"tipoJurosMora\": 1,\r\n        \"valorJurosMora\": 0,\r\n        \"percentualJurosMora\": 0,\r\n        \"valorAbatimento\": 0,\r\n        \"diasNegativacaoSerasa\": 0,\r\n        \"diasProtesto\": 0\r\n      },\r\n      \"valorBoleto\": {\r\n        \"valorTitulo\": 0\r\n      },\r\n      \"avisoSMS\": {\r\n        \"enviarAvisoVencimentoSms\": 0,\r\n        \"enviarAvisoVencimentoSmsAntesVencimento\": true,\r\n        \"enviarAvisoVencimentoSmsDiaVencimento\": true,\r\n        \"enviarAvisoVencimentoSmsAposVencimento\": true\r\n      },\r\n      \"pagamentoDivergente\": {\r\n        \"tipoPagamentoDivergente\": 0,\r\n        \"valorMinimoParaPagamentoDivergente\": 0\r\n      },\r\n      \"avalista\": {\r\n        \"entidadeLegal\": {\r\n          \"identificadorReceitaFederal\": \"string\",\r\n          \"tipoPessoa\": 1,\r\n          \"nome\": \"string\"\r\n        }\r\n      },\r\n      \"reciboBeneficiario\": true,\r\n      \"indicadorRegistroCip\": 1\r\n    }\r\n  ]\r\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{HostHomol}}/ailos/cobranca/api/v1/boletos/gerar/carne/lote/convenios/{{convenio}}",
+									"host": [
+										"{{HostHomol}}"
+									],
+									"path": [
+										"ailos",
+										"cobranca",
+										"api",
+										"v1",
+										"boletos",
+										"gerar",
+										"carne",
+										"lote",
+										"convenios",
+										"{{convenio}}"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "Consulta - Retorno Carnê",
+							"request": {
+								"auth": {
+									"type": "noauth"
+								},
+								"method": "GET",
+								"header": [
+									{
+										"key": "accept",
+										"value": "application/json"
+									},
+									{
+										"key": "x-ailos-authentication",
+										"value": "Bearer {{x-ailos-authentication}}"
+									},
+									{
+										"key": "Authorization",
+										"value": "Bearer {{acess_token}}"
+									}
+								],
+								"url": {
+									"raw": "{{HostHomol}}/ailos/cobranca/api/v1/boletos/consultar/carne/lote/convenios/{{convenio}}/{ticket}",
+									"host": [
+										"{{HostHomol}}"
+									],
+									"path": [
+										"ailos",
+										"cobranca",
+										"api",
+										"v1",
+										"boletos",
+										"consultar",
+										"carne",
+										"lote",
+										"convenios",
+										"{{convenio}}",
+										"{ticket}"
+									]
+								}
+							},
+							"response": []
+						}
+					]
+				},
+				{
+					"name": "Emissão - V2",
+					"item": [
+						{
+							"name": "Consulta de boleto único",
+							"request": {
+								"auth": {
+									"type": "noauth"
+								},
+								"method": "GET",
+								"header": [
+									{
+										"key": "accept",
+										"value": "application/json"
+									},
+									{
+										"key": "x-ailos-authentication",
+										"value": "Bearer {{x-ailos-authentication}}"
+									},
+									{
+										"key": "Authorization",
+										"value": "Bearer {{acess_token}}"
+									}
+								],
+								"url": {
+									"raw": "{{HostHomol}}/ailos/cobranca/api/v2/boletos/consultar/boleto/convenios/{{convenio}}}/{num boleto}",
+									"host": [
+										"{{HostHomol}}"
+									],
+									"path": [
+										"ailos",
+										"cobranca",
+										"api",
+										"v2",
+										"boletos",
+										"consultar",
+										"boleto",
+										"convenios",
+										"{{convenio}}}",
+										"{num boleto}"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "Gerar Boleto - Único",
+							"request": {
+								"auth": {
+									"type": "noauth"
+								},
+								"method": "POST",
+								"header": [
+									{
+										"key": "accept",
+										"value": "application/json"
+									},
+									{
+										"key": "x-ailos-authentication",
+										"value": "Bearer {{x-ailos-authentication}}"
+									},
+									{
+										"key": "Authorization",
+										"value": "Bearer {{acess_token}}"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\r\n  \"convenioCobranca\": {\r\n    \"codigoCarteiraCobranca\": 0\r\n  },\r\n  \"documento\": {\r\n    \"numeroDocumento\": 0,\r\n    \"descricaoDocumento\": \"string\",\r\n    \"especieDocumento\": 1\r\n  },\r\n  \"emissao\": {\r\n    \"formaEmissao\": 1,\r\n    \"dataEmissaoDocumento\": \"2025-04-16T18:04:43.802Z\"\r\n  },\r\n  \"pagador\": {\r\n    \"entidadeLegal\": {\r\n      \"identificadorReceitaFederal\": \"string\",\r\n      \"tipoPessoa\": 1,\r\n      \"nome\": \"string\"\r\n    },\r\n    \"telefone\": {\r\n      \"ddi\": \"string\",\r\n      \"ddd\": \"string\",\r\n      \"numero\": \"string\"\r\n    },\r\n    \"emails\": [\r\n      {\r\n        \"endereco\": \"string\"\r\n      }\r\n    ],\r\n    \"endereco\": {\r\n      \"cep\": \"string\",\r\n      \"logradouro\": \"string\",\r\n      \"numero\": \"string\",\r\n      \"complemento\": \"string\",\r\n      \"bairro\": \"string\",\r\n      \"cidade\": \"string\",\r\n      \"uf\": \"string\"\r\n    },\r\n    \"mensagemPagador\": [\r\n      \"string\"\r\n    ]\r\n  },\r\n  \"vencimento\": {\r\n    \"dataVencimento\": \"2025-04-16T18:04:43.802Z\"\r\n  },\r\n  \"instrucoes\": {\r\n    \"valorAbatimento\": 0,\r\n    \"tipoDesconto\": 1,\r\n    \"descontos\": [\r\n      {\r\n        \"valor\": 0,\r\n        \"diasAteVencimento\": 0\r\n      }\r\n    ],\r\n    \"tipoMulta\": 1,\r\n    \"valorMulta\": 0,\r\n    \"tipoJurosMora\": 1,\r\n    \"valorJurosMora\": 0,\r\n    \"diasNegativacao\": 0,\r\n    \"diasProtesto\": 0\r\n  },\r\n  \"valorBoleto\": {\r\n    \"valorNominal\": 0\r\n  },\r\n  \"avisoSms\": {\r\n    \"enviarAvisoVencimentoSms\": 0,\r\n    \"enviarAvisoVencimentoSmsAntesVencimento\": true,\r\n    \"enviarAvisoVencimentoSmsDiaVencimento\": true,\r\n    \"enviarAvisoVencimentoSmsAposVencimento\": true\r\n  },\r\n  \"pagamentoDivergente\": {\r\n    \"tipoPagamentoDivergente\": 0,\r\n    \"valorMinimoPagamentoDivergente\": 0\r\n  },\r\n  \"avalista\": {\r\n    \"entidadeLegal\": {\r\n      \"identificadorReceitaFederal\": \"string\",\r\n      \"tipoPessoa\": 1,\r\n      \"nome\": \"string\"\r\n    }\r\n  },\r\n  \"indicadorRegistroNuclea\": 1,\r\n  \"bolePix\": true\r\n}"
+								},
+								"url": {
+									"raw": "{{HostHomol}}/ailos/cobranca/api/v2/boletos/gerar/boleto/convenios/{{convenio}}}",
+									"host": [
+										"{{HostHomol}}"
+									],
+									"path": [
+										"ailos",
+										"cobranca",
+										"api",
+										"v2",
+										"boletos",
+										"gerar",
+										"boleto",
+										"convenios",
+										"{{convenio}}}"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "Gerar boleto - Lote",
+							"request": {
+								"auth": {
+									"type": "noauth"
+								},
+								"method": "POST",
+								"header": [
+									{
+										"key": "accept",
+										"value": "application/json"
+									},
+									{
+										"key": "x-ailos-authentication",
+										"value": "Bearer {{x-ailos-authentication}}"
+									},
+									{
+										"key": "Authorization",
+										"value": "Bearer {{acess_token}}"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\r\n  \"convenioCobranca\": {\r\n    \"codigoCarteiraCobranca\": 0\r\n  },\r\n  \"boletos\": [\r\n    {\r\n      \"convenioCobranca\": {\r\n        \"codigoCarteiraCobranca\": 0\r\n      },\r\n      \"documento\": {\r\n        \"numeroDocumento\": 0,\r\n        \"descricaoDocumento\": \"string\",\r\n        \"especieDocumento\": 1\r\n      },\r\n      \"emissao\": {\r\n        \"formaEmissao\": 1,\r\n        \"dataEmissaoDocumento\": \"2025-04-16T18:05:42.500Z\"\r\n      },\r\n      \"pagador\": {\r\n        \"entidadeLegal\": {\r\n          \"identificadorReceitaFederal\": \"string\",\r\n          \"tipoPessoa\": 1,\r\n          \"nome\": \"string\"\r\n        },\r\n        \"telefone\": {\r\n          \"ddi\": \"string\",\r\n          \"ddd\": \"string\",\r\n          \"numero\": \"string\"\r\n        },\r\n        \"emails\": [\r\n          {\r\n            \"endereco\": \"string\"\r\n          }\r\n        ],\r\n        \"endereco\": {\r\n          \"cep\": \"string\",\r\n          \"logradouro\": \"string\",\r\n          \"numero\": \"string\",\r\n          \"complemento\": \"string\",\r\n          \"bairro\": \"string\",\r\n          \"cidade\": \"string\",\r\n          \"uf\": \"string\"\r\n        },\r\n        \"mensagemPagador\": [\r\n          \"string\"\r\n        ]\r\n      },\r\n      \"vencimento\": {\r\n        \"dataVencimento\": \"2025-04-16T18:05:42.500Z\"\r\n      },\r\n      \"instrucoes\": {\r\n        \"valorAbatimento\": 0,\r\n        \"tipoDesconto\": 1,\r\n        \"descontos\": [\r\n          {\r\n            \"valor\": 0,\r\n            \"diasAteVencimento\": 0\r\n          }\r\n        ],\r\n        \"tipoMulta\": 1,\r\n        \"valorMulta\": 0,\r\n        \"tipoJurosMora\": 1,\r\n        \"valorJurosMora\": 0,\r\n        \"diasNegativacao\": 0,\r\n        \"diasProtesto\": 0\r\n      },\r\n      \"valorBoleto\": {\r\n        \"valorNominal\": 0\r\n      },\r\n      \"avisoSms\": {\r\n        \"enviarAvisoVencimentoSms\": 0,\r\n        \"enviarAvisoVencimentoSmsAntesVencimento\": true,\r\n        \"enviarAvisoVencimentoSmsDiaVencimento\": true,\r\n        \"enviarAvisoVencimentoSmsAposVencimento\": true\r\n      },\r\n      \"pagamentoDivergente\": {\r\n        \"tipoPagamentoDivergente\": 0,\r\n        \"valorMinimoPagamentoDivergente\": 0\r\n      },\r\n      \"avalista\": {\r\n        \"entidadeLegal\": {\r\n          \"identificadorReceitaFederal\": \"string\",\r\n          \"tipoPessoa\": 1,\r\n          \"nome\": \"string\"\r\n        }\r\n      },\r\n      \"indicadorRegistroNuclea\": 1\r\n    }\r\n  ]\r\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{HostHomol}}/ailos/cobranca/api/v2/boletos/gerar/boleto/lote/convenios/{{convenio}}}",
+									"host": [
+										"{{HostHomol}}"
+									],
+									"path": [
+										"ailos",
+										"cobranca",
+										"api",
+										"v2",
+										"boletos",
+										"gerar",
+										"boleto",
+										"lote",
+										"convenios",
+										"{{convenio}}}"
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "Gerar boleto - Carnês Lote",
+							"request": {
+								"auth": {
+									"type": "noauth"
+								},
+								"method": "POST",
+								"header": [
+									{
+										"key": "accept",
+										"value": "application/json"
+									},
+									{
+										"key": "x-ailos-authentication",
+										"value": "Bearer {{x-ailos-authentication}}"
+									},
+									{
+										"key": "Authorization",
+										"value": "Bearer {{acess_token}}"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\r\n  \"convenioCobranca\": {\r\n    \"codigoCarteiraCobranca\": 0\r\n  },\r\n  \"carnes\": [\r\n    {\r\n      \"convenioCobranca\": {\r\n        \"codigoCarteiraCobranca\": 0\r\n      },\r\n      \"documento\": {\r\n        \"numeroDocumento\": 0,\r\n        \"descricaoDocumento\": \"string\",\r\n        \"especieDocumento\": 1\r\n      },\r\n      \"emissao\": {\r\n        \"formaEmissao\": 1,\r\n        \"dataEmissaoDocumento\": \"2025-04-16T18:06:29.565Z\"\r\n      },\r\n      \"pagador\": {\r\n        \"entidadeLegal\": {\r\n          \"identificadorReceitaFederal\": \"string\",\r\n          \"tipoPessoa\": 1,\r\n          \"nome\": \"string\"\r\n        },\r\n        \"telefone\": {\r\n          \"ddi\": \"string\",\r\n          \"ddd\": \"string\",\r\n          \"numero\": \"string\"\r\n        },\r\n        \"emails\": [\r\n          {\r\n            \"endereco\": \"string\"\r\n          }\r\n        ],\r\n        \"endereco\": {\r\n          \"cep\": \"string\",\r\n          \"logradouro\": \"string\",\r\n          \"numero\": \"string\",\r\n          \"complemento\": \"string\",\r\n          \"bairro\": \"string\",\r\n          \"cidade\": \"string\",\r\n          \"uf\": \"string\"\r\n        },\r\n        \"mensagemPagador\": [\r\n          \"string\"\r\n        ]\r\n      },\r\n      \"vencimento\": {\r\n        \"dataVencimento\": \"2025-04-16T18:06:29.565Z\"\r\n      },\r\n      \"instrucoes\": {\r\n        \"valorAbatimento\": 0,\r\n        \"tipoDesconto\": 1,\r\n        \"descontos\": [\r\n          {\r\n            \"valor\": 0,\r\n            \"diasAteVencimento\": 0\r\n          }\r\n        ],\r\n        \"tipoMulta\": 1,\r\n        \"valorMulta\": 0,\r\n        \"tipoJurosMora\": 1,\r\n        \"valorJurosMora\": 0,\r\n        \"diasNegativacao\": 0,\r\n        \"diasProtesto\": 0\r\n      },\r\n      \"valorBoleto\": {\r\n        \"valorNominal\": 0\r\n      },\r\n      \"avisoSms\": {\r\n        \"enviarAvisoVencimentoSms\": 0,\r\n        \"enviarAvisoVencimentoSmsAntesVencimento\": true,\r\n        \"enviarAvisoVencimentoSmsDiaVencimento\": true,\r\n        \"enviarAvisoVencimentoSmsAposVencimento\": true\r\n      },\r\n      \"pagamentoDivergente\": {\r\n        \"tipoPagamentoDivergente\": 0,\r\n        \"valorMinimoPagamentoDivergente\": 0\r\n      },\r\n      \"avalista\": {\r\n        \"entidadeLegal\": {\r\n          \"identificadorReceitaFederal\": \"string\",\r\n          \"tipoPessoa\": 1,\r\n          \"nome\": \"string\"\r\n        }\r\n      },\r\n      \"indicadorRegistroNuclea\": 1,\r\n      \"numeroParcela\": 0,\r\n      \"tipoVencimento\": {\r\n        \"tipoVencimento\": 1,\r\n        \"quantidadeXDias\": 0,\r\n        \"diaXDeCadaMes\": 0\r\n      }\r\n    }\r\n  ]\r\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{HostHomol}}/ailos/cobranca/api/v2/boletos/gerar/carne/lote/convenios/{{convenio}}}",
+									"host": [
+										"{{HostHomol}}"
+									],
+									"path": [
+										"ailos",
+										"cobranca",
+										"api",
+										"v2",
+										"boletos",
+										"gerar",
+										"carne",
+										"lote",
+										"convenios",
+										"{{convenio}}}"
+									]
+								}
+							},
+							"response": []
+						}
+					]
+				},
+				{
+					"name": "Movimentação",
+					"item": [
+						{
+							"name": "Listar Movimentação",
+							"request": {
+								"method": "GET",
+								"header": [
+									{
+										"key": "accept",
+										"value": "application/json"
+									},
+									{
+										"key": "x-ailos-authentication",
+										"value": "Bearer {{x-ailos-authentication}}"
+									},
+									{
+										"key": "Authorization",
+										"value": "Bearer {{acess_token}}"
+									}
+								],
+								"url": {
+									"raw": "{{HostHomol}}/ailos/cobranca/api/v1/boletos/listar/arquivo/retorno/convenios/{{convenio}}}/{{dataInicio}}/{{dataFim}}",
+									"host": [
+										"{{HostHomol}}"
+									],
+									"path": [
+										"ailos",
+										"cobranca",
+										"api",
+										"v1",
+										"boletos",
+										"listar",
+										"arquivo",
+										"retorno",
+										"convenios",
+										"{{convenio}}}",
+										"{{dataInicio}}",
+										"{{dataFim}}"
+									]
+								}
+							},
+							"response": []
+						}
+					]
+				}
+			]
+		},
+		{
+			"name": "Arq. Retorno",
+			"item": [
+				{
+					"name": "Ticket Arq. Retorno",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "accept",
+								"value": "application/json"
+							},
+							{
+								"key": "x-ailos-authentication",
+								"value": "Bearer {{x-ailos-authentication}}"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{acess_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{HostHomol}}/ailos/cobranca/api/v1/boletos/solicitar/arquivo/retorno/convenios/{{convenio}}}/{{dataMovimentação}}",
+							"host": [
+								"{{HostHomol}}"
+							],
+							"path": [
+								"ailos",
+								"cobranca",
+								"api",
+								"v1",
+								"boletos",
+								"solicitar",
+								"arquivo",
+								"retorno",
+								"convenios",
+								"{{convenio}}}",
+								"{{dataMovimentação}}"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Arq. Retorno (.zip)",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "accept",
+								"value": "application/json"
+							},
+							{
+								"key": "x-ailos-authentication",
+								"value": "Bearer {{x-ailos-authentication}}"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{acess_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{HostHomol}}/ailos/cobranca/api/v1/boletos/baixar/arquivo/retorno/convenios/{{convenio}}}/{Ticket}",
+							"host": [
+								"{{HostHomol}}"
+							],
+							"path": [
+								"ailos",
+								"cobranca",
+								"api",
+								"v1",
+								"boletos",
+								"baixar",
+								"arquivo",
+								"retorno",
+								"convenios",
+								"{{convenio}}}",
+								"{Ticket}"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Pagadores",
+			"item": [
+				{
+					"name": "Cadastrar pagador",
+					"request": {
+						"auth": {
+							"type": "noauth"
+						},
+						"method": "POST",
+						"header": [
+							{
+								"key": "accept",
+								"value": "application/json"
+							},
+							{
+								"key": "x-ailos-authentication",
+								"value": "Bearer {{x-ailos-authentication}}"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{acess_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n  \"pagador\": {\r\n    \"entidadeLegal\": {\r\n      \"identificadorReceitaFederal\": \"string\",\r\n      \"tipoPessoa\": 1,\r\n      \"nome\": \"string\"\r\n    },\r\n    \"telefone\": {\r\n      \"ddi\": \"string\",\r\n      \"ddd\": \"string\",\r\n      \"numero\": \"string\"\r\n    },\r\n    \"emails\": [\r\n      {\r\n        \"endereco\": \"string\"\r\n      }\r\n    ],\r\n    \"endereco\": {\r\n      \"cep\": \"string\",\r\n      \"logradouro\": \"string\",\r\n      \"numero\": \"string\",\r\n      \"complemento\": \"string\",\r\n      \"bairro\": \"string\",\r\n      \"cidade\": \"string\",\r\n      \"uf\": \"string\"\r\n    },\r\n    \"mensagemPagador\": [\r\n      \"string\"\r\n    ],\r\n    \"dda\": true\r\n  }\r\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{HostHomol}}/ailos/cobranca/api/v1/pagadores/cadastrar",
+							"host": [
+								"{{HostHomol}}"
+							],
+							"path": [
+								"ailos",
+								"cobranca",
+								"api",
+								"v1",
+								"pagadores",
+								"cadastrar"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Alterar pagador",
+					"request": {
+						"auth": {
+							"type": "noauth"
+						},
+						"method": "PUT",
+						"header": [
+							{
+								"key": "accept",
+								"value": "application/json"
+							},
+							{
+								"key": "x-ailos-authentication",
+								"value": "Bearer {{x-ailos-authentication}}"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{acess_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n  \"pagador\": {\r\n    \"entidadeLegal\": {\r\n      \"identificadorReceitaFederal\": \"string\",\r\n      \"tipoPessoa\": 1,\r\n      \"nome\": \"string\"\r\n    },\r\n    \"telefone\": {\r\n      \"ddi\": \"string\",\r\n      \"ddd\": \"string\",\r\n      \"numero\": \"string\"\r\n    },\r\n    \"emails\": [\r\n      {\r\n        \"endereco\": \"string\"\r\n      }\r\n    ],\r\n    \"endereco\": {\r\n      \"cep\": \"string\",\r\n      \"logradouro\": \"string\",\r\n      \"numero\": \"string\",\r\n      \"complemento\": \"string\",\r\n      \"bairro\": \"string\",\r\n      \"cidade\": \"string\",\r\n      \"uf\": \"string\"\r\n    },\r\n    \"mensagemPagador\": [\r\n      \"string\"\r\n    ],\r\n    \"dda\": true\r\n  }\r\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{HostHomol}}/ailos/cobranca/api/v1/pagadores/alterar",
+							"host": [
+								"{{HostHomol}}"
+							],
+							"path": [
+								"ailos",
+								"cobranca",
+								"api",
+								"v1",
+								"pagadores",
+								"alterar"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Consultar pagaodor",
+					"protocolProfileBehavior": {
+						"disableBodyPruning": true
+					},
+					"request": {
+						"auth": {
+							"type": "noauth"
+						},
+						"method": "GET",
+						"header": [
+							{
+								"key": "accept",
+								"value": "application/json"
+							},
+							{
+								"key": "x-ailos-authentication",
+								"value": "Bearer {{x-ailos-authentication}}"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{acess_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{HostHomol}}/ailos/cobranca/api/v1/pagadores/consultar/{CPF/CNPJ}",
+							"host": [
+								"{{HostHomol}}"
+							],
+							"path": [
+								"ailos",
+								"cobranca",
+								"api",
+								"v1",
+								"pagadores",
+								"consultar",
+								"{CPF",
+								"CNPJ}"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Listar pagadores",
+					"protocolProfileBehavior": {
+						"disableBodyPruning": true
+					},
+					"request": {
+						"auth": {
+							"type": "noauth"
+						},
+						"method": "GET",
+						"header": [
+							{
+								"key": "accept",
+								"value": "application/json"
+							},
+							{
+								"key": "x-ailos-authentication",
+								"value": "Bearer {{x-ailos-authentication}}"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{acess_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{HostHomol}}/ailos/cobranca/api/v1/pagadores/listar",
+							"host": [
+								"{{HostHomol}}"
+							],
+							"path": [
+								"ailos",
+								"cobranca",
+								"api",
+								"v1",
+								"pagadores",
+								"listar"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Totalizar Pagadores",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "accept",
+								"value": "application/json"
+							},
+							{
+								"key": "x-ailos-authentication",
+								"value": "Bearer {{x-ailos-authentication}}"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{acess_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{HostHomol}}/ailos/cobranca/api/v1/pagadores/totalizar/21/1.1.1.1",
+							"host": [
+								"{{HostHomol}}"
+							],
+							"path": [
+								"ailos",
+								"cobranca",
+								"api",
+								"v1",
+								"pagadores",
+								"totalizar",
+								"21",
+								"1.1.1.1"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Exportar Pagadores",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "accept",
+								"value": "application/json"
+							},
+							{
+								"key": "x-ailos-authentication",
+								"value": "Bearer {{x-ailos-authentication}}"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{acess_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{HostHomol}}/ailos/cobranca/api/v1/pagadores/exportar/21/1.1.1.1?tipoArquivo=2&flagArquivoModelo=false",
+							"host": [
+								"{{HostHomol}}"
+							],
+							"path": [
+								"ailos",
+								"cobranca",
+								"api",
+								"v1",
+								"pagadores",
+								"exportar",
+								"21",
+								"1.1.1.1"
+							],
+							"query": [
+								{
+									"key": "tipoArquivo",
+									"value": "2"
+								},
+								{
+									"key": "flagArquivoModelo",
+									"value": "false"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Importar Pagadores",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "accept",
+								"value": "application/json"
+							},
+							{
+								"key": "x-ailos-authentication",
+								"value": "Bearer {{x-ailos-authentication}}"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{acess_token}}"
+							}
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "arquivo",
+									"type": "file",
+									"src": "///svp03700arq01.cecred.coop.br/foldersredir$/t0036145/Desktop/teste.csv"
+								},
+								{
+									"key": "codigoCanal",
+									"value": "21",
+									"type": "text"
+								},
+								{
+									"key": "ipAcionamento",
+									"value": "1.1.1.1",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{HostHomol}}/ailos/cobranca/api/v1/pagadores/importar",
+							"host": [
+								"{{HostHomol}}"
+							],
+							"path": [
+								"ailos",
+								"cobranca",
+								"api",
+								"v1",
+								"pagadores",
+								"importar"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		}
+	],
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"packages": {},
+				"requests": {},
+				"exec": [
+					""
+				]
+			}
+		},
+		{
+			"listen": "test",
+			"script": {
+				"type": "text/javascript",
+				"packages": {},
+				"requests": {},
+				"exec": [
+					""
+				]
+			}
+		}
+	],
+	"variable": [
+		{
+			"key": "HostHomol",
+			"value": ""
+		},
+		{
+			"key": "HostProd",
+			"value": ""
+		},
+		{
+			"key": "acess_token",
+			"value": ""
+		},
+		{
+			"key": "ID",
+			"value": ""
+		},
+		{
+			"key": "x-ailos-authentication",
+			"value": ""
+		},
+		{
+			"key": "convenio",
+			"value": ""
+		},
+		{
+			"key": "dataInicio",
+			"value": "",
+			"description": "aaaa-mm-dd"
+		},
+		{
+			"key": "dataFim",
+			"value": "",
+			"description": "aaaa-mm-dd"
+		},
+		{
+			"key": "dataMovimentação",
+			"value": "",
+			"description": "aaaa-mm-dd"
+		}
+	]
+}
