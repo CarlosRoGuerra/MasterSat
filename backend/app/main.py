@@ -1,3 +1,6 @@
+import logging
+import secrets
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -5,6 +8,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from sqlalchemy import inspect, text
+from sqlalchemy.exc import IntegrityError
 
 from app.api.v1.api import api_router
 from app.core.config import settings
@@ -17,7 +21,14 @@ from app.models.enums import UserRole
 from app.models.user import User
 from app.services.storage import ensure_bucket
 
-app = FastAPI(title=settings.app_name)
+# /docs, /redoc e /openapi.json só ficam expostos se ENABLE_DOCS=true (dev).
+# Em produção ficam desativados para não publicar a superfície da API.
+app = FastAPI(
+    title=settings.app_name,
+    docs_url='/docs' if settings.enable_docs else None,
+    redoc_url='/redoc' if settings.enable_docs else None,
+    openapi_url='/openapi.json' if settings.enable_docs else None,
+)
 
 # ── Rate limiting ─────────────────────────────────────────────────────────────
 app.state.limiter = limiter
@@ -49,10 +60,26 @@ def ensure_schema_updates():
 
         if inspector.has_table('clients'):
             client_columns = {column['name'] for column in inspector.get_columns('clients')}
-            if 'extra_emails' not in client_columns:
-                conn.execute(text('ALTER TABLE clients ADD COLUMN extra_emails JSON'))
-            if 'contacts' not in client_columns:
-                conn.execute(text('ALTER TABLE clients ADD COLUMN contacts JSON'))
+            client_alter_statements = {
+                'extra_emails': 'ALTER TABLE clients ADD COLUMN extra_emails JSON',
+                'contacts': 'ALTER TABLE clients ADD COLUMN contacts JSON',
+                'rg_ie': 'ALTER TABLE clients ADD COLUMN rg_ie VARCHAR(30)',
+                'birth_date': 'ALTER TABLE clients ADD COLUMN birth_date DATE',
+                'emergency_contacts': 'ALTER TABLE clients ADD COLUMN emergency_contacts JSON',
+            }
+            for column_name, sql in client_alter_statements.items():
+                if column_name not in client_columns:
+                    conn.execute(text(sql))
+
+        if inspector.has_table('contracts'):
+            contract_columns = {column['name'] for column in inspector.get_columns('contracts')}
+            contract_alter_statements = {
+                'installation_fee': 'ALTER TABLE contracts ADD COLUMN installation_fee NUMERIC(10,2)',
+                'uninstall_fee': 'ALTER TABLE contracts ADD COLUMN uninstall_fee NUMERIC(10,2)',
+            }
+            for column_name, sql in contract_alter_statements.items():
+                if column_name not in contract_columns:
+                    conn.execute(text(sql))
 
         if inspector.has_table('documents'):
             document_columns = {column['name'] for column in inspector.get_columns('documents')}
@@ -335,12 +362,59 @@ def ensure_schema_updates():
             '''))
 
 
+def _seed_admin() -> None:
+    """
+    Cria o admin inicial apenas se ainda não existir (banco vazio).
+
+    Sem senha pública: usa INITIAL_ADMIN_PASSWORD do .env ou gera uma aleatória,
+    logada UMA vez para troca no primeiro acesso. Tolerante a corrida entre
+    workers (IntegrityError no e-mail único).
+    """
+    db = SessionLocal()
+    try:
+        email = settings.initial_admin_email
+        if db.query(User).filter(User.email == email).first():
+            return
+        senha = settings.initial_admin_password or secrets.token_urlsafe(16)
+        db.add(User(
+            name='Administrador',
+            email=email,
+            password_hash=get_password_hash(senha),
+            role=UserRole.ADMIN,
+            active=True,
+        ))
+        db.commit()
+        if not settings.initial_admin_password:
+            logging.getLogger('uvicorn.error').warning(
+                'ADMIN INICIAL criado: %s — senha gerada: %s — TROQUE no primeiro acesso.',
+                email, senha,
+            )
+    except IntegrityError:
+        db.rollback()  # outro worker criou primeiro
+    finally:
+        db.close()
+
+
 @app.on_event('startup')
 def on_startup():
-    Base.metadata.create_all(bind=engine)
-    ensure_schema_updates()
+    # Com múltiplos workers (uvicorn --workers), o startup roda em cada processo.
+    # Um advisory lock do Postgres serializa schema/seed entre os workers para
+    # evitar corrida (ALTER/INSERT simultâneos).
+    lock_conn = engine.connect()
+    try:
+        lock_conn.exec_driver_sql('SELECT pg_advisory_lock(918273645)')
+        Base.metadata.create_all(bind=engine)
+        ensure_schema_updates()
+        _seed_admin()
+    finally:
+        try:
+            lock_conn.exec_driver_sql('SELECT pg_advisory_unlock(918273645)')
+        finally:
+            lock_conn.close()
+
     ensure_bucket()
-    # Executa verificação inicial de inadimplência ao subir o servidor
+
+    # Verificação inicial de inadimplência (idempotente; não bloqueia o startup)
     try:
         from app.services.financial import mark_delinquent_clients
         startup_db = SessionLocal()
@@ -349,27 +423,7 @@ def on_startup():
         finally:
             startup_db.close()
     except Exception:  # noqa: BLE001
-        pass  # Não bloqueia o startup se falhar
-    db = SessionLocal()
-    try:
-        # Cria o admin padrão apenas na primeira execução (banco vazio).
-        # NUNCA sobrescreve um usuário existente — resetar a senha a cada
-        # restart criava uma porta dos fundos permanente com credenciais
-        # públicas (admin@rastreamento.local / Admin@123).
-        admin = db.query(User).filter(User.email == 'admin@rastreamento.local').first()
-        if not admin:
-            db.add(
-                User(
-                    name='Administrador',
-                    email='admin@rastreamento.local',
-                    password_hash=get_password_hash('Admin@123'),
-                    role=UserRole.ADMIN,
-                    active=True,
-                )
-            )
-            db.commit()
-    finally:
-        db.close()
+        pass
 
 
 @app.get('/')

@@ -43,6 +43,11 @@ NS_SERVICE = 'http://service.nfse.integracao.ws.publica/'
 # Situações de lote (tsSituacaoLoteRps): 4=Sucesso, 7=Erro+Sucesso são terminais OK
 _SITUACAO_PROCESSANDO = {'1', '2', '6'}  # Não recebido / Não processado / Em processamento
 
+# Fuso de Brasília (UTC-3, sem horário de verão desde 2019). O backend roda em
+# UTC no container, então a DataEmissao PRECISA ser convertida para Brasília —
+# senão o ambiente nacional acusa "emissão no futuro" (erro E0008).
+_TZ_BRASILIA = dt.timezone(dt.timedelta(hours=-3))
+
 
 class NfseError(Exception):
     """Erro de configuração/estado — nenhuma chamada à prefeitura foi feita (ou inválida)."""
@@ -141,7 +146,7 @@ def _montar_tomador(inf: etree._Element, client: Client) -> None:
 
 def montar_inf_rps(billing: Billing, client: Client, numero_rps: str) -> tuple[etree._Element, str]:
     """Monta <InfRps id="..."> a partir de um Billing + Client."""
-    agora = dt.datetime.now()
+    agora = dt.datetime.now(_TZ_BRASILIA)
     rps_id = f'rps{numero_rps}'
     valor = _fmt_valor(billing.amount)
 
@@ -375,7 +380,8 @@ def emitir_nfse(db: Session, billing: Billing, client: Client) -> NfseNota:
     nota.status = 'processing'
     db.commit()
 
-    time.sleep(3)  # processamento costuma ser quase imediato
+    # Consulta imediata (o processamento costuma ser instantâneo). SEM sleep no
+    # request: se ainda estiver processando, o front reconsulta via /consultar.
     return consultar(db, nota)
 
 

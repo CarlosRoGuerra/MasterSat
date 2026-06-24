@@ -45,7 +45,7 @@ services:
     volumes: ["./backend:/app"]
 
   frontend:
-    build: { context: ./frontend }
+    build: { context: ./frontend, target: dev }
     env_file: [.env]
     ports: ["127.0.0.1:3000:3000"]
     depends_on: [backend]

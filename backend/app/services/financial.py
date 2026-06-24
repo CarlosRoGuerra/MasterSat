@@ -49,18 +49,19 @@ def period_label_for_date(reference: date, interval_months: int = 1) -> str:
 
 
 def refresh_overdue_statuses(db: Session) -> None:
+    """Reclassifica pendente↔vencida via UPDATE no banco (sem carregar a tabela)."""
     today = date.today()
-    billings = db.query(Billing).filter(Billing.is_deleted == False).all()
-    changed = False
-    for billing in billings:
-        if billing.status == BillingStatus.PENDING and billing.due_date < today:
-            billing.status = BillingStatus.OVERDUE
-            changed = True
-        elif billing.status == BillingStatus.OVERDUE and billing.due_date >= today:
-            billing.status = BillingStatus.PENDING
-            changed = True
-    if changed:
-        db.commit()
+    db.query(Billing).filter(
+        Billing.is_deleted == False,
+        Billing.status == BillingStatus.PENDING,
+        Billing.due_date < today,
+    ).update({Billing.status: BillingStatus.OVERDUE}, synchronize_session=False)
+    db.query(Billing).filter(
+        Billing.is_deleted == False,
+        Billing.status == BillingStatus.OVERDUE,
+        Billing.due_date >= today,
+    ).update({Billing.status: BillingStatus.PENDING}, synchronize_session=False)
+    db.commit()
 
 
 def mark_delinquent_clients(db: Session) -> dict:

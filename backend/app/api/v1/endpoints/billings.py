@@ -122,10 +122,10 @@ def financial_summary(db: Session = Depends(get_db), _: object = Depends(require
     active_contracts = db.query(func.count(Contract.id)).filter(Contract.is_deleted == False, Contract.status == 'ativo').scalar() or 0
     pending_billings = db.query(func.count(Billing.id)).filter(Billing.is_deleted == False, Billing.status == BillingStatus.PENDING).scalar() or 0
     overdue_billings = db.query(func.count(Billing.id)).filter(Billing.is_deleted == False, Billing.status == BillingStatus.OVERDUE).scalar() or 0
-    pending_amount = sum(decimal_to_float(item.amount) for item in db.query(Billing).filter(Billing.is_deleted == False, Billing.status == BillingStatus.PENDING).all())
-    overdue_amount = sum(decimal_to_float(item.amount) for item in db.query(Billing).filter(Billing.is_deleted == False, Billing.status == BillingStatus.OVERDUE).all())
+    pending_amount = decimal_to_float(db.query(func.coalesce(func.sum(Billing.amount), 0)).filter(Billing.is_deleted == False, Billing.status == BillingStatus.PENDING).scalar())
+    overdue_amount = decimal_to_float(db.query(func.coalesce(func.sum(Billing.amount), 0)).filter(Billing.is_deleted == False, Billing.status == BillingStatus.OVERDUE).scalar())
     now = date.today()
-    paid_this_month = sum(decimal_to_float(item.paid_amount or item.amount) for item in db.query(Billing).filter(Billing.is_deleted == False, Billing.status == BillingStatus.PAID, func.extract('month', Billing.payment_date) == now.month, func.extract('year', Billing.payment_date) == now.year).all())
+    paid_this_month = decimal_to_float(db.query(func.coalesce(func.sum(func.coalesce(Billing.paid_amount, Billing.amount)), 0)).filter(Billing.is_deleted == False, Billing.status == BillingStatus.PAID, func.extract('month', Billing.payment_date) == now.month, func.extract('year', Billing.payment_date) == now.year).scalar())
     return FinancialSummary(
         active_plans=active_plans,
         active_contracts=active_contracts,

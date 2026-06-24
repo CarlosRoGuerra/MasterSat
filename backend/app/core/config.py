@@ -20,6 +20,12 @@ class Settings(BaseSettings):
     password_reset_expire_minutes: int = 30
     # Produção: sempre False — nunca retorna token de reset no response
     debug_return_reset_token: bool = False
+    # Swagger/OpenAPI: desabilitado por padrão (não expor a superfície da API em produção)
+    enable_docs: bool = False
+    # Admin inicial (criado só se o banco não tiver esse e-mail). Se a senha não
+    # for definida, é gerada uma aleatória e logada uma vez — NUNCA usar senha pública.
+    initial_admin_email: str = 'admin@rastreamento.local'
+    initial_admin_password: str = ''
     database_url: str = 'postgresql+psycopg://postgres:postgres@db:5432/rastreamento'
     frontend_url: str = 'http://localhost:3000'
     backend_public_url: str = 'http://localhost:8000'
