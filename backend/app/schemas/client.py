@@ -1,3 +1,5 @@
+from datetime import date
+
 from pydantic import BaseModel, Field, field_validator
 
 from app.models.enums import ClientStatus
@@ -8,6 +10,12 @@ class ContactItem(BaseModel):
     phone: str | None = None
     email: str | None = None
     role: str | None = None
+
+
+class EmergencyContact(BaseModel):
+    name: str | None = None
+    phone: str | None = None
+    mobile: str | None = None
 
 
 def normalize_email_list(value: list[str] | None) -> list[str] | None:
@@ -44,6 +52,9 @@ class ClientBase(BaseModel):
     address: str | None = None
     notes: str | None = None
     billing_day: int | None = Field(default=None, ge=1, le=28)
+    rg_ie: str | None = None
+    birth_date: date | None = None
+    emergency_contacts: list[EmergencyContact] | None = None
 
     @field_validator('cpf_cnpj')
     @classmethod
@@ -122,6 +133,9 @@ class ClientUpdate(BaseModel):
     address: str | None = None
     notes: str | None = None
     billing_day: int | None = Field(default=None, ge=1, le=28)
+    rg_ie: str | None = None
+    birth_date: date | None = None
+    emergency_contacts: list[EmergencyContact] | None = None
 
     @field_validator('cpf_cnpj')
     @classmethod

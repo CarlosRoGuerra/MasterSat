@@ -46,6 +46,9 @@ type Client = {
   state?: string | null;
   notes?: string | null;
   billing_day?: number | null;
+  rg_ie?: string | null;
+  birth_date?: string | null;
+  emergency_contacts?: { name?: string | null; phone?: string | null; mobile?: string | null }[] | null;
 };
 
 type ClientDocument = {
@@ -130,6 +133,14 @@ type ClientFormState = {
   state: string;
   notes: string;
   billing_day: string;
+  rg_ie: string;
+  birth_date: string;
+  em1_name: string;
+  em1_phone: string;
+  em1_mobile: string;
+  em2_name: string;
+  em2_phone: string;
+  em2_mobile: string;
 };
 
 const initialForm: ClientFormState = {
@@ -150,6 +161,14 @@ const initialForm: ClientFormState = {
   state: '',
   notes: '',
   billing_day: '',
+  rg_ie: '',
+  birth_date: '',
+  em1_name: '',
+  em1_phone: '',
+  em1_mobile: '',
+  em2_name: '',
+  em2_phone: '',
+  em2_mobile: '',
 };
 
 const documentCategoryOptions = ['cnh', 'rg', 'cpf', 'contrato', 'comprovante_endereco', 'cartao_cnpj', 'contrato_social', 'outro'];
@@ -442,6 +461,14 @@ export default function ClientesPage() {
       state: client.state || '',
       notes: client.notes || '',
       billing_day: client.billing_day != null ? String(client.billing_day) : '',
+      rg_ie: client.rg_ie || '',
+      birth_date: client.birth_date || '',
+      em1_name: client.emergency_contacts?.[0]?.name || '',
+      em1_phone: client.emergency_contacts?.[0]?.phone || '',
+      em1_mobile: client.emergency_contacts?.[0]?.mobile || '',
+      em2_name: client.emergency_contacts?.[1]?.name || '',
+      em2_phone: client.emergency_contacts?.[1]?.phone || '',
+      em2_mobile: client.emergency_contacts?.[1]?.mobile || '',
     });
     setDocFiles([]);
     setModalOpen(true);
@@ -525,6 +552,13 @@ export default function ClientesPage() {
         .filter((c) => c.name.trim())
         .map((c) => ({ name: c.name.trim(), phone: c.phone.trim() || null, email: c.email.trim() || null, role: c.role.trim() || null }));
 
+      const emergencyContacts = [
+        { name: form.em1_name.trim(), phone: form.em1_phone.trim(), mobile: form.em1_mobile.trim() },
+        { name: form.em2_name.trim(), phone: form.em2_phone.trim(), mobile: form.em2_mobile.trim() },
+      ]
+        .filter((e) => e.name || e.phone || e.mobile)
+        .map((e) => ({ name: e.name || null, phone: e.phone || null, mobile: e.mobile || null }));
+
       const payload = {
         name: form.name.trim(),
         cpf_cnpj: onlyDigits(form.cpf_cnpj),
@@ -543,6 +577,9 @@ export default function ClientesPage() {
         state: form.state.trim() || null,
         notes: form.notes.trim() || null,
         billing_day: form.billing_day ? Number(form.billing_day) : null,
+        rg_ie: form.rg_ie.trim() || null,
+        birth_date: form.birth_date || null,
+        emergency_contacts: emergencyContacts.length ? emergencyContacts : null,
       };
 
       const saved = isEditing && selectedClient
@@ -1019,6 +1056,40 @@ export default function ClientesPage() {
             <FormField label="Observações">
               <Textarea placeholder="Anotações administrativas internas" value={form.notes} onChange={(e) => handleChange('notes', e.target.value)} />
             </FormField>
+          </FormSection>
+
+          <FormDivider />
+
+          <FormSection title="Dados para contrato">
+            <FormGrid cols={2}>
+              <FormField label="RG / Inscrição Estadual">
+                <Input value={form.rg_ie} onChange={(e) => handleChange('rg_ie', e.target.value)} />
+              </FormField>
+              <FormField label="Data de nascimento">
+                <Input type="date" value={form.birth_date} onChange={(e) => handleChange('birth_date', e.target.value)} />
+              </FormField>
+            </FormGrid>
+            <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">Contatos de emergência (pessoas autorizadas)</p>
+            <FormGrid cols={3}>
+              <FormField label="Contato 1">
+                <Input placeholder="Nome" value={form.em1_name} onChange={(e) => handleChange('em1_name', e.target.value)} />
+              </FormField>
+              <FormField label="Telefone">
+                <Input value={form.em1_phone} onChange={(e) => handleChange('em1_phone', e.target.value)} />
+              </FormField>
+              <FormField label="Celular">
+                <Input value={form.em1_mobile} onChange={(e) => handleChange('em1_mobile', e.target.value)} />
+              </FormField>
+              <FormField label="Contato 2">
+                <Input placeholder="Nome" value={form.em2_name} onChange={(e) => handleChange('em2_name', e.target.value)} />
+              </FormField>
+              <FormField label="Telefone">
+                <Input value={form.em2_phone} onChange={(e) => handleChange('em2_phone', e.target.value)} />
+              </FormField>
+              <FormField label="Celular">
+                <Input value={form.em2_mobile} onChange={(e) => handleChange('em2_mobile', e.target.value)} />
+              </FormField>
+            </FormGrid>
           </FormSection>
 
           <FormDivider />

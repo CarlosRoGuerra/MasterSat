@@ -1,4 +1,6 @@
-from sqlalchemy import Enum, Integer, JSON, String, Text
+from datetime import date
+
+from sqlalchemy import Date, Enum, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -28,3 +30,8 @@ class Client(Base, TimestampMixin, SoftDeleteMixin):
     address: Mapped[str | None] = mapped_column(Text, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     billing_day: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Dados adicionais usados no contrato (TERMO DE ADESÃO)
+    rg_ie: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    birth_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Contatos de emergência: [{"name", "phone", "mobile"}, ...]
+    emergency_contacts: Mapped[list | None] = mapped_column(JSON, nullable=True)

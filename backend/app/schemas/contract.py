@@ -13,6 +13,8 @@ class ContractBase(BaseModel):
     billing_day: int | None = Field(default=None, ge=1, le=28)
     payment_method: str | None = None
     notes: str | None = None
+    installation_fee: float | None = None
+    uninstall_fee: float | None = None
 
 
 class ContractCreate(ContractBase):
@@ -28,6 +30,8 @@ class ContractUpdate(BaseModel):
     billing_day: int | None = Field(default=None, ge=1, le=28)
     payment_method: str | None = None
     notes: str | None = None
+    installation_fee: float | None = None
+    uninstall_fee: float | None = None
 
 
 class ContractOut(ContractBase):

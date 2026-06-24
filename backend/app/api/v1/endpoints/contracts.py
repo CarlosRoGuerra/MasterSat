@@ -1,6 +1,6 @@
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -56,6 +56,8 @@ def serialize_contract(db: Session, contract: Contract) -> ContractOut:
         billing_day=contract.billing_day,
         payment_method=contract.payment_method,
         notes=contract.notes,
+        installation_fee=float(contract.installation_fee) if contract.installation_fee is not None else None,
+        uninstall_fee=float(contract.uninstall_fee) if contract.uninstall_fee is not None else None,
         client_name=client.name if (client and not client.is_deleted) else None,
         plan_name=plan.name if (plan and not plan.is_deleted) else None,
         vehicle_plate=vehicle.plate if (vehicle and not vehicle.is_deleted) else None,
@@ -186,3 +188,23 @@ def delete_item(item_id: int, db: Session = Depends(get_db), _: object = Depends
     obj.status = 'cancelado'
     db.commit()
     return {'message': 'Contrato removido com sucesso'}
+
+
+@router.get('/{item_id}/pdf')
+def contract_pdf(item_id: int, db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
+    """Gera o PDF do contrato (TERMO DE ADESÃO + cláusulas) no padrão MasterSat."""
+    obj = db.get(Contract, item_id)
+    if not obj or obj.is_deleted:
+        raise HTTPException(status_code=404, detail='Contrato não encontrado')
+    client = db.get(Client, obj.client_id)
+    if not client or client.is_deleted:
+        raise HTTPException(status_code=404, detail='Cliente do contrato não encontrado')
+    plan = db.get(Plan, obj.plan_id)
+    vehicle = db.get(Vehicle, obj.vehicle_id) if getattr(obj, 'vehicle_id', None) else None
+    from app.services.contract_pdf import gerar_contrato_pdf
+    pdf = gerar_contrato_pdf(obj, client, plan, vehicle)
+    return Response(
+        content=pdf,
+        media_type='application/pdf',
+        headers={'Content-Disposition': f'inline; filename="contrato_{obj.id}.pdf"'},
+    )

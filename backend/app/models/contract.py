@@ -1,5 +1,6 @@
 from datetime import date
-from sqlalchemy import Date, ForeignKey, Integer, String, Text
+from decimal import Decimal
+from sqlalchemy import Date, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import SoftDeleteMixin, TimestampMixin
@@ -21,3 +22,6 @@ class Contract(Base, TimestampMixin, SoftDeleteMixin):
     payment_method: Mapped[str | None] = mapped_column(String(40), nullable=True)
     billing_modality: Mapped[str] = mapped_column(String(20), default='boleto')
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Taxas do TERMO DE ADESÃO (por veículo)
+    installation_fee: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    uninstall_fee: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
