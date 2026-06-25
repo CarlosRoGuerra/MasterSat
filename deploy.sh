@@ -24,7 +24,7 @@
 # =============================================================================
 
 set -euo pipefail
-DOMAIN="${DOMAIN:-}"
+DOMAIN="${DOMAIN:-mastersat.com.br}"   # domínio já fixado no nginx.conf
 EMAIL="${EMAIL:-}"
 COMPOSE="docker compose -f docker-compose.yml -f docker-compose.prod.yml"
 
@@ -60,10 +60,8 @@ MINIO_PASS=$(grep '^MINIO_ROOT_PASSWORD=' .env | cut -d= -f2- || echo "")
 
 ok "Configurações de segurança OK"
 
-# ── 3. Configura domínio no nginx.conf (idempotente) ──────────────────────────
-log "Configurando nginx para o domínio $DOMAIN (app.$DOMAIN / api.$DOMAIN)..."
-sed -i "s/SEU_DOMINIO.COM.BR/$DOMAIN/g" nginx/nginx.conf
-ok "nginx.conf atualizado"
+# ── 3. (O domínio já está fixado em nginx/nginx.conf — nada a configurar) ─────
+log "Domínio: app.$DOMAIN / api.$DOMAIN (já configurado em nginx/nginx.conf)"
 
 # ── 4. Builda e sobe serviços de aplicação ────────────────────────────────────
 log "Buildando e subindo serviços de aplicação..."
