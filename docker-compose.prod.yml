@@ -20,23 +20,25 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - certbot_certs:/etc/letsencrypt:ro
+      - certbot_www:/var/www/certbot:ro   # webroot do desafio ACME (HTTP-01)
     depends_on:
       - backend
       - frontend
 
-  # ── Certbot (emissão/renovação via DNS-01 na Cloudflare) ─────────────────────
-  # Atrás do proxy da Cloudflare, o desafio HTTP-01 é frágil (a Cloudflare pode
-  # interceptar a porta 80). DNS-01 cria um registro TXT temporário via API da
-  # Cloudflare e funciona com o proxy ligado, sem precisar abrir porta 80.
-  # Credenciais em ./nginx/cloudflare.ini (gerado pelo deploy.sh, chmod 600).
+  # ── Certbot (emissão/renovação via HTTP-01 / webroot) ────────────────────────
+  # Sem Cloudflare: a validação é feita pela porta 80. O nginx serve o desafio
+  # em /.well-known/acme-challenge/ a partir do volume certbot_www; o certbot
+  # grava os arquivos de desafio nesse mesmo volume. Funciona para emissão e
+  # renovação sem precisar parar o nginx. Requer a porta 80 aberta na internet.
+  # (Para deploy atrás da Cloudflare via DNS-01, ver docs/deploy-producao.md.)
   certbot:
-    image: certbot/dns-cloudflare:latest
+    image: certbot/certbot:latest
     restart: unless-stopped
     volumes:
       - certbot_certs:/etc/letsencrypt
-      - ./nginx/cloudflare.ini:/etc/letsencrypt/cloudflare.ini:ro
-    # Verifica renovação a cada 12h (certbot só renova quando faltam < 30 dias)
-    # — o método dns-cloudflare usado na emissão inicial fica salvo no renewal conf.
+      - certbot_www:/var/www/certbot
+    # Verifica renovação a cada 12h (só renova de fato quando faltam < 30 dias);
+    # o método webroot da emissão inicial fica salvo no renewal conf.
     entrypoint: >
       sh -c "trap exit TERM;
              while :; do
@@ -94,3 +96,4 @@ services:
 
 volumes:
   certbot_certs:
+  certbot_www:

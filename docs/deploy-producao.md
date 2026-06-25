@@ -61,7 +61,14 @@ Cliente → Cloudflare (proxy) → VPS:80/443 (nginx)
 
 ---
 
-## 2. Configurar DNS na Cloudflare
+> **⚠️ Padrão atual: HTTP-01 (sem Cloudflare).** O `deploy.sh` emite o
+> certificado via Let's Encrypt **HTTP-01 (webroot na porta 80)** e o DNS pode
+> apontar **direto** para o IP da VPS (registro A em qualquer provedor). Nesse
+> modo você **não** precisa migrar nameservers nem do `CLOUDFLARE_API_TOKEN` —
+> basta a **porta 80 aberta**. As seções 2 (Cloudflare/DNS-01) abaixo são a
+> **alternativa opcional** para quem quiser o proxy/WAF da Cloudflare na frente.
+
+## 2. (Opcional) Configurar DNS na Cloudflare — alternativa via DNS-01
 
 O DNS do `mastersat.com.br` hoje está em outro painel. Para usar o proxy da
 Cloudflare (recomendado para WAF/DDoS), o domínio precisa ser **migrado**
