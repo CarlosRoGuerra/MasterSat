@@ -18,6 +18,9 @@ services:
       - "80:80"
       - "443:443"
     volumes:
+      # Bind mount de ARQUIVO único: ao trocar o nginx.conf (git pull recria o
+      # inode), um "nginx -s reload" relê o arquivo ANTIGO. Após mudar a config,
+      # use: docker compose ... up -d --force-recreate nginx  (não só reload).
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - certbot_certs:/etc/letsencrypt:ro
       - certbot_www:/var/www/certbot:ro   # webroot do desafio ACME (HTTP-01)
