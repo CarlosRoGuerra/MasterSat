@@ -128,6 +128,11 @@ def montar_payload_boleto(billing: Billing, client: Client) -> dict:
         'indicadorRegistroNuclea': settings.ailos_default_indicador_registro_nuclea,
     }
 
+    # BolePix: boleto híbrido com QR Code Pix (V2). Só envia quando habilitado
+    # via AILOS_BOLE_PIX e a conta tiver chave Pix aleatória vinculada na Ailos.
+    if settings.ailos_bole_pix:
+        payload['bolePix'] = True
+
     validate_boleto_payload(payload)
     return payload
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useMemo, useState } from 'react';
+import { FormEvent, Suspense, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 
@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button';
 import { apiFetch } from '@/lib/api';
 import { validatePassword } from '@/lib/format';
 
-export default function ResetPasswordPage() {
+function ResetPasswordForm() {
   const searchParams = useSearchParams();
   const [token, setToken] = useState(searchParams.get('token') || '');
   const [newPassword, setNewPassword] = useState('');
@@ -91,5 +91,13 @@ export default function ResetPasswordPage() {
         </div>
       </form>
     </AuthShell>
+  );
+}
+
+export default function ResetPasswordPage() {
+  return (
+    <Suspense fallback={null}>
+      <ResetPasswordForm />
+    </Suspense>
   );
 }

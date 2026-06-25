@@ -58,6 +58,10 @@ class Settings(BaseSettings):
     ailos_default_carteira: int = 1
     ailos_default_forma_emissao: int = 2
     ailos_default_indicador_registro_nuclea: int = 2
+    # BolePix (boleto híbrido com QR Code Pix). Requer que a conta tenha uma
+    # chave Pix aleatória cadastrada, ativada e vinculada à funcionalidade na
+    # Ailos. Quando True, envia "bolePix": true no payload V2 de geração.
+    ailos_bole_pix: bool = False
     ailos_token_encryption_key: str = ''
 
     # ── Integração NFS-e Joinville (Pública / Nota Nacional, SOAP) ────────────
