@@ -39,9 +39,18 @@ export function useAuthGuard(allowedRoles: AllowedRole[], loginPath: string): Gu
         setUser(me);
       })
       .catch((err) => {
-        clearSession();
-        setError(err instanceof Error ? err.message : 'Sessão inválida');
-        window.location.href = loginPath;
+        // 401 (sessão expirada/ inválida) já é tratado dentro do apiFetch:
+        // limpa os tokens e redireciona para o login. Aqui só chegam erros
+        // que NÃO são de autenticação (rede, 429 de rate limit, 5xx). Nesse
+        // caso NÃO deslogar — senão uma falha transitória joga o usuário pra
+        // tela de login. Apenas sinaliza o erro; o token continua válido.
+        const status = (err as { status?: number })?.status;
+        if (status === 401 || status === 403) {
+          clearSession();
+          window.location.href = loginPath;
+          return;
+        }
+        setError(err instanceof Error ? err.message : 'Não foi possível carregar a sessão.');
       })
       .finally(() => setLoading(false));
   }, [allowedRoles.join('|'), loginPath]);
