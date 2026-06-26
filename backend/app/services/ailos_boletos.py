@@ -498,7 +498,11 @@ def verificar_pagamento(db: Session, billing: Billing) -> dict:
         return {'consultado': False, 'pago': False, 'data_pagamento': None,
                 'valor_pago': None, 'mensagem': 'Boleto Ailos ainda não gerado para esta cobrança.'}
 
-    resp = consultar_boleto(db, boleto.nosso_numero)
+    # A consulta usa o NÚMERO DO DOCUMENTO (= billing.id), não o nosso_numero
+    # completo — a Ailos rejeita o nosso_numero com prefixo da conta
+    # ("Validações"). Confirmado contra a API real.
+    numero_consulta = boleto.numero_documento or str(billing.id)
+    resp = consultar_boleto(db, numero_consulta)
     if isinstance(resp, dict):
         _upsert_ailos_boleto(db, billing.id, boleto.payload_request or {}, resp)
 
