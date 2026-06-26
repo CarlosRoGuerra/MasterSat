@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import Date, ForeignKey, JSON, Numeric, String
+from sqlalchemy import Date, ForeignKey, JSON, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -27,5 +27,8 @@ class AilosBoleto(Base, TimestampMixin):
     valor_nominal: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     data_vencimento: Mapped[date | None] = mapped_column(Date, nullable=True)
     status_ailos: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # "Copia e cola" (EMV) do Pix quando o boleto é BolePix e a conta tem a
+    # chave Pix vinculada à funcionalidade na Ailos. Usado p/ gerar o QR.
+    pix_emv: Mapped[str | None] = mapped_column(Text, nullable=True)
     payload_request: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     payload_response: Mapped[dict | None] = mapped_column(JSON, nullable=True)

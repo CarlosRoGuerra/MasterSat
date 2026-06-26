@@ -147,6 +147,23 @@ def _to_str_or_none(value) -> str | None:
     return str(value)
 
 
+def _extrair_pix_emv(pix) -> str | None:
+    """Extrai o 'copia e cola' (EMV) do bloco ``pix`` do BolePix.
+
+    A Ailos devolve ``"pix": null`` quando a conta ainda não tem a chave Pix
+    vinculada à funcionalidade. Quando preenchido, o EMV vem em uma destas
+    chaves (varia conforme a versão) — pega a primeira string não-vazia.
+    """
+    if not isinstance(pix, dict):
+        return None
+    for key in ('emv', 'textoQrCode', 'qrCode', 'qrcode', 'copiaECola',
+                'pixCopiaECola', 'codigoQrCode', 'codigoPix', 'brCode'):
+        value = pix.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 def _upsert_ailos_boleto(
     db: Session,
     billing_id: int,
@@ -166,25 +183,46 @@ def _upsert_ailos_boleto(
 
     if payload_response is not None:
         boleto.payload_response = payload_response
-        documento = payload_response.get('documento') or {}
-        codigo_barras_obj = payload_response.get('codigoBarras') or {}
-        valor_boleto = payload_response.get('valorBoleto') or {}
-        vencimento = payload_response.get('vencimento') or {}
+        # A geração V2 responde envelopando em {"boleto": {...}}; consultas
+        # podem vir já no nível raiz. Desembrulha para ler os dois formatos.
+        dados = payload_response.get('boleto')
+        if not isinstance(dados, dict):
+            dados = payload_response
+
+        documento = dados.get('documento') or {}
+        codigo_barras_obj = dados.get('codigoBarras') or {}
+        valor_boleto = dados.get('valorBoleto') or {}
+        vencimento = dados.get('vencimento') or {}
 
         boleto.numero_documento = _to_str_or_none(documento.get('numeroDocumento'))
         boleto.nosso_numero = _to_str_or_none(documento.get('nossoNumero'))
-        boleto.identificador_unico_titulo = documento.get('identificadorUnicoTitulo')
+        boleto.identificador_unico_titulo = _to_str_or_none(documento.get('identificadorUnicoTitulo'))
         boleto.linha_digitavel = codigo_barras_obj.get('linhaDigitavel')
         boleto.codigo_barras = codigo_barras_obj.get('codigoBarras')
-        boleto.status_ailos = payload_response.get('indicadorSituacaoBoleto')
+        boleto.status_ailos = _to_str_or_none(dados.get('indicadorSituacaoBoleto'))
+        boleto.pix_emv = _extrair_pix_emv(dados.get('pix'))
 
-        valor_nominal = valor_boleto.get('valorNominal')
+        # valorNominal (consulta) ou valorOriginalTitulo/valorAtual (geração)
+        valor_nominal = (
+            valor_boleto.get('valorNominal')
+            if valor_boleto.get('valorNominal') is not None
+            else valor_boleto.get('valorOriginalTitulo') or valor_boleto.get('valorAtual')
+        )
         if valor_nominal is not None:
             boleto.valor_nominal = Decimal(str(valor_nominal))
 
-        data_vencimento = vencimento.get('dataVencimento')
-        if data_vencimento:
-            boleto.data_vencimento = date.fromisoformat(data_vencimento)
+        # Aceita dataVencimento (consulta) ou dataVencimentoAtual (geração),
+        # que pode vir como datetime ISO ("2026-06-26T00:00:00").
+        data_venc = (
+            vencimento.get('dataVencimento')
+            or vencimento.get('dataVencimentoAtual')
+            or vencimento.get('dataVencimentoOriginal')
+        )
+        if data_venc:
+            try:
+                boleto.data_vencimento = date.fromisoformat(str(data_venc)[:10])
+            except ValueError:
+                pass
 
     db.commit()
     db.refresh(boleto)
@@ -396,4 +434,5 @@ def aplicar_dados_oficiais_ailos(dados: DadosBoleto, ailos_boleto: AilosBoleto |
         codigo_barras=ailos_boleto.codigo_barras,
         linha_digitavel=ailos_boleto.linha_digitavel,
         nosso_numero_display=ailos_boleto.nosso_numero or dados.nosso_numero_display,
+        pix_emv=ailos_boleto.pix_emv or dados.pix_emv,
     )

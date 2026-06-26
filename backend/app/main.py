@@ -81,6 +81,11 @@ def ensure_schema_updates():
                 if column_name not in contract_columns:
                     conn.execute(text(sql))
 
+        if inspector.has_table('ailos_boletos'):
+            ailos_boleto_columns = {column['name'] for column in inspector.get_columns('ailos_boletos')}
+            if 'pix_emv' not in ailos_boleto_columns:
+                conn.execute(text('ALTER TABLE ailos_boletos ADD COLUMN pix_emv TEXT'))
+
         if inspector.has_table('documents'):
             document_columns = {column['name'] for column in inspector.get_columns('documents')}
             document_alter_statements = {

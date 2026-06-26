@@ -358,6 +358,26 @@ def _draw_barcode(c, codigo: str, x: float, y_top: float, height_mm: float = 15.
         return False
 
 # ─────────────────────────────────────────────────────────────────────────────
+# QR CODE PIX (BolePix) — usa o gerador nativo do reportlab (sem dependência nova)
+# ─────────────────────────────────────────────────────────────────────────────
+def _draw_pix_qr(c, emv: str, x: float, y_top: float, size_mm: float = 26.0) -> bool:
+    try:
+        from reportlab.graphics.barcode.qr import QrCodeWidget
+        from reportlab.graphics.shapes import Drawing
+        from reportlab.graphics import renderPDF
+
+        size = _mm(size_mm)
+        qr = QrCodeWidget(emv)
+        b = qr.getBounds()
+        w, h = b[2] - b[0], b[3] - b[1]
+        d = Drawing(size, size, transform=[size / w, 0, 0, size / h, 0, 0])
+        d.add(qr)
+        renderPDF.draw(d, c, x, y_top - size)
+        return True
+    except Exception:
+        return False
+
+# ─────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO PRINCIPAL
 # ─────────────────────────────────────────────────────────────────────────────
 def gerar_boleto_pdf(dados: DadosBoleto) -> bytes:
@@ -386,6 +406,15 @@ def gerar_boleto_pdf(dados: DadosBoleto) -> bytes:
 
     y = _draw_ficha(c, dados, y)
     y -= _mm(6)
+
+    # Pix (BolePix): QR Code do "copia e cola", quando a conta tem a chave
+    # vinculada à funcionalidade na Ailos (senão pix_emv é None e não desenha).
+    if dados.pix_emv and _draw_pix_qr(c, dados.pix_emv, LM, y, size_mm=26):
+        c.setFont("Helvetica-Bold", 8); c.setFillColorRGB(0, 0, 0)
+        c.drawString(LM + _mm(30), y - _mm(6), "Pague com Pix")
+        c.setFont("Helvetica", 6.5); c.setFillColorRGB(0.35, 0.35, 0.35)
+        c.drawString(LM + _mm(30), y - _mm(11), "Escaneie o QR Code no app do seu banco.")
+        y -= _mm(30)
 
     _draw_barcode(c, dados.codigo_barras, LM, y, height_mm=13)  # manual Ailos: 13mm
 

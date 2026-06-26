@@ -120,6 +120,32 @@ class TestGerarBoleto:
         assert boleto.payload_request['documento']['numeroDocumento'] == billing_pendente.id
         assert boleto.payload_response['indicadorSituacaoBoleto'] == 'REGISTRADO'
 
+    def test_desembrulha_envelope_boleto_e_pix(self, db, billing_pendente, cliente):
+        # Produção responde envelopado em {"boleto": {...}} com nomes próprios
+        # (dataVencimentoAtual, valorOriginalTitulo) e o EMV do Pix em "pix".
+        _preencher_endereco(cliente, db)
+        envelope = {'boleto': {
+            'documento': {'numeroDocumento': billing_pendente.id, 'nossoNumero': '00454702000000002',
+                          'identificadorUnicoTitulo': 0},
+            'codigoBarras': {'codigoBarras': '0859...01', 'linhaDigitavel': '08591.02006 ... 1000'},
+            'valorBoleto': {'valorOriginalTitulo': 10, 'valorAtual': 10},
+            'vencimento': {'dataVencimentoAtual': '2026-06-26T00:00:00'},
+            'indicadorSituacaoBoleto': 0,
+            'pix': {'emv': '00020126...EMV-PIX...6304ABCD'},
+        }}
+
+        with patch('app.services.ailos_client.requests') as mock_requests:
+            mock_requests.request.return_value = _resp(200, json_data=envelope)
+            boleto = gerar_boleto(db, billing_pendente, cliente)
+
+        assert boleto.nosso_numero == '00454702000000002'
+        assert boleto.linha_digitavel == '08591.02006 ... 1000'
+        assert boleto.codigo_barras == '0859...01'
+        assert boleto.status_ailos == '0'
+        assert boleto.valor_nominal == Decimal('10')
+        assert boleto.data_vencimento == date(2026, 6, 26)
+        assert boleto.pix_emv == '00020126...EMV-PIX...6304ABCD'
+
     def test_reexecucao_idempotente_nao_reregistra(self, db, billing_pendente, cliente):
         # Já registrado (tem linha digitável) → re-executar NÃO chama a Ailos de
         # novo (evita "título já cadastrado") e devolve o mesmo boleto.

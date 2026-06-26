@@ -47,6 +47,7 @@ class AilosBoletoOut(BaseModel):
     valor_nominal: float | None = None
     data_vencimento: date | None = None
     status_ailos: str | None = None
+    pix_emv: str | None = None
     created_at: datetime
     updated_at: datetime
 
