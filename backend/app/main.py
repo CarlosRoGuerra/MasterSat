@@ -1,5 +1,7 @@
 import logging
 import secrets
+import threading
+import time
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -402,6 +404,35 @@ def _seed_admin() -> None:
         db.close()
 
 
+def _cooperado_token_keepalive():
+    """Renova o token do cooperado Ailos a cada ~20 min (vive 30 min e não pode
+    ser renovado após expirar). Mantém a sessão viva 24/7 — sem reautorização
+    manual. Guardado por advisory lock: com vários workers, só um renova.
+    """
+    from sqlalchemy.orm import Session
+    from app.models.ailos_integration import AilosIntegration
+    from app.services.ailos_client import refresh_cooperado_token
+    logger = logging.getLogger('uvicorn.error')
+
+    while True:
+        time.sleep(1200)  # 20 min (margem de 10 min antes dos 30)
+        try:
+            with engine.connect() as conn:
+                got = conn.exec_driver_sql('SELECT pg_try_advisory_lock(918273646)').scalar()
+                if not got:
+                    continue  # outro worker está cuidando da renovação
+                try:
+                    with Session(bind=conn) as db:
+                        integ = db.query(AilosIntegration).order_by(AilosIntegration.id.asc()).first()
+                        if integ and integ.status == 'authorized' and integ.cooperado_token_encrypted:
+                            refresh_cooperado_token(db)
+                            logger.info('Token do cooperado Ailos renovado (keepalive).')
+                finally:
+                    conn.exec_driver_sql('SELECT pg_advisory_unlock(918273646)')
+        except Exception as exc:  # noqa: BLE001 — keepalive nunca pode derrubar o worker
+            logger.warning('Keepalive do token Ailos falhou (renovará no próximo ciclo): %s', exc)
+
+
 @app.on_event('startup')
 def on_startup():
     # Com múltiplos workers (uvicorn --workers), o startup roda em cada processo.
@@ -420,6 +451,11 @@ def on_startup():
             lock_conn.close()
 
     ensure_bucket()
+
+    # Renovador automático do token do cooperado Ailos (mantém a sessão viva
+    # sem reautorização manual). Só sobe se a integração estiver configurada.
+    if settings.ailos_client_id and settings.ailos_token_encryption_key:
+        threading.Thread(target=_cooperado_token_keepalive, daemon=True).start()
 
     # Verificação inicial de inadimplência (idempotente; não bloqueia o startup)
     try:

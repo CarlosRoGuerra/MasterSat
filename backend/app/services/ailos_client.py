@@ -61,7 +61,10 @@ _TOKEN_REFRESH_MARGIN = timedelta(seconds=60)
 # O JWT do cooperado vive 30 min (Cartilha jan/26, p.26) e NÃO pode ser
 # renovado após expirar — então renovamos proativamente com folga.
 _COOPERADO_TOKEN_LIFETIME = timedelta(minutes=30)
-_COOPERADO_REFRESH_MARGIN = timedelta(minutes=2)
+# Renova com folga: qualquer chamada faltando < 10 min para expirar já renova
+# (o keepalive em background renova a cada 20 min, então normalmente nem chega
+# perto). Evita o token morrer entre uma operação e outra.
+_COOPERADO_REFRESH_MARGIN = timedelta(minutes=10)
 _MAX_ATTEMPTS = 3
 
 # Código de falha do WSO2 para access token expirado/inválido (Cartilha p.18).
@@ -459,8 +462,31 @@ def get_valid_cooperado_token(db: Session) -> str:
     if expires_at is not None:
         if expires_at.tzinfo is None:
             expires_at = expires_at.replace(tzinfo=timezone.utc)
-        if expires_at - datetime.now(timezone.utc) < _COOPERADO_REFRESH_MARGIN:
-            return refresh_cooperado_token(db)
+        now = datetime.now(timezone.utc)
+
+        # Já expirou: a Ailos NÃO permite renovar token expirado — exige nova
+        # autorização. Devolve erro tratado (400), nunca deixa estourar 500.
+        if expires_at <= now:
+            integration.status = 'expired'
+            integration.last_error = 'Token do cooperado expirado'
+            db.commit()
+            raise AilosError(
+                'Sessão do cooperado Ailos expirada. Reautorize via '
+                'POST /api/v1/ailos/connect.'
+            )
+
+        # Perto de expirar: renova proativamente. Qualquer falha inesperada
+        # vira AilosError (erro tratado) em vez de 500.
+        if expires_at - now < _COOPERADO_REFRESH_MARGIN:
+            try:
+                return refresh_cooperado_token(db)
+            except (AilosError, AilosApiError):
+                raise
+            except Exception as exc:  # noqa: BLE001
+                raise AilosError(
+                    f'Falha ao renovar o token do cooperado Ailos ({exc}). '
+                    'Reautorize via POST /api/v1/ailos/connect.'
+                ) from exc
 
     return decrypt_token(integration.cooperado_token_encrypted)
 
@@ -506,14 +532,26 @@ def refresh_cooperado_token(db: Session) -> str:
             friendly_message='Falha ao renovar token do cooperado na Ailos. Reautorize via /connect.',
         )
 
-    body = resp.json() if _is_json_response(resp) else {}
+    try:
+        body = resp.json() if _is_json_response(resp) else {}
+    except ValueError:
+        body = {}
     new_token = body.get('access_token') or body.get('code') or resp.text.strip()
-    expires_in = body.get('expires_in')
+    if not new_token:
+        integration.last_error = 'Renovação sem token na resposta'
+        integration.status = 'expired'
+        db.commit()
+        raise AilosError('Renovação do token do cooperado não retornou token. Reautorize via /connect.')
+
+    try:
+        expires_seconds = int(body.get('expires_in'))
+    except (TypeError, ValueError):
+        expires_seconds = None
 
     integration.cooperado_token_encrypted = encrypt_token(new_token)
     integration.cooperado_token_expires_at = (
-        datetime.now(timezone.utc) + timedelta(seconds=int(expires_in))
-        if expires_in else datetime.now(timezone.utc) + _COOPERADO_TOKEN_LIFETIME
+        datetime.now(timezone.utc) + timedelta(seconds=expires_seconds)
+        if expires_seconds else datetime.now(timezone.utc) + _COOPERADO_TOKEN_LIFETIME
     )
     integration.last_refresh_at = datetime.now(timezone.utc)
     integration.last_error = None
