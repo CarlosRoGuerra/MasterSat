@@ -226,3 +226,20 @@ class TestManterSessaoCooperado:
             res = manter_sessao_cooperado(db)
         assert res == 'relogin_travado'
         mock_login.assert_not_called()
+
+
+class TestRefreshCooperadoToken:
+    def test_refresh_aceita_token_como_string(self, db):
+        # A Ailos devolve o novo token como STRING JSON pura — não pode quebrar
+        # com "'str' object has no attribute 'get'".
+        from app.services.ailos_client import refresh_cooperado_token
+        _seed_client_token(db)
+        integ = _seed_integration(db, status='authorized', expires_minutes=5, token='token-antigo')
+        resp = _resp(200, json_data='novo-token-abc', headers={'Content-Type': 'application/json'})
+        with patch('app.services.ailos_client.requests') as mock_requests:
+            mock_requests.get.return_value = resp
+            novo = refresh_cooperado_token(db)
+        assert novo == 'novo-token-abc'
+        db.refresh(integ)
+        assert decrypt_token(integ.cooperado_token_encrypted) == 'novo-token-abc'
+        assert integ.status == 'authorized'

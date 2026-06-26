@@ -534,20 +534,29 @@ def refresh_cooperado_token(db: Session) -> str:
         )
 
     try:
-        body = resp.json() if _is_json_response(resp) else {}
+        body = resp.json() if _is_json_response(resp) else None
     except ValueError:
-        body = {}
-    new_token = body.get('access_token') or body.get('code') or resp.text.strip()
+        body = None
+
+    # A Ailos devolve o novo token de formas diferentes: como STRING JSON pura
+    # ("token"), como objeto {access_token/code}, ou em texto plano.
+    expires_seconds = None
+    if isinstance(body, str):
+        new_token = body.strip()
+    elif isinstance(body, dict):
+        new_token = body.get('access_token') or body.get('code') or resp.text.strip()
+        try:
+            expires_seconds = int(body.get('expires_in'))
+        except (TypeError, ValueError):
+            expires_seconds = None
+    else:
+        new_token = resp.text.strip()
+
     if not new_token:
         integration.last_error = 'Renovação sem token na resposta'
         integration.status = 'expired'
         db.commit()
         raise AilosError('Renovação do token do cooperado não retornou token. Reautorize via /connect.')
-
-    try:
-        expires_seconds = int(body.get('expires_in'))
-    except (TypeError, ValueError):
-        expires_seconds = None
 
     integration.cooperado_token_encrypted = encrypt_token(new_token)
     integration.cooperado_token_expires_at = (
@@ -598,10 +607,13 @@ def manter_sessao_cooperado(db: Session) -> str:
         try:
             refresh_cooperado_token(db)
             return 'renovado'
-        except (AilosError, AilosApiError):
-            pass  # refresh falhou → re-login proativo abaixo (token ainda vivo)
+        except Exception:  # noqa: BLE001
+            # refresh falhou, MAS o token ainda está vivo → não re-loga agora
+            # (evita login a cada ciclo); tenta de novo no próximo ciclo e só
+            # cai no re-login quando o token realmente expirar.
+            return 'refresh_falhou_token_vivo'
 
-    # token morto OU refresh falhou → re-login headless
+    # token MORTO → re-login headless
     if not (settings.ailos_auto_relogin
             and settings.ailos_cooperado_conta
             and settings.ailos_cooperado_senha):
