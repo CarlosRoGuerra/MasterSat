@@ -120,7 +120,9 @@ class TestGerarBoleto:
         assert boleto.payload_request['documento']['numeroDocumento'] == billing_pendente.id
         assert boleto.payload_response['indicadorSituacaoBoleto'] == 'REGISTRADO'
 
-    def test_reexecucao_atualiza_em_vez_de_duplicar(self, db, billing_pendente, cliente):
+    def test_reexecucao_idempotente_nao_reregistra(self, db, billing_pendente, cliente):
+        # Já registrado (tem linha digitável) → re-executar NÃO chama a Ailos de
+        # novo (evita "título já cadastrado") e devolve o mesmo boleto.
         _preencher_endereco(cliente, db)
 
         resp1 = _resp(200, json_data=_boleto_response(billing_pendente.id, nosso_numero='11111111'))
@@ -128,13 +130,12 @@ class TestGerarBoleto:
             mock_requests.request.return_value = resp1
             boleto1 = gerar_boleto(db, billing_pendente, cliente)
 
-        resp2 = _resp(200, json_data=_boleto_response(billing_pendente.id, nosso_numero='22222222'))
         with patch('app.services.ailos_client.requests') as mock_requests:
-            mock_requests.request.return_value = resp2
             boleto2 = gerar_boleto(db, billing_pendente, cliente)
+            mock_requests.request.assert_not_called()
 
         assert boleto1.id == boleto2.id
-        assert boleto2.nosso_numero == '22222222'
+        assert boleto2.nosso_numero == '11111111'
         assert db.query(AilosBoleto).count() == 1
 
 

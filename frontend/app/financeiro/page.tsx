@@ -419,6 +419,7 @@ export default function FinanceiroPage() {
   const [selectedBilling, setSelectedBilling] = useState<Billing | null>(null);
   const [nfse, setNfse] = useState<Nfse | null>(null);
   const [nfseLoading, setNfseLoading] = useState(false);
+  const [boletoLoading, setBoletoLoading] = useState(false);
   const [editingPlanId, setEditingPlanId] = useState<number | null>(null);
   const [editingProductId, setEditingProductId] = useState<number | null>(null);
   const [editingContractId, setEditingContractId] = useState<number | null>(null);
@@ -744,6 +745,27 @@ export default function FinanceiroPage() {
       const result = await apiFetch<Nfse>(`/nfse/consultar/${selectedBilling.id}`, { method: 'POST' }, token);
       setNfse(result);
     } catch (err) { setError(parseError(err)); } finally { setNfseLoading(false); }
+  }
+
+  // Registra o boleto na Ailos (linha digitável/QR oficiais) e baixa o PDF já
+  // com os dados registrados. Idempotente no backend: re-clicar não duplica.
+  async function handleGerarBoleto() {
+    if (!token || !selectedBilling || !canEdit) return;
+    setBoletoLoading(true);
+    setError('');
+    try {
+      const boleto = await apiFetch<{ linha_digitavel?: string | null; status_ailos?: string | null }>(
+        '/ailos/boletos',
+        { method: 'POST', body: JSON.stringify({ billing_id: selectedBilling.id }) },
+        token,
+      );
+      await downloadProtectedFile(`/boletos/${selectedBilling.id}/pdf`, token, `boleto-${selectedBilling.id}.pdf`);
+      setFeedback(
+        boleto.linha_digitavel
+          ? `Boleto registrado na Ailos. Linha digitável: ${boleto.linha_digitavel}`
+          : 'Boleto registrado na Ailos.',
+      );
+    } catch (err) { setError(parseError(err)); } finally { setBoletoLoading(false); }
   }
 
   /* ─────────────────────────────────────────────────────────────── */
@@ -1090,8 +1112,8 @@ export default function FinanceiroPage() {
               <Button variant="secondary" disabled={!canEdit || processing || selectedBilling.status === 'cancelada'} onClick={() => setAdjustModal(true)}>Ajustar cobrança</Button>
               <Button variant="danger" disabled={!canEdit || processing || selectedBilling.status === 'cancelada'} onClick={handleCancel}>Cancelar</Button>
               {(selectedBilling.status === 'pendente' || selectedBilling.status === 'vencida') && token && (
-                <Button variant="secondary" onClick={() => downloadProtectedFile(`/boletos/${selectedBilling.id}/pdf`, token, `boleto-${selectedBilling.id}.pdf`).catch(e => setError(parseError(e)))}>
-                  🔑 Boleto PDF
+                <Button variant="secondary" disabled={!canEdit || boletoLoading} onClick={handleGerarBoleto}>
+                  {boletoLoading ? 'Gerando…' : '🔑 Gerar boleto (Ailos)'}
                 </Button>
               )}
               {selectedBilling.status === 'paga' && selectedBilling.receipt_number && (

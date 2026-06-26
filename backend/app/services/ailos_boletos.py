@@ -196,7 +196,16 @@ def _upsert_ailos_boleto(
 # ---------------------------------------------------------------------------
 
 def gerar_boleto(db: Session, billing: Billing, client: Client) -> AilosBoleto:
-    """Gera (ou regenera, via UPSERT) um boleto via API Ailos para um billing."""
+    """Gera um boleto via API Ailos para um billing.
+
+    Idempotente: se já existe um boleto registrado (com linha digitável) para
+    este billing, retorna o existente sem chamar a Ailos de novo — evita erro
+    de número duplicado ao re-clicar "Gerar boleto" na tela.
+    """
+    existing = db.query(AilosBoleto).filter_by(billing_id=billing.id).first()
+    if existing is not None and existing.linha_digitavel:
+        return existing
+
     payload = montar_payload_boleto(billing, client)
 
     resp = ailos_client.request(

@@ -57,7 +57,9 @@ class Settings(BaseSettings):
     ailos_numero_convenio: str = '102004'
     ailos_default_carteira: int = 1
     ailos_default_forma_emissao: int = 2
-    ailos_default_indicador_registro_nuclea: int = 2
+    # 1 = registra o título na Nuclea (boleto REGISTRADO) — valor do Postman
+    # oficial da Ailos. 2 deixava o boleto sair como "não registrado".
+    ailos_default_indicador_registro_nuclea: int = 1
     # BolePix (boleto híbrido com QR Code Pix). Requer que a conta tenha uma
     # chave Pix aleatória cadastrada, ativada e vinculada à funcionalidade na
     # Ailos. Quando True, envia "bolePix": true no payload V2 de geração.
