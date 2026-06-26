@@ -32,3 +32,7 @@ class AilosIntegration(Base, TimestampMixin):
     authorized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_refresh_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Tentativas consecutivas de re-login automático headless. Trava de
+    # segurança contra o bloqueio por 3 senhas erradas: ao chegar no limite,
+    # o re-login automático se desabiliza. Zera quando autoriza com sucesso.
+    auto_relogin_failures: Mapped[int] = mapped_column(Integer, default=0, server_default='0')

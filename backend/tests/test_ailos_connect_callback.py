@@ -172,3 +172,57 @@ class TestCallbackEndpoint:
         )
 
         assert response.status_code == 400
+
+
+def _seed_integration(db, *, status='authorized', expires_minutes=20, token='coop-token', failures=0):
+    integ = AilosIntegration(
+        numero_convenio='102004',
+        status=status,
+        cooperado_token_encrypted=encrypt_token(token) if token else None,
+        cooperado_token_expires_at=datetime.now(timezone.utc) + timedelta(minutes=expires_minutes),
+        auto_relogin_failures=failures,
+    )
+    db.add(integ)
+    db.commit()
+    db.refresh(integ)
+    return integ
+
+
+class TestManterSessaoCooperado:
+    def test_token_sadio_renova(self, db):
+        from app.services.ailos_client import manter_sessao_cooperado
+        _seed_integration(db, status='authorized', expires_minutes=20)
+        with patch('app.services.ailos_client.refresh_cooperado_token') as mock_refresh:
+            res = manter_sessao_cooperado(db)
+        assert res == 'renovado'
+        mock_refresh.assert_called_once()
+
+    def test_token_morto_sem_relogin_desligado(self, db, monkeypatch):
+        from app.services.ailos_client import manter_sessao_cooperado
+        monkeypatch.setattr(settings, 'ailos_auto_relogin', False)
+        _seed_integration(db, status='authorized', expires_minutes=-5)
+        assert manter_sessao_cooperado(db) == 'expirado_sem_relogin'
+
+    def test_token_morto_dispara_relogin(self, db, monkeypatch):
+        from app.services.ailos_client import manter_sessao_cooperado
+        monkeypatch.setattr(settings, 'ailos_auto_relogin', True)
+        monkeypatch.setattr(settings, 'ailos_cooperado_conta', '00454702')
+        monkeypatch.setattr(settings, 'ailos_cooperado_senha', 'senha-ok')
+        integ = _seed_integration(db, status='authorized', expires_minutes=-5, failures=0)
+        with patch('app.services.ailos_client.autorizar_cooperado_directo') as mock_login:
+            res = manter_sessao_cooperado(db)
+        assert res == 'relogin_disparado'
+        mock_login.assert_called_once()
+        db.refresh(integ)
+        assert integ.auto_relogin_failures == 1
+
+    def test_trava_em_duas_falhas_nao_chama_login(self, db, monkeypatch):
+        from app.services.ailos_client import manter_sessao_cooperado
+        monkeypatch.setattr(settings, 'ailos_auto_relogin', True)
+        monkeypatch.setattr(settings, 'ailos_cooperado_conta', '00454702')
+        monkeypatch.setattr(settings, 'ailos_cooperado_senha', 'senha-errada')
+        _seed_integration(db, status='authorized', expires_minutes=-5, failures=2)
+        with patch('app.services.ailos_client.autorizar_cooperado_directo') as mock_login:
+            res = manter_sessao_cooperado(db)
+        assert res == 'relogin_travado'
+        mock_login.assert_not_called()

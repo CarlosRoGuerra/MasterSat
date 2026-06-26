@@ -440,6 +440,7 @@ def handle_cooperado_callback(db: Session, state: str, code: str) -> AilosIntegr
     integration.last_refresh_at = datetime.now(timezone.utc)
     integration.last_error = None
     integration.state = None
+    integration.auto_relogin_failures = 0  # login OK → libera o re-login automático
     db.commit()
     db.refresh(integration)
     return integration
@@ -558,6 +559,74 @@ def refresh_cooperado_token(db: Session) -> str:
     integration.status = 'authorized'
     db.commit()
     return new_token
+
+
+# Teto de tentativas consecutivas de re-login automático. Mantém abaixo das 3
+# senhas erradas que BLOQUEIAM a conta na Ailos (Cartilha p.22).
+_MAX_RELOGIN_FAILURES = 2
+
+
+def manter_sessao_cooperado(db: Session) -> str:
+    """Mantém a sessão do cooperado viva (usado pelo keepalive em background).
+
+    1) Sessão sadia (autorizada e token válido) → renova via refresh.
+    2) Token morto OU refresh falhou → se ``AILOS_AUTO_RELOGIN`` ligado e as
+       credenciais configuradas, refaz o login headless (``autorizar_cooperado_directo``).
+
+    Trava de segurança: re-login só é tentado enquanto a sessão NÃO volta a
+    ficar sadia; ao chegar em ``_MAX_RELOGIN_FAILURES`` re-logins seguidos sem
+    sucesso, para de tentar (evita o bloqueio por 3 senhas erradas). O contador
+    zera assim que a sessão fica sadia de novo. Nunca levanta exceção.
+    """
+    integration = db.query(AilosIntegration).order_by(AilosIntegration.id.asc()).first()
+    if integration is None:
+        return 'sem_integracao'
+
+    token_saudavel = False
+    if integration.status == 'authorized' and integration.cooperado_token_encrypted:
+        expires_at = integration.cooperado_token_expires_at
+        if expires_at is not None and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at is None or expires_at > datetime.now(timezone.utc):
+            token_saudavel = True
+
+    if token_saudavel:
+        # sessão sadia → zera o contador de falhas de re-login e renova
+        if integration.auto_relogin_failures:
+            integration.auto_relogin_failures = 0
+            db.commit()
+        try:
+            refresh_cooperado_token(db)
+            return 'renovado'
+        except (AilosError, AilosApiError):
+            pass  # refresh falhou → re-login proativo abaixo (token ainda vivo)
+
+    # token morto OU refresh falhou → re-login headless
+    if not (settings.ailos_auto_relogin
+            and settings.ailos_cooperado_conta
+            and settings.ailos_cooperado_senha):
+        return 'expirado_sem_relogin'
+
+    if (integration.auto_relogin_failures or 0) >= _MAX_RELOGIN_FAILURES:
+        return 'relogin_travado'  # trava de segurança — credencial provavelmente errada
+
+    # incrementa ANTES (pessimista): garante o teto mesmo se o processo cair.
+    # Zera só quando a sessão volta a ficar sadia (no topo do próximo ciclo).
+    integration.auto_relogin_failures = (integration.auto_relogin_failures or 0) + 1
+    db.commit()
+    try:
+        autorizar_cooperado_directo(
+            db,
+            settings.ailos_cooperado_cooperativa,
+            settings.ailos_cooperado_conta,
+            settings.ailos_cooperado_senha,
+        )
+        return 'relogin_disparado'
+    except (AilosError, AilosApiError):
+        # falha de conexão / obter-id (não foi rejeição de senha) → não conta strike
+        integration.auto_relogin_failures = max(0, (integration.auto_relogin_failures or 1) - 1)
+        db.commit()
+        return 'relogin_erro_conexao'
 
 
 # ---------------------------------------------------------------------------

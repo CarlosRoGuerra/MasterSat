@@ -64,6 +64,13 @@ class Settings(BaseSettings):
     # chave Pix aleatória cadastrada, ativada e vinculada à funcionalidade na
     # Ailos. Quando True, envia "bolePix": true no payload V2 de geração.
     ailos_bole_pix: bool = False
+    # Re-login automático headless (mantém a sessão do cooperado viva sem
+    # reautorizar no navegador). Requer as credenciais abaixo. ⚠ 3 senhas
+    # erradas BLOQUEIAM a conta — só ligue com a senha confirmada (trava em 2).
+    ailos_auto_relogin: bool = False
+    ailos_cooperado_cooperativa: str = ''
+    ailos_cooperado_conta: str = ''
+    ailos_cooperado_senha: str = ''
     ailos_token_encryption_key: str = ''
 
     # ── Integração NFS-e Joinville (Pública / Nota Nacional, SOAP) ────────────

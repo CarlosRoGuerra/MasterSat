@@ -90,6 +90,11 @@ def ensure_schema_updates():
             if 'pix_qr_base64' not in ailos_boleto_columns:
                 conn.execute(text('ALTER TABLE ailos_boletos ADD COLUMN pix_qr_base64 TEXT'))
 
+        if inspector.has_table('ailos_integrations'):
+            ailos_integ_columns = {column['name'] for column in inspector.get_columns('ailos_integrations')}
+            if 'auto_relogin_failures' not in ailos_integ_columns:
+                conn.execute(text('ALTER TABLE ailos_integrations ADD COLUMN auto_relogin_failures INTEGER DEFAULT 0'))
+
         if inspector.has_table('documents'):
             document_columns = {column['name'] for column in inspector.get_columns('documents')}
             document_alter_statements = {
@@ -410,8 +415,7 @@ def _cooperado_token_keepalive():
     manual. Guardado por advisory lock: com vários workers, só um renova.
     """
     from sqlalchemy.orm import Session
-    from app.models.ailos_integration import AilosIntegration
-    from app.services.ailos_client import refresh_cooperado_token
+    from app.services.ailos_client import manter_sessao_cooperado
     logger = logging.getLogger('uvicorn.error')
 
     while True:
@@ -423,10 +427,11 @@ def _cooperado_token_keepalive():
                     continue  # outro worker está cuidando da renovação
                 try:
                     with Session(bind=conn) as db:
-                        integ = db.query(AilosIntegration).order_by(AilosIntegration.id.asc()).first()
-                        if integ and integ.status == 'authorized' and integ.cooperado_token_encrypted:
-                            refresh_cooperado_token(db)
-                            logger.info('Token do cooperado Ailos renovado (keepalive).')
+                        resultado = manter_sessao_cooperado(db)
+                    if resultado in ('renovado', 'relogin_disparado'):
+                        logger.info('Sessão Ailos (keepalive): %s.', resultado)
+                    elif resultado not in ('sem_integracao', 'expirado_sem_relogin'):
+                        logger.warning('Sessão Ailos (keepalive): %s.', resultado)
                 finally:
                     conn.exec_driver_sql('SELECT pg_advisory_unlock(918273646)')
         except Exception as exc:  # noqa: BLE001 — keepalive nunca pode derrubar o worker
