@@ -85,6 +85,8 @@ def ensure_schema_updates():
             ailos_boleto_columns = {column['name'] for column in inspector.get_columns('ailos_boletos')}
             if 'pix_emv' not in ailos_boleto_columns:
                 conn.execute(text('ALTER TABLE ailos_boletos ADD COLUMN pix_emv TEXT'))
+            if 'pix_qr_base64' not in ailos_boleto_columns:
+                conn.execute(text('ALTER TABLE ailos_boletos ADD COLUMN pix_qr_base64 TEXT'))
 
         if inspector.has_table('documents'):
             document_columns = {column['name'] for column in inspector.get_columns('documents')}

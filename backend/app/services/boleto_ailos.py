@@ -289,7 +289,8 @@ class DadosBoleto:
     especie: str = "R$"
     aceite: str = "N"
     instrucoes: list[str] | None = None
-    pix_emv: str | None = None   # "copia e cola" do Pix (BolePix) → vira QR no PDF
+    pix_emv: str | None = None         # EMV/BR Code do Pix → gera QR vetorial nítido
+    pix_qr_base64: str | None = None   # imagem PNG/JPEG do QR (fallback se não houver EMV)
 
 
 def gerar_dados_boleto(

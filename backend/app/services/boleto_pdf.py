@@ -367,12 +367,29 @@ def _draw_pix_qr(c, emv: str, x: float, y_top: float, size_mm: float = 26.0) -> 
         from reportlab.graphics import renderPDF
 
         size = _mm(size_mm)
-        qr = QrCodeWidget(emv)
+        # barLevel='M' (recomendado p/ boleto). Vetorial → nítido em qualquer
+        # tamanho. O conteúdo é o EMV (BR Code), não a imagem base64.
+        qr = QrCodeWidget(emv, barLevel='M')
         b = qr.getBounds()
         w, h = b[2] - b[0], b[3] - b[1]
         d = Drawing(size, size, transform=[size / w, 0, 0, size / h, 0, 0])
         d.add(qr)
         renderPDF.draw(d, c, x, y_top - size)
+        return True
+    except Exception:
+        return False
+
+
+def _draw_pix_image(c, b64: str, x: float, y_top: float, size_mm: float = 28.0) -> bool:
+    """Desenha a imagem do QR (PNG/JPEG base64) que a própria Ailos devolveu —
+    usado só quando não há o EMV para gerar um QR vetorial."""
+    try:
+        import base64 as _b64
+        from reportlab.lib.utils import ImageReader
+        raw = b64.split(',', 1)[-1]  # remove prefixo data URI, se houver
+        img = ImageReader(io.BytesIO(_b64.b64decode(raw)))
+        size = _mm(size_mm)
+        c.drawImage(img, x, y_top - size, width=size, height=size, mask='auto')
         return True
     except Exception:
         return False
@@ -407,14 +424,19 @@ def gerar_boleto_pdf(dados: DadosBoleto) -> bytes:
     y = _draw_ficha(c, dados, y)
     y -= _mm(6)
 
-    # Pix (BolePix): QR Code do "copia e cola", quando a conta tem a chave
-    # vinculada à funcionalidade na Ailos (senão pix_emv é None e não desenha).
-    if dados.pix_emv and _draw_pix_qr(c, dados.pix_emv, LM, y, size_mm=26):
+    # Pix (BolePix): prefere o EMV (QR vetorial nítido); se só houver a imagem
+    # da Ailos, desenha a imagem. Se nenhum, não desenha (pix não habilitado).
+    pix_ok = False
+    if dados.pix_emv:
+        pix_ok = _draw_pix_qr(c, dados.pix_emv, LM, y, size_mm=28)
+    elif dados.pix_qr_base64:
+        pix_ok = _draw_pix_image(c, dados.pix_qr_base64, LM, y, size_mm=28)
+    if pix_ok:
         c.setFont("Helvetica-Bold", 8); c.setFillColorRGB(0, 0, 0)
-        c.drawString(LM + _mm(30), y - _mm(6), "Pague com Pix")
+        c.drawString(LM + _mm(32), y - _mm(7), "Pague com Pix")
         c.setFont("Helvetica", 6.5); c.setFillColorRGB(0.35, 0.35, 0.35)
-        c.drawString(LM + _mm(30), y - _mm(11), "Escaneie o QR Code no app do seu banco.")
-        y -= _mm(30)
+        c.drawString(LM + _mm(32), y - _mm(12), "Escaneie o QR Code no app do seu banco.")
+        y -= _mm(32)
 
     _draw_barcode(c, dados.codigo_barras, LM, y, height_mm=13)  # manual Ailos: 13mm
 

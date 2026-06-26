@@ -131,7 +131,8 @@ class TestGerarBoleto:
             'valorBoleto': {'valorOriginalTitulo': 10, 'valorAtual': 10},
             'vencimento': {'dataVencimentoAtual': '2026-06-26T00:00:00'},
             'indicadorSituacaoBoleto': 0,
-            'pix': {'emv': '00020126...EMV-PIX...6304ABCD'},
+            # bloco pix com imagem (base64 PNG) E o EMV — detecção por conteúdo
+            'pix': {'qrCode': 'iVBORw0KGgoBASE64PNG==', 'emv': '00020126580014BR.GOV.BCB.PIX6304ABCD'},
         }}
 
         with patch('app.services.ailos_client.requests') as mock_requests:
@@ -144,7 +145,9 @@ class TestGerarBoleto:
         assert boleto.status_ailos == '0'
         assert boleto.valor_nominal == Decimal('10')
         assert boleto.data_vencimento == date(2026, 6, 26)
-        assert boleto.pix_emv == '00020126...EMV-PIX...6304ABCD'
+        # EMV (começa com 000201) vai p/ pix_emv; a imagem PNG p/ pix_qr_base64
+        assert boleto.pix_emv == '00020126580014BR.GOV.BCB.PIX6304ABCD'
+        assert boleto.pix_qr_base64 == 'iVBORw0KGgoBASE64PNG=='
 
     def test_reexecucao_idempotente_nao_reregistra(self, db, billing_pendente, cliente):
         # Já registrado (tem linha digitável) → re-executar NÃO chama a Ailos de

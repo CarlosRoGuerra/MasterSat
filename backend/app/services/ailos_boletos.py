@@ -147,21 +147,28 @@ def _to_str_or_none(value) -> str | None:
     return str(value)
 
 
-def _extrair_pix_emv(pix) -> str | None:
-    """Extrai o 'copia e cola' (EMV) do bloco ``pix`` do BolePix.
+def _extrair_pix(pix) -> tuple[str | None, str | None]:
+    """Extrai ``(emv, imagem_base64)`` do bloco ``pix`` do BolePix.
 
-    A Ailos devolve ``"pix": null`` quando a conta ainda não tem a chave Pix
-    vinculada à funcionalidade. Quando preenchido, o EMV vem em uma destas
-    chaves (varia conforme a versão) — pega a primeira string não-vazia.
+    Detecta por CONTEÚDO (não por nome de campo, que varia entre versões):
+      - EMV / "copia e cola" (BR Code): string que começa com ``000201``.
+      - Imagem do QR: PNG/JPEG em base64 (``iVBOR...`` / ``/9j/...``) ou data URI.
+
+    A Ailos devolve ``"pix": null`` quando a conta não tem a chave Pix vinculada
+    à funcionalidade — nesse caso retorna ``(None, None)``.
     """
-    if not isinstance(pix, dict):
-        return None
-    for key in ('emv', 'textoQrCode', 'qrCode', 'qrcode', 'copiaECola',
-                'pixCopiaECola', 'codigoQrCode', 'codigoPix', 'brCode'):
-        value = pix.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return None
+    emv: str | None = None
+    imagem: str | None = None
+    if isinstance(pix, dict):
+        for value in pix.values():
+            if not isinstance(value, str) or not value.strip():
+                continue
+            s = value.strip()
+            if s.startswith('000201'):
+                emv = s
+            elif s.startswith('iVBOR') or s.startswith('/9j/') or s.startswith('data:image'):
+                imagem = s
+    return emv, imagem
 
 
 def _upsert_ailos_boleto(
@@ -200,7 +207,7 @@ def _upsert_ailos_boleto(
         boleto.linha_digitavel = codigo_barras_obj.get('linhaDigitavel')
         boleto.codigo_barras = codigo_barras_obj.get('codigoBarras')
         boleto.status_ailos = _to_str_or_none(dados.get('indicadorSituacaoBoleto'))
-        boleto.pix_emv = _extrair_pix_emv(dados.get('pix'))
+        boleto.pix_emv, boleto.pix_qr_base64 = _extrair_pix(dados.get('pix'))
 
         # valorNominal (consulta) ou valorOriginalTitulo/valorAtual (geração)
         valor_nominal = (
@@ -435,4 +442,5 @@ def aplicar_dados_oficiais_ailos(dados: DadosBoleto, ailos_boleto: AilosBoleto |
         linha_digitavel=ailos_boleto.linha_digitavel,
         nosso_numero_display=ailos_boleto.nosso_numero or dados.nosso_numero_display,
         pix_emv=ailos_boleto.pix_emv or dados.pix_emv,
+        pix_qr_base64=ailos_boleto.pix_qr_base64 or dados.pix_qr_base64,
     )
