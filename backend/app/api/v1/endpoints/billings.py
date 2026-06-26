@@ -38,6 +38,7 @@ from app.schemas.billing import (
 from app.services.financial import (
     decimal_to_float,
     generate_receipt_number,
+    marcar_billing_pago,
     mark_charge_item_if_settled,
     period_bucket,
     refresh_overdue_statuses,
@@ -285,16 +286,13 @@ def receive_billing(item_id: int, payload: BillingReceive, db: Session = Depends
         raise HTTPException(status_code=404, detail='Cobrança não encontrada')
     if billing.status == BillingStatus.CANCELED:
         raise HTTPException(status_code=400, detail='Cobrança cancelada não pode ser recebida.')
-    billing.status = BillingStatus.PAID
-    billing.payment_date = payload.payment_date
-    billing.payment_method = payload.payment_method
-    billing.notes = payload.notes or billing.notes
-    billing.paid_amount = payload.paid_amount or billing.amount
-    if not billing.receipt_number:
-        billing.receipt_number = generate_receipt_number(billing.id)
-    db.commit()
-    db.refresh(billing)
-    mark_charge_item_if_settled(db, billing.item_id)
+    marcar_billing_pago(
+        db, billing,
+        payment_date=payload.payment_date,
+        paid_amount=payload.paid_amount,
+        payment_method=payload.payment_method,
+        notes=payload.notes,
+    )
     row = base_query(db).filter(Billing.id == billing.id).first()
     return serialize_billing(row)
 

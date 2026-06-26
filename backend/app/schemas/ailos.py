@@ -54,6 +54,15 @@ class AilosBoletoOut(BaseModel):
     model_config = {'from_attributes': True}
 
 
+class AilosPagamentoOut(BaseModel):
+    billing_id: int
+    consultado: bool
+    pago: bool
+    mensagem: str
+    data_pagamento: date | None = None
+    valor_pago: float | None = None
+
+
 class AilosLoteOut(BaseModel):
     id: int
     tipo: str

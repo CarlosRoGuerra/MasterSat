@@ -433,6 +433,39 @@ def _cooperado_token_keepalive():
             logger.warning('Keepalive do token Ailos falhou (renovará no próximo ciclo): %s', exc)
 
 
+def _ailos_baixa_automatica():
+    """Concilia pagamentos: consulta na Ailos os boletos de cobranças em aberto
+    e dá baixa nas pagas. Roda a cada 1h. Guardado por advisory lock (só 1
+    worker concilia). Só age com o cooperado autorizado.
+    """
+    from sqlalchemy.orm import Session
+    from app.models.ailos_integration import AilosIntegration
+    from app.services.ailos_boletos import conciliar_boletos_abertos
+    logger = logging.getLogger('uvicorn.error')
+
+    while True:
+        time.sleep(3600)  # 1h
+        try:
+            with engine.connect() as conn:
+                got = conn.exec_driver_sql('SELECT pg_try_advisory_lock(918273647)').scalar()
+                if not got:
+                    continue  # outro worker está conciliando
+                try:
+                    with Session(bind=conn) as db:
+                        integ = db.query(AilosIntegration).order_by(AilosIntegration.id.asc()).first()
+                        if integ and integ.status == 'authorized':
+                            res = conciliar_boletos_abertos(db)
+                            if res.get('baixados'):
+                                logger.info(
+                                    'Conciliação Ailos: %s baixado(s) de %s consultado(s).',
+                                    res['baixados'], res['consultados'],
+                                )
+                finally:
+                    conn.exec_driver_sql('SELECT pg_advisory_unlock(918273647)')
+        except Exception as exc:  # noqa: BLE001 — conciliação nunca pode derrubar o worker
+            logger.warning('Conciliação automática Ailos falhou (tentará no próximo ciclo): %s', exc)
+
+
 @app.on_event('startup')
 def on_startup():
     # Com múltiplos workers (uvicorn --workers), o startup roda em cada processo.
@@ -453,9 +486,11 @@ def on_startup():
     ensure_bucket()
 
     # Renovador automático do token do cooperado Ailos (mantém a sessão viva
-    # sem reautorização manual). Só sobe se a integração estiver configurada.
+    # sem reautorização manual) + conciliação automática de pagamentos (baixa
+    # dos boletos pagos). Só sobem se a integração estiver configurada.
     if settings.ailos_client_id and settings.ailos_token_encryption_key:
         threading.Thread(target=_cooperado_token_keepalive, daemon=True).start()
+        threading.Thread(target=_ailos_baixa_automatica, daemon=True).start()
 
     # Verificação inicial de inadimplência (idempotente; não bloqueia o startup)
     try:

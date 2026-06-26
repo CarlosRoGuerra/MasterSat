@@ -32,6 +32,7 @@ from app.models.ailos_boleto import AilosBoleto
 from app.models.ailos_lote import AilosLote
 from app.models.billing import Billing
 from app.models.client import Client
+from app.models.enums import BillingStatus
 from app.services import ailos_client
 from app.services.ailos_validators import (
     normalize_text,
@@ -41,6 +42,7 @@ from app.services.ailos_validators import (
     validate_boleto_payload,
 )
 from app.services.boleto_ailos import DadosBoleto
+from app.services.financial import marcar_billing_pago, refresh_overdue_statuses
 
 # ---------------------------------------------------------------------------
 # Caminhos (relativos a AILOS_GATEWAY_BASE_URL)
@@ -444,3 +446,106 @@ def aplicar_dados_oficiais_ailos(dados: DadosBoleto, ailos_boleto: AilosBoleto |
         pix_emv=ailos_boleto.pix_emv or dados.pix_emv,
         pix_qr_base64=ailos_boleto.pix_qr_base64 or dados.pix_qr_base64,
     )
+
+
+# ---------------------------------------------------------------------------
+# Conciliação de pagamento (baixa automática)
+# ---------------------------------------------------------------------------
+
+def _extrair_pagamento(payload_response: dict | None) -> dict:
+    """Lê a situação de pagamento do retorno de consulta de boleto.
+
+    Considera PAGO quando há valor pago (> 0) ou uma data de pagamento real
+    (diferente de 0001-01-01). Desembrulha o envelope {"boleto": {...}}.
+    """
+    if not isinstance(payload_response, dict):
+        return {'pago': False, 'valor_pago': None, 'data_pagamento': None}
+    dados = payload_response.get('boleto')
+    if not isinstance(dados, dict):
+        dados = payload_response
+
+    pagamento = dados.get('pagamento') or {}
+    valor_boleto = dados.get('valorBoleto') or {}
+
+    try:
+        valor_pago = float(valor_boleto.get('valorPago') or 0)
+    except (TypeError, ValueError):
+        valor_pago = 0.0
+
+    data_pagamento = None
+    data_str = pagamento.get('dataPagamento')
+    if data_str and not str(data_str).startswith('0001'):
+        try:
+            data_pagamento = date.fromisoformat(str(data_str)[:10])
+        except ValueError:
+            data_pagamento = None
+
+    pago = valor_pago > 0 or data_pagamento is not None
+    return {
+        'pago': pago,
+        'valor_pago': valor_pago if valor_pago else None,
+        'data_pagamento': data_pagamento,
+    }
+
+
+def verificar_pagamento(db: Session, billing: Billing) -> dict:
+    """Consulta o boleto na Ailos e, se pago, dá baixa na cobrança.
+
+    Retorna ``{consultado, pago, data_pagamento, valor_pago, mensagem}``.
+    """
+    boleto = db.query(AilosBoleto).filter_by(billing_id=billing.id).first()
+    if boleto is None or not boleto.nosso_numero:
+        return {'consultado': False, 'pago': False, 'data_pagamento': None,
+                'valor_pago': None, 'mensagem': 'Boleto Ailos ainda não gerado para esta cobrança.'}
+
+    resp = consultar_boleto(db, boleto.nosso_numero)
+    if isinstance(resp, dict):
+        _upsert_ailos_boleto(db, billing.id, boleto.payload_request or {}, resp)
+
+    info = _extrair_pagamento(resp if isinstance(resp, dict) else None)
+    if not info['pago']:
+        return {'consultado': True, 'pago': False, 'data_pagamento': None,
+                'valor_pago': None, 'mensagem': 'Boleto ainda não consta como pago na Ailos.'}
+
+    if billing.status != BillingStatus.PAID:
+        marcar_billing_pago(
+            db, billing,
+            payment_date=info['data_pagamento'] or date.today(),
+            paid_amount=info['valor_pago'] or float(billing.amount),
+            payment_method='boleto',
+            notes='Baixa automática via Ailos.',
+        )
+    return {'consultado': True, 'pago': True, 'data_pagamento': info['data_pagamento'],
+            'valor_pago': info['valor_pago'], 'mensagem': 'Pagamento confirmado — baixa realizada.'}
+
+
+def conciliar_boletos_abertos(db: Session, limit: int = 300) -> dict:
+    """Consulta os boletos de cobranças em aberto e dá baixa nas pagas.
+
+    Usado pela conciliação automática em background. Erro pontual num boleto
+    não interrompe o lote. Retorna ``{consultados, baixados}``.
+    """
+    refresh_overdue_statuses(db)
+    rows = (
+        db.query(Billing)
+        .join(AilosBoleto, AilosBoleto.billing_id == Billing.id)
+        .filter(
+            Billing.is_deleted.is_(False),
+            Billing.status.in_([BillingStatus.PENDING, BillingStatus.OVERDUE]),
+            AilosBoleto.nosso_numero.isnot(None),
+        )
+        .limit(limit)
+        .all()
+    )
+    consultados = 0
+    baixados = 0
+    for billing in rows:
+        try:
+            res = verificar_pagamento(db, billing)
+            if res.get('consultado'):
+                consultados += 1
+            if res.get('pago'):
+                baixados += 1
+        except (ailos_client.AilosError, ailos_client.AilosApiError):
+            continue
+    return {'consultados': consultados, 'baixados': baixados}

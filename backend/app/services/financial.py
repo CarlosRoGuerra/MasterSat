@@ -323,6 +323,34 @@ def generate_item_billings(db: Session, item: ClientChargeItem, force: bool = Fa
     return created
 
 
+def marcar_billing_pago(
+    db: Session,
+    billing: Billing,
+    *,
+    payment_date: date,
+    paid_amount: float | Decimal | None,
+    payment_method: str = 'boleto',
+    notes: str | None = None,
+) -> Billing:
+    """Marca uma cobrança como paga (status, data, valor, recibo).
+
+    Reaproveitado pelo recebimento manual e pela baixa automática Ailos —
+    mesma lógica do endpoint /billings/{id}/receive.
+    """
+    billing.status = BillingStatus.PAID
+    billing.payment_date = payment_date
+    billing.payment_method = payment_method
+    if notes:
+        billing.notes = notes
+    billing.paid_amount = paid_amount if paid_amount else billing.amount
+    if not billing.receipt_number:
+        billing.receipt_number = generate_receipt_number(billing.id)
+    db.commit()
+    db.refresh(billing)
+    mark_charge_item_if_settled(db, billing.item_id)
+    return billing
+
+
 def mark_charge_item_if_settled(db: Session, item_id: int | None) -> None:
     if not item_id:
         return

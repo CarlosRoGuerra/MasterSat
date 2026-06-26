@@ -287,3 +287,69 @@ class TestConsultarLote:
         assert boleto_a.codigo_barras == 'CB-A'
         assert boleto_b.linha_digitavel == 'LD-B'
         assert boleto_b.codigo_barras == 'CB-B'
+
+
+class TestVerificarPagamento:
+    def test_extrair_pagamento_pago(self):
+        from app.services.ailos_boletos import _extrair_pagamento
+        env = {'boleto': {'valorBoleto': {'valorPago': 10.0},
+                          'pagamento': {'dataPagamento': '2026-06-26T00:00:00'}}}
+        info = _extrair_pagamento(env)
+        assert info['pago'] is True
+        assert info['valor_pago'] == 10.0
+        assert info['data_pagamento'] == date(2026, 6, 26)
+
+    def test_extrair_pagamento_nao_pago(self):
+        from app.services.ailos_boletos import _extrair_pagamento
+        env = {'boleto': {'valorBoleto': {'valorPago': 0},
+                          'pagamento': {'dataPagamento': '0001-01-01T00:00:00'}}}
+        assert _extrair_pagamento(env)['pago'] is False
+
+    def test_verificar_pagamento_da_baixa(self, db, billing_pendente, cliente):
+        from app.models.enums import BillingStatus
+        from app.services.ailos_boletos import verificar_pagamento
+        _preencher_endereco(cliente, db)
+
+        # gera o boleto (cria AilosBoleto com nosso_numero)
+        with patch('app.services.ailos_client.requests') as mock_requests:
+            mock_requests.request.return_value = _resp(200, json_data=_boleto_response(billing_pendente.id, nosso_numero='999'))
+            gerar_boleto(db, billing_pendente, cliente)
+
+        # consulta retorna PAGO
+        consulta = {'boleto': {
+            'documento': {'numeroDocumento': billing_pendente.id, 'nossoNumero': '999'},
+            'codigoBarras': {'codigoBarras': 'X', 'linhaDigitavel': 'Y'},
+            'valorBoleto': {'valorPago': 99.9},
+            'pagamento': {'dataPagamento': '2026-06-26T00:00:00'},
+        }}
+        with patch('app.services.ailos_client.requests') as mock_requests:
+            mock_requests.request.return_value = _resp(200, json_data=consulta)
+            res = verificar_pagamento(db, billing_pendente)
+
+        assert res['pago'] is True
+        db.refresh(billing_pendente)
+        assert billing_pendente.status == BillingStatus.PAID
+        assert billing_pendente.payment_date == date(2026, 6, 26)
+        assert billing_pendente.receipt_number is not None
+
+    def test_verificar_pagamento_sem_baixa_quando_nao_pago(self, db, billing_pendente, cliente):
+        from app.models.enums import BillingStatus
+        from app.services.ailos_boletos import verificar_pagamento
+        _preencher_endereco(cliente, db)
+
+        with patch('app.services.ailos_client.requests') as mock_requests:
+            mock_requests.request.return_value = _resp(200, json_data=_boleto_response(billing_pendente.id, nosso_numero='999'))
+            gerar_boleto(db, billing_pendente, cliente)
+
+        consulta = {'boleto': {
+            'documento': {'numeroDocumento': billing_pendente.id, 'nossoNumero': '999'},
+            'valorBoleto': {'valorPago': 0},
+            'pagamento': {'dataPagamento': '0001-01-01T00:00:00'},
+        }}
+        with patch('app.services.ailos_client.requests') as mock_requests:
+            mock_requests.request.return_value = _resp(200, json_data=consulta)
+            res = verificar_pagamento(db, billing_pendente)
+
+        assert res['pago'] is False
+        db.refresh(billing_pendente)
+        assert billing_pendente.status != BillingStatus.PAID

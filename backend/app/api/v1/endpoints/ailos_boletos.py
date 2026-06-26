@@ -25,6 +25,7 @@ from app.schemas.ailos import (
     AilosGerarLoteIn,
     AilosLoteOut,
     AilosLoteStatusOut,
+    AilosPagamentoOut,
 )
 from app.services.ailos_boletos import (
     consultar_boleto,
@@ -32,6 +33,7 @@ from app.services.ailos_boletos import (
     gerar_boleto,
     gerar_boleto_lote,
     gerar_carne_lote,
+    verificar_pagamento,
 )
 from app.services.ailos_client import AilosApiError, AilosError
 from app.services.ailos_validators import AilosValidationError
@@ -84,6 +86,25 @@ def gerar_boleto_endpoint(
         return gerar_boleto(db, billing, client)
     except _AILOS_EXCEPTIONS as exc:
         raise_ailos_error(exc)
+
+
+# ---------------------------------------------------------------------------
+# POST /ailos/boletos/{billing_id}/verificar-pagamento — consulta + baixa
+# ---------------------------------------------------------------------------
+
+@router.post('/boletos/{billing_id}/verificar-pagamento', response_model=AilosPagamentoOut)
+def verificar_pagamento_endpoint(
+    billing_id: int,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    """Consulta o boleto na Ailos e, se estiver pago, dá baixa na cobrança."""
+    billing = _get_billing_or_404(billing_id, db)
+    try:
+        result = verificar_pagamento(db, billing)
+    except _AILOS_EXCEPTIONS as exc:
+        raise_ailos_error(exc)
+    return AilosPagamentoOut(billing_id=billing_id, **result)
 
 
 # ---------------------------------------------------------------------------

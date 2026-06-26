@@ -768,6 +768,25 @@ export default function FinanceiroPage() {
     } catch (err) { setError(parseError(err)); } finally { setBoletoLoading(false); }
   }
 
+  // Consulta a Ailos e, se o boleto estiver pago, dá baixa na cobrança.
+  async function handleVerificarPagamento() {
+    if (!token || !selectedBilling || !canEdit) return;
+    setBoletoLoading(true);
+    setError('');
+    try {
+      const res = await apiFetch<{ pago: boolean; mensagem: string }>(
+        `/ailos/boletos/${selectedBilling.id}/verificar-pagamento`,
+        { method: 'POST' },
+        token,
+      );
+      setFeedback(res.mensagem);
+      if (res.pago) {
+        setSelectedBilling(null);
+        await loadData(token);
+      }
+    } catch (err) { setError(parseError(err)); } finally { setBoletoLoading(false); }
+  }
+
   /* ─────────────────────────────────────────────────────────────── */
   return (
     <PageShell title="Financeiro" description="Gestão financeira com KPIs, cobranças, inadimplência e cadastro de planos e contratos.">
@@ -1114,6 +1133,11 @@ export default function FinanceiroPage() {
               {(selectedBilling.status === 'pendente' || selectedBilling.status === 'vencida') && token && (
                 <Button variant="secondary" disabled={!canEdit || boletoLoading} onClick={handleGerarBoleto}>
                   {boletoLoading ? 'Gerando…' : '🔑 Gerar boleto (Ailos)'}
+                </Button>
+              )}
+              {(selectedBilling.status === 'pendente' || selectedBilling.status === 'vencida') && token && (
+                <Button variant="secondary" disabled={!canEdit || boletoLoading} onClick={handleVerificarPagamento}>
+                  {boletoLoading ? 'Verificando…' : '🔄 Verificar pagamento'}
                 </Button>
               )}
               {selectedBilling.status === 'paga' && selectedBilling.receipt_number && (
