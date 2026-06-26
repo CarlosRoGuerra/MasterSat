@@ -409,64 +409,76 @@ def _seed_admin() -> None:
         db.close()
 
 
-def _cooperado_token_keepalive():
-    """Renova o token do cooperado Ailos a cada ~20 min (vive 30 min e não pode
-    ser renovado após expirar). Mantém a sessão viva 24/7 — sem reautorização
-    manual. Guardado por advisory lock: com vários workers, só um renova.
+def _run_locked(lock_key: int, fn):
+    """Executa ``fn(db)`` com um advisory lock dedicado (1 worker por vez).
+
+    A conexão do lock é SEPARADA da sessão de trabalho (uma SessionLocal
+    própria, que faz COMMIT de verdade). Antes, ``Session(bind=conn)`` na mesma
+    conexão do lock fazia o commit ser descartado no fim do ``with`` — o
+    refresh/baixa "rodava" mas não persistia. Retorna o que ``fn`` retornar, ou
+    None se outro worker já tem o lock.
     """
-    from sqlalchemy.orm import Session
+    lock_conn = engine.connect()
+    try:
+        if not lock_conn.exec_driver_sql(f'SELECT pg_try_advisory_lock({int(lock_key)})').scalar():
+            return None  # outro worker tem o lock
+        db = SessionLocal()
+        try:
+            return fn(db)
+        finally:
+            db.close()
+    finally:
+        try:
+            lock_conn.exec_driver_sql(f'SELECT pg_advisory_unlock({int(lock_key)})')
+        except Exception:  # noqa: BLE001
+            pass
+        lock_conn.close()
+
+
+def _cooperado_token_keepalive():
+    """Renova o token do cooperado Ailos a cada 10 min (vive 30 min e não pode
+    ser renovado após expirar). Mantém a sessão viva 24/7 sem reautorização
+    manual. Advisory lock: com vários workers, só um renova por ciclo.
+    """
     from app.services.ailos_client import manter_sessao_cooperado
     logger = logging.getLogger('uvicorn.error')
 
     while True:
-        time.sleep(1200)  # 20 min (margem de 10 min antes dos 30)
+        time.sleep(600)  # 10 min — folga de 20 min antes dos 30
         try:
-            with engine.connect() as conn:
-                got = conn.exec_driver_sql('SELECT pg_try_advisory_lock(918273646)').scalar()
-                if not got:
-                    continue  # outro worker está cuidando da renovação
-                try:
-                    with Session(bind=conn) as db:
-                        resultado = manter_sessao_cooperado(db)
-                    if resultado in ('renovado', 'relogin_disparado'):
-                        logger.info('Sessão Ailos (keepalive): %s.', resultado)
-                    elif resultado not in ('sem_integracao', 'expirado_sem_relogin'):
-                        logger.warning('Sessão Ailos (keepalive): %s.', resultado)
-                finally:
-                    conn.exec_driver_sql('SELECT pg_advisory_unlock(918273646)')
+            resultado = _run_locked(918273646, manter_sessao_cooperado)
+            if resultado in ('renovado', 'relogin_disparado'):
+                logger.info('Sessão Ailos (keepalive): %s.', resultado)
+            elif resultado not in (None, 'sem_integracao', 'expirado_sem_relogin'):
+                logger.warning('Sessão Ailos (keepalive): %s.', resultado)
         except Exception as exc:  # noqa: BLE001 — keepalive nunca pode derrubar o worker
             logger.warning('Keepalive do token Ailos falhou (renovará no próximo ciclo): %s', exc)
 
 
 def _ailos_baixa_automatica():
     """Concilia pagamentos: consulta na Ailos os boletos de cobranças em aberto
-    e dá baixa nas pagas. Roda a cada 1h. Guardado por advisory lock (só 1
-    worker concilia). Só age com o cooperado autorizado.
+    e dá baixa nas pagas. Roda a cada 1h. Advisory lock (só 1 worker concilia).
+    Só age com o cooperado autorizado.
     """
-    from sqlalchemy.orm import Session
     from app.models.ailos_integration import AilosIntegration
     from app.services.ailos_boletos import conciliar_boletos_abertos
     logger = logging.getLogger('uvicorn.error')
 
+    def _job(db):
+        integ = db.query(AilosIntegration).order_by(AilosIntegration.id.asc()).first()
+        if integ and integ.status == 'authorized':
+            return conciliar_boletos_abertos(db)
+        return None
+
     while True:
         time.sleep(3600)  # 1h
         try:
-            with engine.connect() as conn:
-                got = conn.exec_driver_sql('SELECT pg_try_advisory_lock(918273647)').scalar()
-                if not got:
-                    continue  # outro worker está conciliando
-                try:
-                    with Session(bind=conn) as db:
-                        integ = db.query(AilosIntegration).order_by(AilosIntegration.id.asc()).first()
-                        if integ and integ.status == 'authorized':
-                            res = conciliar_boletos_abertos(db)
-                            if res.get('baixados'):
-                                logger.info(
-                                    'Conciliação Ailos: %s baixado(s) de %s consultado(s).',
-                                    res['baixados'], res['consultados'],
-                                )
-                finally:
-                    conn.exec_driver_sql('SELECT pg_advisory_unlock(918273647)')
+            res = _run_locked(918273647, _job)
+            if res and res.get('baixados'):
+                logger.info(
+                    'Conciliação Ailos: %s baixado(s) de %s consultado(s).',
+                    res['baixados'], res['consultados'],
+                )
         except Exception as exc:  # noqa: BLE001 — conciliação nunca pode derrubar o worker
             logger.warning('Conciliação automática Ailos falhou (tentará no próximo ciclo): %s', exc)
 
