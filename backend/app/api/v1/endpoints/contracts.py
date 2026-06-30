@@ -58,6 +58,7 @@ def serialize_contract(db: Session, contract: Contract) -> ContractOut:
         notes=contract.notes,
         installation_fee=float(contract.installation_fee) if contract.installation_fee is not None else None,
         uninstall_fee=float(contract.uninstall_fee) if contract.uninstall_fee is not None else None,
+        delivery_method=contract.delivery_method,
         client_name=client.name if (client and not client.is_deleted) else None,
         plan_name=plan.name if (plan and not plan.is_deleted) else None,
         vehicle_plate=vehicle.plate if (vehicle and not vehicle.is_deleted) else None,
