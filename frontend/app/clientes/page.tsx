@@ -49,6 +49,13 @@ type Client = {
   rg_ie?: string | null;
   birth_date?: string | null;
   emergency_contacts?: { name?: string | null; phone?: string | null; mobile?: string | null }[] | null;
+  boleto_format?: string | null;
+  boleto_fee?: string | null;
+  issue_invoice?: string | null;
+  tributacao?: string | null;
+  iss_retido?: string | null;
+  optante_simples?: string | null;
+  delivery_method?: string | null;
 };
 
 type ClientDocument = {
@@ -141,6 +148,13 @@ type ClientFormState = {
   em2_name: string;
   em2_phone: string;
   em2_mobile: string;
+  boleto_format: string;
+  boleto_fee: string;
+  issue_invoice: string;
+  tributacao: string;
+  iss_retido: string;
+  optante_simples: string;
+  delivery_method: string;
 };
 
 const initialForm: ClientFormState = {
@@ -169,6 +183,13 @@ const initialForm: ClientFormState = {
   em2_name: '',
   em2_phone: '',
   em2_mobile: '',
+  boleto_format: 'unico',
+  boleto_fee: 'nao',
+  issue_invoice: 'sim',
+  tributacao: 'dentro_municipio',
+  iss_retido: 'nao',
+  optante_simples: 'sim',
+  delivery_method: 'email',
 };
 
 const documentCategoryOptions = ['cnh', 'rg', 'cpf', 'contrato', 'comprovante_endereco', 'cartao_cnpj', 'contrato_social', 'outro'];
@@ -469,6 +490,13 @@ export default function ClientesPage() {
       em2_name: client.emergency_contacts?.[1]?.name || '',
       em2_phone: client.emergency_contacts?.[1]?.phone || '',
       em2_mobile: client.emergency_contacts?.[1]?.mobile || '',
+      boleto_format: client.boleto_format || 'unico',
+      boleto_fee: client.boleto_fee || 'nao',
+      issue_invoice: client.issue_invoice || 'sim',
+      tributacao: client.tributacao || 'dentro_municipio',
+      iss_retido: client.iss_retido || 'nao',
+      optante_simples: client.optante_simples || 'sim',
+      delivery_method: client.delivery_method || 'email',
     });
     setDocFiles([]);
     setModalOpen(true);
@@ -580,6 +608,13 @@ export default function ClientesPage() {
         rg_ie: form.rg_ie.trim() || null,
         birth_date: form.birth_date || null,
         emergency_contacts: emergencyContacts.length ? emergencyContacts : null,
+        boleto_format: form.boleto_format || null,
+        boleto_fee: form.boleto_fee || null,
+        issue_invoice: form.issue_invoice || null,
+        tributacao: form.tributacao || null,
+        iss_retido: form.iss_retido || null,
+        optante_simples: form.optante_simples || null,
+        delivery_method: form.delivery_method || null,
       };
 
       const saved = isEditing && selectedClient
@@ -1085,6 +1120,57 @@ export default function ClientesPage() {
               </FormField>
               <FormField label="Celular">
                 <Input value={form.em2_mobile} onChange={(e) => handleChange('em2_mobile', e.target.value)} />
+              </FormField>
+            </FormGrid>
+          </FormSection>
+
+          <FormDivider />
+
+          <FormSection title="Financeiro">
+            <FormGrid cols={3}>
+              <FormField label="Formato do Boleto" required>
+                <Select value={form.boleto_format} onChange={(e) => handleChange('boleto_format', e.target.value)}>
+                  <option value="unico">Boleto Único</option>
+                  <option value="individual">Boleto Individual</option>
+                </Select>
+              </FormField>
+              <FormField label="Taxa de Emissão do Boleto">
+                <Select value={form.boleto_fee} onChange={(e) => handleChange('boleto_fee', e.target.value)}>
+                  <option value="nao">Não</option>
+                  <option value="sim">Sim</option>
+                </Select>
+              </FormField>
+              <FormField label="Emitir Nota Fiscal">
+                <Select value={form.issue_invoice} onChange={(e) => handleChange('issue_invoice', e.target.value)}>
+                  <option value="sim">Sim</option>
+                  <option value="nao">Não</option>
+                </Select>
+              </FormField>
+              <FormField label="Tributação">
+                <Select value={form.tributacao} onChange={(e) => handleChange('tributacao', e.target.value)}>
+                  <option value="dentro_municipio">Dentro do município</option>
+                  <option value="fora_municipio">Fora do município</option>
+                  <option value="isento">Isento</option>
+                </Select>
+              </FormField>
+              <FormField label="Reter ISS">
+                <Select value={form.iss_retido} onChange={(e) => handleChange('iss_retido', e.target.value)}>
+                  <option value="nao">Não</option>
+                  <option value="sim">Sim</option>
+                </Select>
+              </FormField>
+              <FormField label="Optante do Simples Nacional">
+                <Select value={form.optante_simples} onChange={(e) => handleChange('optante_simples', e.target.value)}>
+                  <option value="sim">Sim</option>
+                  <option value="nao">Não</option>
+                </Select>
+              </FormField>
+              <FormField label="Tipo de Envio">
+                <Select value={form.delivery_method} onChange={(e) => handleChange('delivery_method', e.target.value)}>
+                  <option value="email">Email</option>
+                  <option value="whatsapp">WhatsApp</option>
+                  <option value="todos">Todos</option>
+                </Select>
               </FormField>
             </FormGrid>
           </FormSection>

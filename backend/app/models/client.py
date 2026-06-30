@@ -35,3 +35,11 @@ class Client(Base, TimestampMixin, SoftDeleteMixin):
     birth_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     # Contatos de emergência: [{"name", "phone", "mobile"}, ...]
     emergency_contacts: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # ── Dados fiscais/financeiros do cliente (usados no fechamento / NFS-e) ──
+    boleto_format: Mapped[str | None] = mapped_column(String(20), nullable=True)      # 'unico' | 'individual'
+    boleto_fee: Mapped[str | None] = mapped_column(String(3), nullable=True)          # Taxa de emissão: 'sim' | 'nao'
+    issue_invoice: Mapped[str | None] = mapped_column(String(3), nullable=True)       # Emitir NF: 'sim' | 'nao'
+    tributacao: Mapped[str | None] = mapped_column(String(30), nullable=True)         # 'dentro_municipio' | 'fora_municipio' | 'isento'
+    iss_retido: Mapped[str | None] = mapped_column(String(3), nullable=True)          # Reter ISS: 'sim' | 'nao'
+    optante_simples: Mapped[str | None] = mapped_column(String(3), nullable=True)     # Optante do Simples: 'sim' | 'nao'
+    delivery_method: Mapped[str | None] = mapped_column(String(20), nullable=True)    # Tipo de Envio: 'email' | 'whatsapp' | 'todos'

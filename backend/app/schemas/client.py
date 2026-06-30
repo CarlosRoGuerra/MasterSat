@@ -55,6 +55,13 @@ class ClientBase(BaseModel):
     rg_ie: str | None = None
     birth_date: date | None = None
     emergency_contacts: list[EmergencyContact] | None = None
+    boleto_format: str | None = None
+    boleto_fee: str | None = None
+    issue_invoice: str | None = None
+    tributacao: str | None = None
+    iss_retido: str | None = None
+    optante_simples: str | None = None
+    delivery_method: str | None = None
 
     @field_validator('cpf_cnpj')
     @classmethod
@@ -136,6 +143,13 @@ class ClientUpdate(BaseModel):
     rg_ie: str | None = None
     birth_date: date | None = None
     emergency_contacts: list[EmergencyContact] | None = None
+    boleto_format: str | None = None
+    boleto_fee: str | None = None
+    issue_invoice: str | None = None
+    tributacao: str | None = None
+    iss_retido: str | None = None
+    optante_simples: str | None = None
+    delivery_method: str | None = None
 
     @field_validator('cpf_cnpj')
     @classmethod

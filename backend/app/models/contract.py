@@ -25,5 +25,3 @@ class Contract(Base, TimestampMixin, SoftDeleteMixin):
     # Taxas do TERMO DE ADESÃO (por veículo)
     installation_fee: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     uninstall_fee: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
-    # Tipo de Envio da cobrança: 'todos' | 'email' | 'whatsapp' (preferência)
-    delivery_method: Mapped[str | None] = mapped_column(String(20), nullable=True)

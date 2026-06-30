@@ -68,6 +68,13 @@ def ensure_schema_updates():
                 'rg_ie': 'ALTER TABLE clients ADD COLUMN rg_ie VARCHAR(30)',
                 'birth_date': 'ALTER TABLE clients ADD COLUMN birth_date DATE',
                 'emergency_contacts': 'ALTER TABLE clients ADD COLUMN emergency_contacts JSON',
+                'boleto_format': 'ALTER TABLE clients ADD COLUMN boleto_format VARCHAR(20)',
+                'boleto_fee': 'ALTER TABLE clients ADD COLUMN boleto_fee VARCHAR(3)',
+                'issue_invoice': 'ALTER TABLE clients ADD COLUMN issue_invoice VARCHAR(3)',
+                'tributacao': 'ALTER TABLE clients ADD COLUMN tributacao VARCHAR(30)',
+                'iss_retido': 'ALTER TABLE clients ADD COLUMN iss_retido VARCHAR(3)',
+                'optante_simples': 'ALTER TABLE clients ADD COLUMN optante_simples VARCHAR(3)',
+                'delivery_method': 'ALTER TABLE clients ADD COLUMN delivery_method VARCHAR(20)',
             }
             for column_name, sql in client_alter_statements.items():
                 if column_name not in client_columns:
@@ -78,7 +85,6 @@ def ensure_schema_updates():
             contract_alter_statements = {
                 'installation_fee': 'ALTER TABLE contracts ADD COLUMN installation_fee NUMERIC(10,2)',
                 'uninstall_fee': 'ALTER TABLE contracts ADD COLUMN uninstall_fee NUMERIC(10,2)',
-                'delivery_method': 'ALTER TABLE contracts ADD COLUMN delivery_method VARCHAR(20)',
             }
             for column_name, sql in contract_alter_statements.items():
                 if column_name not in contract_columns:

@@ -15,7 +15,6 @@ class ContractBase(BaseModel):
     notes: str | None = None
     installation_fee: float | None = None
     uninstall_fee: float | None = None
-    delivery_method: str | None = None
 
 
 class ContractCreate(ContractBase):
@@ -33,7 +32,6 @@ class ContractUpdate(BaseModel):
     notes: str | None = None
     installation_fee: float | None = None
     uninstall_fee: float | None = None
-    delivery_method: str | None = None
 
 
 class ContractOut(ContractBase):
