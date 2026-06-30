@@ -55,6 +55,7 @@ class ClientBase(BaseModel):
     rg_ie: str | None = None
     birth_date: date | None = None
     emergency_contacts: list[EmergencyContact] | None = None
+    delivery_method: str | None = None
 
     @field_validator('cpf_cnpj')
     @classmethod
@@ -136,6 +137,7 @@ class ClientUpdate(BaseModel):
     rg_ie: str | None = None
     birth_date: date | None = None
     emergency_contacts: list[EmergencyContact] | None = None
+    delivery_method: str | None = None
 
     @field_validator('cpf_cnpj')
     @classmethod

@@ -48,6 +48,7 @@ type Client = {
   billing_day?: number | null;
   rg_ie?: string | null;
   birth_date?: string | null;
+  delivery_method?: string | null;
   emergency_contacts?: { name?: string | null; phone?: string | null; mobile?: string | null }[] | null;
 };
 
@@ -135,6 +136,7 @@ type ClientFormState = {
   billing_day: string;
   rg_ie: string;
   birth_date: string;
+  delivery_method: string;
   em1_name: string;
   em1_phone: string;
   em1_mobile: string;
@@ -163,6 +165,7 @@ const initialForm: ClientFormState = {
   billing_day: '',
   rg_ie: '',
   birth_date: '',
+  delivery_method: 'email',
   em1_name: '',
   em1_phone: '',
   em1_mobile: '',
@@ -463,6 +466,7 @@ export default function ClientesPage() {
       billing_day: client.billing_day != null ? String(client.billing_day) : '',
       rg_ie: client.rg_ie || '',
       birth_date: client.birth_date || '',
+      delivery_method: client.delivery_method || 'email',
       em1_name: client.emergency_contacts?.[0]?.name || '',
       em1_phone: client.emergency_contacts?.[0]?.phone || '',
       em1_mobile: client.emergency_contacts?.[0]?.mobile || '',
@@ -579,6 +583,7 @@ export default function ClientesPage() {
         billing_day: form.billing_day ? Number(form.billing_day) : null,
         rg_ie: form.rg_ie.trim() || null,
         birth_date: form.birth_date || null,
+        delivery_method: form.delivery_method || null,
         emergency_contacts: emergencyContacts.length ? emergencyContacts : null,
       };
 
@@ -1058,6 +1063,16 @@ export default function ClientesPage() {
                 onChange={(e) => setForm((p) => ({ ...p, billing_day: e.target.value.slice(0, 2) }))}
                 className="max-w-[120px]"
               />
+            </FormField>
+            <FormField
+              label="Forma de envio da cobrança"
+              hint="Como o cliente prefere receber os boletos (preferência — o envio automático ainda não está ativo)"
+            >
+              <Select value={form.delivery_method} onChange={(e) => handleChange('delivery_method', e.target.value)}>
+                <option value="email">Email</option>
+                <option value="whatsapp">WhatsApp</option>
+                <option value="ambos">Ambos (Email + WhatsApp)</option>
+              </Select>
             </FormField>
             <FormField label="Observações">
               <Textarea placeholder="Anotações administrativas internas" value={form.notes} onChange={(e) => handleChange('notes', e.target.value)} />

@@ -35,3 +35,6 @@ class Client(Base, TimestampMixin, SoftDeleteMixin):
     birth_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     # Contatos de emergência: [{"name", "phone", "mobile"}, ...]
     emergency_contacts: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # Forma de envio preferida da cobrança: 'email' | 'whatsapp' | 'ambos'
+    # (apenas preferência por enquanto — o envio em si não é automático).
+    delivery_method: Mapped[str | None] = mapped_column(String(20), nullable=True)
