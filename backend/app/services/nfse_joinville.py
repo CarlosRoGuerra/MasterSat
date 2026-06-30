@@ -144,6 +144,16 @@ def _montar_tomador(inf: etree._Element, client: Client) -> None:
         etree.SubElement(contato, 'Email').text = _norm(client.email, 100)
 
 
+def _sim_nao_code(value: str | None, default: int) -> str:
+    """Converte a preferência do cliente ('sim'/'nao') para o código ABRASF
+    (1=Sim, 2=Não). None/vazio → usa o default global do .env."""
+    if value == 'sim':
+        return '1'
+    if value == 'nao':
+        return '2'
+    return str(default)
+
+
 def montar_inf_rps(billing: Billing, client: Client, numero_rps: str) -> tuple[etree._Element, str]:
     """Monta <InfRps id="..."> a partir de um Billing + Client."""
     agora = dt.datetime.now(_TZ_BRASILIA)
@@ -159,14 +169,16 @@ def montar_inf_rps(billing: Billing, client: Client, numero_rps: str) -> tuple[e
 
     etree.SubElement(inf, 'DataEmissao').text = agora.strftime('%Y-%m-%dT%H:%M:%S')
     etree.SubElement(inf, 'NaturezaOperacao').text = settings.nfse_natureza_operacao
-    etree.SubElement(inf, 'OptanteSimplesNacional').text = str(settings.nfse_optante_simples)
+    etree.SubElement(inf, 'OptanteSimplesNacional').text = _sim_nao_code(
+        client.optante_simples, settings.nfse_optante_simples)
     etree.SubElement(inf, 'IncentivadorCultural').text = str(settings.nfse_incentivador_cultural)
     etree.SubElement(inf, 'Status').text = '1'  # 1 = Normal
 
     servico = etree.SubElement(inf, 'Servico')
     valores = etree.SubElement(servico, 'Valores')
     etree.SubElement(valores, 'ValorServicos').text = valor
-    etree.SubElement(valores, 'IssRetido').text = str(settings.nfse_iss_retido)
+    etree.SubElement(valores, 'IssRetido').text = _sim_nao_code(
+        client.iss_retido, settings.nfse_iss_retido)
     etree.SubElement(valores, 'ValorIss').text = '0.00'
     etree.SubElement(valores, 'BaseCalculo').text = valor
     etree.SubElement(valores, 'Aliquota').text = settings.nfse_aliquota_iss
@@ -336,6 +348,11 @@ def emitir_nfse(db: Session, billing: Billing, client: Client) -> NfseNota:
     """
     if not settings.nfse_enabled:
         raise NfseError('Integração NFS-e desabilitada (NFSE_ENABLED=false)')
+
+    # Respeita a preferência do cliente: só emite se "Emitir Nota Fiscal" != 'nao'
+    # (None/'sim' → emite; mantém compatibilidade com clientes antigos sem o campo).
+    if (client.issue_invoice or 'sim') == 'nao':
+        raise NfseError('Cliente configurado para NÃO emitir nota fiscal (campo "Emitir Nota Fiscal" = Não no cadastro).')
 
     nota = db.query(NfseNota).filter_by(billing_id=billing.id).first()
     if nota and nota.status == 'emitida':
