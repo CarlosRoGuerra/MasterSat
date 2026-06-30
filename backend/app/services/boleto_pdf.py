@@ -54,6 +54,11 @@ def _tmp_copy(src: str, name: str) -> str | None:
 
 _AILOS_PATH = _tmp_copy(_AILOS_SRC, "ailos.png")
 
+# Logo da MASTERSAT (beneficiário) — aparece no RECIBO DO PAGADOR. Na FICHA DE
+# COMPENSAÇÃO mantém-se o logo do banco (Ailos 085), exigência FEBRABAN.
+_MASTERSAT_SRC = os.path.normpath(os.path.join(_HERE, "..", "static", "mastersat_logo.png"))
+_MASTERSAT_PATH = _tmp_copy(_MASTERSAT_SRC, "mastersat.png")
+
 # ── Dimensões A4 ─────────────────────────────────────────────────────────────
 W, H = A4
 def _mm(v: float) -> float: return v * 72 / 25.4
@@ -132,6 +137,55 @@ def _prepare_ailos_jpeg() -> bytes | None:
 _AILOS_JPEG = _prepare_ailos_jpeg()
 
 
+def _prepare_mastersat_jpeg() -> bytes | None:
+    """Converte o logo MasterSat (PNG/RGBA) para JPEG em memória (mesma técnica do Ailos)."""
+    src = _MASTERSAT_PATH or _MASTERSAT_SRC
+    if not src or not os.path.exists(src):
+        return None
+    try:
+        from PIL import Image as PILImg
+        with open(src, "rb") as f:
+            png_data = f.read()
+        pil = PILImg.open(io.BytesIO(png_data))
+        bg = PILImg.new("RGB", pil.size, (255, 255, 255))
+        if pil.mode == "RGBA":
+            bg.paste(pil, mask=pil.split()[3])
+        else:
+            bg.paste(pil.convert("RGB"))
+        buf = io.BytesIO()
+        bg.save(buf, format="JPEG", quality=92)
+        buf.seek(0)
+        return buf.read()
+    except Exception:
+        return None
+
+_MASTERSAT_JPEG = _prepare_mastersat_jpeg()
+
+
+def _draw_mastersat(c, x, y_top, h_mm=11.0, max_w_mm=34.0):
+    """Logo da MasterSat (beneficiário) no recibo. preserveAspectRatio evita distorção."""
+    from reportlab.lib.utils import ImageReader
+    h_pt = _mm(h_mm)
+    box_w = _mm(max_w_mm)
+    if _MASTERSAT_JPEG:
+        try:
+            c.drawImage(ImageReader(io.BytesIO(_MASTERSAT_JPEG)), x, y_top - h_pt,
+                        width=box_w, height=h_pt, preserveAspectRatio=True, anchor='sw')
+            return
+        except Exception:
+            pass
+    if _MASTERSAT_PATH and os.path.exists(_MASTERSAT_PATH):
+        try:
+            c.drawImage(_MASTERSAT_PATH, x, y_top - h_pt, width=box_w, height=h_pt,
+                        mask='auto', preserveAspectRatio=True, anchor='sw')
+            return
+        except Exception:
+            pass
+    c.setFont("Helvetica-Bold", 12); c.setFillColorRGB(0.85, 0.45, 0.0)
+    c.drawString(x + _mm(1), y_top - h_pt / 2 - _mm(1), "MASTERSAT")
+    c.setFillColorRGB(0, 0, 0)
+
+
 def _draw_ailos(c, x, y_top, h_mm=14.0):
     """
     CORRIGIDO:
@@ -179,8 +233,12 @@ def _draw_header(c, y_top, is_ficha, linha_dig, h):
     _vline(c, sep1, y_top - h, y_top, lw=0.6)
     _vline(c, sep2, y_top - h, y_top, lw=0.6)
 
-    # Logo Ailos (célula esquerda)
-    _draw_ailos(c, LM + _mm(2), y_top - _mm(1.5), h_mm=(h - _mm(3)) / _mm(1))
+    # Logo na célula esquerda: MasterSat (beneficiário) no recibo; Ailos (banco)
+    # na ficha de compensação — exigência FEBRABAN de exibir o logo do banco.
+    if is_ficha:
+        _draw_ailos(c, LM + _mm(2), y_top - _mm(1.5), h_mm=(h - _mm(3)) / _mm(1))
+    else:
+        _draw_mastersat(c, LM + _mm(2), y_top - _mm(1.5), h_mm=(h - _mm(3)) / _mm(1))
 
     # "085-0"
     mid_x = (sep1 + sep2) / 2

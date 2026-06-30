@@ -173,7 +173,6 @@ const PAYMENT_METHODS = [
   { value: 'boleto',    label: 'Boleto',      desc: 'Código de barras',      Icon: FileBillet   },
   { value: 'cartao',   label: 'Cartão',       desc: 'Débito recorrente',     Icon: CreditCard   },
   { value: 'pix',      label: 'PIX',          desc: 'Transferência rápida',  Icon: Zap          },
-  { value: 'deposito', label: 'Depósito',     desc: 'Depósito em conta',     Icon: Building2    },
   { value: 'dinheiro', label: 'Dinheiro',     desc: 'Pagamento em espécie',  Icon: Banknote     },
 ] as const;
 

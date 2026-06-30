@@ -1231,7 +1231,7 @@ export default function FinanceiroPage() {
             <input type="date" className={fieldClass} value={contractForm.start_date} onChange={e => setContractForm(p => ({ ...p, start_date: e.target.value }))} required />
             <input type="date" className={fieldClass} value={contractForm.end_date} onChange={e => setContractForm(p => ({ ...p, end_date: e.target.value }))} />
             <input className={fieldClass} placeholder="Dia de vencimento" value={contractForm.billing_day} onChange={e => setContractForm(p => ({ ...p, billing_day: e.target.value.replace(/\D/g, '').slice(0, 2) }))} />
-            <select className={fieldClass} value={contractForm.payment_method} onChange={e => setContractForm(p => ({ ...p, payment_method: e.target.value }))}><option value="boleto">Boleto</option><option value="pix">Pix</option><option value="cartao">Cartão</option><option value="deposito">Depósito</option></select>
+            <select className={fieldClass} value={contractForm.payment_method} onChange={e => setContractForm(p => ({ ...p, payment_method: e.target.value }))}><option value="boleto">Boleto</option><option value="pix">Pix</option><option value="cartao">Cartão</option></select>
             <input className={fieldClass} placeholder="Taxa de instalação por veículo (R$)" value={contractForm.installation_fee} onChange={e => setContractForm(p => ({ ...p, installation_fee: e.target.value }))} />
             <input className={fieldClass} placeholder="Taxa de desinstalação por veículo (R$)" value={contractForm.uninstall_fee} onChange={e => setContractForm(p => ({ ...p, uninstall_fee: e.target.value }))} />
 
@@ -1275,7 +1275,7 @@ export default function FinanceiroPage() {
           <div className="grid gap-4 md:grid-cols-2">
             <input className={fieldClass} placeholder="Valor pago" value={receiveForm.paid_amount} onChange={e => setReceiveForm(p => ({ ...p, paid_amount: e.target.value }))} />
             <input type="date" className={fieldClass} value={receiveForm.payment_date} onChange={e => setReceiveForm(p => ({ ...p, payment_date: e.target.value }))} />
-            <select className={fieldClass} value={receiveForm.payment_method} onChange={e => setReceiveForm(p => ({ ...p, payment_method: e.target.value }))}><option value="pix">Pix</option><option value="boleto">Boleto</option><option value="cartao">Cartão</option><option value="deposito">Depósito</option><option value="dinheiro">Dinheiro</option></select>
+            <select className={fieldClass} value={receiveForm.payment_method} onChange={e => setReceiveForm(p => ({ ...p, payment_method: e.target.value }))}><option value="pix">Pix</option><option value="boleto">Boleto</option><option value="cartao">Cartão</option><option value="dinheiro">Dinheiro</option></select>
             <textarea className={areaClass} placeholder="Observações" value={receiveForm.notes} onChange={e => setReceiveForm(p => ({ ...p, notes: e.target.value }))} />
           </div>
           <div className="flex justify-end gap-3">

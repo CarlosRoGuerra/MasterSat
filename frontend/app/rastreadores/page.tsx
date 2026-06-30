@@ -676,7 +676,6 @@ export default function RastreadoresPage() {
                       <option value="boleto">Boleto</option>
                       <option value="pix">PIX</option>
                       <option value="cartao">Cartão</option>
-                      <option value="deposito">Depósito</option>
                       <option value="dinheiro">Dinheiro</option>
                     </select>
                     {/* Dia de vencimento: herdado do cliente */}

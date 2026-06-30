@@ -120,7 +120,6 @@ const PAYMENT_OPTS = [
   { value: 'boleto', label: 'Boleto', desc: 'Cada parcela gera um boleto individual' },
   { value: 'cartao', label: 'Cartão', desc: 'Cobrado no cartão de crédito' },
   { value: 'pix', label: 'PIX', desc: 'Pagamento via chave PIX' },
-  { value: 'deposito', label: 'Depósito', desc: 'Depósito ou transferência' },
   { value: 'dinheiro', label: 'Dinheiro', desc: 'Pagamento em espécie' },
 ];
 

@@ -972,6 +972,12 @@ export default function ClientesPage() {
               <FormField label={form.type === 'pj' ? 'CNPJ' : 'CPF'} required>
                 <Input placeholder={form.type === 'pj' ? '00.000.000/0001-00' : '000.000.000-00'} value={form.cpf_cnpj} onChange={(e) => handleChange('cpf_cnpj', e.target.value)} required />
               </FormField>
+              <FormField label="RG / Inscrição Estadual">
+                <Input value={form.rg_ie} onChange={(e) => handleChange('rg_ie', e.target.value)} />
+              </FormField>
+              <FormField label="Data de nascimento">
+                <Input type="date" value={form.birth_date} onChange={(e) => handleChange('birth_date', e.target.value)} />
+              </FormField>
               <FormField label="E-mail principal" required>
                 <Input type="email" placeholder="email@empresa.com" value={form.email} onChange={(e) => handleChange('email', e.target.value)} required />
               </FormField>
@@ -1060,16 +1066,7 @@ export default function ClientesPage() {
 
           <FormDivider />
 
-          <FormSection title="Dados para contrato">
-            <FormGrid cols={2}>
-              <FormField label="RG / Inscrição Estadual">
-                <Input value={form.rg_ie} onChange={(e) => handleChange('rg_ie', e.target.value)} />
-              </FormField>
-              <FormField label="Data de nascimento">
-                <Input type="date" value={form.birth_date} onChange={(e) => handleChange('birth_date', e.target.value)} />
-              </FormField>
-            </FormGrid>
-            <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">Contatos de emergência (pessoas autorizadas)</p>
+          <FormSection title="Contatos de emergência (pessoas autorizadas)">
             <FormGrid cols={3}>
               <FormField label="Contato 1">
                 <Input placeholder="Nome" value={form.em1_name} onChange={(e) => handleChange('em1_name', e.target.value)} />
