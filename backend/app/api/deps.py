@@ -1,6 +1,7 @@
+import secrets
 from collections.abc import Callable
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
@@ -41,3 +42,23 @@ def require_roles(*roles: UserRole) -> Callable[[User], User]:
         return current_user
 
     return dependency
+
+
+def require_api_key(x_api_key: str | None = Header(default=None, alias='X-API-Key')) -> None:
+    """Autenticação máquina-a-máquina para integrações externas (ex.: CobraZap).
+
+    Espera o header ``X-API-Key`` igual a ``settings.integration_api_key``.
+    Sem chave configurada no servidor → 503 (integração desativada).
+    """
+    expected = settings.integration_api_key
+    if not expected:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail='Integração externa não configurada (INTEGRATION_API_KEY ausente).',
+        )
+    if not x_api_key or not secrets.compare_digest(x_api_key, expected):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail='API key inválida ou ausente.',
+            headers={'WWW-Authenticate': 'ApiKey'},
+        )

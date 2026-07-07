@@ -18,6 +18,7 @@ from app.api.v1.endpoints import (
     contracts,
     dashboard,
     integration_multiportal,
+    integrations,
     documents,
     nfse,
     plans,
@@ -44,6 +45,7 @@ api_router.include_router(dashboard.router, prefix='/dashboard', tags=['dashboar
 api_router.include_router(documents.router, prefix='/documents', tags=['documents'])
 
 api_router.include_router(integration_multiportal.router, prefix='/integrations/multiportal', tags=['integrations-multiportal'])
+api_router.include_router(integrations.router, prefix='/integrations', tags=['integrations'])
 
 api_router.include_router(service_products.router, prefix='/service-products', tags=['service-products'])
 api_router.include_router(client_charge_items.router, prefix='/client-charge-items', tags=['client-charge-items'])

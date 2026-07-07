@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     debug_return_reset_token: bool = False
     # Swagger/OpenAPI: desabilitado por padrão (não expor a superfície da API em produção)
     enable_docs: bool = False
+    # Chave de API para integrações máquina-a-máquina (ex.: o CobraZap puxa os boletos
+    # via header X-API-Key). Vazio = endpoints de /integrations/cobrancas ficam off (503).
+    integration_api_key: str = ''
     # Admin inicial (criado só se o banco não tiver esse e-mail). Se a senha não
     # for definida, é gerada uma aleatória e logada uma vez — NUNCA usar senha pública.
     initial_admin_email: str = 'admin@rastreamento.local'
