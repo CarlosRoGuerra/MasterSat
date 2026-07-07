@@ -142,10 +142,6 @@ def _data_extenso(d: date) -> str:
     return f'JOINVILLE {d.day:02d} DE {_MESES[d.month - 1]} DE {d.year}'
 
 
-def _fmt_data(d: date | None) -> str:
-    return d.strftime('%d/%m/%Y') if d else ''
-
-
 def _fmt_moeda(value) -> str:
     if value is None:
         return ''
@@ -186,8 +182,8 @@ def _grade(linhas: list[list], st, larguras: list[float]) -> Table:
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ('LEFTPADDING', (0, 0), (-1, -1), 4),
         ('RIGHTPADDING', (0, 0), (-1, -1), 4),
-        ('TOPPADDING', (0, 0), (-1, -1), 3),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ('TOPPADDING', (0, 0), (-1, -1), 2),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
     ]))
     return t
 
@@ -221,10 +217,7 @@ def gerar_contrato_pdf(contract, client, plan=None, vehicle=None) -> bytes:
     cli_tel = getattr(client, 'phone', '') or ''
     cli_email = getattr(client, 'email', '') or ''
     placa = getattr(vehicle, 'plate', '') if vehicle else ''
-    prazo = getattr(plan, 'billing_interval_months', '') if plan else ''
     valor_mensal = _fmt_moeda(getattr(plan, 'price', None)) if plan else ''
-    forma = (getattr(contract, 'payment_method', '') or '').upper()
-    numero = getattr(contract, 'id', '')
 
     cli_rg = getattr(client, 'rg_ie', '') or ''
     _nasc = getattr(client, 'birth_date', None)
@@ -248,8 +241,7 @@ def gerar_contrato_pdf(contract, client, plan=None, vehicle=None) -> bytes:
     elems: list = []
 
     # ═══ TERMO DE ADESÃO ═══
-    elems.append(Table([[Paragraph('TERMO DE ADESÃO', st['titulo']), Paragraph(f'Nº {numero}', st['label'])]],
-                       colWidths=[W - 70, 70]))
+    elems.append(Paragraph('TERMO DE ADESÃO', st['titulo']))
 
     # 1. DADOS DA CONTRATADA
     elems.append(_barra_secao('1. DADOS DA CONTRATADA', st, W))
@@ -266,9 +258,12 @@ def gerar_contrato_pdf(contract, client, plan=None, vehicle=None) -> bytes:
     elems.append(_grade([
         L('NOME / RAZÃO SOCIAL:', cli_nome),
         L('CPF / CNPJ:', cli_doc),
-        L('RG / INSC. ESTADUAL:', cli_rg),
-        L('DATA DE NASCIMENTO:', cli_nasc),
     ], st, [W * 0.22, W * 0.78]))
+    # RG e data de nascimento dividem a mesma linha (compacta o termo)
+    elems.append(_grade([
+        [Paragraph('RG / INSC. ESTADUAL:', st['label']), P(cli_rg),
+         Paragraph('DATA DE NASCIMENTO:', st['label']), P(cli_nasc)],
+    ], st, [W * 0.22, W * 0.38, W * 0.20, W * 0.20]))
     elems.append(_grade([
         [Paragraph('LOGRADOURO:', st['label']), P(f'{cli_log} {cli_num}'.strip()),
          Paragraph('BAIRRO:', st['label']), P(cli_bairro)],
@@ -287,20 +282,23 @@ def gerar_contrato_pdf(contract, client, plan=None, vehicle=None) -> bytes:
     elems.append(Spacer(1, 4))
     elems.append(_barra_secao('3. CONDIÇÕES DE PAGAMENTO DA ADESÃO/INSTALAÇÃO', st, W))
     elems.append(_grade([[Paragraph('FORMA DE PAGAMENTO:', st['label']),
-                          Paragraph('[  ] DINHEIRO&nbsp;&nbsp;&nbsp;&nbsp;[  ] CARTÃO', st['valor'])]],
+                          Paragraph('[  ] DINHEIRO&nbsp;&nbsp;&nbsp;&nbsp;[  ] CARTÃO&nbsp;&nbsp;&nbsp;&nbsp;[  ] PIX', st['valor'])]],
                         st, [W * 0.3, W * 0.7]))
 
-    # 4. FORMA DE PAGAMENTO DO SERVIÇO + ENDEREÇO PARA COBRANÇA
+    # 4. FORMA DE PAGAMENTO DO SERVIÇO DE RASTREAMENTO
     elems.append(Spacer(1, 4))
-    elems.append(_barra_secao('4. FORMA DE PAGAMENTO DO SERVIÇO DE RASTREAMENTO E ENDEREÇO PARA COBRANÇA', st, W))
+    elems.append(_barra_secao('4. FORMA DE PAGAMENTO DO SERVIÇO DE RASTREAMENTO', st, W))
     elems.append(_grade([[Paragraph(
-        '[  ] VIA E-MAIL&nbsp;&nbsp;&nbsp;[  ] CARNÊ&nbsp;&nbsp;&nbsp;[  ] OUTROS&nbsp;&nbsp;&nbsp;[  ] CARTÃO DE CRÉDITO'
-        + (f'&nbsp;&nbsp;&nbsp;(<b>{forma}</b>)' if forma else ''), st['valor'])]], st, [W]))
+        '[  ] CARNÊ&nbsp;&nbsp;&nbsp;[  ] CARTÃO DE CRÉDITO&nbsp;&nbsp;&nbsp;[  ] BOLETO VIA E-MAIL&nbsp;&nbsp;&nbsp;'
+        '[  ] BOLETO VIA WHATSAPP [ ______________________ ]', st['valor'])]], st, [W]))
+    # Data manual no MESMO campo do rótulo; prazo padrão 12 meses; renovação e
+    # "sem fidelidade" como caixinhas para marcar à caneta (campo de meses saiu)
     elems.append(_grade([
-        [Paragraph('INÍCIO VIGÊNCIA CONTRATO:', st['label']), P(_fmt_data(getattr(contract, 'start_date', None))),
-         Paragraph('PRAZO (MESES):', st['label']), P(str(prazo) if prazo else ''),
-         Paragraph('FIDELIDADE (MESES):', st['label']), P('SEM FIDELIDADE')],
-    ], st, [W * 0.22, W * 0.16, W * 0.13, W * 0.10, W * 0.16, W * 0.23]))
+        [Paragraph('<b>INÍCIO VIGÊNCIA CONTRATO:</b> ____ / ____ / ________', st['valor']),
+         Paragraph('<b>PRAZO (MESES):</b> 12', st['valor']),
+         Paragraph('[  ] RENOVAÇÃO ANUAL AUTOMÁTICA', st['label']),
+         Paragraph('[  ] SEM FIDELIDADE', st['label'])],
+    ], st, [W * 0.34, W * 0.15, W * 0.29, W * 0.22]))
     elems.append(_grade([
         [Paragraph('DIA VENCIMENTO:', st['label']), P(str(getattr(contract, 'billing_day', '') or '')),
          Paragraph('VALOR RASTREAMENTO MENSAL POR VEÍCULO:', st['label']), P(valor_mensal)],
@@ -314,15 +312,19 @@ def gerar_contrato_pdf(contract, client, plan=None, vehicle=None) -> bytes:
     elems.append(Spacer(1, 4))
     elems.append(_barra_secao('5. EM CASO DE EMERGÊNCIA AVISAR - PESSOAS AUTORIZADAS', st, W))
     elems.append(_grade([
-        [Paragraph('CONTATO:', st['label']), P(e1n), Paragraph('TELEFONE:', st['label']), P(e1t),
-         Paragraph('CELULAR:', st['label']), P(e1c)],
-        [Paragraph('CONTATO:', st['label']), P(e2n), Paragraph('TELEFONE:', st['label']), P(e2t),
-         Paragraph('CELULAR:', st['label']), P(e2c)],
-    ], st, [W * 0.12, W * 0.30, W * 0.12, W * 0.16, W * 0.10, W * 0.20]))
+        [Paragraph('CONTATO:', st['label']), P(e1n), Paragraph('CELULAR:', st['label']), P(e1c or e1t)],
+        [Paragraph('CONTATO:', st['label']), P(e2n), Paragraph('CELULAR:', st['label']), P(e2c or e2t)],
+    ], st, [W * 0.10, W * 0.52, W * 0.10, W * 0.28]))
+    # Credenciais de acesso à plataforma — DUAS linhas completas e idênticas
+    # (código URL, usuário e senha), para anotar dois acessos à caneta.
     elems.append(_grade([
-        [Paragraph('CÓDIGO URL:', st['label']), P(CODIGO_URL), Paragraph('USUÁRIO:', st['label']), P(''),
+        [Paragraph('CÓDIGO URL:', st['label']), P(CODIGO_URL),
+         Paragraph('USUÁRIO:', st['label']), P(''),
          Paragraph('SENHA:', st['label']), P('')],
-    ], st, [W * 0.14, W * 0.16, W * 0.14, W * 0.24, W * 0.10, W * 0.22]))
+        [Paragraph('CÓDIGO URL:', st['label']), P(CODIGO_URL),
+         Paragraph('USUÁRIO:', st['label']), P(''),
+         Paragraph('SENHA:', st['label']), P('')],
+    ], st, [W * 0.12, W * 0.10, W * 0.10, W * 0.34, W * 0.08, W * 0.26]))
 
     # 6. PLACAS
     elems.append(Spacer(1, 4))
@@ -348,8 +350,9 @@ def gerar_contrato_pdf(contract, client, plan=None, vehicle=None) -> bytes:
     elems.append(Table([[Paragraph('_______________________________<br/>CONTRATANTE/COMODATÁRIO', st['assinatura']),
                          Paragraph('_______________________________<br/>CONTRATADA/COMODANTE', st['assinatura'])]],
                        colWidths=[W / 2, W / 2]))
-    elems.append(Spacer(1, 8))
-    elems.append(Paragraph('OBS: SOMENTE A MASTERSAT ESTÁ AUTORIZADA A DESINSTALAR O RASTREADOR.', st['small']))
+    # Observação em destaque no FINAL da 1ª página (pedido do cliente) — 1x só
+    elems.append(Spacer(1, 14))
+    elems.append(_barra_secao('OBSERVAÇÃO: SOMENTE A MASTERSAT ESTÁ AUTORIZADA A DESINSTALAR O RASTREADOR.', st, W))
 
     # ═══ CONTRATO (cláusulas) ═══
     elems.append(PageBreak())
@@ -364,13 +367,21 @@ def gerar_contrato_pdf(contract, client, plan=None, vehicle=None) -> bytes:
         for par in paragrafos:
             elems.append(Paragraph(par, st['clausula']))
 
-    elems.append(Spacer(1, 18))
-    elems.append(Table([[Paragraph(f'_______________________________<br/>{cli_nome}<br/>CPF/CNPJ {cli_doc}', st['assinatura']),
-                         Paragraph(f'_______________________________<br/>{CONTRATADA_RAZAO}<br/>CNPJ {CONTRATADA_CNPJ}', st['assinatura'])]],
-                       colWidths=[W / 2, W / 2]))
-    elems.append(Spacer(1, 14))
+    # Assinaturas afastadas da cláusula 13. Os traços ficam numa linha própria
+    # da tabela para SEMPRE saírem na mesma altura (a razão social da MasterSat
+    # quebra em 2 linhas e desalinhava os traços quando tudo era uma célula só).
+    elems.append(Spacer(1, 48))
+    assinaturas = Table([
+        [Paragraph('_______________________________', st['assinatura']),
+         Paragraph('_______________________________', st['assinatura'])],
+        [Paragraph(f'{cli_nome}<br/>CPF/CNPJ {cli_doc}', st['assinatura']),
+         Paragraph(f'{CONTRATADA_RAZAO}<br/>CNPJ {CONTRATADA_CNPJ}', st['assinatura'])],
+    ], colWidths=[W / 2, W / 2])
+    assinaturas.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'TOP')]))
+    elems.append(assinaturas)
+    elems.append(Spacer(1, 30))
     elems.append(Paragraph('Testemunha', st['titulo']))
-    elems.append(Spacer(1, 8))
+    elems.append(Spacer(1, 16))
     elems.append(Table([[Paragraph('_______________________________<br/>NOME:<br/>CPF:', st['assinatura']),
                          Paragraph('_______________________________<br/>NOME:<br/>CPF:', st['assinatura'])]],
                        colWidths=[W / 2, W / 2]))
