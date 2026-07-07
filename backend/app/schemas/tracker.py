@@ -198,3 +198,7 @@ class TrackerLinkPayload(BaseModel):
     payment_method: str | None = None
     billing_modality: str = 'boleto'
     notes: str | None = None
+    # Cliente da base que responde pela cobrança (None = o próprio cliente do veículo)
+    interveniente_client_id: int | None = None
+    # Banco emissor do boleto deste contrato
+    bank: str | None = 'ailos'

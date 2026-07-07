@@ -62,6 +62,7 @@ class ClientBase(BaseModel):
     iss_retido: str | None = None
     optante_simples: str | None = None
     delivery_method: str | None = None
+    send_boleto_whatsapp: bool | None = None
 
     @field_validator('cpf_cnpj')
     @classmethod
@@ -150,6 +151,7 @@ class ClientUpdate(BaseModel):
     iss_retido: str | None = None
     optante_simples: str | None = None
     delivery_method: str | None = None
+    send_boleto_whatsapp: bool | None = None
 
     @field_validator('cpf_cnpj')
     @classmethod

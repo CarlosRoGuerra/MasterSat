@@ -25,3 +25,10 @@ class NfseOut(BaseModel):
     data_emissao: datetime | None = None
     erro_codigo: str | None = None
     erro_mensagem: str | None = None
+
+
+class NfseClientItem(NfseOut):
+    """Item da listagem de notas por cliente (inclui contexto da cobrança)."""
+
+    valor: float | None = None
+    titulo: str | None = None

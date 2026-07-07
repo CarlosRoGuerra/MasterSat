@@ -1,6 +1,7 @@
 """
 Endpoints da NFS-e de Joinville (Pública / Nota Nacional).
 
+GET  /nfse/                       → lista notas (filtro por client_id) p/ o painel
 POST /nfse/emitir/{billing_id}    → emite a NFS-e da cobrança (ADMIN/FINANCEIRO)
 GET  /nfse/{billing_id}           → status/dados da NFS-e da cobrança
 POST /nfse/consultar/{billing_id} → reconsulta o protocolo (quando 'processing')
@@ -9,7 +10,7 @@ from __future__ import annotations
 
 from typing import NoReturn
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_roles
@@ -18,7 +19,7 @@ from app.models.billing import Billing
 from app.models.client import Client
 from app.models.enums import UserRole
 from app.models.nfse_nota import NfseNota
-from app.schemas.nfse import NfseOut
+from app.schemas.nfse import NfseClientItem, NfseOut
 from app.services import nfse_joinville
 from app.services.nfse_joinville import NfseApiError, NfseError
 
@@ -33,6 +34,33 @@ def _raise_nfse_error(exc: Exception) -> NoReturn:
     if isinstance(exc, NfseError):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     raise exc
+
+
+@router.get('/', response_model=list[NfseClientItem])
+def listar(
+    client_id: int | None = None,
+    limit: int = Query(default=100, le=300),
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    """Lista as NFS-e emitidas/em processamento, com filtro por cliente
+    (usado no botão de nota fiscal da grid de clientes)."""
+    query = (
+        db.query(NfseNota, Billing)
+        .join(Billing, Billing.id == NfseNota.billing_id)
+        .filter(Billing.is_deleted.is_(False))
+    )
+    if client_id:
+        query = query.filter(Billing.client_id == client_id)
+    rows = query.order_by(NfseNota.id.desc()).limit(limit).all()
+    return [
+        NfseClientItem(
+            **NfseOut.model_validate(nota).model_dump(),
+            valor=float(billing.amount) if billing.amount is not None else None,
+            titulo=billing.title,
+        )
+        for nota, billing in rows
+    ]
 
 
 @router.post('/emitir/{billing_id}', response_model=NfseOut)

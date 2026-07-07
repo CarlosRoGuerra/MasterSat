@@ -1,6 +1,6 @@
 from datetime import date
 
-from sqlalchemy import Date, Enum, Integer, JSON, String, Text
+from sqlalchemy import Boolean, Date, Enum, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -43,3 +43,6 @@ class Client(Base, TimestampMixin, SoftDeleteMixin):
     iss_retido: Mapped[str | None] = mapped_column(String(3), nullable=True)          # Reter ISS: 'sim' | 'nao'
     optante_simples: Mapped[str | None] = mapped_column(String(3), nullable=True)     # Optante do Simples: 'sim' | 'nao'
     delivery_method: Mapped[str | None] = mapped_column(String(20), nullable=True)    # Tipo de Envio: 'email' | 'whatsapp' | 'todos'
+    # Atalho no cadastro (ao lado do telefone): boleto deste cliente vai por WhatsApp.
+    # Alimenta a automação de cobrança (CobraZap/n8n) junto com delivery_method.
+    send_boleto_whatsapp: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)

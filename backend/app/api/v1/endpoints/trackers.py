@@ -456,8 +456,17 @@ def link_vehicle(
             payload.start_date.day if payload.start_date.day <= 28 else 28
         )
 
+        interveniente_id = payload.interveniente_client_id
+        if interveniente_id == vehicle.client_id:
+            interveniente_id = None  # o próprio cliente → não registra interveniente
+        if interveniente_id:
+            interveniente = db.get(Client, interveniente_id)
+            if not interveniente or interveniente.is_deleted:
+                raise HTTPException(status_code=404, detail='Interveniente não encontrado na base de clientes.')
+
         contract = Contract(
             client_id=vehicle.client_id,
+            interveniente_client_id=interveniente_id,
             plan_id=payload.plan_id,
             vehicle_id=vehicle.id,
             tracker_id=tracker.id,
@@ -466,6 +475,7 @@ def link_vehicle(
             billing_day=billing_day,
             payment_method=payload.payment_method,
             billing_modality=payload.billing_modality,
+            bank=payload.bank or 'ailos',
             notes=payload.notes,
         )
         db.add(contract)

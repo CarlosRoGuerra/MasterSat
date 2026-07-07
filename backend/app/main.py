@@ -75,6 +75,7 @@ def ensure_schema_updates():
                 'iss_retido': 'ALTER TABLE clients ADD COLUMN iss_retido VARCHAR(3)',
                 'optante_simples': 'ALTER TABLE clients ADD COLUMN optante_simples VARCHAR(3)',
                 'delivery_method': 'ALTER TABLE clients ADD COLUMN delivery_method VARCHAR(20)',
+                'send_boleto_whatsapp': 'ALTER TABLE clients ADD COLUMN send_boleto_whatsapp BOOLEAN DEFAULT FALSE',
             }
             for column_name, sql in client_alter_statements.items():
                 if column_name not in client_columns:
@@ -85,6 +86,8 @@ def ensure_schema_updates():
             contract_alter_statements = {
                 'installation_fee': 'ALTER TABLE contracts ADD COLUMN installation_fee NUMERIC(10,2)',
                 'uninstall_fee': 'ALTER TABLE contracts ADD COLUMN uninstall_fee NUMERIC(10,2)',
+                'interveniente_client_id': 'ALTER TABLE contracts ADD COLUMN interveniente_client_id INTEGER REFERENCES clients(id)',
+                'bank': "ALTER TABLE contracts ADD COLUMN bank VARCHAR(40) DEFAULT 'ailos'",
             }
             for column_name, sql in contract_alter_statements.items():
                 if column_name not in contract_columns:

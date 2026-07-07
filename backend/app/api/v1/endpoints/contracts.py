@@ -47,6 +47,7 @@ def serialize_contract(db: Session, contract: Contract) -> ContractOut:
     return ContractOut(
         id=contract.id,
         client_id=contract.client_id,
+        interveniente_client_id=getattr(contract, 'interveniente_client_id', None),
         plan_id=contract.plan_id,
         vehicle_id=getattr(contract, 'vehicle_id', None),
         tracker_id=getattr(contract, 'tracker_id', None),
@@ -55,6 +56,7 @@ def serialize_contract(db: Session, contract: Contract) -> ContractOut:
         status=contract.status,
         billing_day=contract.billing_day,
         payment_method=contract.payment_method,
+        bank=getattr(contract, 'bank', None),
         notes=contract.notes,
         installation_fee=float(contract.installation_fee) if contract.installation_fee is not None else None,
         uninstall_fee=float(contract.uninstall_fee) if contract.uninstall_fee is not None else None,
@@ -88,6 +90,7 @@ def validate_links(db: Session, client_id: int, vehicle_id: int | None, tracker_
 @router.get('/', response_model=list[ContractOut])
 def list_items(
     client_id: int | None = None,
+    interveniente_client_id: int | None = None,
     plan_id: int | None = None,
     vehicle_id: int | None = None,
     tracker_id: int | None = None,
@@ -101,6 +104,8 @@ def list_items(
     query = db.query(Contract).filter(Contract.is_deleted == False)
     if client_id:
         query = query.filter(Contract.client_id == client_id)
+    if interveniente_client_id:
+        query = query.filter(Contract.interveniente_client_id == interveniente_client_id)
     if plan_id:
         query = query.filter(Contract.plan_id == plan_id)
     if vehicle_id:

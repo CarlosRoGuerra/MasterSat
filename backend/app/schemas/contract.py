@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 
 class ContractBase(BaseModel):
     client_id: int
+    interveniente_client_id: int | None = None
     plan_id: int
     vehicle_id: int | None = None
     tracker_id: int | None = None
@@ -12,6 +13,7 @@ class ContractBase(BaseModel):
     status: str = 'ativo'
     billing_day: int | None = Field(default=None, ge=1, le=28)
     payment_method: str | None = None
+    bank: str | None = None
     notes: str | None = None
     installation_fee: float | None = None
     uninstall_fee: float | None = None
@@ -23,12 +25,14 @@ class ContractCreate(ContractBase):
 
 class ContractUpdate(BaseModel):
     client_id: int | None = None
+    interveniente_client_id: int | None = None
     plan_id: int | None = None
     start_date: date | None = None
     end_date: date | None = None
     status: str | None = None
     billing_day: int | None = Field(default=None, ge=1, le=28)
     payment_method: str | None = None
+    bank: str | None = None
     notes: str | None = None
     installation_fee: float | None = None
     uninstall_fee: float | None = None
