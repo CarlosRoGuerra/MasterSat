@@ -173,6 +173,9 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
 
   // Step 3 — plan + billing
   const [pf, setPf] = useState({ plan_id: '', payment_method: 'boleto', billing_day: '' });
+  // Mantém o input do dia de vencimento visível enquanto digita (senão o campo
+  // sumia no primeiro dígito: "10" travava em "1")
+  const [editingBillingDay, setEditingBillingDay] = useState(false);
   const [selectedProductIds, setSelectedProductIds] = useState<number[]>([]);
 
   // Load remote data once on open
@@ -959,21 +962,24 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
                         </p>
                       </div>
                       <div className="shrink-0">
-                        {!pf.billing_day ? (
+                        {editingBillingDay || !pf.billing_day ? (
                           <input
                             className={fieldClass}
                             type="number"
                             min={1}
                             max={28}
                             placeholder="Informar dia"
+                            autoFocus={editingBillingDay}
                             value={pf.billing_day}
                             onChange={e => setPf(prev => ({ ...prev, billing_day: e.target.value }))}
+                            onFocus={() => setEditingBillingDay(true)}
+                            onBlur={() => setEditingBillingDay(false)}
                             style={{ width: 120 }}
                           />
                         ) : (
                           <button
                             type="button"
-                            onClick={() => setPf(prev => ({ ...prev, billing_day: '' }))}
+                            onClick={() => { setEditingBillingDay(true); setPf(prev => ({ ...prev, billing_day: '' })); }}
                             className="text-xs text-slate-400 underline hover:text-slate-600 dark:hover:text-slate-200"
                           >
                             Usar outro dia

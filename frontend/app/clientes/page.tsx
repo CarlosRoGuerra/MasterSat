@@ -1,7 +1,7 @@
 'use client';
 
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { Users, AlertTriangle, Building2, CheckCircle2, FileText, Wrench, CheckCircle, Clock, AlertCircle, Download, Plus, Trash2, Car, DollarSign, Pencil, Receipt } from 'lucide-react';
+import { Users, AlertTriangle, Building2, CheckCircle2, FileText, Wrench, CheckCircle, Clock, AlertCircle, Download, Plus, Trash2, Car, Coins, DollarSign, PawPrint, Pencil, Printer } from 'lucide-react';
 
 import { PageShell } from '@/components/page-shell';
 import { Card } from '@/components/ui/card';
@@ -56,6 +56,7 @@ type Client = {
   iss_retido?: string | null;
   optante_simples?: string | null;
   delivery_method?: string | null;
+  send_boleto_whatsapp?: boolean | null;
 };
 
 type ClientDocument = {
@@ -98,6 +99,20 @@ type BillingItem = {
   payment_date?: string | null;
   created_at?: string | null;
   vehicle_plate?: string | null;
+};
+
+type IntervContract = { id: number; client_name?: string | null; vehicle_plate?: string | null; plan_name?: string | null; status: string; monthly_value?: number | null };
+
+type NfseItem = {
+  billing_id: number;
+  status: string;
+  numero_nfse?: string | null;
+  codigo_verificacao?: string | null;
+  link_visualizacao?: string | null;
+  data_emissao?: string | null;
+  erro_mensagem?: string | null;
+  valor?: number | null;
+  titulo?: string | null;
 };
 
 type TimelineContract = { id: number; start_date: string; plan_name?: string | null; status: string };
@@ -155,6 +170,7 @@ type ClientFormState = {
   iss_retido: string;
   optante_simples: string;
   delivery_method: string;
+  send_boleto_whatsapp: boolean;
 };
 
 const initialForm: ClientFormState = {
@@ -190,6 +206,7 @@ const initialForm: ClientFormState = {
   iss_retido: 'nao',
   optante_simples: 'sim',
   delivery_method: 'email',
+  send_boleto_whatsapp: false,
 };
 
 const documentCategoryOptions = ['cnh', 'rg', 'cpf', 'contrato', 'comprovante_endereco', 'cartao_cnpj', 'contrato_social', 'outro'];
@@ -207,14 +224,16 @@ function parseExtraEmails(value: string) {
   return value.split(/[,;\n]/).map((item) => item.trim().toLowerCase()).filter(Boolean);
 }
 
-// Botão de ação colorido — padrão visual do sistema de referência
+// Botão de ação colorido — badges quadrados no código semântico do sistema de referência
 const COLOR_CLASSES: Record<string, string> = {
-  blue:   'bg-blue-500 text-white hover:bg-blue-600',
-  green:  'bg-emerald-500 text-white hover:bg-emerald-600',
-  purple: 'bg-purple-500 text-white hover:bg-purple-600',
+  purple: 'bg-[#7952B3] text-white hover:brightness-110',   // veículos do cliente
+  yellow: 'bg-[#FFC107] text-white hover:brightness-105',   // veículos como interveniente
+  green:  'bg-[#28A745] text-white hover:brightness-110',   // central financeira / boletos
+  white:  'border border-slate-300 bg-white text-slate-600 hover:bg-slate-100 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300', // NF / documentação
+  teal:   'bg-[#20C997] text-white hover:brightness-110',   // imprimir ficha de adesão
+  blue:   'bg-[#17A2B8] text-white hover:brightness-110',   // editar
+  red:    'bg-[#DC3545] text-white hover:brightness-110',   // excluir
   slate:  'bg-slate-500 text-white hover:bg-slate-600',
-  red:    'bg-red-500 text-white hover:bg-red-600',
-  yellow: 'bg-amber-400 text-white hover:bg-amber-500',
 };
 
 function ActionBtn({ color, icon: Icon, title, onClick }: { color: string; icon: React.ElementType; title: string; onClick: () => void }) {
@@ -277,6 +296,19 @@ export default function ClientesPage() {
   const [clientBillings, setClientBillings] = useState<BillingItem[]>([]);
   const [billingsLoading, setBillingsLoading] = useState(false);
   const [billingSummaryExpanded, setBillingSummaryExpanded] = useState(false);
+
+  // Modal "Veículos onde o cliente é interveniente financeiro"
+  const [intervModalOpen, setIntervModalOpen] = useState(false);
+  const [intervModalClient, setIntervModalClient] = useState<Client | null>(null);
+  const [intervContracts, setIntervContracts] = useState<IntervContract[]>([]);
+  const [intervLoading, setIntervLoading] = useState(false);
+  const [printingContract, setPrintingContract] = useState(false);
+
+  // Modal "Notas fiscais do cliente" (botão da patinha)
+  const [nfseModalOpen, setNfseModalOpen] = useState(false);
+  const [nfseModalClient, setNfseModalClient] = useState<Client | null>(null);
+  const [clientNotas, setClientNotas] = useState<NfseItem[]>([]);
+  const [nfseLoading, setNfseLoading] = useState(false);
 
   async function loadClients(currentToken: string) {
     setLoading(true);
@@ -424,6 +456,75 @@ export default function ClientesPage() {
     }
   }
 
+  async function openIntervenienteModal(client: Client) {
+    setIntervModalClient(client);
+    setIntervModalOpen(true);
+    setIntervLoading(true);
+    try {
+      const data = await apiFetch<IntervContract[]>(
+        `/contracts?interveniente_client_id=${client.id}&limit=100`, {}, token!
+      ).catch(() => []);
+      setIntervContracts(data);
+    } finally {
+      setIntervLoading(false);
+    }
+  }
+
+  async function openNfseModal(client: Client) {
+    setNfseModalClient(client);
+    setNfseModalOpen(true);
+    setNfseLoading(true);
+    try {
+      const data = await apiFetch<NfseItem[]>(
+        `/nfse?client_id=${client.id}&limit=100`, {}, token!
+      ).catch(() => []);
+      setClientNotas(data);
+    } finally {
+      setNfseLoading(false);
+    }
+  }
+
+  async function printContractSheet(client: Client) {
+    if (!token || printingContract) return;
+    setPrintingContract(true);
+    try {
+      // Ficha de adesão do contrato mais recente do cliente (preferindo ativo)
+      const contracts = await apiFetch<IntervContract[]>(`/contracts?client_id=${client.id}&limit=50`, {}, token);
+      const target = contracts.find((c) => c.status === 'ativo') ?? contracts[0];
+      if (!target) {
+        alert('Este cliente ainda não possui contrato para imprimir a ficha de adesão.');
+        return;
+      }
+      const resp = await fetch(`${API_URL.replace(/\/+$/, '')}/contracts/${target.id}/pdf`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!resp.ok) throw new Error(`Erro ${resp.status} ao gerar a ficha`);
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank');
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Erro ao imprimir a ficha de adesão');
+    } finally {
+      setPrintingContract(false);
+    }
+  }
+
+  async function deleteClient(client: Client) {
+    if (!token) return;
+    const ok = window.confirm(
+      `Excluir o cliente "${client.name}"?\n\nO cadastro será inativado (soft delete) e some das listagens.`
+    );
+    if (!ok) return;
+    try {
+      await apiFetch(`/clients/${client.id}`, { method: 'DELETE' }, token);
+      setFeedback('Cliente removido.');
+      await loadClients(token);
+    } catch (err) {
+      setError(parseError(err));
+    }
+  }
+
   useEffect(() => {
     if (!token || !selectedClient) {
       setClientDocuments([]);
@@ -497,6 +598,7 @@ export default function ClientesPage() {
       iss_retido: client.iss_retido || 'nao',
       optante_simples: client.optante_simples || 'sim',
       delivery_method: client.delivery_method || 'email',
+      send_boleto_whatsapp: !!client.send_boleto_whatsapp,
     });
     setDocFiles([]);
     setModalOpen(true);
@@ -615,6 +717,7 @@ export default function ClientesPage() {
         iss_retido: form.iss_retido || null,
         optante_simples: form.optante_simples || null,
         delivery_method: form.delivery_method || null,
+        send_boleto_whatsapp: form.send_boleto_whatsapp,
       };
 
       const saved = isEditing && selectedClient
@@ -769,16 +872,22 @@ export default function ClientesPage() {
                         </Td>
                         <Td>
                           <div className="flex justify-end gap-1">
-                            {/* 🚗 Veículos vinculados */}
-                            <ActionBtn color="blue" icon={Car} title="Veículos vinculados ao cliente" onClick={() => openVehiclesModal(client)} />
-                            {/* 💲 Boletos do cliente */}
-                            <ActionBtn color="green" icon={DollarSign} title="Boletos do cliente" onClick={() => openBillingsModal(client)} />
-                            {/* 📄 Detalhes / documentos */}
-                            <ActionBtn color="purple" icon={Receipt} title="Detalhes e documentos" onClick={() => { setSelectedClient(client); setDetailsOpen(true); setDetailsTab('cadastro'); }} />
+                            {/* 1. Roxo — veículos próprios do cliente */}
+                            <ActionBtn color="purple" icon={Car} title="Veículos vinculados ao cliente" onClick={() => openVehiclesModal(client)} />
+                            {/* 2. Amarelo — veículos onde é interveniente financeiro */}
+                            <ActionBtn color="yellow" icon={Coins} title="Veículos onde é interveniente financeiro" onClick={() => openIntervenienteModal(client)} />
+                            {/* 3. Verde — central financeira / boletos */}
+                            <ActionBtn color="green" icon={DollarSign} title="Central financeira / boletos do cliente" onClick={() => openBillingsModal(client)} />
+                            {/* 4. Branco (patinha) — notas fiscais do cliente */}
+                            <ActionBtn color="white" icon={PawPrint} title="Notas fiscais do cliente" onClick={() => openNfseModal(client)} />
+                            {/* 5. Teal — imprimir ficha de adesão / contrato */}
+                            <ActionBtn color="teal" icon={Printer} title="Imprimir ficha de adesão / contrato" onClick={() => printContractSheet(client)} />
                             {canEdit && (
                               <>
-                                <ActionBtn color="slate" icon={Pencil} title="Editar cliente" onClick={() => openEditModal(client)} />
-                                <ActionBtn color="red" icon={Trash2} title="Excluir cliente" onClick={() => {/* TODO */}} />
+                                {/* 6. Azul — editar */}
+                                <ActionBtn color="blue" icon={Pencil} title="Editar cliente" onClick={() => openEditModal(client)} />
+                                {/* 7. Vermelho — excluir/inativar */}
+                                <ActionBtn color="red" icon={Trash2} title="Excluir cliente" onClick={() => deleteClient(client)} />
                               </>
                             )}
                           </div>
@@ -1017,7 +1126,25 @@ export default function ClientesPage() {
                 <Input type="email" placeholder="email@empresa.com" value={form.email} onChange={(e) => handleChange('email', e.target.value)} required />
               </FormField>
               <FormField label="Telefone principal">
-                <Input placeholder="(11) 99999-0000" value={form.phone} onChange={(e) => handleChange('phone', e.target.value)} />
+                <div className="flex items-center gap-3">
+                  <Input placeholder="(11) 99999-0000" value={form.phone} onChange={(e) => handleChange('phone', e.target.value)} />
+                  <label
+                    className={[
+                      'flex shrink-0 cursor-pointer select-none items-center gap-2 rounded-xl border px-3 py-2.5 text-xs font-bold uppercase tracking-wide transition-colors',
+                      form.send_boleto_whatsapp
+                        ? 'border-emerald-400 bg-emerald-50 text-emerald-700 dark:border-emerald-600 dark:bg-emerald-950/30 dark:text-emerald-300'
+                        : 'border-orange-300 bg-orange-50 text-orange-600 hover:bg-orange-100 dark:border-orange-800/60 dark:bg-orange-950/20 dark:text-orange-400',
+                    ].join(' ')}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={form.send_boleto_whatsapp}
+                      onChange={(e) => setForm((prev) => ({ ...prev, send_boleto_whatsapp: e.target.checked }))}
+                      className="h-4 w-4 rounded accent-emerald-600"
+                    />
+                    Enviar boleto via Whats
+                  </label>
+                </div>
               </FormField>
             </FormGrid>
             <FormField label="E-mails adicionais" hint="Um por linha ou separados por vírgula">
@@ -1239,6 +1366,109 @@ export default function ClientesPage() {
         )}
         <p className="mt-3 text-xs text-slate-400">
           Mostrando {vehiclesDetailed.length} registro(s)
+        </p>
+      </Modal>
+
+      {/* ══ Modal: Veículos onde o cliente é interveniente financeiro ═════ */}
+      <Modal
+        open={intervModalOpen}
+        onClose={() => { setIntervModalOpen(false); setIntervModalClient(null); setIntervContracts([]); }}
+        title={intervModalClient ? `Interveniente financeiro — ${intervModalClient.name}` : 'Interveniente financeiro'}
+        size="2xl"
+      >
+        {intervLoading ? (
+          <TableSkeleton rows={4} cols={5} />
+        ) : intervContracts.length === 0 ? (
+          <EmptyState
+            icon={Coins}
+            title="Nenhum vínculo como interveniente"
+            description="Este cliente não responde pela cobrança de contratos de outros clientes."
+          />
+        ) : (
+          <Table>
+            <TableHead>
+              <Th>Contrato</Th>
+              <Th>Placa</Th>
+              <Th>Cliente titular</Th>
+              <Th>Plano</Th>
+              <Th>Situação</Th>
+            </TableHead>
+            <TableBody>
+              {intervContracts.map((c) => (
+                <Tr key={c.id}>
+                  <Td className="text-xs text-slate-500">#{c.id}</Td>
+                  <Td className="font-mono font-semibold">{c.vehicle_plate ?? '—'}</Td>
+                  <Td className="text-sm">{c.client_name ?? '—'}</Td>
+                  <Td className="text-sm">{c.plan_name ?? '—'}</Td>
+                  <Td><Badge variant={statusVariant(c.status)}>{statusLabel(c.status)}</Badge></Td>
+                </Tr>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+        <p className="mt-3 text-xs text-slate-400">
+          Mostrando {intervContracts.length} registro(s)
+        </p>
+      </Modal>
+
+      {/* ══ Modal: Notas fiscais do cliente (patinha) ══════════════════════ */}
+      <Modal
+        open={nfseModalOpen}
+        onClose={() => { setNfseModalOpen(false); setNfseModalClient(null); setClientNotas([]); }}
+        title={nfseModalClient ? `Notas fiscais — ${nfseModalClient.name}` : 'Notas fiscais'}
+        size="2xl"
+      >
+        {nfseLoading ? (
+          <TableSkeleton rows={4} cols={6} />
+        ) : clientNotas.length === 0 ? (
+          <EmptyState
+            icon={FileText}
+            title="Nenhuma nota fiscal"
+            description="Este cliente ainda não possui NFS-e emitida. As notas são geradas a partir das cobranças no fechamento."
+          />
+        ) : (
+          <Table>
+            <TableHead>
+              <Th>Nº NFS-e</Th>
+              <Th>Cobrança</Th>
+              <Th>Valor</Th>
+              <Th>Emissão</Th>
+              <Th>Situação</Th>
+              <Th className="w-24" />
+            </TableHead>
+            <TableBody>
+              {clientNotas.map((n) => (
+                <Tr key={n.billing_id}>
+                  <Td className="font-mono font-semibold">{n.numero_nfse ?? '—'}</Td>
+                  <Td className="text-xs">#{n.billing_id}{n.titulo ? ` · ${n.titulo}` : ''}</Td>
+                  <Td className="font-mono">
+                    {n.valor != null ? new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(n.valor) : '—'}
+                  </Td>
+                  <Td className="text-xs">{n.data_emissao ? new Date(n.data_emissao).toLocaleDateString('pt-BR') : '—'}</Td>
+                  <Td>
+                    <Badge variant={n.status === 'emitida' ? 'success' : n.status === 'erro' ? 'danger' : 'warning'}>
+                      {n.status === 'emitida' ? 'Emitida' : n.status === 'erro' ? 'Erro' : 'Processando'}
+                    </Badge>
+                  </Td>
+                  <Td>
+                    {n.link_visualizacao && (
+                      <a
+                        href={n.link_visualizacao}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="rounded-lg border border-brand-200 bg-brand-50 px-2.5 py-1 text-[11px] font-semibold text-brand-700 transition hover:bg-brand-100 dark:border-brand-900/40 dark:bg-brand-950/30 dark:text-brand-400"
+                      >
+                        Ver nota
+                      </a>
+                    )}
+                  </Td>
+                </Tr>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+        <p className="mt-3 text-xs text-slate-400">
+          Mostrando {clientNotas.length} registro(s)
         </p>
       </Modal>
 

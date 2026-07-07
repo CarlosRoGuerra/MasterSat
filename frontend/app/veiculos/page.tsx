@@ -318,6 +318,8 @@ function LinkTrackerForm({
   stockTrackers,
   plans,
   serviceProducts,
+  clients,
+  vehicleClientId,
   form,
   onChange,
   selectedProductIds,
@@ -330,7 +332,12 @@ function LinkTrackerForm({
   stockTrackers: TrackerOption[];
   plans: PlanOption[];
   serviceProducts: ServiceProductOption[];
-  form: { tracker_id: string; plan_id: string; payment_method: string; billing_day: string; start_date: string };
+  clients: ClientOption[];
+  vehicleClientId?: number;
+  form: {
+    tracker_id: string; plan_id: string; payment_method: string; billing_day: string; start_date: string;
+    use_client_as_interveniente: string; interveniente_client_id: string; bank: string;
+  };
   onChange: (f: typeof form) => void;
   selectedProductIds: number[];
   onProductToggle: (id: number) => void;
@@ -341,6 +348,10 @@ function LinkTrackerForm({
 }) {
   const set = (key: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     onChange({ ...form, [key]: e.target.value });
+
+  // Mantém o input do dia visível enquanto o usuário digita (senão o campo
+  // sumia no primeiro dígito: "10" travava em "1")
+  const [editingDay, setEditingDay] = useState(false);
 
   const selectedPlan = plans.find((p) => String(p.id) === form.plan_id);
   const isMonthlyPlan = !selectedPlan?.billing_interval_months || selectedPlan.billing_interval_months === 1;
@@ -386,6 +397,39 @@ function LinkTrackerForm({
             <input className={fieldClass} type="date" value={form.start_date} onChange={set('start_date')} />
           </FormField>
         </div>
+      </div>
+
+      {/* ── Interveniente financeiro ─────────────────────────────────────── */}
+      <div>
+        <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">Interveniente financeiro</p>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <FormField label="Utilizar cliente como interveniente?">
+            <select
+              className={fieldClass}
+              value={form.use_client_as_interveniente}
+              onChange={(e) => onChange({ ...form, use_client_as_interveniente: e.target.value, interveniente_client_id: '' })}
+            >
+              <option value="sim">Sim — o próprio cliente paga</option>
+              <option value="nao">Não — outra pessoa responde pela cobrança</option>
+            </select>
+          </FormField>
+          {form.use_client_as_interveniente === 'nao' && (
+            <FormField label="Interveniente" required>
+              <ClientAutocomplete
+                clients={clients.filter((c) => c.id !== vehicleClientId)}
+                value={form.interveniente_client_id}
+                onChange={(id) => onChange({ ...form, interveniente_client_id: id })}
+                placeholder="Buscar cliente por nome ou CPF/CNPJ…"
+                required
+              />
+            </FormField>
+          )}
+        </div>
+        {form.use_client_as_interveniente === 'nao' && (
+          <p className="mt-2 text-xs text-slate-400 dark:text-slate-500">
+            O interveniente precisa estar cadastrado como cliente — as cobranças deste contrato ficam vinculadas a ele, sem duplicar cadastro.
+          </p>
+        )}
       </div>
 
       {/* ── Plano de monitoramento ───────────────────────────────────────── */}
@@ -438,9 +482,16 @@ function LinkTrackerForm({
         </div>
       )}
 
-      {/* ── Dia do vencimento ────────────────────────────────────────────── */}
+      {/* ── Cobrança: banco emissor + dia do vencimento ─────────────────── */}
       <div>
-        <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">Dia do vencimento</p>
+        <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">Cobrança</p>
+        <FormField label="Banco (emissão do boleto)">
+          <select className={fieldClass} value={form.bank} onChange={set('bank')}>
+            <option value="ailos">Ailos (Viacredi) — 085</option>
+            <option value="outro">Outro banco (emissão manual)</option>
+          </select>
+        </FormField>
+        <p className="mb-3 mt-3 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">Dia do vencimento</p>
         <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-700 dark:bg-slate-900/50">
           <div className="flex items-center justify-between gap-4">
             <div>
@@ -458,21 +509,24 @@ function LinkTrackerForm({
               </p>
             </div>
             <div className="shrink-0">
-              {!form.billing_day ? (
+              {editingDay || !form.billing_day ? (
                 <input
                   className={fieldClass}
                   type="number"
                   min={1}
                   max={28}
                   placeholder="Informar dia"
+                  autoFocus={editingDay}
                   value={form.billing_day}
                   onChange={set('billing_day')}
+                  onFocus={() => setEditingDay(true)}
+                  onBlur={() => setEditingDay(false)}
                   style={{ width: 120 }}
                 />
               ) : (
                 <button
                   type="button"
-                  onClick={() => onChange({ ...form, billing_day: '' })}
+                  onClick={() => { setEditingDay(true); onChange({ ...form, billing_day: '' }); }}
                   className="text-xs text-slate-400 underline hover:text-slate-600 dark:hover:text-slate-200"
                 >
                   Usar outro dia
@@ -565,7 +619,10 @@ function LinkTrackerForm({
 
       <div className="flex justify-end gap-2 border-t border-slate-100 pt-4 dark:border-slate-800">
         <Button variant="secondary" onClick={onCancel}>Cancelar</Button>
-        <Button disabled={!form.tracker_id || linking} onClick={onSubmit}>
+        <Button
+          disabled={!form.tracker_id || linking || (form.use_client_as_interveniente === 'nao' && !form.interveniente_client_id)}
+          onClick={onSubmit}
+        >
           {linking ? 'Vinculando…' : 'Confirmar vínculo'}
         </Button>
       </div>
@@ -623,6 +680,9 @@ export default function VeiculosPage() {
     payment_method: 'boleto',
     billing_day: '',
     start_date: new Date().toISOString().slice(0, 10),
+    use_client_as_interveniente: 'sim',
+    interveniente_client_id: '',
+    bank: 'ailos',
   });
   const [linking, setLinking] = useState(false);
   const [error, setError] = useState('');
@@ -745,6 +805,11 @@ export default function VeiculosPage() {
             billing_day: linkForm.billing_day ? Number(linkForm.billing_day) : undefined,
             billing_modality: 'boleto',
             start_date: linkForm.start_date,
+            interveniente_client_id:
+              linkForm.use_client_as_interveniente === 'nao' && linkForm.interveniente_client_id
+                ? Number(linkForm.interveniente_client_id)
+                : null,
+            bank: linkForm.bank,
           }),
         },
         token,
@@ -786,6 +851,9 @@ export default function VeiculosPage() {
         tracker_id: '', plan_id: '', payment_method: 'boleto',
         billing_day: '',
         start_date: new Date().toISOString().slice(0, 10),
+        use_client_as_interveniente: 'sim',
+        interveniente_client_id: '',
+        bank: 'ailos',
       });
       await loadVehicles(token);
       const updated = await apiFetch<TrackerOption[]>(`/trackers?vehicle_id=${selectedVehicle.id}`, {}, token).catch(() => []);
@@ -1307,6 +1375,8 @@ export default function VeiculosPage() {
           stockTrackers={stockTrackers}
           plans={plans}
           serviceProducts={serviceProducts}
+          clients={clients}
+          vehicleClientId={selectedVehicle?.client_id}
           form={linkForm}
           onChange={setLinkForm}
           selectedProductIds={selectedProductIds}
