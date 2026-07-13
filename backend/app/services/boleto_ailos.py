@@ -291,6 +291,13 @@ class DadosBoleto:
     instrucoes: list[str] | None = None
     pix_emv: str | None = None         # EMV/BR Code do Pix → gera QR vetorial nítido
     pix_qr_base64: str | None = None   # imagem PNG/JPEG do QR (fallback se não houver EMV)
+    # Dados extras do sacado exibidos no Recibo de Pagamento (parte superior)
+    sacado_cidade: str = ""
+    sacado_cep: str = ""
+    sacado_uf: str = ""
+    sacado_ie: str = ""
+    # Itens da tabela do recibo: [(descrição, valor)]; None → 1 item padrão
+    itens: list[tuple[str, float]] | None = None
 
 
 def gerar_dados_boleto(
@@ -302,6 +309,11 @@ def gerar_dados_boleto(
     sacado_endereco: str = "",
     data_emissao: date | None = None,
     instrucoes: list[str] | None = None,
+    sacado_cidade: str = "",
+    sacado_cep: str = "",
+    sacado_uf: str = "",
+    sacado_ie: str = "",
+    itens: list[tuple[str, float]] | None = None,
 ) -> DadosBoleto:
     """
     Gera todos os dados calculados do boleto a partir das informações do billing.
@@ -325,6 +337,11 @@ def gerar_dados_boleto(
         sacado_nome=sacado_nome,
         sacado_cpf_cnpj=sacado_cpf_cnpj,
         sacado_endereco=sacado_endereco,
+        sacado_cidade=sacado_cidade,
+        sacado_cep=sacado_cep,
+        sacado_uf=sacado_uf,
+        sacado_ie=sacado_ie,
+        itens=itens,
         instrucoes=instrucoes or [
             "Não receber após vencimento.",
             "Em caso de dúvidas entre em contato com MASTERSAT.",

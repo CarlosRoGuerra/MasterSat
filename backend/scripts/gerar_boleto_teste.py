@@ -39,6 +39,11 @@ def main() -> None:
         sacado_nome='CARLOS ROBERTO GUERRA CLEMENTE HONORIO DA SILVA',
         sacado_cpf_cnpj='15964802702',
         sacado_endereco='RUA NATIVIDADE 552 RECREIO DOS BANDEIRANTES',
+        sacado_cidade='RIO DE JANEIRO',
+        sacado_cep='22790725',
+        sacado_uf='RJ',
+        sacado_ie='',
+        itens=[('MENSALIDADE RASTREAMENTO — PLANO TESTE', 149.90)],
         instrucoes=[
             'Não receber após o vencimento.',
             'Após vencimento entrar em contato: contato@mastersat.com.br',

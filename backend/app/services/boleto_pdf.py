@@ -254,46 +254,124 @@ def _draw_header(c, y_top, is_ficha, linha_dig, h):
         c.drawRightString(RM - _mm(1), y_top - h / 2 - _mm(2.5), "RECIBO DO PAGADOR")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# RECIBO DO PAGADOR
+# RECIBO DE PAGAMENTO (layout aprovado pelo cliente — logo + dados da empresa,
+# box do cliente, tabela de itens com cabeçalho azul, data e assinatura)
 # ─────────────────────────────────────────────────────────────────────────────
+# Razão social oficial (mesma do contrato / CNPJ 14.228.344/0001-67)
+_EMPRESA_RAZAO = "MASTERSAT COMERCIO E SERVIÇOS DE RASTREAMENTO LTDA"
+_EMPRESA_LINHAS = [
+    "RUA MARITIMA, n 424, COMASA",
+    "JOINVILLE - SC  CEP: 89228-450",
+    "TEL: (47) 3085-3796   WHATS: (47) 98877-9273",
+]
+
+_DIAS_PT = ["segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo"]
+_MESES_PT = ["janeiro", "fevereiro", "março", "abril", "maio", "junho",
+             "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"]
+
+
+def _fmt_cep(s: str) -> str:
+    d = "".join(ch for ch in (s or "") if ch.isdigit())
+    return f"{d[:5]}-{d[5:]}" if len(d) == 8 else (s or "")
+
+
+def _data_recibo(dt: date) -> str:
+    return f"JOINVILLE, {_DIAS_PT[dt.weekday()]}, {dt.day:02d} de {_MESES_PT[dt.month - 1]} de {dt.year}"
+
+
 def _draw_recibo(c, d: DadosBoleto, y_top: float) -> float:
-    H_HDR  = _mm(14)
-    H_ROW1 = _mm(13)
-    H_ROW2 = _mm(12)
-    H_ROW3 = _mm(11)
-    H_ROW4 = _mm(14)
-    H_ROW5 = _mm(9)
     y = y_top
 
-    _draw_header(c, y, False, d.linha_digitavel, H_HDR); y -= H_HDR
+    # ── Cabeçalho: logo + endereço (esq) · CNPJ (centro) · título (dir) ─────
+    _draw_mastersat(c, LM, y, h_mm=11.0, max_w_mm=38.0)
+    c.setFont("Helvetica-Bold", 10); c.setFillColorRGB(0, 0, 0)
+    c.drawRightString(RM, y - _mm(5), "RECIBO DE PAGAMENTO")
+    ty = y - _mm(13.5)
+    c.setFont("Helvetica-Bold", 7)
+    c.drawString(LM, ty, _EMPRESA_RAZAO); ty -= _mm(3.2)
+    # CNPJ logo abaixo do nome da MasterSat
+    c.drawString(LM, ty, f"CNPJ: {_fmt_cnpj(d.cedente_cnpj)}"); ty -= _mm(3.2)
+    c.setFont("Helvetica", 7)
+    for ln in _EMPRESA_LINHAS:
+        c.drawString(LM, ty, ln); ty -= _mm(3.2)
+    y = ty - _mm(1)
 
-    cB=CW*.43; cA=CW*.18; cE=CW*.07; cQ=CW*.08; cN=CW-cB-cA-cE-cQ
-    _cell(c, LM,             y, cB, H_ROW1, "Nome do Beneficiário",               d.cedente_nome)
-    _cell(c, LM+cB,          y, cA, H_ROW1, "Agência / Código do Beneficiário",   f"{d.cedente_agencia} / {d.cedente_codigo}")
-    _cell(c, LM+cB+cA,       y, cE, H_ROW1, "Espécie",                            d.especie)
-    _cell(c, LM+cB+cA+cE,    y, cQ, H_ROW1, "Quantidade",                         "")
-    _cell(c, LM+cB+cA+cE+cQ, y, cN, H_ROW1, "Nosso Número",                       d.nosso_numero_display)
-    y -= H_ROW1
+    # ── Box de dados do cliente (2 colunas) ─────────────────────────────────
+    H_CLI = _mm(21)
+    _box(c, LM, y, CW, H_CLI, lw=0.4)
+    lx = LM + _mm(2); vx = LM + _mm(26)
+    rx = LM + CW * 0.58; rvx = rx + _mm(36)
+    rows_l = [
+        ("NOME:", d.sacado_nome),
+        ("ENDEREÇO:", d.sacado_endereco),
+        ("CIDADE:", d.sacado_cidade),
+        ("CEP:", _fmt_cep(d.sacado_cep)),
+        ("CPF/CNPJ:", _fmt_cnpj(d.sacado_cpf_cnpj)),
+    ]
+    rows_r = [
+        ("DATA DE EMISSÃO:", _fd(d.data_emissao)),
+        ("DATA DE VENCIMENTO:", _fd(d.data_vencimento)),
+        ("ESTADO:", d.sacado_uf),
+        ("IE:", d.sacado_ie),
+    ]
+    line_h = _mm(3.9); ty = y - _mm(4.4)
+    for lbl, val in rows_l:
+        c.setFont("Helvetica-Bold", 7); c.drawString(lx, ty, lbl)
+        c.setFont("Helvetica", 7); c.drawString(vx, ty, str(val or "")[:70])
+        ty -= line_h
+    ty = y - _mm(4.6)
+    for lbl, val in rows_r:
+        c.setFont("Helvetica-Bold", 7); c.drawString(rx, ty, lbl)
+        c.setFont("Helvetica", 7); c.drawString(rvx, ty, str(val or ""))
+        ty -= line_h
+    y -= H_CLI + _mm(2)
 
-    cD=CW*.17; cC=CW*.10; cCPF=CW*.22; cV=CW*.14; cVL=CW-cD-cC-cCPF-cV
-    _cell(c, LM,                  y, cD,   H_ROW2, "Número do Documento", f"BOLETO-{d.billing_id}")
-    _cell(c, LM+cD,               y, cC,   H_ROW2, "Contrato",            d.cedente_convenio)
-    _cell(c, LM+cD+cC,            y, cCPF, H_ROW2, "CPF/CNPJ",            _fmt_cnpj(d.sacado_cpf_cnpj))
-    _cell(c, LM+cD+cC+cCPF,       y, cV,   H_ROW2, "Vencimento",          _fd(d.data_vencimento))
-    _cell(c, LM+cD+cC+cCPF+cV,    y, cVL,  H_ROW2, "Valor Documento",     _fv(d.valor), align="right")
-    y -= H_ROW2
+    # ── Tabela de itens (cabeçalho azul) ────────────────────────────────────
+    H_TH = _mm(5.5); H_TR = _mm(5.5)
+    cQ = CW * 0.08; cVU = CW * 0.14; cVT = CW * 0.14
+    cDESC = CW - cQ - cVU - cVT
+    c.setFillColorRGB(0.24, 0.52, 0.78)
+    c.rect(LM, y - H_TH, CW, H_TH, stroke=0, fill=1)
+    c.setFillColorRGB(1, 1, 1); c.setFont("Helvetica-Bold", 7.5)
+    base_th = y - H_TH + _mm(2)
+    c.drawCentredString(LM + cQ / 2, base_th, "Quant.")
+    c.drawCentredString(LM + cQ + cDESC / 2, base_th, "Descrição dos Produtos/Serviços")
+    c.drawCentredString(LM + cQ + cDESC + cVU / 2, base_th, "Vlr. Unitário")
+    c.drawCentredString(LM + cQ + cDESC + cVU + cVT / 2, base_th, "Vlr. Total")
+    y -= H_TH
 
-    _cell(c, LM, y, CW, H_ROW3, "Pagador", d.sacado_nome); y -= H_ROW3
-    _cell(c, LM, y, CW, H_ROW4, "Informações", " | ".join(d.instrucoes or [])); y -= H_ROW4
+    itens = d.itens or [(f"SERVIÇO DE RASTREAMENTO — COBRANÇA #{d.billing_id}", float(d.valor))]
+    c.setFillColorRGB(0, 0, 0)
+    for desc, val in itens[:3]:  # até 3 itens (mantém o boleto em 1 página)
+        for bx, bw in ((LM, cQ), (LM + cQ, cDESC), (LM + cQ + cDESC, cVU), (LM + cQ + cDESC + cVU, cVT)):
+            _box(c, bx, y, bw, H_TR, lw=0.3)
+        base = y - H_TR + _mm(2)
+        c.setFont("Helvetica", 7.5)
+        c.drawCentredString(LM + cQ / 2, base, "1")
+        c.drawString(LM + cQ + _mm(1.5), base, str(desc or "")[:80].upper())
+        c.drawRightString(LM + cQ + cDESC + cVU - _mm(1.5), base, f"R$ {_fv(val)}")
+        c.drawRightString(LM + cQ + cDESC + cVU + cVT - _mm(1.5), base, f"R$ {_fv(val)}")
+        y -= H_TR
 
-    _box(c, LM, y, CW, H_ROW5)
-    c.setFont("Helvetica", 7); c.setFillColorRGB(0, 0, 0)
-    # Rodapé: agência-dígito / código cedente-dígito (padrão Ailos)
-    c.drawString(LM + _mm(1), y - H_ROW5 + _mm(2.5),
-                 f"{d.cedente_agencia} / {d.cedente_codigo}")
-    c.setFont("Helvetica", 6); c.setFillColorRGB(0.5, 0.5, 0.5)
-    c.drawRightString(RM - _mm(1), y - H_ROW5 + _mm(2.5), "Autenticação Mecânica")
-    y -= H_ROW5
+    total = sum(float(v) for _, v in itens[:3])
+    c.setFont("Helvetica-Bold", 8)
+    c.drawRightString(LM + cQ + cDESC + cVU - _mm(1.5), y - H_TR + _mm(2), "Valor Total da Fatura:")
+    _box(c, LM + cQ + cDESC + cVU, y, cVT, H_TR, lw=0.3)
+    c.drawRightString(LM + cQ + cDESC + cVU + cVT - _mm(1.5), y - H_TR + _mm(2), f"R$ {_fv(total)}")
+    y -= H_TR + _mm(2.5)
+
+    # ── Data por extenso + assinatura automática ────────────────────────────
+    c.setFont("Helvetica", 7.5)
+    c.drawString(LM, y - _mm(3), _data_recibo(d.data_emissao or date.today()))
+    y -= _mm(8)
+    sig_w = _mm(80); sx = LM + (CW - sig_w) / 2
+    # Assinatura automática: razão social em itálico sobre a linha
+    c.setFont("Helvetica-Oblique", 8)
+    c.drawCentredString(LM + CW / 2, y + _mm(1), _EMPRESA_RAZAO)
+    _hline(c, sx, y, sx + sig_w, lw=0.5)
+    c.setFont("Helvetica", 7)
+    c.drawCentredString(LM + CW / 2, y - _mm(3.5), "Assinatura")
+    y -= _mm(4.5)
     return y
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -494,7 +572,7 @@ def gerar_boleto_pdf(dados: DadosBoleto) -> bytes:
         c.drawString(LM + _mm(32), y - _mm(7), "Pague com Pix")
         c.setFont("Helvetica", 6.5); c.setFillColorRGB(0.35, 0.35, 0.35)
         c.drawString(LM + _mm(32), y - _mm(12), "Escaneie o QR Code no app do seu banco.")
-        y -= _mm(32)
+        y -= _mm(30)
 
     _draw_barcode(c, dados.codigo_barras, LM, y, height_mm=13)  # manual Ailos: 13mm
 
