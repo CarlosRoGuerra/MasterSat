@@ -1,7 +1,7 @@
 'use client';
 
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { Users, AlertTriangle, Building2, CheckCircle2, FileText, Wrench, CheckCircle, Clock, AlertCircle, Download, Plus, Trash2, Car, Coins, DollarSign, PawPrint, Pencil, Printer } from 'lucide-react';
+import { Users, AlertTriangle, Building2, CheckCircle2, FileText, Wrench, CheckCircle, Clock, AlertCircle, Download, Plus, Trash2, Car, Coins, DollarSign, Flag, Mail, MessageCircle, PawPrint, Pencil, Printer, Receipt } from 'lucide-react';
 
 import { PageShell } from '@/components/page-shell';
 import { Card } from '@/components/ui/card';
@@ -102,6 +102,15 @@ type BillingItem = {
 };
 
 type IntervContract = { id: number; client_name?: string | null; vehicle_plate?: string | null; plan_name?: string | null; status: string; monthly_value?: number | null };
+
+type BillingChange = {
+  id: number;
+  field_name: string;
+  previous_value?: string | null;
+  new_value?: string | null;
+  justification: string;
+  created_at?: string | null;
+};
 
 type NfseItem = {
   billing_id: number;
@@ -297,6 +306,17 @@ export default function ClientesPage() {
   const [billingsLoading, setBillingsLoading] = useState(false);
   const [billingSummaryExpanded, setBillingSummaryExpanded] = useState(false);
 
+  // Seleção múltipla de boletos (soma para pagamento em lote)
+  const [selectedBillingIds, setSelectedBillingIds] = useState<number[]>([]);
+
+  // Ações do modal de boletos (alterar / histórico)
+  const [editBilling, setEditBilling] = useState<BillingItem | null>(null);
+  const [editBillingForm, setEditBillingForm] = useState({ amount: '', due_date: '', justification: '' });
+  const [savingBilling, setSavingBilling] = useState(false);
+  const [historyBilling, setHistoryBilling] = useState<BillingItem | null>(null);
+  const [billingChanges, setBillingChanges] = useState<BillingChange[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
   // Modal "Veículos onde o cliente é interveniente financeiro"
   const [intervModalOpen, setIntervModalOpen] = useState(false);
   const [intervModalClient, setIntervModalClient] = useState<Client | null>(null);
@@ -445,6 +465,7 @@ export default function ClientesPage() {
   async function openBillingsModal(client: Client) {
     setBillingsModalClient(client);
     setBillingsModalOpen(true);
+    setSelectedBillingIds([]);
     setBillingsLoading(true);
     try {
       const data = await apiFetch<BillingItem[]>(
@@ -453,6 +474,150 @@ export default function ClientesPage() {
       setClientBillings(data);
     } finally {
       setBillingsLoading(false);
+    }
+  }
+
+  // Multa de 2% + juros de 1% ao mês ou fração sobre o valor em atraso
+  // (cláusula 4.3 do contrato). Retorna null se a cobrança não está vencida.
+  function valorComJuros(b: BillingItem): number | null {
+    if (b.status !== 'vencida') return null;
+    const dias = Math.floor((Date.now() - new Date(b.due_date + 'T12:00:00').getTime()) / 86_400_000);
+    if (dias <= 0) return null;
+    return b.amount * 1.02 + b.amount * 0.01 * Math.ceil(dias / 30);
+  }
+
+  async function reloadClientBillings() {
+    if (!token || !billingsModalClient) return;
+    const data = await apiFetch<BillingItem[]>(
+      `/billings?client_id=${billingsModalClient.id}&limit=100`, {}, token
+    ).catch(() => []);
+    setClientBillings(data);
+  }
+
+  function openEditBilling(b: BillingItem) {
+    setEditBilling(b);
+    setEditBillingForm({ amount: String(b.amount), due_date: b.due_date, justification: '' });
+  }
+
+  async function saveEditBilling() {
+    if (!token || !editBilling) return;
+    const payload: Record<string, unknown> = {};
+    if (Number(editBillingForm.amount) !== editBilling.amount) payload.amount = Number(editBillingForm.amount);
+    if (editBillingForm.due_date !== editBilling.due_date) payload.due_date = editBillingForm.due_date;
+    if (Object.keys(payload).length === 0) { setEditBilling(null); return; }
+    const justification = editBillingForm.justification.trim();
+    if (!justification) { alert('Informe a justificativa da alteração.'); return; }
+    payload.justification = justification;
+    setSavingBilling(true);
+    try {
+      await apiFetch(`/billings/${editBilling.id}`, { method: 'PUT', body: JSON.stringify(payload) }, token);
+      setEditBilling(null);
+      await reloadClientBillings();
+    } catch (err) {
+      alert(parseError(err));
+    } finally {
+      setSavingBilling(false);
+    }
+  }
+
+  async function openBillingHistory(b: BillingItem) {
+    if (!token) return;
+    setHistoryBilling(b);
+    setHistoryLoading(true);
+    try {
+      const logs = await apiFetch<BillingChange[]>(`/billings/${b.id}/changes`, {}, token).catch(() => []);
+      setBillingChanges(logs);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
+  // Mensagem de cobrança no padrão aprovado (saudação, referência, código de
+  // barras "limpo" e link público do boleto).
+  function _mensagemBoleto(info: { linha_digitavel: string; public_pdf_url?: string }, b: BillingItem) {
+    const nome = (billingsModalClient?.name || '').toUpperCase();
+    const valor = b.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+    const venc = new Date(b.due_date + 'T12:00:00').toLocaleDateString('pt-BR');
+    const referente = b.period_label || venc.slice(3);
+    const codigo = (info.linha_digitavel || '').replace(/\D/g, '');
+    const linhas = [
+      `Olá, ${nome} tudo bem? Estamos enviando o código de barras do seu boleto, basta copiar a linha digitável e realizar o pagamento junto ao banco.`,
+      '',
+      'Atenciosamente,',
+      'MASTERSAT COMERCIO E SERVIÇOS DE RASTREAMENTO LTDA',
+      '',
+      `Referente:${referente} Valor: ${valor} Vencimento:${venc}`,
+      '',
+      'Código de Barras:',
+      codigo,
+    ];
+    if (info.public_pdf_url) {
+      linhas.push('', 'Clique no link abaixo para visualizar seu boleto:', info.public_pdf_url);
+    }
+    return linhas.join('\n');
+  }
+
+  async function sendBoletoEmail(b: BillingItem) {
+    if (!token) return;
+    if (!billingsModalClient?.email) { alert('Cliente sem e-mail cadastrado.'); return; }
+    try {
+      const info = await apiFetch<{ linha_digitavel: string; public_pdf_url?: string }>(`/boletos/${b.id}`, {}, token);
+      const venc = new Date(b.due_date + 'T12:00:00').toLocaleDateString('pt-BR');
+      const assunto = encodeURIComponent(`Boleto MasterSat — vencimento ${venc}`);
+      const corpo = encodeURIComponent(_mensagemBoleto(info, b));
+      window.location.href = `mailto:${billingsModalClient.email}?subject=${assunto}&body=${corpo}`;
+    } catch (err) {
+      alert(parseError(err));
+    }
+  }
+
+  async function sendBoletoWhats(b: BillingItem) {
+    if (!token) return;
+    const fone = (billingsModalClient?.phone || '').replace(/\D/g, '');
+    if (!fone) { alert('Cliente sem telefone cadastrado.'); return; }
+    try {
+      const info = await apiFetch<{ linha_digitavel: string; public_pdf_url?: string }>(`/boletos/${b.id}`, {}, token);
+      const msg = encodeURIComponent(_mensagemBoleto(info, b));
+      window.open(`https://wa.me/55${fone}?text=${msg}`, '_blank');
+    } catch (err) {
+      alert(parseError(err));
+    }
+  }
+
+  async function baixarComprovante(b: BillingItem) {
+    if (!token) return;
+    try {
+      const resp = await fetch(`${API_URL.replace(/\/+$/, '')}/billings/${b.id}/receipt`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!resp.ok) throw new Error(`Erro ${resp.status} ao gerar o comprovante`);
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank');
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Erro ao gerar comprovante');
+    }
+  }
+
+  async function baixarBoletoPdf(b: BillingItem) {
+    if (!token) return;
+    try {
+      const resp = await fetch(`${API_URL.replace(/\/+$/, '')}/boletos/${b.id}/pdf`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!resp.ok) throw new Error(`Erro ${resp.status}`);
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const cd = resp.headers.get('Content-Disposition') ?? '';
+      const match = cd.match(/filename="?([^"]+)"?/);
+      a.download = match?.[1] ?? `boleto-${b.id}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Erro ao baixar boleto');
     }
   }
 
@@ -1475,7 +1640,7 @@ export default function ClientesPage() {
       {/* ══ Modal: Boletos do cliente ══════════════════════════════════════ */}
       <Modal
         open={billingsModalOpen}
-        onClose={() => { setBillingsModalOpen(false); setBillingsModalClient(null); setClientBillings([]); setBillingSummaryExpanded(false); }}
+        onClose={() => { setBillingsModalOpen(false); setBillingsModalClient(null); setClientBillings([]); setBillingSummaryExpanded(false); setSelectedBillingIds([]); }}
         title={billingsModalClient ? `Boletos do cliente — ${billingsModalClient.name}` : 'Boletos do cliente'}
         size="2xl"
       >
@@ -1509,6 +1674,34 @@ export default function ClientesPage() {
           )}
         </div>
 
+        {/* Soma dos boletos selecionados (pagamento em lote) */}
+        {selectedBillingIds.length > 0 && (() => {
+          const fmt = (v: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v);
+          const sel = clientBillings.filter((b) => selectedBillingIds.includes(b.id));
+          const total = sel.reduce((s, b) => s + b.amount, 0);
+          const totalJuros = sel.reduce((s, b) => s + (valorComJuros(b) ?? b.amount), 0);
+          return (
+            <div className="mb-4 flex flex-wrap items-center gap-x-6 gap-y-2 rounded-xl border border-brand-300 bg-brand-50 px-4 py-3 text-sm dark:border-brand-700 dark:bg-brand-950/30">
+              <span className="font-bold text-brand-800 dark:text-brand-200">
+                {sel.length} boleto(s) selecionado(s)
+              </span>
+              <span className="text-slate-600 dark:text-slate-300">
+                Total sem juros: <strong className="font-mono text-slate-900 dark:text-white">{fmt(total)}</strong>
+              </span>
+              <span className="text-slate-600 dark:text-slate-300">
+                Total com juros: <strong className="font-mono text-rose-600 dark:text-rose-400">{fmt(totalJuros)}</strong>
+              </span>
+              <button
+                type="button"
+                onClick={() => setSelectedBillingIds([])}
+                className="ml-auto text-xs text-slate-400 underline hover:text-slate-600 dark:hover:text-slate-200"
+              >
+                Limpar seleção
+              </button>
+            </div>
+          );
+        })()}
+
         {billingsLoading ? (
           <TableSkeleton rows={5} cols={8} />
         ) : clientBillings.length === 0 ? (
@@ -1516,30 +1709,63 @@ export default function ClientesPage() {
         ) : (
           <Table>
             <TableHead>
+              <Th className="w-8">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 rounded accent-brand-700"
+                  title="Selecionar todos os boletos em aberto"
+                  checked={
+                    clientBillings.some((b) => b.status === 'pendente' || b.status === 'vencida') &&
+                    clientBillings.filter((b) => b.status === 'pendente' || b.status === 'vencida').every((b) => selectedBillingIds.includes(b.id))
+                  }
+                  onChange={(e) => setSelectedBillingIds(
+                    e.target.checked
+                      ? clientBillings.filter((b) => b.status === 'pendente' || b.status === 'vencida').map((b) => b.id)
+                      : []
+                  )}
+                />
+              </Th>
               <Th>Nº</Th>
               <Th>Tipo</Th>
               <Th>Emissão</Th>
               <Th>Vencimento</Th>
               <Th>Pagamento</Th>
               <Th>Valor</Th>
+              <Th>Valor c/ Juros</Th>
               <Th>Valor Pago</Th>
               <Th>Parcela</Th>
               <Th>Mês Ref.</Th>
               <Th>Situação</Th>
-              <Th className="w-24" />
+              <Th className="w-44" />
             </TableHead>
             <TableBody>
               {clientBillings.map((b) => {
                 const fmt = (v: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v);
                 const isAberto = b.status === 'pendente' || b.status === 'vencida';
+                const juros = valorComJuros(b);
                 return (
                   <Tr key={b.id}>
+                    <Td>
+                      {isAberto ? (
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 rounded accent-brand-700"
+                          checked={selectedBillingIds.includes(b.id)}
+                          onChange={() => setSelectedBillingIds((prev) =>
+                            prev.includes(b.id) ? prev.filter((id) => id !== b.id) : [...prev, b.id]
+                          )}
+                        />
+                      ) : null}
+                    </Td>
                     <Td className="text-xs text-slate-500">{b.id}</Td>
                     <Td className="text-xs capitalize">{b.billing_type === 'prorata' ? 'Pró-rata' : b.billing_type === 'recorrente' ? 'Mensalidade' : b.billing_type}</Td>
                     <Td className="text-xs">{b.created_at ? new Date(b.created_at).toLocaleDateString('pt-BR') : '—'}</Td>
                     <Td className="text-sm font-medium">{b.due_date}</Td>
                     <Td className="text-xs">{b.payment_date ?? '—'}</Td>
                     <Td className="font-mono font-semibold">{fmt(b.amount)}</Td>
+                    <Td className="font-mono font-semibold text-rose-600 dark:text-rose-400">
+                      {juros != null ? fmt(juros) : '—'}
+                    </Td>
                     <Td className="font-mono text-emerald-700 dark:text-emerald-400">{fmt(b.paid_amount ?? 0)}</Td>
                     <Td className="text-xs text-center">
                       {b.installment_number ? `${b.installment_number}/${b.installment_total}` : '1/1'}
@@ -1547,36 +1773,20 @@ export default function ClientesPage() {
                     <Td className="text-xs">{b.period_label ?? '—'}</Td>
                     <Td><Badge variant={statusVariant(b.status)}>{statusLabel(b.status)}</Badge></Td>
                     <Td>
-                      {isAberto && token && (
-                        <button
-                          type="button"
-                          title="Baixar boleto PDF"
-                          onClick={async () => {
-                            try {
-                              const resp = await fetch(
-                                `${API_URL.replace(/\/+$/, '')}/boletos/${b.id}/pdf`,
-                                { headers: { Authorization: `Bearer ${token}` } }
-                              );
-                              if (!resp.ok) throw new Error(`Erro ${resp.status}`);
-                              const blob = await resp.blob();
-                              const url = URL.createObjectURL(blob);
-                              const a = document.createElement('a');
-                              a.href = url;
-                              // Usa o filename do header Content-Disposition se disponível
-                              const cd = resp.headers.get('Content-Disposition') ?? '';
-                              const match = cd.match(/filename="?([^"]+)"?/);
-                              a.download = match?.[1] ?? `boleto-${b.id}.pdf`;
-                              a.click();
-                              URL.revokeObjectURL(url);
-                            } catch (e) {
-                              alert(e instanceof Error ? e.message : 'Erro ao baixar boleto');
-                            }
-                          }}
-                          className="flex items-center gap-1 rounded-lg border border-brand-200 bg-brand-50 px-2.5 py-1 text-[11px] font-semibold text-brand-700 transition hover:bg-brand-100 dark:border-brand-900/40 dark:bg-brand-950/30 dark:text-brand-400"
-                        >
-                          ⬇ Boleto
-                        </button>
-                      )}
+                      <div className="flex justify-end gap-1">
+                        <ActionBtn color="purple" icon={Wrench} title="Alterar boleto" onClick={() => openEditBilling(b)} />
+                        <ActionBtn color="purple" icon={Flag} title="Histórico de operações" onClick={() => openBillingHistory(b)} />
+                        {isAberto && (
+                          <>
+                            <ActionBtn color="blue" icon={Mail} title="Enviar boleto por e-mail" onClick={() => sendBoletoEmail(b)} />
+                            <ActionBtn color="green" icon={MessageCircle} title="Enviar boleto via Whats" onClick={() => sendBoletoWhats(b)} />
+                            <ActionBtn color="teal" icon={Download} title="Baixar boleto PDF" onClick={() => baixarBoletoPdf(b)} />
+                          </>
+                        )}
+                        {b.status === 'paga' && (
+                          <ActionBtn color="blue" icon={Receipt} title="Emitir comprovante de pagamento" onClick={() => baixarComprovante(b)} />
+                        )}
+                      </div>
                     </Td>
                   </Tr>
                 );
@@ -1587,6 +1797,91 @@ export default function ClientesPage() {
         <p className="mt-3 text-xs text-slate-400">
           Mostrando {clientBillings.length} registro(s)
         </p>
+      </Modal>
+
+      {/* ══ Modal: Alterar boleto (valor/vencimento com justificativa) ═════ */}
+      <Modal
+        open={!!editBilling}
+        onClose={() => setEditBilling(null)}
+        title={editBilling ? `Alterar boleto #${editBilling.id}` : 'Alterar boleto'}
+        subtitle="Alterações de valor e vencimento ficam registradas no histórico"
+        size="md"
+      >
+        <div className="space-y-4">
+          <FormGrid>
+            <FormField label="Valor (R$)" required>
+              <Input
+                type="number"
+                step="0.01"
+                min="0.01"
+                value={editBillingForm.amount}
+                onChange={(e) => setEditBillingForm((p) => ({ ...p, amount: e.target.value }))}
+              />
+            </FormField>
+            <FormField label="Vencimento" required>
+              <Input
+                type="date"
+                value={editBillingForm.due_date}
+                onChange={(e) => setEditBillingForm((p) => ({ ...p, due_date: e.target.value }))}
+              />
+            </FormField>
+          </FormGrid>
+          <FormField label="Justificativa" required hint="Obrigatória — fica gravada no histórico de operações">
+            <Textarea
+              placeholder="Ex.: negociação com o cliente, correção de valor…"
+              value={editBillingForm.justification}
+              onChange={(e) => setEditBillingForm((p) => ({ ...p, justification: e.target.value }))}
+              className="min-h-[72px]"
+            />
+          </FormField>
+          <div className="flex justify-end gap-2 border-t border-slate-100 pt-4 dark:border-slate-800">
+            <Button variant="secondary" onClick={() => setEditBilling(null)}>Cancelar</Button>
+            <Button onClick={saveEditBilling} disabled={savingBilling}>
+              {savingBilling ? 'Salvando…' : 'Salvar alteração'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* ══ Modal: Histórico de operações do boleto ════════════════════════ */}
+      <Modal
+        open={!!historyBilling}
+        onClose={() => { setHistoryBilling(null); setBillingChanges([]); }}
+        title={historyBilling ? `Histórico de operações — boleto #${historyBilling.id}` : 'Histórico'}
+        size="xl"
+      >
+        {historyLoading ? (
+          <TableSkeleton rows={3} cols={5} />
+        ) : billingChanges.length === 0 ? (
+          <EmptyState
+            icon={Flag}
+            title="Sem alterações registradas"
+            description="Este boleto não teve valor ou vencimento alterados."
+          />
+        ) : (
+          <Table>
+            <TableHead>
+              <Th>Data</Th>
+              <Th>Campo</Th>
+              <Th>De</Th>
+              <Th>Para</Th>
+              <Th>Justificativa</Th>
+            </TableHead>
+            <TableBody>
+              {billingChanges.map((ch) => (
+                <Tr key={ch.id}>
+                  <Td className="text-xs">{ch.created_at ? new Date(ch.created_at).toLocaleString('pt-BR') : '—'}</Td>
+                  <Td className="text-xs font-medium">
+                    {ch.field_name === 'amount' ? 'Valor' : ch.field_name === 'due_date' ? 'Vencimento' : ch.field_name}
+                  </Td>
+                  <Td className="font-mono text-xs">{ch.previous_value ?? '—'}</Td>
+                  <Td className="font-mono text-xs">{ch.new_value ?? '—'}</Td>
+                  <Td className="text-xs">{ch.justification}</Td>
+                </Tr>
+              ))}
+            </TableBody>
+          </Table>
+        )}
       </Modal>
     </PageShell>
   );
