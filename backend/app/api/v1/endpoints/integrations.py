@@ -19,6 +19,7 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_api_key
+from app.api.v1.endpoints.boletos import public_boleto_url
 from app.core.config import settings
 from app.db.session import get_db
 from app.models.ailos_boleto import AilosBoleto
@@ -51,6 +52,11 @@ def _dados_boleto(billing: Billing, client: Client, ailos_boleto: AilosBoleto | 
         sacado_cpf_cnpj=client.cpf_cnpj or '',
         sacado_endereco=_endereco(client),
         data_emissao=billing.created_at.date() if billing.created_at else date.today(),
+        sacado_cidade=client.city or '',
+        sacado_cep=client.zip_code or '',
+        sacado_uf=client.state or '',
+        sacado_ie=client.rg_ie or '',
+        itens=[(billing.title or 'SERVIÇO DE RASTREAMENTO', float(billing.amount))],
     )
     return aplicar_dados_oficiais_ailos(dados, ailos_boleto)
 
@@ -80,6 +86,8 @@ def _cobranca_payload(billing: Billing, client: Client, ailos_boleto: AilosBolet
         'pix_copia_cola': None,
         'boleto_registrado': bool(ailos_boleto and ailos_boleto.linha_digitavel),
         'boleto_pdf_url': f'{base}{settings.api_v1_prefix}/integrations/cobrancas/{billing.id}/pdf',
+        # Link SEM autenticação (token HMAC) — pode ir direto na mensagem ao cliente
+        'boleto_link_cliente': public_boleto_url(billing.id),
     }
     # Geração do boleto não pode derrubar a lista inteira: se uma cobrança falhar
     # (ex.: dado inconsistente), devolvemos a cobrança com os campos de boleto nulos.

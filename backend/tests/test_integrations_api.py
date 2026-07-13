@@ -148,3 +148,23 @@ def test_detalhe_e_pdf(http_unauth, api_key, cobranca):
 def test_cobranca_inexistente_404(http_unauth, api_key):
     resp = http_unauth.get('/api/v1/integrations/cobrancas/999999', headers={'X-API-Key': api_key})
     assert resp.status_code == 404
+
+
+# ── Link público do boleto (token HMAC, sem login) ───────────────────────────
+
+def test_boleto_link_publico(http_unauth, cobranca):
+    from app.api.v1.endpoints.boletos import _public_token
+
+    ok = http_unauth.get(f'/api/v1/public/boleto/{cobranca.id}/{_public_token(cobranca.id)}')
+    assert ok.status_code == 200
+    assert ok.headers['content-type'] == 'application/pdf'
+    assert ok.content[:4] == b'%PDF'
+
+    errado = http_unauth.get(f'/api/v1/public/boleto/{cobranca.id}/token-invalido')
+    assert errado.status_code == 404
+
+
+def test_listagem_inclui_link_publico(http_unauth, api_key, cobranca):
+    resp = http_unauth.get('/api/v1/integrations/cobrancas', headers={'X-API-Key': api_key})
+    item = resp.json()['cobrancas'][0]
+    assert '/public/boleto/' in item['boleto_link_cliente']

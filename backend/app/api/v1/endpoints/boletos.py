@@ -8,6 +8,8 @@ POST /boletos/cnab240               → Arquivo remessa CNAB240
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -16,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_roles
+from app.core.config import settings
 from app.db.session import get_db
 from app.models.ailos_boleto import AilosBoleto
 from app.models.billing import Billing
@@ -30,7 +33,23 @@ from app.services.cnab240 import gerar_arquivo_cnab240
 
 router = APIRouter()
 
+# Rotas públicas (sem JWT) — boleto por link tokenizado, para envio ao cliente
+# por WhatsApp/e-mail. Montado em /public no api.py.
+public_router = APIRouter()
+
 ALLOWED_ROLES = (UserRole.ADMIN, UserRole.FINANCIAL)
+
+
+def _public_token(billing_id: int) -> str:
+    """Token HMAC do link público do boleto (não adivinhável, sem estado)."""
+    return hmac.new(
+        settings.secret_key.encode(), f'boleto-pdf:{billing_id}'.encode(), hashlib.sha256
+    ).hexdigest()[:20]
+
+
+def public_boleto_url(billing_id: int) -> str:
+    base = (settings.backend_public_url or '').rstrip('/')
+    return f'{base}{settings.api_v1_prefix}/public/boleto/{billing_id}/{_public_token(billing_id)}'
 
 
 def _get_billing_or_404(billing_id: int, db: Session) -> Billing:
@@ -121,6 +140,8 @@ def get_boleto(
         "emissao": dados.data_emissao.isoformat(),
         "valor": float(dados.valor),
         "banco": {"codigo": dados.banco_codigo, "nome": dados.banco_nome},
+        # Link do PDF sem login (token HMAC) — para enviar ao cliente por Whats/e-mail
+        "public_pdf_url": public_boleto_url(b.id),
     }
 
 
@@ -128,15 +149,9 @@ def get_boleto(
 # GET /boletos/{billing_id}/pdf  — PDF do boleto
 # ---------------------------------------------------------------------------
 
-@router.get("/{billing_id}/pdf")
-def get_boleto_pdf(
-    billing_id: int,
-    db: Session = Depends(get_db),
-    _: object = Depends(require_roles(*ALLOWED_ROLES)),
-):
-    """Gera e retorna o PDF do boleto para download/impressão."""
-    b = _get_billing_or_404(billing_id, db)
-    c = _get_client_or_404(b.client_id, db)
+def _montar_pdf_boleto(b: Billing, c: Client, db: Session) -> tuple[bytes, str]:
+    """Gera o PDF do boleto e o nome do arquivo (compartilhado entre a rota
+    autenticada e o link público)."""
     item = _billing_to_boleto_item(b, c)
 
     dados = gerar_dados_boleto(
@@ -147,6 +162,11 @@ def get_boleto_pdf(
         sacado_cpf_cnpj=c.cpf_cnpj or "",
         sacado_endereco=item["sacado_endereco"],
         data_emissao=item["data_emissao"],
+        sacado_cidade=c.city or "",
+        sacado_cep=c.zip_code or "",
+        sacado_uf=c.state or "",
+        sacado_ie=c.rg_ie or "",
+        itens=[(b.title or "SERVIÇO DE RASTREAMENTO", float(b.amount))],
         instrucoes=[
             "Não receber após o vencimento.",
             "Após vencimento entrar em contato: contato@mastersat.com.br",
@@ -171,7 +191,43 @@ def get_boleto_pdf(
         filename = f"boleto_{placa}_{data_emissao_str}.pdf"
     else:
         filename = f"boleto_{b.id:06d}_{data_emissao_str}.pdf"
+    return pdf_bytes, filename
 
+
+@router.get("/{billing_id}/pdf")
+def get_boleto_pdf(
+    billing_id: int,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    """Gera e retorna o PDF do boleto para download/impressão."""
+    b = _get_billing_or_404(billing_id, db)
+    c = _get_client_or_404(b.client_id, db)
+    pdf_bytes, filename = _montar_pdf_boleto(b, c, db)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /public/boleto/{billing_id}/{token}  — PDF por link público (sem login)
+# ---------------------------------------------------------------------------
+
+@public_router.get("/boleto/{billing_id}/{token}")
+def get_boleto_publico(
+    billing_id: int,
+    token: str,
+    db: Session = Depends(get_db),
+):
+    """PDF do boleto acessível pelo cliente final via link enviado por
+    WhatsApp/e-mail. Protegido por token HMAC — sem token válido, 404."""
+    if not hmac.compare_digest(token, _public_token(billing_id)):
+        raise HTTPException(status_code=404, detail="Boleto não encontrado")
+    b = _get_billing_or_404(billing_id, db)
+    c = _get_client_or_404(b.client_id, db)
+    pdf_bytes, filename = _montar_pdf_boleto(b, c, db)
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
