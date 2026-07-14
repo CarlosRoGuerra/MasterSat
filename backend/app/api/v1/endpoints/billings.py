@@ -100,7 +100,7 @@ def serialize_billing(row) -> BillingOut:
     )
 
 
-def apply_filters(query, search: str | None, status: str | None, client_id: int | None, contract_id: int | None, due_from: date | None, due_to: date | None):
+def apply_filters(query, search: str | None, status: str | None, client_id: int | None, contract_id: int | None, due_from: date | None, due_to: date | None, vehicle_id: int | None = None):
     if search:
         query = query.filter(or_(Client.name.ilike(f'%{search}%'), Client.cpf_cnpj.ilike(f'%{search}%'), Billing.receipt_number.ilike(f'%{search}%'), Billing.notes.ilike(f'%{search}%'), Billing.title.ilike(f'%{search}%')))
     if status:
@@ -109,6 +109,8 @@ def apply_filters(query, search: str | None, status: str | None, client_id: int 
         query = query.filter(Billing.client_id == client_id)
     if contract_id:
         query = query.filter(Billing.contract_id == contract_id)
+    if vehicle_id:
+        query = query.filter(Billing.vehicle_id == vehicle_id)
     if due_from:
         query = query.filter(Billing.due_date >= due_from)
     if due_to:
@@ -241,8 +243,8 @@ def download_receipt(item_id: int, db: Session = Depends(get_db), _: object = De
 
 
 @router.get('/', response_model=list[BillingOut])
-def list_items(search: str | None = None, status: str | None = None, client_id: int | None = None, contract_id: int | None = None, due_from: date | None = None, due_to: date | None = None, limit: int = Query(default=200, ge=1, le=1000), db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
-    query = apply_filters(base_query(db), search, status, client_id, contract_id, due_from, due_to).order_by(Billing.due_date.desc(), Billing.id.desc())
+def list_items(search: str | None = None, status: str | None = None, client_id: int | None = None, contract_id: int | None = None, vehicle_id: int | None = None, due_from: date | None = None, due_to: date | None = None, limit: int = Query(default=200, ge=1, le=1000), db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
+    query = apply_filters(base_query(db), search, status, client_id, contract_id, due_from, due_to, vehicle_id).order_by(Billing.due_date.desc(), Billing.id.desc())
     return [serialize_billing(row) for row in query.limit(limit).all()]
 
 

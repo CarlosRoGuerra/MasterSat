@@ -194,6 +194,21 @@ class TestReceiveBilling:
         assert r.status_code == 404
 
 
+class TestFiltroVeiculo:
+    def test_filtra_por_vehicle_id(self, http, db, billing_pendente, veiculo, veiculo_outro_cliente):
+        billing_pendente.vehicle_id = veiculo.id
+        db.commit()
+
+        r = http.get(f"{PREFIX}/?vehicle_id={veiculo.id}")
+        assert r.status_code == 200
+        assert [b["id"] for b in r.json()] == [billing_pendente.id]
+
+        # Outro veículo não pode receber as cobranças deste
+        r2 = http.get(f"{PREFIX}/?vehicle_id={veiculo_outro_cliente.id}")
+        assert r2.status_code == 200
+        assert r2.json() == []
+
+
 class TestReceiptDownload:
     def test_receipt_de_cobranca_paga(self, http, billing_pendente):
         http.post(f"{PREFIX}/{billing_pendente.id}/receive", json={
