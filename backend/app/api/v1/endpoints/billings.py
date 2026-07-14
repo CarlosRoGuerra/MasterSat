@@ -231,7 +231,8 @@ def download_receipt(item_id: int, db: Session = Depends(get_db), _: object = De
     row = base_query(db).filter(Billing.id == item_id).first()
     if not row:
         raise HTTPException(status_code=404, detail='Cobrança não encontrada')
-    billing, client_name, _, _ = row
+    # base_query retorna 6 colunas; só as duas primeiras interessam aqui
+    billing, client_name, *_ = row
     if billing.status != BillingStatus.PAID:
         raise HTTPException(status_code=400, detail='Recibo disponível apenas para cobranças pagas')
     buffer = _receipt_pdf(billing, client_name)

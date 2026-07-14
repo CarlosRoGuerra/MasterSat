@@ -193,6 +193,23 @@ class TestReceiveBilling:
         })
         assert r.status_code == 404
 
+
+class TestReceiptDownload:
+    def test_receipt_de_cobranca_paga(self, http, billing_pendente):
+        http.post(f"{PREFIX}/{billing_pendente.id}/receive", json={
+            "paid_amount": 99.90, "payment_date": "2025-05-28", "payment_method": "pix",
+        })
+        r = http.get(f"{PREFIX}/{billing_pendente.id}/receipt")
+        assert r.status_code == 200
+        assert r.headers["content-type"] == "application/pdf"
+        assert r.content[:4] == b"%PDF"
+
+    def test_receipt_de_pendente_retorna_400(self, http, billing_pendente):
+        r = http.get(f"{PREFIX}/{billing_pendente.id}/receipt")
+        assert r.status_code == 400
+
+
+class TestReceiveBillingEdgeCases:
     def test_receive_already_paid_returns_400(self, http, db, billing_pendente):
         billing_pendente.status = BillingStatus.PAID
         db.commit()
