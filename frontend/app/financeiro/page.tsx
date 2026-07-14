@@ -15,6 +15,7 @@ import { Table, TableHead, Th, TableBody, Tr, Td } from '@/components/ui/table';
 import { EmptyState, TableSkeleton } from '@/components/ui/empty-state';
 import { usePagination, Pagination } from '@/components/ui/pagination';
 import { ErrorBanner } from '@/components/ui/error-banner';
+import { ClientAutocomplete } from '@/components/ui/client-autocomplete';
 import { API_URL, apiFetch } from '@/lib/api';
 import { useAuthGuard } from '@/lib/use-auth-guard';
 
@@ -306,6 +307,7 @@ function BillingTableSection({
   onRefresh,
   onSelect,
   selectedId,
+  onNewBilling,
 }: {
   billings: Billing[];
   loading: boolean;
@@ -318,6 +320,7 @@ function BillingTableSection({
   onRefresh: () => void;
   onSelect: (b: Billing) => void;
   selectedId?: number;
+  onNewBilling?: () => void;
 }) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const in7 = new Date(today); in7.setDate(in7.getDate() + 7);
@@ -337,6 +340,11 @@ function BillingTableSection({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <SectionHeader eyebrow="Cobranças" title={billingView === 'alert' ? 'Atenção imediata' : 'Carteira completa'} />
         <div className="flex gap-2">
+          {onNewBilling && (
+            <Button onClick={onNewBilling} className="text-xs px-3 py-1.5">
+              Nova cobrança avulsa
+            </Button>
+          )}
           <Button variant="secondary" onClick={onViewToggle} className="text-xs px-3 py-1.5">
             {billingView === 'alert' ? `Ver todas (${billings.length})` : 'Ver urgentes'}
           </Button>
@@ -434,6 +442,10 @@ export default function FinanceiroPage() {
   const [billingView, setBillingView] = useState<'alert' | 'all'>('alert');
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
+
+  // Nova cobrança avulsa (instalação, serviço pontual etc. — sem esperar o fechamento)
+  const [newBillingModal, setNewBillingModal] = useState(false);
+  const [newBillingForm, setNewBillingForm] = useState({ client_id: '', title: '', amount: '', due_date: '', notes: '' });
   const [error, setError] = useState('');
   const [feedback, setFeedback] = useState('');
   const [modalError, setModalError] = useState('');
@@ -709,6 +721,34 @@ export default function FinanceiroPage() {
     } catch (err) { setModalError(parseError(err)); } finally { setProcessing(false); }
   }
 
+  async function handleCreateAvulsa() {
+    if (!token || !canEdit) return;
+    setModalError('');
+    if (!newBillingForm.client_id || !newBillingForm.amount || !newBillingForm.due_date) {
+      setModalError('Cliente, valor e vencimento são obrigatórios.');
+      return;
+    }
+    setProcessing(true);
+    try {
+      const nova = await apiFetch<Billing>('/billings/', {
+        method: 'POST',
+        body: JSON.stringify({
+          client_id: Number(newBillingForm.client_id),
+          title: newBillingForm.title.trim() || 'COBRANÇA AVULSA',
+          billing_type: 'avulsa',
+          amount: Number(newBillingForm.amount.replace(',', '.')),
+          due_date: newBillingForm.due_date,
+          notes: newBillingForm.notes.trim() || null,
+        }),
+      }, token);
+      setNewBillingModal(false);
+      setNewBillingForm({ client_id: '', title: '', amount: '', due_date: '', notes: '' });
+      setFeedback(`Cobrança avulsa #${nova.id} criada. Gere o boleto (Ailos) e a NFS-e pelo detalhe.`);
+      await loadData(token);
+      setSelectedBilling(nova);
+    } catch (err) { setModalError(parseError(err)); } finally { setProcessing(false); }
+  }
+
   async function handleCancel() {
     if (!token || !selectedBilling || !canEdit) return;
     const reason = window.prompt('Informe a justificativa para cancelamento:', '');
@@ -967,6 +1007,7 @@ export default function FinanceiroPage() {
               onRefresh={() => token && loadData(token)}
               onSelect={b => setSelectedBilling(b)}
               selectedId={selectedBilling?.id}
+              onNewBilling={canEdit ? () => { setModalError(''); setNewBillingModal(true); } : undefined}
             />
           </section>
         </>
@@ -1296,6 +1337,37 @@ export default function FinanceiroPage() {
           <div className="flex justify-end gap-3">
             <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200" onClick={() => setAdjustModal(false)}>Cancelar</button>
             <Button type="button" disabled={!canEdit || processing} onClick={handleAdjust}>{processing ? 'Salvando...' : 'Salvar ajuste'}</Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        open={newBillingModal}
+        onClose={() => { setNewBillingModal(false); setModalError(''); }}
+        title="Nova cobrança avulsa"
+        description="Instalação, serviço pontual ou negociação — sem esperar o fechamento mensal. Depois de criar, gere o boleto (Ailos) e a NFS-e pelo detalhe da cobrança."
+        size="lg"
+      >
+        <div className="space-y-5">
+          {modalError && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>}
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="md:col-span-2">
+              <ClientAutocomplete
+                clients={clients}
+                value={newBillingForm.client_id}
+                onChange={(id) => setNewBillingForm(p => ({ ...p, client_id: id }))}
+                placeholder="Buscar cliente por nome ou CPF/CNPJ…"
+                required
+              />
+            </div>
+            <input className={`${fieldClass} md:col-span-2`} placeholder="Descrição (ex.: INSTALAÇÃO DO RASTREADOR)" value={newBillingForm.title} onChange={e => setNewBillingForm(p => ({ ...p, title: e.target.value }))} />
+            <input className={fieldClass} placeholder="Valor (ex.: 120,00)" value={newBillingForm.amount} onChange={e => setNewBillingForm(p => ({ ...p, amount: e.target.value }))} />
+            <input type="date" className={fieldClass} value={newBillingForm.due_date} onChange={e => setNewBillingForm(p => ({ ...p, due_date: e.target.value }))} />
+            <textarea className={`${areaClass} md:col-span-2`} placeholder="Observações (opcional)" value={newBillingForm.notes} onChange={e => setNewBillingForm(p => ({ ...p, notes: e.target.value }))} />
+          </div>
+          <div className="flex justify-end gap-3">
+            <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200" onClick={() => setNewBillingModal(false)}>Cancelar</button>
+            <Button type="button" disabled={!canEdit || processing} onClick={handleCreateAvulsa}>{processing ? 'Criando...' : 'Criar cobrança'}</Button>
           </div>
         </div>
       </Modal>

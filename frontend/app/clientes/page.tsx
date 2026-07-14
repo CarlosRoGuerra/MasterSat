@@ -309,6 +309,11 @@ export default function ClientesPage() {
   // Seleção múltipla de boletos (soma para pagamento em lote)
   const [selectedBillingIds, setSelectedBillingIds] = useState<number[]>([]);
 
+  // Unificação de boletos (negociação: N boletos abertos → 1 avulso)
+  const [unifyOpen, setUnifyOpen] = useState(false);
+  const [unifyForm, setUnifyForm] = useState({ due_date: '', amount: '', notes: '' });
+  const [unifying, setUnifying] = useState(false);
+
   // Ações do modal de boletos (alterar / histórico)
   const [editBilling, setEditBilling] = useState<BillingItem | null>(null);
   const [editBillingForm, setEditBillingForm] = useState({ amount: '', due_date: '', justification: '' });
@@ -492,6 +497,38 @@ export default function ClientesPage() {
       `/billings?client_id=${billingsModalClient.id}&limit=100`, {}, token
     ).catch(() => []);
     setClientBillings(data);
+  }
+
+  function openUnifyModal() {
+    const sel = clientBillings.filter((b) => selectedBillingIds.includes(b.id));
+    const soma = sel.reduce((s, b) => s + b.amount, 0);
+    setUnifyForm({ due_date: '', amount: soma.toFixed(2), notes: '' });
+    setUnifyOpen(true);
+  }
+
+  async function saveUnify() {
+    if (!token || selectedBillingIds.length < 2) return;
+    if (!unifyForm.due_date) { alert('Informe o vencimento do boleto único.'); return; }
+    setUnifying(true);
+    try {
+      const nova = await apiFetch<BillingItem>('/billings/unificar', {
+        method: 'POST',
+        body: JSON.stringify({
+          billing_ids: selectedBillingIds,
+          due_date: unifyForm.due_date,
+          amount: unifyForm.amount ? Number(unifyForm.amount) : undefined,
+          notes: unifyForm.notes.trim() || undefined,
+        }),
+      }, token);
+      setUnifyOpen(false);
+      setSelectedBillingIds([]);
+      setFeedback(`Boleto único #${nova.id} criado. As cobranças originais foram canceladas.`);
+      await reloadClientBillings();
+    } catch (err) {
+      alert(parseError(err));
+    } finally {
+      setUnifying(false);
+    }
   }
 
   function openEditBilling(b: BillingItem) {
@@ -1691,6 +1728,11 @@ export default function ClientesPage() {
               <span className="text-slate-600 dark:text-slate-300">
                 Total com juros: <strong className="font-mono text-rose-600 dark:text-rose-400">{fmt(totalJuros)}</strong>
               </span>
+              {sel.length >= 2 && (
+                <Button onClick={openUnifyModal} className="!py-1.5 text-xs">
+                  Unificar em 1 boleto
+                </Button>
+              )}
               <button
                 type="button"
                 onClick={() => setSelectedBillingIds([])}
@@ -1797,6 +1839,50 @@ export default function ClientesPage() {
         <p className="mt-3 text-xs text-slate-400">
           Mostrando {clientBillings.length} registro(s)
         </p>
+      </Modal>
+
+      {/* ══ Modal: Unificar boletos em um único (negociação) ═══════════════ */}
+      <Modal
+        open={unifyOpen}
+        onClose={() => setUnifyOpen(false)}
+        title={`Unificar ${selectedBillingIds.length} boletos em um único`}
+        subtitle="As cobranças originais são canceladas e substituídas por um boleto avulso"
+        size="md"
+      >
+        <div className="space-y-4">
+          <FormGrid>
+            <FormField label="Vencimento do boleto único" required>
+              <Input
+                type="date"
+                value={unifyForm.due_date}
+                onChange={(e) => setUnifyForm((p) => ({ ...p, due_date: e.target.value }))}
+              />
+            </FormField>
+            <FormField label="Valor (R$)" hint="Pré-preenchido com a soma — ajuste se houve negociação">
+              <Input
+                type="number"
+                step="0.01"
+                min="0.01"
+                value={unifyForm.amount}
+                onChange={(e) => setUnifyForm((p) => ({ ...p, amount: e.target.value }))}
+              />
+            </FormField>
+          </FormGrid>
+          <FormField label="Observações (opcional)">
+            <Textarea
+              placeholder="Ex.: negociação com o cliente em 14/07…"
+              value={unifyForm.notes}
+              onChange={(e) => setUnifyForm((p) => ({ ...p, notes: e.target.value }))}
+              className="min-h-[64px]"
+            />
+          </FormField>
+          <div className="flex justify-end gap-2 border-t border-slate-100 pt-4 dark:border-slate-800">
+            <Button variant="secondary" onClick={() => setUnifyOpen(false)}>Cancelar</Button>
+            <Button onClick={saveUnify} disabled={unifying || !unifyForm.due_date}>
+              {unifying ? 'Unificando…' : 'Criar boleto único'}
+            </Button>
+          </div>
+        </div>
       </Modal>
 
       {/* ══ Modal: Alterar boleto (valor/vencimento com justificativa) ═════ */}

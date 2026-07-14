@@ -49,6 +49,16 @@ class BillingUpdate(BaseModel):
     justification: str | None = None
 
 
+class BillingUnify(BaseModel):
+    """Unifica cobranças em aberto em um único boleto avulso (negociação)."""
+
+    billing_ids: list[int] = Field(min_length=2)
+    due_date: date
+    # Valor negociado; se ausente, usa a soma simples das cobranças
+    amount: float | None = Field(default=None, gt=0)
+    notes: str | None = None
+
+
 class BillingReceive(BaseModel):
     paid_amount: float | None = Field(default=None, gt=0)
     payment_date: date

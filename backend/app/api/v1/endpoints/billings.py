@@ -30,6 +30,7 @@ from app.schemas.billing import (
     BillingCreate,
     BillingOut,
     BillingReceive,
+    BillingUnify,
     BillingUpdate,
     DelinquentClientItem,
     FinancialSummary,
@@ -271,6 +272,47 @@ def create_item(payload: BillingCreate, db: Session = Depends(get_db), _: object
         db.refresh(obj)
         mark_charge_item_if_settled(db, obj.item_id)
     row = base_query(db).filter(Billing.id == obj.id).first()
+    return serialize_billing(row)
+
+
+@router.post('/unificar', response_model=BillingOut)
+def unify_billings(payload: BillingUnify, db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
+    """Unifica cobranças em aberto do MESMO cliente em um único boleto avulso
+    (negociação). As originais são canceladas com referência à nova cobrança."""
+    ids = list(dict.fromkeys(payload.billing_ids))
+    billings = [db.get(Billing, bid) for bid in ids]
+    faltando = [bid for bid, b in zip(ids, billings) if not b or b.is_deleted]
+    if faltando:
+        raise HTTPException(status_code=404, detail=f'Cobranças não encontradas: {faltando}')
+
+    abertas = (BillingStatus.PENDING, BillingStatus.OVERDUE)
+    invalidas = [b.id for b in billings if b.status not in abertas]
+    if invalidas:
+        raise HTTPException(status_code=400, detail=f'Apenas cobranças pendentes/vencidas podem ser unificadas: {invalidas}')
+
+    if len({b.client_id for b in billings}) > 1:
+        raise HTTPException(status_code=400, detail='Todas as cobranças precisam ser do mesmo cliente.')
+
+    total = sum(float(b.amount) for b in billings)
+    refs = ', '.join(f'#{b.id}' for b in billings)
+    nova = Billing(
+        client_id=billings[0].client_id,
+        billing_type='avulsa',
+        title=f'BOLETO ÚNICO — UNIFICAÇÃO ({refs})',
+        amount=payload.amount or total,
+        due_date=payload.due_date,
+        status=BillingStatus.PENDING,
+        period_label=payload.due_date.strftime('%m/%Y'),
+        notes=payload.notes or f'Negociação: unifica {refs}. Soma original: R$ {total:.2f}.',
+    )
+    db.add(nova)
+    db.flush()
+    for b in billings:
+        b.status = BillingStatus.CANCELED
+        marker = f'Unificada na cobrança #{nova.id}.'
+        b.notes = f'{b.notes} | {marker}' if b.notes else marker
+    db.commit()
+    row = base_query(db).filter(Billing.id == nova.id).first()
     return serialize_billing(row)
 
 

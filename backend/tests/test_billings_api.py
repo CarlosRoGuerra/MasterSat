@@ -194,6 +194,59 @@ class TestReceiveBilling:
         assert r.status_code == 404
 
 
+class TestUnificarBoletos:
+    def test_unifica_duas_cobrancas_em_uma(self, http, billing_pendente, billing_vencida):
+        r = http.post(f"{PREFIX}/unificar", json={
+            "billing_ids": [billing_pendente.id, billing_vencida.id],
+            "due_date": "2099-01-15",
+        })
+        assert r.status_code == 200
+        nova = r.json()
+        assert nova["amount"] == 199.80          # soma das duas
+        assert nova["status"] == "pendente"
+        assert nova["billing_type"] == "avulsa"
+        # originais canceladas com referência
+        for bid in (billing_pendente.id, billing_vencida.id):
+            rr = http.get(f"{PREFIX}/{bid}")
+            assert rr.json()["status"] == "cancelada"
+            assert f'#{nova["id"]}' in (rr.json()["notes"] or "")
+
+    def test_valor_negociado_sobrepoe_a_soma(self, http, billing_pendente, billing_vencida):
+        r = http.post(f"{PREFIX}/unificar", json={
+            "billing_ids": [billing_pendente.id, billing_vencida.id],
+            "due_date": "2099-01-15",
+            "amount": 150.0,
+        })
+        assert r.status_code == 200
+        assert r.json()["amount"] == 150.0
+
+    def test_rejeita_cobranca_paga(self, http, db, billing_pendente, billing_vencida):
+        billing_pendente.status = BillingStatus.PAID
+        db.commit()
+        r = http.post(f"{PREFIX}/unificar", json={
+            "billing_ids": [billing_pendente.id, billing_vencida.id],
+            "due_date": "2099-01-15",
+        })
+        assert r.status_code == 400
+
+    def test_rejeita_clientes_diferentes(self, http, billing_pendente, outro_cliente):
+        outra = http.post(f"{PREFIX}/", json={
+            "client_id": outro_cliente.id, "amount": 50.0, "due_date": "2099-02-01",
+        }).json()
+        r = http.post(f"{PREFIX}/unificar", json={
+            "billing_ids": [billing_pendente.id, outra["id"]],
+            "due_date": "2099-01-15",
+        })
+        assert r.status_code == 400
+
+    def test_exige_pelo_menos_duas(self, http, billing_pendente):
+        r = http.post(f"{PREFIX}/unificar", json={
+            "billing_ids": [billing_pendente.id],
+            "due_date": "2099-01-15",
+        })
+        assert r.status_code == 422
+
+
 class TestFiltroVeiculo:
     def test_filtra_por_vehicle_id(self, http, db, billing_pendente, veiculo, veiculo_outro_cliente):
         billing_pendente.vehicle_id = veiculo.id
