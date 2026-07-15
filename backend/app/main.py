@@ -445,21 +445,63 @@ def _run_locked(lock_key: int, fn):
         lock_conn.close()
 
 
+def _alerta_admin(mensagem: str, logger) -> None:
+    """Loga em nível crítico e, se ALERT_WEBHOOK estiver no .env (Discord/Slack —
+    o mesmo canal dos alertas de backup), envia a mensagem para lá."""
+    logger.critical(mensagem)
+    webhook = settings.alert_webhook
+    if not webhook:
+        return
+    try:
+        import requests
+        # 'content' = Discord; 'text' = Slack — cada um ignora a chave do outro
+        requests.post(webhook, json={'content': mensagem, 'text': mensagem}, timeout=10)
+    except Exception:  # noqa: BLE001
+        logger.warning('Falha ao enviar alerta para o ALERT_WEBHOOK.')
+
+
 def _cooperado_token_keepalive():
-    """Renova o token do cooperado Ailos a cada 10 min (vive 30 min e não pode
-    ser renovado após expirar). Mantém a sessão viva 24/7 sem reautorização
-    manual. Advisory lock: com vários workers, só um renova por ciclo.
+    """Renova o token do cooperado Ailos (vive 30 min e NÃO pode ser renovado
+    após expirar). Advisory lock: com vários workers, só um renova por ciclo.
+
+    Endurecimentos contra a morte silenciosa da sessão:
+    - 1º refresh logo no boot (5s): um deploy pode ter consumido boa parte da
+      janela de 30 min — esperar 10 min já matou o token uma vez (04/07).
+    - Refresh falhou com token vivo → nova tentativa em 60s (não em 10 min).
+    - Sessão expirou de vez → alerta no log (CRITICAL) e no ALERT_WEBHOOK,
+      uma única vez por queda; avisa também quando a sessão volta.
     """
     from app.services.ailos_client import manter_sessao_cooperado
     logger = logging.getLogger('uvicorn.error')
 
+    CICLO = 600        # 10 min — folga de 20 min antes dos 30
+    RETRY_CURTO = 60   # refresh falhou mas o token ainda vive → insiste rápido
+    ja_alertado = False
+
+    espera = 5  # primeiro refresh imediatamente após o boot
     while True:
-        time.sleep(600)  # 10 min — folga de 20 min antes dos 30
+        time.sleep(espera)
+        espera = CICLO
         try:
             resultado = _run_locked(918273646, manter_sessao_cooperado)
             if resultado in ('renovado', 'relogin_disparado'):
+                if ja_alertado:
+                    _alerta_admin('✅ Sessão do cooperado Ailos RECUPERADA — emissão de boletos normalizada.', logger)
+                    ja_alertado = False
                 logger.info('Sessão Ailos (keepalive): %s.', resultado)
-            elif resultado not in (None, 'sem_integracao', 'expirado_sem_relogin'):
+            elif resultado == 'refresh_falhou_token_vivo':
+                espera = RETRY_CURTO
+                logger.warning('Sessão Ailos: refresh falhou com token vivo — nova tentativa em %ss.', RETRY_CURTO)
+            elif resultado in ('expirado_sem_relogin', 'relogin_travado'):
+                if not ja_alertado:
+                    _alerta_admin(
+                        '🚨 Sessão do cooperado Ailos EXPIROU — emissão de boletos PARADA. '
+                        'Reconecte pelo painel Financeiro (botão "Reconectar Ailos") ou via '
+                        'POST /api/v1/ailos/connect + login no navegador.',
+                        logger,
+                    )
+                    ja_alertado = True
+            elif resultado not in (None, 'sem_integracao'):
                 logger.warning('Sessão Ailos (keepalive): %s.', resultado)
         except Exception as exc:  # noqa: BLE001 — keepalive nunca pode derrubar o worker
             logger.warning('Keepalive do token Ailos falhou (renovará no próximo ciclo): %s', exc)

@@ -446,6 +446,10 @@ export default function FinanceiroPage() {
   // Nova cobrança avulsa (instalação, serviço pontual etc. — sem esperar o fechamento)
   const [newBillingModal, setNewBillingModal] = useState(false);
   const [newBillingForm, setNewBillingForm] = useState({ client_id: '', title: '', amount: '', due_date: '', notes: '' });
+
+  // Saúde da sessão Ailos (emissão de boletos depende dela)
+  const [ailosStatus, setAilosStatus] = useState<{ cooperado_status: string } | null>(null);
+  const [connectingAilos, setConnectingAilos] = useState(false);
   const [error, setError] = useState('');
   const [feedback, setFeedback] = useState('');
   const [modalError, setModalError] = useState('');
@@ -584,6 +588,10 @@ export default function FinanceiroPage() {
   useEffect(() => {
     if (!token) return;
     loadData(token);
+    // Saúde da sessão Ailos — se caiu, o banner de reconexão aparece
+    apiFetch<{ cooperado_status: string }>('/ailos/status', {}, token)
+      .then(setAilosStatus)
+      .catch(() => setAilosStatus(null));
   }, [token]);
 
   useEffect(() => {
@@ -721,6 +729,28 @@ export default function FinanceiroPage() {
     } catch (err) { setModalError(parseError(err)); } finally { setProcessing(false); }
   }
 
+  async function refreshAilosStatus() {
+    if (!token) return;
+    try {
+      const st = await apiFetch<{ cooperado_status: string }>('/ailos/status', {}, token);
+      setAilosStatus(st);
+      if (st.cooperado_status === 'authorized') setFeedback('Sessão Ailos conectada — emissão de boletos normalizada.');
+    } catch { setAilosStatus(null); }
+  }
+
+  async function handleReconnectAilos() {
+    if (!token) return;
+    setConnectingAilos(true);
+    try {
+      const resp = await apiFetch<{ login_url: string }>('/ailos/connect', { method: 'POST' }, token);
+      window.open(resp.login_url, '_blank');
+    } catch (err) {
+      setError(parseError(err));
+    } finally {
+      setConnectingAilos(false);
+    }
+  }
+
   async function handleCreateAvulsa() {
     if (!token || !canEdit) return;
     setModalError('');
@@ -836,6 +866,36 @@ export default function FinanceiroPage() {
         <div className="mb-4 space-y-3">
           {(guardError || error) && <ErrorBanner message={guardError || error} />}
           {feedback && <p className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{feedback}</p>}
+        </div>
+      )}
+
+      {/* Sessão Ailos caída = emissão de boletos parada — reconexão em 2 cliques */}
+      {ailosStatus && ailosStatus.cooperado_status !== 'authorized' && (
+        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-300">
+          <span className="font-semibold">⚠ Sessão Ailos desconectada — a emissão de boletos está parada.</span>
+          {user?.role === 'admin' ? (
+            <>
+              <Button
+                onClick={handleReconnectAilos}
+                disabled={connectingAilos}
+                className="!py-1.5 text-xs"
+              >
+                {connectingAilos ? 'Gerando link…' : 'Reconectar Ailos'}
+              </Button>
+              <span className="text-xs">
+                Abre o login do cooperado em nova aba — após autorizar, clique em
+              </span>
+              <button
+                type="button"
+                onClick={refreshAilosStatus}
+                className="text-xs font-semibold underline hover:text-amber-900 dark:hover:text-amber-200"
+              >
+                Verificar conexão
+              </button>
+            </>
+          ) : (
+            <span className="text-xs">Peça a um administrador para reconectar (botão disponível no perfil admin).</span>
+          )}
         </div>
       )}
       {guardLoading && <p className="mb-4 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">Validando sessão...</p>}

@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     # Chave de API para integrações máquina-a-máquina (ex.: o CobraZap puxa os boletos
     # via header X-API-Key). Vazio = endpoints de /integrations/cobrancas ficam off (503).
     integration_api_key: str = ''
+    # Webhook de alertas (Discord/Slack) — mesmo canal usado pelo backup.
+    # Usado p/ avisar quando a sessão do cooperado Ailos morre (emissão parada).
+    alert_webhook: str = ''
     # Admin inicial (criado só se o banco não tiver esse e-mail). Se a senha não
     # for definida, é gerada uma aleatória e logada uma vez — NUNCA usar senha pública.
     initial_admin_email: str = 'admin@rastreamento.local'
