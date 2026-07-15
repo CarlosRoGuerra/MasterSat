@@ -49,6 +49,27 @@ class BillingUpdate(BaseModel):
     justification: str | None = None
 
 
+class BillingBatchStatusIn(BaseModel):
+    """Alterar situação de boletos em lote: receber ou cancelar vários de uma vez."""
+
+    billing_ids: list[int] = Field(min_length=1)
+    action: str  # 'receber' | 'cancelar'
+    # para action='receber'
+    payment_date: date | None = None
+    payment_method: str | None = None
+    # para action='cancelar'
+    reason: str | None = None
+
+
+class BillingBatchMaintIn(BaseModel):
+    """Manutenção de título em lote: novo vencimento e/ou valor, com justificativa."""
+
+    billing_ids: list[int] = Field(min_length=1)
+    due_date: date | None = None
+    amount: float | None = Field(default=None, gt=0)
+    justification: str
+
+
 class BillingUnify(BaseModel):
     """Unifica cobranças em aberto em um único boleto avulso (negociação)."""
 

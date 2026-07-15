@@ -24,6 +24,7 @@ type BillingInterval = 1 | 3 | 6 | 12;
 type BillingStatus = 'pendente' | 'paga' | 'vencida' | 'cancelada';
 
 type ClientOption = { id: number; name: string; cpf_cnpj: string };
+type Payable = { id: number; description: string; supplier?: string | null; category?: string | null; amount: number; due_date: string; status: string; payment_date?: string | null; payment_method?: string | null; notes?: string | null; overdue_days: number };
 type VehicleOption = { id: number; client_id: number; plate: string; model?: string | null };
 type TrackerOption = { id: number; client_id?: number | null; vehicle_id?: number | null; imei: string; model?: string | null; brand?: string | null };
 type Plan = { id: number; name: string; price: number; description?: string | null; active: boolean; billing_interval_months: BillingInterval; active_contracts: number };
@@ -308,6 +309,11 @@ function BillingTableSection({
   onSelect,
   selectedId,
   onNewBilling,
+  batchIds,
+  onBatchIdsChange,
+  onBatchReceive,
+  onBatchCancel,
+  onBatchMaint,
 }: {
   billings: Billing[];
   loading: boolean;
@@ -321,6 +327,11 @@ function BillingTableSection({
   onSelect: (b: Billing) => void;
   selectedId?: number;
   onNewBilling?: () => void;
+  batchIds?: number[];
+  onBatchIdsChange?: (ids: number[]) => void;
+  onBatchReceive?: () => void;
+  onBatchCancel?: () => void;
+  onBatchMaint?: () => void;
 }) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const in7 = new Date(today); in7.setDate(in7.getDate() + 7);
@@ -365,6 +376,19 @@ function BillingTableSection({
           </select>
         </div>
       )}
+      {/* Barra de ações em lote */}
+      {batchIds && batchIds.length > 0 && (
+        <div className="mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-brand-300 bg-brand-50 px-4 py-2.5 text-sm dark:border-brand-700 dark:bg-brand-950/30">
+          <span className="font-bold text-brand-800 dark:text-brand-200">{batchIds.length} selecionada(s)</span>
+          {onBatchReceive && <Button onClick={onBatchReceive} className="!py-1.5 text-xs">Receber em lote</Button>}
+          {onBatchMaint && <Button variant="secondary" onClick={onBatchMaint} className="!py-1.5 text-xs">Alterar venc./valor</Button>}
+          {onBatchCancel && <Button variant="secondary" onClick={onBatchCancel} className="!py-1.5 text-xs">Cancelar em lote</Button>}
+          <button type="button" onClick={() => onBatchIdsChange?.([])} className="ml-auto text-xs text-slate-400 underline hover:text-slate-600 dark:hover:text-slate-200">
+            Limpar seleção
+          </button>
+        </div>
+      )}
+
       <div className="mt-4">
         {loading ? <TableSkeleton rows={8} cols={5} /> : list.length === 0 ? (
           <EmptyState icon={CheckCircle2} title={billingView === 'alert' ? 'Nenhuma cobrança urgente' : 'Nenhuma cobrança encontrada'} description={billingView === 'alert' ? 'Todas as cobranças estão em dia.' : 'Tente ajustar os filtros.'} />
@@ -372,6 +396,24 @@ function BillingTableSection({
           <>
             <Table>
               <TableHead>
+                {onBatchIdsChange && (
+                  <Th className="w-8">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 rounded accent-brand-700"
+                      title="Selecionar todas em aberto (desta página)"
+                      checked={
+                        pg.slice.some(b => b.status === 'pendente' || b.status === 'vencida') &&
+                        pg.slice.filter(b => b.status === 'pendente' || b.status === 'vencida').every(b => (batchIds ?? []).includes(b.id))
+                      }
+                      onChange={e => onBatchIdsChange(
+                        e.target.checked
+                          ? Array.from(new Set([...(batchIds ?? []), ...pg.slice.filter(b => b.status === 'pendente' || b.status === 'vencida').map(b => b.id)]))
+                          : []
+                      )}
+                    />
+                  </Th>
+                )}
                 <Th>Cliente</Th>
                 <Th>Título</Th>
                 <Th>Vencimento</Th>
@@ -382,6 +424,21 @@ function BillingTableSection({
               <TableBody>
                 {pg.slice.map(b => (
                   <Tr key={b.id} selected={b.id === selectedId}>
+                    {onBatchIdsChange && (
+                      <Td>
+                        {(b.status === 'pendente' || b.status === 'vencida') ? (
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 rounded accent-brand-700"
+                            checked={(batchIds ?? []).includes(b.id)}
+                            onChange={() => {
+                              const cur = batchIds ?? [];
+                              onBatchIdsChange(cur.includes(b.id) ? cur.filter(id => id !== b.id) : [...cur, b.id]);
+                            }}
+                          />
+                        ) : null}
+                      </Td>
+                    )}
                     <Td>
                       <p className="font-medium">{b.client_name ?? '—'}</p>
                       <p className="text-xs text-slate-400">{b.vehicle_plate ?? ''}</p>
@@ -450,6 +507,21 @@ export default function FinanceiroPage() {
   // Saúde da sessão Ailos (emissão de boletos depende dela)
   const [ailosStatus, setAilosStatus] = useState<{ cooperado_status: string } | null>(null);
   const [connectingAilos, setConnectingAilos] = useState(false);
+
+  // Contas a Pagar
+  const [payables, setPayables] = useState<Payable[]>([]);
+  const [payableStatusFilter, setPayableStatusFilter] = useState('pendente');
+  const [payableModal, setPayableModal] = useState(false);
+  const [payableForm, setPayableForm] = useState({ description: '', supplier: '', category: '', amount: '', due_date: '', notes: '' });
+  const [payingPayable, setPayingPayable] = useState<Payable | null>(null);
+  const [payPayableForm, setPayPayableForm] = useState({ payment_date: new Date().toISOString().slice(0, 10), payment_method: 'pix' });
+
+  // Operações em lote na carteira de cobranças
+  const [selectedBillingIds, setSelectedBillingIds] = useState<number[]>([]);
+  const [batchReceiveModal, setBatchReceiveModal] = useState(false);
+  const [batchReceiveForm, setBatchReceiveForm] = useState({ payment_date: new Date().toISOString().slice(0, 10), payment_method: 'pix' });
+  const [batchMaintModal, setBatchMaintModal] = useState(false);
+  const [batchMaintForm, setBatchMaintForm] = useState({ due_date: '', amount: '', justification: '' });
   const [error, setError] = useState('');
   const [feedback, setFeedback] = useState('');
   const [modalError, setModalError] = useState('');
@@ -461,7 +533,7 @@ export default function FinanceiroPage() {
   const [adjustModal, setAdjustModal] = useState(false);
 
   // Tab navigation with URL sync
-  const [activeTab, setActiveTab] = useState<'overview' | 'management'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'management' | 'payables'>('overview');
 
   // Contract table filters
   const [contractStatusFilter, setContractStatusFilter] = useState('');
@@ -469,7 +541,7 @@ export default function FinanceiroPage() {
   // Plans table sort
   const [planSort, setPlanSort] = useState<{ field: 'name' | 'price' | 'active_contracts'; dir: 'asc' | 'desc' }>({ field: 'name', dir: 'asc' });
 
-  function switchTab(tab: 'overview' | 'management') {
+  function switchTab(tab: 'overview' | 'management' | 'payables') {
     setActiveTab(tab);
     if (typeof window === 'undefined') return;
     const url = new URL(window.location.href);
@@ -481,7 +553,8 @@ export default function FinanceiroPage() {
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
-    if (params.get('tab') === 'management') setActiveTab('management');
+    const tab = params.get('tab');
+    if (tab === 'management' || tab === 'payables') setActiveTab(tab);
   }, []);
 
   function openCreatePlan() { setEditingPlanId(null); setPlanForm(initialPlanForm); setModalError(''); setPlanModal(true); }
@@ -593,6 +666,10 @@ export default function FinanceiroPage() {
       .then(setAilosStatus)
       .catch(() => setAilosStatus(null));
   }, [token]);
+
+  useEffect(() => {
+    if (token && activeTab === 'payables') loadPayables(token);
+  }, [token, activeTab]);
 
   useEffect(() => {
     if (selectedBilling) {
@@ -727,6 +804,122 @@ export default function FinanceiroPage() {
       setFeedback('Cobrança ajustada com sucesso.'); setAdjustModal(false);
       await loadData(token);
     } catch (err) { setModalError(parseError(err)); } finally { setProcessing(false); }
+  }
+
+  async function loadPayables(t: string) {
+    try {
+      setPayables(await apiFetch<Payable[]>('/payables?limit=500', {}, t));
+    } catch (err) { setError(parseError(err)); }
+  }
+
+  async function handleCreatePayable() {
+    if (!token || !canEdit) return;
+    setModalError('');
+    if (!payableForm.description.trim() || !payableForm.amount || !payableForm.due_date) {
+      setModalError('Descrição, valor e vencimento são obrigatórios.');
+      return;
+    }
+    setProcessing(true);
+    try {
+      await apiFetch('/payables/', {
+        method: 'POST',
+        body: JSON.stringify({
+          description: payableForm.description.trim(),
+          supplier: payableForm.supplier.trim() || null,
+          category: payableForm.category.trim() || null,
+          amount: Number(payableForm.amount.replace(',', '.')),
+          due_date: payableForm.due_date,
+          notes: payableForm.notes.trim() || null,
+        }),
+      }, token);
+      setPayableModal(false);
+      setPayableForm({ description: '', supplier: '', category: '', amount: '', due_date: '', notes: '' });
+      setFeedback('Conta cadastrada.');
+      await loadPayables(token);
+    } catch (err) { setModalError(parseError(err)); } finally { setProcessing(false); }
+  }
+
+  async function handlePayPayable() {
+    if (!token || !payingPayable) return;
+    setProcessing(true);
+    try {
+      await apiFetch(`/payables/${payingPayable.id}/pay`, {
+        method: 'POST', body: JSON.stringify(payPayableForm),
+      }, token);
+      setPayingPayable(null);
+      setFeedback('Conta marcada como paga.');
+      await loadPayables(token);
+    } catch (err) { setError(parseError(err)); } finally { setProcessing(false); }
+  }
+
+  async function handleCancelPayable(p: Payable) {
+    if (!token || !window.confirm(`Cancelar a conta "${p.description}"?`)) return;
+    try {
+      await apiFetch(`/payables/${p.id}/cancel`, { method: 'POST' }, token);
+      await loadPayables(token);
+    } catch (err) { setError(parseError(err)); }
+  }
+
+  async function handleDeletePayable(p: Payable) {
+    if (!token || !window.confirm(`Excluir a conta "${p.description}"?`)) return;
+    try {
+      await apiFetch(`/payables/${p.id}`, { method: 'DELETE' }, token);
+      await loadPayables(token);
+    } catch (err) { setError(parseError(err)); }
+  }
+
+  async function handleBatchReceive() {
+    if (!token || selectedBillingIds.length === 0) return;
+    setProcessing(true);
+    try {
+      const r = await apiFetch<{ processados: number[]; ignorados: number[] }>('/billings/lote/situacao', {
+        method: 'POST',
+        body: JSON.stringify({ billing_ids: selectedBillingIds, action: 'receber', ...batchReceiveForm }),
+      }, token);
+      setBatchReceiveModal(false);
+      setSelectedBillingIds([]);
+      setFeedback(`${r.processados.length} cobrança(s) recebida(s)${r.ignorados.length ? ` · ${r.ignorados.length} ignorada(s) (não estavam em aberto)` : ''}.`);
+      await loadData(token);
+    } catch (err) { setError(parseError(err)); } finally { setProcessing(false); }
+  }
+
+  async function handleBatchCancel() {
+    if (!token || selectedBillingIds.length === 0) return;
+    const reason = window.prompt(`Justificativa para cancelar ${selectedBillingIds.length} cobrança(s):`, '');
+    if (!reason) return;
+    setProcessing(true);
+    try {
+      const r = await apiFetch<{ processados: number[]; ignorados: number[] }>('/billings/lote/situacao', {
+        method: 'POST',
+        body: JSON.stringify({ billing_ids: selectedBillingIds, action: 'cancelar', reason }),
+      }, token);
+      setSelectedBillingIds([]);
+      setFeedback(`${r.processados.length} cobrança(s) cancelada(s)${r.ignorados.length ? ` · ${r.ignorados.length} ignorada(s)` : ''}.`);
+      await loadData(token);
+    } catch (err) { setError(parseError(err)); } finally { setProcessing(false); }
+  }
+
+  async function handleBatchMaint() {
+    if (!token || selectedBillingIds.length === 0) return;
+    if (!batchMaintForm.justification.trim()) { setModalError('Justificativa é obrigatória.'); return; }
+    if (!batchMaintForm.due_date && !batchMaintForm.amount) { setModalError('Informe novo vencimento e/ou valor.'); return; }
+    setProcessing(true);
+    try {
+      const r = await apiFetch<{ processados: number[]; ignorados: number[] }>('/billings/lote/manutencao', {
+        method: 'POST',
+        body: JSON.stringify({
+          billing_ids: selectedBillingIds,
+          due_date: batchMaintForm.due_date || null,
+          amount: batchMaintForm.amount ? Number(batchMaintForm.amount.replace(',', '.')) : null,
+          justification: batchMaintForm.justification.trim(),
+        }),
+      }, token);
+      setBatchMaintModal(false);
+      setBatchMaintForm({ due_date: '', amount: '', justification: '' });
+      setSelectedBillingIds([]);
+      setFeedback(`${r.processados.length} título(s) atualizado(s)${r.ignorados.length ? ` · ${r.ignorados.length} ignorado(s)` : ''}.`);
+      await loadData(token);
+    } catch (err) { setError(parseError(err)); } finally { setProcessing(false); }
   }
 
   async function refreshAilosStatus() {
@@ -931,7 +1124,7 @@ export default function FinanceiroPage() {
 
       {/* ── 2. Tab navigation ── */}
       <div className="mb-6 flex gap-1 rounded-2xl border border-slate-200 bg-slate-50 p-1 dark:border-slate-800 dark:bg-slate-900/60">
-        {(['overview', 'management'] as const).map(tab => (
+        {(['overview', 'management', 'payables'] as const).map(tab => (
           <button
             key={tab}
             type="button"
@@ -943,7 +1136,7 @@ export default function FinanceiroPage() {
                 : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200',
             ].join(' ')}
           >
-            {tab === 'overview' ? 'Visão Geral' : 'Planos e Contratos'}
+            {tab === 'overview' ? 'Visão Geral' : tab === 'management' ? 'Planos e Contratos' : 'Contas a Pagar'}
           </button>
         ))}
       </div>
@@ -1068,6 +1261,11 @@ export default function FinanceiroPage() {
               onSelect={b => setSelectedBilling(b)}
               selectedId={selectedBilling?.id}
               onNewBilling={canEdit ? () => { setModalError(''); setNewBillingModal(true); } : undefined}
+              batchIds={selectedBillingIds}
+              onBatchIdsChange={canEdit ? setSelectedBillingIds : undefined}
+              onBatchReceive={() => setBatchReceiveModal(true)}
+              onBatchCancel={handleBatchCancel}
+              onBatchMaint={() => { setModalError(''); setBatchMaintModal(true); }}
             />
           </section>
         </>
@@ -1196,6 +1394,92 @@ export default function FinanceiroPage() {
                 onPdf={(c) => { if (!token) return; downloadProtectedFile(`/contracts/${c.id}/pdf`, token, `contrato-${c.id}.pdf`).catch(e => setError(parseError(e))); }}
               />
             )}
+          </Card>
+        </section>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════
+          TAB: Contas a Pagar
+      ══════════════════════════════════════════════════════════════ */}
+      {activeTab === 'payables' && (
+        <section className="space-y-6">
+          <Card>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <SectionHeader eyebrow="Contas a Pagar" title="Despesas da empresa" />
+              <div className="flex gap-2">
+                {canEdit && (
+                  <Button onClick={() => { setModalError(''); setPayableModal(true); }} className="text-xs px-3 py-1.5">
+                    Cadastrar conta
+                  </Button>
+                )}
+                <select className={fieldClass} style={{ width: 160 }} value={payableStatusFilter} onChange={e => setPayableStatusFilter(e.target.value)}>
+                  <option value="">Todas</option>
+                  <option value="pendente">Pendentes</option>
+                  <option value="paga">Pagas</option>
+                  <option value="cancelada">Canceladas</option>
+                </select>
+              </div>
+            </div>
+
+            {(() => {
+              const list = payableStatusFilter ? payables.filter(p => p.status === payableStatusFilter) : payables;
+              const pendentes = payables.filter(p => p.status === 'pendente');
+              const totalPendente = pendentes.reduce((s, p) => s + p.amount, 0);
+              const vencidas = pendentes.filter(p => p.overdue_days > 0);
+              return (
+                <>
+                  <div className="mt-3 flex flex-wrap gap-4 text-sm text-slate-500 dark:text-slate-400">
+                    <span>A pagar: <strong className="font-mono text-slate-900 dark:text-white">{formatCurrency(totalPendente)}</strong> ({pendentes.length} conta(s))</span>
+                    {vencidas.length > 0 && (
+                      <span className="text-rose-600 dark:text-rose-400">
+                        {vencidas.length} vencida(s): <strong className="font-mono">{formatCurrency(vencidas.reduce((s, p) => s + p.amount, 0))}</strong>
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-4">
+                    {list.length === 0 ? (
+                      <EmptyState icon={FileText} title="Nenhuma conta" description="Cadastre as despesas da empresa (fornecedores, aluguel, chips…)." />
+                    ) : (
+                      <Table>
+                        <TableHead>
+                          <Th>Descrição</Th>
+                          <Th>Fornecedor</Th>
+                          <Th>Categoria</Th>
+                          <Th>Vencimento</Th>
+                          <Th>Valor</Th>
+                          <Th>Status</Th>
+                          <Th className="w-52" />
+                        </TableHead>
+                        <TableBody>
+                          {list.map(p => (
+                            <Tr key={p.id}>
+                              <Td><p className="font-medium">{p.description}</p></Td>
+                              <Td className="text-sm">{p.supplier ?? '—'}</Td>
+                              <Td className="text-xs capitalize">{p.category ?? '—'}</Td>
+                              <Td>
+                                <p className="text-sm">{formatDate(p.due_date)}</p>
+                                {p.overdue_days > 0 && <p className="text-xs font-medium text-rose-600 dark:text-rose-400">{p.overdue_days}d atraso</p>}
+                              </Td>
+                              <Td className="font-mono font-semibold">{formatCurrency(p.amount)}</Td>
+                              <Td><Badge variant={p.status === 'paga' ? 'success' : p.status === 'cancelada' ? 'default' : p.overdue_days > 0 ? 'danger' : 'warning'}>{p.status === 'paga' ? 'Paga' : p.status === 'cancelada' ? 'Cancelada' : p.overdue_days > 0 ? 'Vencida' : 'Pendente'}</Badge></Td>
+                              <Td>
+                                {canEdit && p.status === 'pendente' && (
+                                  <div className="flex justify-end gap-2">
+                                    <Button onClick={() => { setPayingPayable(p); setPayPayableForm({ payment_date: new Date().toISOString().slice(0, 10), payment_method: 'pix' }); }} className="px-3 py-1.5 text-xs">Pagar</Button>
+                                    <Button variant="secondary" onClick={() => handleCancelPayable(p)} className="px-3 py-1.5 text-xs">Cancelar</Button>
+                                    <Button variant="secondary" onClick={() => handleDeletePayable(p)} className="px-3 py-1.5 text-xs">Excluir</Button>
+                                  </div>
+                                )}
+                              </Td>
+                            </Tr>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    )}
+                  </div>
+                </>
+              );
+            })()}
           </Card>
         </section>
       )}
@@ -1428,6 +1712,76 @@ export default function FinanceiroPage() {
           <div className="flex justify-end gap-3">
             <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200" onClick={() => setNewBillingModal(false)}>Cancelar</button>
             <Button type="button" disabled={!canEdit || processing} onClick={handleCreateAvulsa}>{processing ? 'Criando...' : 'Criar cobrança'}</Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal open={payableModal} onClose={() => { setPayableModal(false); setModalError(''); }} title="Cadastrar conta a pagar" description="Despesas da empresa: fornecedores, aluguel, chips, impostos…" size="lg">
+        <div className="space-y-5">
+          {modalError && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>}
+          <div className="grid gap-4 md:grid-cols-2">
+            <input className={`${fieldClass} md:col-span-2`} placeholder="Descrição (ex.: Aluguel do galpão)" value={payableForm.description} onChange={e => setPayableForm(p => ({ ...p, description: e.target.value }))} />
+            <input className={fieldClass} placeholder="Fornecedor (opcional)" value={payableForm.supplier} onChange={e => setPayableForm(p => ({ ...p, supplier: e.target.value }))} />
+            <input className={fieldClass} placeholder="Categoria (ex.: aluguel, chips…)" value={payableForm.category} onChange={e => setPayableForm(p => ({ ...p, category: e.target.value }))} />
+            <input className={fieldClass} placeholder="Valor (ex.: 1500,00)" value={payableForm.amount} onChange={e => setPayableForm(p => ({ ...p, amount: e.target.value }))} />
+            <input type="date" className={fieldClass} value={payableForm.due_date} onChange={e => setPayableForm(p => ({ ...p, due_date: e.target.value }))} />
+            <textarea className={`${areaClass} md:col-span-2`} placeholder="Observações (opcional)" value={payableForm.notes} onChange={e => setPayableForm(p => ({ ...p, notes: e.target.value }))} />
+          </div>
+          <div className="flex justify-end gap-3">
+            <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200" onClick={() => setPayableModal(false)}>Cancelar</button>
+            <Button type="button" disabled={!canEdit || processing} onClick={handleCreatePayable}>{processing ? 'Salvando...' : 'Cadastrar'}</Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal open={!!payingPayable} onClose={() => setPayingPayable(null)} title={payingPayable ? `Pagar — ${payingPayable.description}` : 'Pagar conta'} size="md">
+        <div className="space-y-5">
+          <div className="grid gap-4 md:grid-cols-2">
+            <input type="date" className={fieldClass} value={payPayableForm.payment_date} onChange={e => setPayPayableForm(p => ({ ...p, payment_date: e.target.value }))} />
+            <select className={fieldClass} value={payPayableForm.payment_method} onChange={e => setPayPayableForm(p => ({ ...p, payment_method: e.target.value }))}>
+              <option value="pix">Pix</option>
+              <option value="boleto">Boleto</option>
+              <option value="transferencia">Transferência</option>
+              <option value="cartao">Cartão</option>
+              <option value="dinheiro">Dinheiro</option>
+            </select>
+          </div>
+          <div className="flex justify-end gap-3">
+            <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200" onClick={() => setPayingPayable(null)}>Cancelar</button>
+            <Button type="button" disabled={processing} onClick={handlePayPayable}>{processing ? 'Salvando...' : 'Confirmar pagamento'}</Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal open={batchReceiveModal} onClose={() => setBatchReceiveModal(false)} title={`Receber ${selectedBillingIds.length} cobrança(s) em lote`} description="Todas as selecionadas serão marcadas como pagas com a mesma data e forma." size="md">
+        <div className="space-y-5">
+          <div className="grid gap-4 md:grid-cols-2">
+            <input type="date" className={fieldClass} value={batchReceiveForm.payment_date} onChange={e => setBatchReceiveForm(p => ({ ...p, payment_date: e.target.value }))} />
+            <select className={fieldClass} value={batchReceiveForm.payment_method} onChange={e => setBatchReceiveForm(p => ({ ...p, payment_method: e.target.value }))}>
+              <option value="pix">Pix</option>
+              <option value="boleto">Boleto</option>
+              <option value="dinheiro">Dinheiro</option>
+              <option value="cartao">Cartão</option>
+            </select>
+          </div>
+          <div className="flex justify-end gap-3">
+            <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200" onClick={() => setBatchReceiveModal(false)}>Cancelar</button>
+            <Button type="button" disabled={!canEdit || processing} onClick={handleBatchReceive}>{processing ? 'Processando...' : 'Receber todas'}</Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal open={batchMaintModal} onClose={() => { setBatchMaintModal(false); setModalError(''); }} title={`Manutenção de ${selectedBillingIds.length} título(s) em lote`} description="Aplica novo vencimento e/ou valor a todas as cobranças selecionadas, com justificativa no histórico de cada uma." size="lg">
+        <div className="space-y-5">
+          {modalError && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>}
+          <div className="grid gap-4 md:grid-cols-2">
+            <input type="date" className={fieldClass} value={batchMaintForm.due_date} onChange={e => setBatchMaintForm(p => ({ ...p, due_date: e.target.value }))} />
+            <input className={fieldClass} placeholder="Novo valor (opcional)" value={batchMaintForm.amount} onChange={e => setBatchMaintForm(p => ({ ...p, amount: e.target.value }))} />
+            <textarea className={`${areaClass} md:col-span-2`} placeholder="Justificativa (obrigatória)" value={batchMaintForm.justification} onChange={e => setBatchMaintForm(p => ({ ...p, justification: e.target.value }))} />
+          </div>
+          <div className="flex justify-end gap-3">
+            <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200" onClick={() => setBatchMaintModal(false)}>Cancelar</button>
+            <Button type="button" disabled={!canEdit || processing} onClick={handleBatchMaint}>{processing ? 'Aplicando...' : 'Aplicar em lote'}</Button>
           </div>
         </div>
       </Modal>

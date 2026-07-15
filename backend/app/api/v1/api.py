@@ -20,6 +20,7 @@ from app.api.v1.endpoints import (
     integration_multiportal,
     integrations,
     documents,
+    payables,
     nfse,
     plans,
     service_products,
@@ -54,6 +55,7 @@ api_router.include_router(exports.router, prefix='/exports', tags=['exports'])
 api_router.include_router(reports.router, prefix='/reports', tags=['reports'])
 api_router.include_router(delinquency.router, prefix='/delinquency', tags=['delinquency'])
 api_router.include_router(billing_closure.router, prefix='/billing-closure', tags=['billing-closure'])
+api_router.include_router(payables.router, prefix='/payables', tags=['contas-a-pagar'])
 api_router.include_router(boletos.router, prefix='/boletos', tags=['boletos'])
 api_router.include_router(boletos.public_router, prefix='/public', tags=['public'])
 api_router.include_router(ailos_auth.router, prefix='/ailos', tags=['ailos'])

@@ -25,6 +25,8 @@ from app.models.tracker import Tracker
 from app.models.vehicle import Vehicle
 from app.models.user import User
 from app.schemas.billing import (
+    BillingBatchMaintIn,
+    BillingBatchStatusIn,
     BillingCancel,
     BillingChangeLogOut,
     BillingCreate,
@@ -278,6 +280,78 @@ def create_item(payload: BillingCreate, db: Session = Depends(get_db), _: object
         mark_charge_item_if_settled(db, obj.item_id)
     row = base_query(db).filter(Billing.id == obj.id).first()
     return serialize_billing(row)
+
+
+@router.post('/lote/situacao')
+def batch_status(payload: BillingBatchStatusIn, db: Session = Depends(get_db), current_user: User = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
+    """Alterar situação de boletos EM LOTE: 'receber' (marca como pagas) ou
+    'cancelar'. Cobranças que não estão em aberto são ignoradas e reportadas."""
+    if payload.action not in ('receber', 'cancelar'):
+        raise HTTPException(status_code=400, detail="action deve ser 'receber' ou 'cancelar'")
+    if payload.action == 'receber' and (not payload.payment_date or not payload.payment_method):
+        raise HTTPException(status_code=400, detail='payment_date e payment_method são obrigatórios para receber')
+    if payload.action == 'cancelar' and not (payload.reason or '').strip():
+        raise HTTPException(status_code=400, detail='reason é obrigatório para cancelar')
+
+    abertas = (BillingStatus.PENDING, BillingStatus.OVERDUE)
+    processados: list[int] = []
+    ignorados: list[int] = []
+    for bid in dict.fromkeys(payload.billing_ids):
+        b = db.get(Billing, bid)
+        if not b or b.is_deleted or b.status not in abertas:
+            ignorados.append(bid)
+            continue
+        if payload.action == 'receber':
+            b.status = BillingStatus.PAID
+            b.paid_amount = b.paid_amount or b.amount
+            b.payment_date = payload.payment_date
+            b.payment_method = payload.payment_method
+            b.receipt_number = b.receipt_number or generate_receipt_number(b.id)
+            mark_charge_item_if_settled(db, b.item_id)
+        else:
+            b.status = BillingStatus.CANCELED
+            marker = f'Cancelada em lote: {payload.reason}'
+            b.notes = f'{b.notes} | {marker}' if b.notes else marker
+        processados.append(bid)
+    db.commit()
+    return {'processados': processados, 'ignorados': ignorados}
+
+
+@router.post('/lote/manutencao')
+def batch_maintenance(payload: BillingBatchMaintIn, db: Session = Depends(get_db), current_user: User = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
+    """Manutenção de título EM LOTE: aplica novo vencimento e/ou valor às
+    cobranças em aberto, com justificativa gravada no histórico de cada uma."""
+    if payload.due_date is None and payload.amount is None:
+        raise HTTPException(status_code=400, detail='Informe due_date e/ou amount')
+    if not payload.justification.strip():
+        raise HTTPException(status_code=400, detail='Justificativa é obrigatória')
+
+    abertas = (BillingStatus.PENDING, BillingStatus.OVERDUE)
+    processados: list[int] = []
+    ignorados: list[int] = []
+    for bid in dict.fromkeys(payload.billing_ids):
+        b = db.get(Billing, bid)
+        if not b or b.is_deleted or b.status not in abertas:
+            ignorados.append(bid)
+            continue
+        for field_name, new_value in (('due_date', payload.due_date), ('amount', payload.amount)):
+            if new_value is None:
+                continue
+            previous = getattr(b, field_name)
+            if previous != new_value:
+                db.add(BillingChangeLog(
+                    billing_id=b.id,
+                    changed_by_user_id=current_user.id,
+                    field_name=field_name,
+                    previous_value=str(previous),
+                    new_value=str(new_value),
+                    justification=f'[lote] {payload.justification}',
+                ))
+                setattr(b, field_name, new_value)
+        processados.append(bid)
+    db.commit()
+    refresh_overdue_statuses(db)
+    return {'processados': processados, 'ignorados': ignorados}
 
 
 @router.post('/unificar', response_model=BillingOut)
