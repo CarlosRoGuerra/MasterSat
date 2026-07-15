@@ -140,6 +140,9 @@ def get_boleto(
         "emissao": dados.data_emissao.isoformat(),
         "valor": float(dados.valor),
         "banco": {"codigo": dados.banco_codigo, "nome": dados.banco_nome},
+        # Sem registro na Ailos o título não é pagável no banco — o frontend usa
+        # esta flag para bloquear o envio ao cliente
+        "boleto_registrado": bool(ailos_boleto and ailos_boleto.linha_digitavel),
         # Link do PDF sem login (token HMAC) — para enviar ao cliente por Whats/e-mail
         "public_pdf_url": public_boleto_url(b.id),
     }

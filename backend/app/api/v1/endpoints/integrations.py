@@ -29,7 +29,7 @@ from app.models.enums import BillingStatus
 from app.services.ailos_boletos import aplicar_dados_oficiais_ailos
 from app.services.boleto_ailos import gerar_dados_boleto
 from app.services.boleto_pdf import gerar_boleto_pdf
-from app.services.financial import refresh_overdue_statuses
+from app.services.financial import refresh_overdue_statuses, valor_com_juros
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -89,6 +89,19 @@ def _cobranca_payload(billing: Billing, client: Client, ailos_boleto: AilosBolet
         # Link SEM autenticação (token HMAC) — pode ir direto na mensagem ao cliente
         'boleto_link_cliente': public_boleto_url(billing.id),
     }
+    # Valor atualizado com multa/juros para cobranças vencidas (fonte: backend)
+    payload['valor_com_juros'] = (
+        valor_com_juros(billing.amount, billing.due_date)
+        if getattr(billing.status, 'value', billing.status) == 'vencida' else None
+    )
+
+    # SÓ entrega os dados de pagamento de boleto REGISTRADO na Ailos: título sem
+    # registro é recusado pelo banco na hora de pagar — enviar linha digitável
+    # local geraria cobrança impagável na mão do cliente final.
+    if not payload['boleto_registrado']:
+        payload['boleto_link_cliente'] = None
+        return payload
+
     # Geração do boleto não pode derrubar a lista inteira: se uma cobrança falhar
     # (ex.: dado inconsistente), devolvemos a cobrança com os campos de boleto nulos.
     try:

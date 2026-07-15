@@ -216,6 +216,49 @@ class TestSimulateClosure:
 # execute_closure
 # ---------------------------------------------------------------------------
 
+class TestBoletoUnico:
+    def test_consolida_mensalidades_do_cliente_unico(self, db, cliente, plan):
+        cliente.boleto_format = 'unico'
+        _make_active_contract(db, cliente, plan)
+        _make_active_contract(db, cliente, plan)
+        db.commit()
+
+        result = execute_closure(db, REF_MONTH)
+        assert result['consolidated_unico'] == 1
+        assert result['generated'] == 1  # 2 mensalidades viraram 1 boleto único
+
+        unico = db.get(Billing, result['billing_ids'][0])
+        assert float(unico.amount) == pytest.approx(199.80)  # 2 × 99.90
+        assert 'boleto único' in (unico.title or '').lower()
+
+        # individuais canceladas com referência
+        canceladas = db.query(Billing).filter(
+            Billing.status == BillingStatus.CANCELED, Billing.client_id == cliente.id
+        ).all()
+        assert len(canceladas) == 2
+        assert all(f'#{unico.id}' in (b.notes or '') for b in canceladas)
+
+    def test_nao_duplica_no_segundo_fechamento(self, db, cliente, plan):
+        cliente.boleto_format = 'unico'
+        _make_active_contract(db, cliente, plan)
+        _make_active_contract(db, cliente, plan)
+        db.commit()
+
+        execute_closure(db, REF_MONTH)
+        segunda = execute_closure(db, REF_MONTH)
+        assert segunda['generated'] == 0  # idempotente: canceladas ainda marcam o período
+
+    def test_cliente_sem_opcao_explicita_mantem_individuais(self, db, cliente, plan):
+        # boleto_format vazio (cliente nunca editado) → comportamento antigo
+        _make_active_contract(db, cliente, plan)
+        _make_active_contract(db, cliente, plan)
+        db.commit()
+
+        result = execute_closure(db, REF_MONTH)
+        assert result['consolidated_unico'] == 0
+        assert result['generated'] == 2
+
+
 class TestExecuteClosure:
     def test_generates_billings_for_contracts(self, db, cliente, plan):
         _make_active_contract(db, cliente, plan)

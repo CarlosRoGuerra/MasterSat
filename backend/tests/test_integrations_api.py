@@ -7,6 +7,7 @@ from decimal import Decimal
 import pytest
 
 from app.core.config import settings
+from app.models.ailos_boleto import AilosBoleto
 from app.models.billing import Billing
 from app.models.enums import BillingStatus
 
@@ -50,6 +51,23 @@ def cobranca2(db, cliente) -> Billing:
     return b
 
 
+@pytest.fixture()
+def boleto_registrado(db, cobranca) -> AilosBoleto:
+    """Boleto oficial Ailos vinculado à cobrança (título registrado/pagável)."""
+    ab = AilosBoleto(
+        billing_id=cobranca.id,
+        numero_convenio='102004',
+        numero_documento=str(cobranca.id),
+        linha_digitavel='08591.02006 40045.470206 00000.003012 5 14890000009990',
+        codigo_barras='08595148900000099901020040045470200000000301',
+        pix_emv='000201teste',
+    )
+    db.add(ab)
+    db.commit()
+    db.refresh(ab)
+    return ab
+
+
 # ── Autenticação ──────────────────────────────────────────────────────────────
 
 def test_sem_chave_configurada_retorna_503(http_unauth, monkeypatch):
@@ -70,7 +88,7 @@ def test_chave_ausente_retorna_401(http_unauth, api_key):
 
 # ── Listagem ────────────────────────────────────────────────────────────────
 
-def test_lista_cobrancas_abertas(http_unauth, api_key, cobranca, cobranca2):
+def test_lista_cobrancas_abertas(http_unauth, api_key, cobranca, cobranca2, boleto_registrado):
     resp = http_unauth.get('/api/v1/integrations/cobrancas', headers={'X-API-Key': api_key})
     assert resp.status_code == 200
     body = resp.json()
@@ -78,14 +96,30 @@ def test_lista_cobrancas_abertas(http_unauth, api_key, cobranca, cobranca2):
     ids = {c['id'] for c in body['cobrancas']}
     assert {cobranca.id, cobranca2.id} == ids
 
+    # REGISTRADA na Ailos → entrega os dados de pagamento
     item = next(c for c in body['cobrancas'] if c['id'] == cobranca.id)
-    # campos que o CobraZap precisa para enviar a cobrança
+    assert item['boleto_registrado'] is True
     assert item['linha_digitavel']
     assert item['codigo_barras']
+    assert item['pix_copia_cola'] == '000201teste'
     assert item['cliente']['nome'] == 'João Silva'
     assert item['cliente']['telefone'] == '11999990000'
     assert item['forma_envio'] == 'email'  # cliente sem delivery_method → default
     assert item['boleto_pdf_url'].endswith(f'/integrations/cobrancas/{cobranca.id}/pdf')
+
+    # SEM registro → não é pagável no banco → campos de pagamento nulos
+    sem_registro = next(c for c in body['cobrancas'] if c['id'] == cobranca2.id)
+    assert sem_registro['boleto_registrado'] is False
+    assert sem_registro['linha_digitavel'] is None
+    assert sem_registro['codigo_barras'] is None
+    assert sem_registro['boleto_link_cliente'] is None
+
+
+def test_vencida_traz_valor_com_juros(http_unauth, api_key, cobranca2):
+    resp = http_unauth.get('/api/v1/integrations/cobrancas', headers={'X-API-Key': api_key})
+    item = next(c for c in resp.json()['cobrancas'] if c['id'] == cobranca2.id)
+    # 5 dias de atraso → multa 2% + 1 mês de juros 1% = 150 × 1.03
+    assert item['valor_com_juros'] == 154.50
 
 
 def test_cobranca_paga_nao_aparece(http_unauth, api_key, cobranca, db):
@@ -164,7 +198,7 @@ def test_boleto_link_publico(http_unauth, cobranca):
     assert errado.status_code == 404
 
 
-def test_listagem_inclui_link_publico(http_unauth, api_key, cobranca):
+def test_listagem_inclui_link_publico(http_unauth, api_key, cobranca, boleto_registrado):
     resp = http_unauth.get('/api/v1/integrations/cobrancas', headers={'X-API-Key': api_key})
     item = resp.json()['cobrancas'][0]
     assert '/public/boleto/' in item['boleto_link_cliente']

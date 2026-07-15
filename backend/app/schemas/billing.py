@@ -78,6 +78,9 @@ class BillingOut(BillingBase):
     plan_name: str | None = None
     contract_status: str | None = None
     overdue_days: int = 0
+    # Valor atualizado (multa 2% + juros 1% a.m.) — calculado no backend,
+    # fonte única para tela/mensagens/integrações. None se não vencida.
+    valor_com_juros: float | None = None
 
     model_config = {'from_attributes': True}
 

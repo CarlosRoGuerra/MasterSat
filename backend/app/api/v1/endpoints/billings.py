@@ -43,6 +43,7 @@ from app.services.financial import (
     mark_charge_item_if_settled,
     period_bucket,
     refresh_overdue_statuses,
+    valor_com_juros,
 )
 
 router = APIRouter()
@@ -98,6 +99,10 @@ def serialize_billing(row) -> BillingOut:
         plan_name=plan_name,
         contract_status=contract_status,
         overdue_days=overdue_days,
+        valor_com_juros=(
+            valor_com_juros(billing.amount, billing.due_date)
+            if billing.status == BillingStatus.OVERDUE else None
+        ),
     )
 
 

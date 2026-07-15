@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from calendar import monthrange
+from collections import defaultdict
 from datetime import date, datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from io import BytesIO
@@ -24,6 +25,7 @@ from app.services.financial import (
     decimal_to_float,
     generate_item_billings,
     normalize_due_date,
+    plan_title,
     period_label_for_date,
     refresh_overdue_statuses,
 )
@@ -418,9 +420,9 @@ def execute_closure(
                 f'{c["title"]}: R$ {c["amount"]:.2f}' for c in first_charges
             )
             if item['is_prorata']:
-                plan_label = f'Plano {plan.name} pró-rata {item["prorated_days"]} dias'
+                plan_label = f'{plan_title(plan)} pró-rata {item["prorated_days"]} dias'
             else:
-                plan_label = f'Plano {plan.name}'
+                plan_label = plan_title(plan)
 
             title = f'1ª cobrança — {plan_label}'
             notes = (
@@ -459,14 +461,14 @@ def execute_closure(
         else:
             # Cobrança normal (mensalidade ou pró-rata sem serviços embutidos)
             if item['is_prorata']:
-                title = f'Plano {plan.name} — pró-rata {item["prorated_days"]} dias'
+                title = f'{plan_title(plan)} — pró-rata {item["prorated_days"]} dias'
                 notes = (
                     f'Pró-rata: {item["prorated_days"]} de {item["days_in_month"]} dias'
                     f' — {item["period_label"]}'
                 )
                 billing_type = 'prorata'
             else:
-                title = f'Plano {plan.name}'
+                title = plan_title(plan)
                 notes = f'Fechamento — {item["period_label"]}'
                 billing_type = 'recorrente'
 
@@ -487,6 +489,57 @@ def execute_closure(
             db.add(billing)
             db.flush()
             created_ids.append(billing.id)
+
+    # ── Boleto único por cliente (boleto_format='unico' no cadastro) ────────
+    # Junta as MENSALIDADES normais recém-criadas do mesmo cliente em UMA
+    # cobrança só (1 boleto = 1 tarifa bancária/mês, como o campo do cadastro
+    # promete). Pró-rata e 1ª cobrança ficam de fora (semântica própria).
+    # As individuais são canceladas com referência cruzada — e continuam
+    # contando para a idempotência (_has_existing_billing ignora o status).
+    consolidated_ids: list[int] = []
+    _por_cliente: dict[int, list[Billing]] = defaultdict(list)
+    for bid in created_ids:
+        b = db.get(Billing, bid)
+        if b and b.billing_type == 'recorrente':
+            _por_cliente[b.client_id].append(b)
+
+    for cid, grupo in _por_cliente.items():
+        if len(grupo) < 2:
+            continue
+        cliente = db.get(Client, cid)
+        # Só consolida com a opção EXPLÍCITA no cadastro (campo vazio = individual)
+        if not cliente or cliente.boleto_format != 'unico':
+            continue
+
+        total = sum(Decimal(str(b.amount)) for b in grupo)
+        venc = max(b.due_date for b in grupo)
+        period = grupo[0].period_label
+
+        def _placa(b: Billing) -> str:
+            v = db.get(Vehicle, b.vehicle_id) if b.vehicle_id else None
+            return v.plate if v and not v.is_deleted else (b.title or f'#{b.id}')
+
+        detalhes = ' | '.join(f'{_placa(b)}: R$ {float(b.amount):.2f}' for b in grupo)
+        unico = Billing(
+            client_id=cid,
+            billing_type='recorrente',
+            title=f'Mensalidades — {len(grupo)} veículos (boleto único)',
+            amount=total,
+            due_date=venc,
+            status=BillingStatus.PENDING if venc >= date.today() else BillingStatus.OVERDUE,
+            period_label=period,
+            payment_method=grupo[0].payment_method,
+            notes=f'Boleto único ({period}): {detalhes}',
+        )
+        db.add(unico)
+        db.flush()
+        for b in grupo:
+            b.status = BillingStatus.CANCELED
+            marker = f'Consolidada no boleto único #{unico.id}.'
+            b.notes = f'{b.notes} | {marker}' if b.notes else marker
+            created_ids.remove(b.id)
+        created_ids.append(unico.id)
+        consolidated_ids.append(unico.id)
 
     # Processa eventos de desinstalação pendentes
     uninstall_billing_ids = []
@@ -563,6 +616,7 @@ def execute_closure(
         'reference_month': simulation['reference_month'],
         'generated': len(created_ids),
         'billing_ids': created_ids,
+        'consolidated_unico': len(consolidated_ids),
         'total_amount': total_mensalidades,
         'uninstall_fees_generated': len(uninstall_billing_ids),
         'uninstall_fees_skipped': skipped_events,

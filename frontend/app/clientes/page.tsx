@@ -91,6 +91,7 @@ type BillingItem = {
   billing_type: string;
   due_date: string;
   amount: number;
+  valor_com_juros?: number | null;
   paid_amount?: number | null;
   status: string;
   period_label?: string | null;
@@ -268,6 +269,9 @@ function cardKeyHandler(event: React.KeyboardEvent<HTMLElement>, callback: () =>
 export default function ClientesPage() {
   const { token, user, loading: guardLoading, error: guardError } = useAuthGuard(['admin', 'operacional', 'financeiro'], '/login/admin');
   const canEdit = !!user && user.role !== 'financeiro';
+  // Ações financeiras (boletos, interveniente, NFS-e, ficha) usam endpoints
+  // restritos a admin/financeiro — esconder do operacional evita 403 no clique
+  const canFinance = !!user && (user.role === 'admin' || user.role === 'financeiro');
 
   const [clients, setClients] = useState<Client[]>([]);
   const [vehicleSummaries, setVehicleSummaries] = useState<VehicleSummary[]>([]);
@@ -482,13 +486,10 @@ export default function ClientesPage() {
     }
   }
 
-  // Multa de 2% + juros de 1% ao mês ou fração sobre o valor em atraso
-  // (cláusula 4.3 do contrato). Retorna null se a cobrança não está vencida.
+  // Valor com multa/juros calculado pelo BACKEND (fonte única — cláusula 4.3
+  // do contrato). Vem no campo valor_com_juros do /billings.
   function valorComJuros(b: BillingItem): number | null {
-    if (b.status !== 'vencida') return null;
-    const dias = Math.floor((Date.now() - new Date(b.due_date + 'T12:00:00').getTime()) / 86_400_000);
-    if (dias <= 0) return null;
-    return b.amount * 1.02 + b.amount * 0.01 * Math.ceil(dias / 30);
+    return b.valor_com_juros ?? null;
   }
 
   async function reloadClientBillings() {
@@ -594,11 +595,16 @@ export default function ClientesPage() {
     return linhas.join('\n');
   }
 
+  const _AVISO_NAO_REGISTRADO =
+    'Este boleto ainda NÃO foi registrado na Ailos e não pode ser pago no banco.\n\n' +
+    'Gere o boleto (Ailos) no Financeiro antes de enviar ao cliente.';
+
   async function sendBoletoEmail(b: BillingItem) {
     if (!token) return;
     if (!billingsModalClient?.email) { alert('Cliente sem e-mail cadastrado.'); return; }
     try {
-      const info = await apiFetch<{ linha_digitavel: string; public_pdf_url?: string }>(`/boletos/${b.id}`, {}, token);
+      const info = await apiFetch<{ linha_digitavel: string; public_pdf_url?: string; boleto_registrado?: boolean }>(`/boletos/${b.id}`, {}, token);
+      if (info.boleto_registrado === false) { alert(_AVISO_NAO_REGISTRADO); return; }
       const venc = new Date(b.due_date + 'T12:00:00').toLocaleDateString('pt-BR');
       const assunto = encodeURIComponent(`Boleto MasterSat — vencimento ${venc}`);
       const corpo = encodeURIComponent(_mensagemBoleto(info, b));
@@ -613,7 +619,8 @@ export default function ClientesPage() {
     const fone = (billingsModalClient?.phone || '').replace(/\D/g, '');
     if (!fone) { alert('Cliente sem telefone cadastrado.'); return; }
     try {
-      const info = await apiFetch<{ linha_digitavel: string; public_pdf_url?: string }>(`/boletos/${b.id}`, {}, token);
+      const info = await apiFetch<{ linha_digitavel: string; public_pdf_url?: string; boleto_registrado?: boolean }>(`/boletos/${b.id}`, {}, token);
+      if (info.boleto_registrado === false) { alert(_AVISO_NAO_REGISTRADO); return; }
       const msg = encodeURIComponent(_mensagemBoleto(info, b));
       window.open(`https://wa.me/55${fone}?text=${msg}`, '_blank');
     } catch (err) {
@@ -1076,14 +1083,18 @@ export default function ClientesPage() {
                           <div className="flex justify-end gap-1">
                             {/* 1. Roxo — veículos próprios do cliente */}
                             <ActionBtn color="purple" icon={Car} title="Veículos vinculados ao cliente" onClick={() => openVehiclesModal(client)} />
-                            {/* 2. Amarelo — veículos onde é interveniente financeiro */}
-                            <ActionBtn color="yellow" icon={Coins} title="Veículos onde é interveniente financeiro" onClick={() => openIntervenienteModal(client)} />
-                            {/* 3. Verde — central financeira / boletos */}
-                            <ActionBtn color="green" icon={DollarSign} title="Central financeira / boletos do cliente" onClick={() => openBillingsModal(client)} />
-                            {/* 4. Branco (patinha) — notas fiscais do cliente */}
-                            <ActionBtn color="white" icon={PawPrint} title="Notas fiscais do cliente" onClick={() => openNfseModal(client)} />
-                            {/* 5. Teal — imprimir ficha de adesão / contrato */}
-                            <ActionBtn color="teal" icon={Printer} title="Imprimir ficha de adesão / contrato" onClick={() => printContractSheet(client)} />
+                            {canFinance && (
+                              <>
+                                {/* 2. Amarelo — veículos onde é interveniente financeiro */}
+                                <ActionBtn color="yellow" icon={Coins} title="Veículos onde é interveniente financeiro" onClick={() => openIntervenienteModal(client)} />
+                                {/* 3. Verde — central financeira / boletos */}
+                                <ActionBtn color="green" icon={DollarSign} title="Central financeira / boletos do cliente" onClick={() => openBillingsModal(client)} />
+                                {/* 4. Branco (patinha) — notas fiscais do cliente */}
+                                <ActionBtn color="white" icon={PawPrint} title="Notas fiscais do cliente" onClick={() => openNfseModal(client)} />
+                                {/* 5. Teal — imprimir ficha de adesão / contrato */}
+                                <ActionBtn color="teal" icon={Printer} title="Imprimir ficha de adesão / contrato" onClick={() => printContractSheet(client)} />
+                              </>
+                            )}
                             {canEdit && (
                               <>
                                 {/* 6. Azul — editar */}

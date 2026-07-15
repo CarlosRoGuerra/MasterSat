@@ -48,6 +48,26 @@ def period_label_for_date(reference: date, interval_months: int = 1) -> str:
     return reference.strftime('%m/%Y')
 
 
+def plan_title(plan) -> str:
+    """Título da cobrança a partir do plano, sem duplicar a palavra 'Plano'
+    ("Plano Plano TESTE" quando o nome do plano já começa com 'Plano')."""
+    name = (getattr(plan, 'name', '') or '').strip()
+    return name if name.lower().startswith('plano') else f'Plano {name}'
+
+
+def valor_com_juros(amount, due_date: date, hoje: date | None = None) -> float | None:
+    """Valor atualizado de cobrança em atraso: multa 2% + juros de 1% ao mês
+    ou fração (cláusula 4.3 do contrato). None se não está em atraso.
+    Fonte ÚNICA do cálculo — tela, mensagens e integrações usam este valor."""
+    hoje = hoje or date.today()
+    dias = (hoje - due_date).days
+    if dias <= 0:
+        return None
+    meses = -(-dias // 30)  # ceil
+    valor = float(amount)
+    return round(valor * 1.02 + valor * 0.01 * meses, 2)
+
+
 def refresh_overdue_statuses(db: Session) -> None:
     """Reclassifica pendente↔vencida via UPDATE no banco (sem carregar a tabela)."""
     today = date.today()
@@ -234,7 +254,7 @@ def generate_monthly_billings(db: Session, contract: Contract, cycles: int = 12,
             existing.due_date = due_date
             existing.client_id = contract.client_id
             existing.period_label = period_label
-            existing.title = f'Plano {plan.name}'
+            existing.title = plan_title(plan)
             existing.notes = notes
             existing.vehicle_id = getattr(contract, 'vehicle_id', None)
             existing.tracker_id = getattr(contract, 'tracker_id', None)
@@ -252,7 +272,7 @@ def generate_monthly_billings(db: Session, contract: Contract, cycles: int = 12,
             notes=notes,
             vehicle_id=getattr(contract, 'vehicle_id', None),
             tracker_id=getattr(contract, 'tracker_id', None),
-            title=f'Plano {plan.name}',
+            title=plan_title(plan),
             billing_type='recorrente',
         )
         db.add(billing)
