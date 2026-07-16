@@ -32,7 +32,8 @@ const EXEMPLO: Record<string, string> = {
   LINK_BOLETO: 'https://api.mastersat.com.br/api/v1/public/boleto/3/a1b2c3…',
 };
 
-export function renderTemplate(tpl: string, vars: Record<string, string>) {
+// Páginas Next só podem exportar default/metadata — helper fica interno
+function renderTemplate(tpl: string, vars: Record<string, string>) {
   return tpl.replace(/\{(\w+)\}/g, (_, k: string) => vars[k] ?? `{${k}}`);
 }
 

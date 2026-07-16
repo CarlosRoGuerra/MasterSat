@@ -17,6 +17,7 @@ import { EmptyState, TableSkeleton } from '@/components/ui/empty-state';
 import { Table, TableHead, Th, TableBody, Tr, Td } from '@/components/ui/table';
 import { ExportButton } from '@/components/ui/export-button';
 import { apiFetch, API_URL } from '@/lib/api';
+import { enviarBoletoEmail, enviarBoletoWhats } from '@/lib/boleto-mensagem';
 import { fetchAddressByCep } from '@/lib/cep';
 import { formatCpfCnpj, formatPhone, formatZipCode, onlyDigits } from '@/lib/format';
 import { useAuthGuard } from '@/lib/use-auth-guard';
@@ -333,9 +334,6 @@ export default function ClientesPage() {
   const [intervLoading, setIntervLoading] = useState(false);
   const [printingContract, setPrintingContract] = useState(false);
 
-  // Templates das mensagens de cobrança (carregados das Configurações)
-  const [msgTemplates, setMsgTemplates] = useState<{ msg_boleto: string; msg_boleto_assunto: string } | null>(null);
-
   // Modal "Notas fiscais do cliente" (botão da patinha)
   const [nfseModalOpen, setNfseModalOpen] = useState(false);
   const [nfseModalClient, setNfseModalClient] = useState<Client | null>(null);
@@ -573,67 +571,20 @@ export default function ClientesPage() {
     }
   }
 
-  // Templates das mensagens vêm das Configurações (banco) — sem texto fixo no
-  // código. Fallback: o backend devolve o template padrão se nada foi salvo.
-  async function _getMsgTemplates(): Promise<{ msg_boleto: string; msg_boleto_assunto: string } | null> {
-    if (msgTemplates) return msgTemplates;
-    try {
-      const t = await apiFetch<{ msg_boleto: string; msg_boleto_assunto: string }>('/settings/mensagens', {}, token!);
-      setMsgTemplates(t);
-      return t;
-    } catch {
-      return null;
-    }
-  }
-
-  function _renderTemplate(tpl: string, vars: Record<string, string>) {
-    return tpl.replace(/\{(\w+)\}/g, (_m, k: string) => vars[k] ?? '');
-  }
-
-  function _varsBoleto(info: { linha_digitavel: string; public_pdf_url?: string }, b: BillingItem): Record<string, string> {
-    const venc = new Date(b.due_date + 'T12:00:00').toLocaleDateString('pt-BR');
-    return {
-      NOME: (billingsModalClient?.name || '').toUpperCase(),
-      VALOR: b.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 }),
-      VENCIMENTO: venc,
-      REFERENTE: b.period_label || venc.slice(3),
-      CODIGO_BARRAS: (info.linha_digitavel || '').replace(/\D/g, ''),
-      LINK_BOLETO: info.public_pdf_url || '',
-    };
-  }
-
-  const _AVISO_NAO_REGISTRADO =
-    'Este boleto ainda NÃO foi registrado na Ailos e não pode ser pago no banco.\n\n' +
-    'Gere o boleto (Ailos) no Financeiro antes de enviar ao cliente.';
-
+  // Envio com template das Configurações — lógica compartilhada em lib/boleto-mensagem
   async function sendBoletoEmail(b: BillingItem) {
-    if (!token) return;
-    if (!billingsModalClient?.email) { alert('Cliente sem e-mail cadastrado.'); return; }
+    if (!token || !billingsModalClient) return;
     try {
-      const info = await apiFetch<{ linha_digitavel: string; public_pdf_url?: string; boleto_registrado?: boolean }>(`/boletos/${b.id}`, {}, token);
-      if (info.boleto_registrado === false) { alert(_AVISO_NAO_REGISTRADO); return; }
-      const tpl = await _getMsgTemplates();
-      if (!tpl) { alert('Não foi possível carregar o modelo da mensagem (Configurações).'); return; }
-      const vars = _varsBoleto(info, b);
-      const assunto = encodeURIComponent(_renderTemplate(tpl.msg_boleto_assunto, vars));
-      const corpo = encodeURIComponent(_renderTemplate(tpl.msg_boleto, vars));
-      window.location.href = `mailto:${billingsModalClient.email}?subject=${assunto}&body=${corpo}`;
+      await enviarBoletoEmail(b, billingsModalClient, token);
     } catch (err) {
       alert(parseError(err));
     }
   }
 
   async function sendBoletoWhats(b: BillingItem) {
-    if (!token) return;
-    const fone = (billingsModalClient?.phone || '').replace(/\D/g, '');
-    if (!fone) { alert('Cliente sem telefone cadastrado.'); return; }
+    if (!token || !billingsModalClient) return;
     try {
-      const info = await apiFetch<{ linha_digitavel: string; public_pdf_url?: string; boleto_registrado?: boolean }>(`/boletos/${b.id}`, {}, token);
-      if (info.boleto_registrado === false) { alert(_AVISO_NAO_REGISTRADO); return; }
-      const tpl = await _getMsgTemplates();
-      if (!tpl) { alert('Não foi possível carregar o modelo da mensagem (Configurações).'); return; }
-      const msg = encodeURIComponent(_renderTemplate(tpl.msg_boleto, _varsBoleto(info, b)));
-      window.open(`https://wa.me/55${fone}?text=${msg}`, '_blank');
+      await enviarBoletoWhats(b, billingsModalClient, token);
     } catch (err) {
       alert(parseError(err));
     }
@@ -1020,14 +971,8 @@ export default function ClientesPage() {
         </div>
       )}
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="Clientes cadastrados" value={stats.total}      hint="Base total disponível"           icon={<Users className="h-5 w-5" />} />
-        <StatCard label="Clientes ativos"      value={stats.active}     hint="Cadastros em operação"  tone="success" icon={<CheckCircle2 className="h-5 w-5" />} />
-        <StatCard label="Inadimplentes"        value={stats.delinquent} hint="Exigem ação do financeiro" tone="warning" icon={<AlertTriangle className="h-5 w-5" />} />
-        <StatCard label="Empresas (PJ)"        value={stats.company}    hint="Cadastros PJ na base"    tone="brand"   icon={<Building2 className="h-5 w-5" />} />
-      </section>
-
-      <section className="mt-6">
+      {/* Base de clientes primeiro; os indicadores ficam abaixo (pedido do cliente) */}
+      <section>
         <Card>
           <SectionHeader
             eyebrow="Cadastro"
@@ -1124,6 +1069,14 @@ export default function ClientesPage() {
             )}
           </div>
         </Card>
+      </section>
+
+      {/* Indicadores da base (abaixo da tabela, conforme solicitado) */}
+      <section className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <StatCard label="Clientes cadastrados" value={stats.total}      hint="Base total disponível"           icon={<Users className="h-5 w-5" />} />
+        <StatCard label="Clientes ativos"      value={stats.active}     hint="Cadastros em operação"  tone="success" icon={<CheckCircle2 className="h-5 w-5" />} />
+        <StatCard label="Inadimplentes"        value={stats.delinquent} hint="Exigem ação do financeiro" tone="warning" icon={<AlertTriangle className="h-5 w-5" />} />
+        <StatCard label="Empresas (PJ)"        value={stats.company}    hint="Cadastros PJ na base"    tone="brand"   icon={<Building2 className="h-5 w-5" />} />
       </section>
 
       {/* Modal de detalhes */}

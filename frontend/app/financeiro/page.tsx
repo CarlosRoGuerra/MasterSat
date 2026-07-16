@@ -17,6 +17,7 @@ import { usePagination, Pagination } from '@/components/ui/pagination';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { ClientAutocomplete } from '@/components/ui/client-autocomplete';
 import { API_URL, apiFetch } from '@/lib/api';
+import { enviarBoletoEmail, enviarBoletoWhats } from '@/lib/boleto-mensagem';
 import { useAuthGuard } from '@/lib/use-auth-guard';
 
 /* ── Types ──────────────────────────────────────────────────────────── */
@@ -516,6 +517,14 @@ export default function FinanceiroPage() {
   const [payingPayable, setPayingPayable] = useState<Payable | null>(null);
   const [payPayableForm, setPayPayableForm] = useState({ payment_date: new Date().toISOString().slice(0, 10), payment_method: 'pix' });
 
+  // Modais do menu (tudo dentro do Financeiro, sem trocar de tela)
+  const [carteiraModal, setCarteiraModal] = useState(false);
+  const [envioModal, setEnvioModal] = useState(false);
+  const [envioClientId, setEnvioClientId] = useState('');
+  const [envioCliente, setEnvioCliente] = useState<{ id: number; name: string; phone?: string | null; email?: string | null } | null>(null);
+  const [envioBillings, setEnvioBillings] = useState<Billing[]>([]);
+  const [envioLoading, setEnvioLoading] = useState(false);
+
   // Operações em lote na carteira de cobranças
   const [selectedBillingIds, setSelectedBillingIds] = useState<number[]>([]);
   const [batchReceiveModal, setBatchReceiveModal] = useState(false);
@@ -557,11 +566,22 @@ export default function FinanceiroPage() {
     if (tab === 'overview' || tab === 'management' || tab === 'payables') setActiveTab(tab);
   }, []);
 
-  // Navega para a carteira de cobranças (usada por vários itens do menu)
-  function goToCarteira() {
-    switchTab('overview');
-    setBillingView('all');
-    setTimeout(() => document.getElementById('billing-section')?.scrollIntoView({ behavior: 'smooth' }), 150);
+  // Seleção de cliente no modal "Enviar boletos" — carrega contato + abertas
+  async function selecionarClienteEnvio(id: string) {
+    setEnvioClientId(id);
+    setEnvioCliente(null);
+    setEnvioBillings([]);
+    if (!token || !id) return;
+    setEnvioLoading(true);
+    try {
+      const [cli, bills] = await Promise.all([
+        apiFetch<{ id: number; name: string; phone?: string | null; email?: string | null }>(`/clients/${id}`, {}, token),
+        apiFetch<Billing[]>(`/billings?client_id=${id}&limit=100`, {}, token),
+      ]);
+      setEnvioCliente(cli);
+      setEnvioBillings(bills.filter(b => b.status === 'pendente' || b.status === 'vencida'));
+    } catch (err) { setError(parseError(err)); }
+    finally { setEnvioLoading(false); }
   }
 
   function openCreatePlan() { setEditingPlanId(null); setPlanForm(initialPlanForm); setModalError(''); setPlanModal(true); }
@@ -1155,16 +1175,16 @@ export default function FinanceiroPage() {
         <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {([
             { label: 'Fechamento', Icon: Lock, run: () => { window.location.href = '/fechamento'; } },
-            { label: 'Alterar situação boleto', Icon: PenSquare, run: goToCarteira },
-            { label: 'Alterar situação boleto em lote', Icon: ListChecks, run: goToCarteira },
-            { label: 'Manutenção de título', Icon: Banknote, run: goToCarteira },
-            { label: 'Manutenção de título em lote', Icon: Layers, run: goToCarteira },
-            { label: 'Enviar boletos via e-mail / WhatsApp', Icon: Mail, run: () => { window.location.href = '/clientes'; } },
+            { label: 'Alterar situação boleto', Icon: PenSquare, run: () => setCarteiraModal(true) },
+            { label: 'Alterar situação boleto em lote', Icon: ListChecks, run: () => setCarteiraModal(true) },
+            { label: 'Manutenção de título', Icon: Banknote, run: () => setCarteiraModal(true) },
+            { label: 'Manutenção de título em lote', Icon: Layers, run: () => setCarteiraModal(true) },
+            { label: 'Enviar boletos via e-mail / WhatsApp', Icon: Mail, run: () => setEnvioModal(true) },
             { label: 'Módulo de Gestor Financeiro (MGF)', Icon: PieChart, run: () => switchTab('overview') },
-            { label: 'Emitir boleto avulso', Icon: Barcode, run: () => { switchTab('overview'); setModalError(''); setNewBillingModal(true); } },
+            { label: 'Emitir boleto avulso', Icon: Barcode, run: () => { setModalError(''); setNewBillingModal(true); } },
             { label: 'Contas a Pagar', Icon: Wallet, run: () => switchTab('payables') },
-            { label: 'Contas a Receber', Icon: Coins, run: goToCarteira },
-            { label: 'Cadastrar Contas', Icon: FilePlus, run: () => { switchTab('payables'); setModalError(''); setPayableModal(true); } },
+            { label: 'Contas a Receber', Icon: Coins, run: () => setCarteiraModal(true) },
+            { label: 'Cadastrar Contas', Icon: FilePlus, run: () => { setModalError(''); setPayableModal(true); } },
           ] as { label: string; Icon: React.ElementType; run: () => void }[]).map(({ label, Icon, run }) => (
             <button
               key={label}
@@ -1821,6 +1841,95 @@ export default function FinanceiroPage() {
             <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200" onClick={() => setBatchMaintModal(false)}>Cancelar</button>
             <Button type="button" disabled={!canEdit || processing} onClick={handleBatchMaint}>{processing ? 'Aplicando...' : 'Aplicar em lote'}</Button>
           </div>
+        </div>
+      </Modal>
+
+      {/* ── Modal: Carteira de cobranças (aberto pelos cards do Menu) ── */}
+      <Modal
+        open={carteiraModal}
+        onClose={() => { setCarteiraModal(false); setSelectedBillingIds([]); }}
+        title="Carteira de cobranças"
+        subtitle="Alterar situação, manutenção de título (individual ou em lote) e contas a receber"
+        size="2xl"
+      >
+        <BillingTableSection
+          billings={billings}
+          loading={loading}
+          billingView="all"
+          billingSearch={billingSearch}
+          billingStatusFilter={billingStatusFilter}
+          onViewToggle={() => {}}
+          onSearchChange={setBillingSearch}
+          onStatusFilterChange={setBillingStatusFilter}
+          onRefresh={() => token && loadData(token)}
+          onSelect={b => setSelectedBilling(b)}
+          selectedId={selectedBilling?.id}
+          onNewBilling={canEdit ? () => { setModalError(''); setNewBillingModal(true); } : undefined}
+          batchIds={selectedBillingIds}
+          onBatchIdsChange={canEdit ? setSelectedBillingIds : undefined}
+          onBatchReceive={() => setBatchReceiveModal(true)}
+          onBatchCancel={handleBatchCancel}
+          onBatchMaint={() => { setModalError(''); setBatchMaintModal(true); }}
+        />
+      </Modal>
+
+      {/* ── Modal: Enviar boletos via e-mail / WhatsApp ── */}
+      <Modal
+        open={envioModal}
+        onClose={() => { setEnvioModal(false); setEnvioClientId(''); setEnvioCliente(null); setEnvioBillings([]); }}
+        title="Enviar boletos via e-mail / WhatsApp"
+        description="Escolha o cliente e envie cada boleto em aberto com a mensagem padrão das Configurações."
+        size="xl"
+      >
+        <div className="space-y-4">
+          <ClientAutocomplete
+            clients={clients}
+            value={envioClientId}
+            onChange={selecionarClienteEnvio}
+            placeholder="Buscar cliente por nome ou CPF/CNPJ…"
+          />
+          {envioLoading ? (
+            <TableSkeleton rows={3} cols={4} />
+          ) : envioClientId && envioCliente && envioBillings.length === 0 ? (
+            <EmptyState icon={CheckCircle2} title="Nenhum boleto em aberto" description="Este cliente não possui cobranças pendentes ou vencidas." />
+          ) : envioBillings.length > 0 ? (
+            <Table>
+              <TableHead>
+                <Th>Nº</Th>
+                <Th>Vencimento</Th>
+                <Th>Valor</Th>
+                <Th>Status</Th>
+                <Th className="w-44" />
+              </TableHead>
+              <TableBody>
+                {envioBillings.map(b => (
+                  <Tr key={b.id}>
+                    <Td className="text-xs text-slate-500">{b.id}</Td>
+                    <Td className="text-sm">{formatDate(b.due_date)}</Td>
+                    <Td className="font-mono font-semibold">{formatCurrency(b.amount)}</Td>
+                    <Td><Badge variant={statusVariant(b.status)}>{statusLabel(b.status)}</Badge></Td>
+                    <Td>
+                      <div className="flex justify-end gap-2">
+                        <Button
+                          className="px-3 py-1.5 text-xs"
+                          onClick={async () => { try { await enviarBoletoWhats(b, envioCliente!, token!); } catch (e) { alert(e instanceof Error ? e.message : 'Erro ao enviar'); } }}
+                        >
+                          WhatsApp
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          className="px-3 py-1.5 text-xs"
+                          onClick={async () => { try { await enviarBoletoEmail(b, envioCliente!, token!); } catch (e) { alert(e instanceof Error ? e.message : 'Erro ao enviar'); } }}
+                        >
+                          E-mail
+                        </Button>
+                      </div>
+                    </Td>
+                  </Tr>
+                ))}
+              </TableBody>
+            </Table>
+          ) : null}
         </div>
       </Modal>
     </PageShell>
