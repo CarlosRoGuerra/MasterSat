@@ -1,7 +1,7 @@
 'use client';
 
 import { FormEvent, Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { TrendingUp, AlertTriangle, FileText, CheckCircle2, Clock, MoreHorizontal, ChevronDown, ChevronRight } from 'lucide-react';
+import { TrendingUp, AlertTriangle, FileText, CheckCircle2, Clock, MoreHorizontal, ChevronDown, ChevronRight, Lock, PenSquare, ListChecks, Banknote, Layers, Mail, PieChart, Barcode, Wallet, Coins, FilePlus } from 'lucide-react';
 
 import { PageShell } from '@/components/page-shell';
 import { Card } from '@/components/ui/card';
@@ -533,7 +533,7 @@ export default function FinanceiroPage() {
   const [adjustModal, setAdjustModal] = useState(false);
 
   // Tab navigation with URL sync
-  const [activeTab, setActiveTab] = useState<'overview' | 'management' | 'payables'>('overview');
+  const [activeTab, setActiveTab] = useState<'menu' | 'overview' | 'management' | 'payables'>('menu');
 
   // Contract table filters
   const [contractStatusFilter, setContractStatusFilter] = useState('');
@@ -541,7 +541,7 @@ export default function FinanceiroPage() {
   // Plans table sort
   const [planSort, setPlanSort] = useState<{ field: 'name' | 'price' | 'active_contracts'; dir: 'asc' | 'desc' }>({ field: 'name', dir: 'asc' });
 
-  function switchTab(tab: 'overview' | 'management' | 'payables') {
+  function switchTab(tab: 'menu' | 'overview' | 'management' | 'payables') {
     setActiveTab(tab);
     if (typeof window === 'undefined') return;
     const url = new URL(window.location.href);
@@ -554,8 +554,15 @@ export default function FinanceiroPage() {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
     const tab = params.get('tab');
-    if (tab === 'management' || tab === 'payables') setActiveTab(tab);
+    if (tab === 'overview' || tab === 'management' || tab === 'payables') setActiveTab(tab);
   }, []);
+
+  // Navega para a carteira de cobranças (usada por vários itens do menu)
+  function goToCarteira() {
+    switchTab('overview');
+    setBillingView('all');
+    setTimeout(() => document.getElementById('billing-section')?.scrollIntoView({ behavior: 'smooth' }), 150);
+  }
 
   function openCreatePlan() { setEditingPlanId(null); setPlanForm(initialPlanForm); setModalError(''); setPlanModal(true); }
   function openCreateProduct() { setEditingProductId(null); setServiceProductForm(initialProductForm); setModalError(''); setProductModal(true); }
@@ -1124,7 +1131,7 @@ export default function FinanceiroPage() {
 
       {/* ── 2. Tab navigation ── */}
       <div className="mb-6 flex gap-1 rounded-2xl border border-slate-200 bg-slate-50 p-1 dark:border-slate-800 dark:bg-slate-900/60">
-        {(['overview', 'management', 'payables'] as const).map(tab => (
+        {(['menu', 'overview', 'management', 'payables'] as const).map(tab => (
           <button
             key={tab}
             type="button"
@@ -1136,10 +1143,41 @@ export default function FinanceiroPage() {
                 : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200',
             ].join(' ')}
           >
-            {tab === 'overview' ? 'Visão Geral' : tab === 'management' ? 'Planos e Contratos' : 'Contas a Pagar'}
+            {tab === 'menu' ? 'Menu' : tab === 'overview' ? 'Visão Geral' : tab === 'management' ? 'Planos e Contratos' : 'Contas a Pagar'}
           </button>
         ))}
       </div>
+
+      {/* ══════════════════════════════════════════════════════════════
+          TAB: Menu (grade de atalhos no padrão do sistema de referência)
+      ══════════════════════════════════════════════════════════════ */}
+      {activeTab === 'menu' && (
+        <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {([
+            { label: 'Fechamento', Icon: Lock, run: () => { window.location.href = '/fechamento'; } },
+            { label: 'Alterar situação boleto', Icon: PenSquare, run: goToCarteira },
+            { label: 'Alterar situação boleto em lote', Icon: ListChecks, run: goToCarteira },
+            { label: 'Manutenção de título', Icon: Banknote, run: goToCarteira },
+            { label: 'Manutenção de título em lote', Icon: Layers, run: goToCarteira },
+            { label: 'Enviar boletos via e-mail / WhatsApp', Icon: Mail, run: () => { window.location.href = '/clientes'; } },
+            { label: 'Módulo de Gestor Financeiro (MGF)', Icon: PieChart, run: () => switchTab('overview') },
+            { label: 'Emitir boleto avulso', Icon: Barcode, run: () => { switchTab('overview'); setModalError(''); setNewBillingModal(true); } },
+            { label: 'Contas a Pagar', Icon: Wallet, run: () => switchTab('payables') },
+            { label: 'Contas a Receber', Icon: Coins, run: goToCarteira },
+            { label: 'Cadastrar Contas', Icon: FilePlus, run: () => { switchTab('payables'); setModalError(''); setPayableModal(true); } },
+          ] as { label: string; Icon: React.ElementType; run: () => void }[]).map(({ label, Icon, run }) => (
+            <button
+              key={label}
+              type="button"
+              onClick={run}
+              className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-8 text-center text-sm font-semibold text-slate-700 shadow-sm transition hover:border-brand-400 hover:shadow-md dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-brand-500"
+            >
+              <Icon className="h-6 w-6 text-slate-500 dark:text-slate-400" />
+              {label}
+            </button>
+          ))}
+        </section>
+      )}
 
       {/* ══════════════════════════════════════════════════════════════
           TAB: Visão Geral
