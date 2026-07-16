@@ -333,6 +333,9 @@ export default function ClientesPage() {
   const [intervLoading, setIntervLoading] = useState(false);
   const [printingContract, setPrintingContract] = useState(false);
 
+  // Templates das mensagens de cobrança (carregados das Configurações)
+  const [msgTemplates, setMsgTemplates] = useState<{ msg_boleto: string; msg_boleto_assunto: string } | null>(null);
+
   // Modal "Notas fiscais do cliente" (botão da patinha)
   const [nfseModalOpen, setNfseModalOpen] = useState(false);
   const [nfseModalClient, setNfseModalClient] = useState<Client | null>(null);
@@ -570,29 +573,33 @@ export default function ClientesPage() {
     }
   }
 
-  // Mensagem de cobrança no padrão aprovado (saudação, referência, código de
-  // barras "limpo" e link público do boleto).
-  function _mensagemBoleto(info: { linha_digitavel: string; public_pdf_url?: string }, b: BillingItem) {
-    const nome = (billingsModalClient?.name || '').toUpperCase();
-    const valor = b.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
-    const venc = new Date(b.due_date + 'T12:00:00').toLocaleDateString('pt-BR');
-    const referente = b.period_label || venc.slice(3);
-    const codigo = (info.linha_digitavel || '').replace(/\D/g, '');
-    const linhas = [
-      `Olá, ${nome} tudo bem? Estamos enviando o código de barras do seu boleto, basta copiar a linha digitável e realizar o pagamento junto ao banco.`,
-      '',
-      'Atenciosamente,',
-      'MASTERSAT COMERCIO E SERVIÇOS DE RASTREAMENTO LTDA',
-      '',
-      `Referente:${referente} Valor: ${valor} Vencimento:${venc}`,
-      '',
-      'Código de Barras:',
-      codigo,
-    ];
-    if (info.public_pdf_url) {
-      linhas.push('', 'Clique no link abaixo para visualizar seu boleto:', info.public_pdf_url);
+  // Templates das mensagens vêm das Configurações (banco) — sem texto fixo no
+  // código. Fallback: o backend devolve o template padrão se nada foi salvo.
+  async function _getMsgTemplates(): Promise<{ msg_boleto: string; msg_boleto_assunto: string } | null> {
+    if (msgTemplates) return msgTemplates;
+    try {
+      const t = await apiFetch<{ msg_boleto: string; msg_boleto_assunto: string }>('/settings/mensagens', {}, token!);
+      setMsgTemplates(t);
+      return t;
+    } catch {
+      return null;
     }
-    return linhas.join('\n');
+  }
+
+  function _renderTemplate(tpl: string, vars: Record<string, string>) {
+    return tpl.replace(/\{(\w+)\}/g, (_m, k: string) => vars[k] ?? '');
+  }
+
+  function _varsBoleto(info: { linha_digitavel: string; public_pdf_url?: string }, b: BillingItem): Record<string, string> {
+    const venc = new Date(b.due_date + 'T12:00:00').toLocaleDateString('pt-BR');
+    return {
+      NOME: (billingsModalClient?.name || '').toUpperCase(),
+      VALOR: b.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 }),
+      VENCIMENTO: venc,
+      REFERENTE: b.period_label || venc.slice(3),
+      CODIGO_BARRAS: (info.linha_digitavel || '').replace(/\D/g, ''),
+      LINK_BOLETO: info.public_pdf_url || '',
+    };
   }
 
   const _AVISO_NAO_REGISTRADO =
@@ -605,9 +612,11 @@ export default function ClientesPage() {
     try {
       const info = await apiFetch<{ linha_digitavel: string; public_pdf_url?: string; boleto_registrado?: boolean }>(`/boletos/${b.id}`, {}, token);
       if (info.boleto_registrado === false) { alert(_AVISO_NAO_REGISTRADO); return; }
-      const venc = new Date(b.due_date + 'T12:00:00').toLocaleDateString('pt-BR');
-      const assunto = encodeURIComponent(`Boleto MasterSat — vencimento ${venc}`);
-      const corpo = encodeURIComponent(_mensagemBoleto(info, b));
+      const tpl = await _getMsgTemplates();
+      if (!tpl) { alert('Não foi possível carregar o modelo da mensagem (Configurações).'); return; }
+      const vars = _varsBoleto(info, b);
+      const assunto = encodeURIComponent(_renderTemplate(tpl.msg_boleto_assunto, vars));
+      const corpo = encodeURIComponent(_renderTemplate(tpl.msg_boleto, vars));
       window.location.href = `mailto:${billingsModalClient.email}?subject=${assunto}&body=${corpo}`;
     } catch (err) {
       alert(parseError(err));
@@ -621,7 +630,9 @@ export default function ClientesPage() {
     try {
       const info = await apiFetch<{ linha_digitavel: string; public_pdf_url?: string; boleto_registrado?: boolean }>(`/boletos/${b.id}`, {}, token);
       if (info.boleto_registrado === false) { alert(_AVISO_NAO_REGISTRADO); return; }
-      const msg = encodeURIComponent(_mensagemBoleto(info, b));
+      const tpl = await _getMsgTemplates();
+      if (!tpl) { alert('Não foi possível carregar o modelo da mensagem (Configurações).'); return; }
+      const msg = encodeURIComponent(_renderTemplate(tpl.msg_boleto, _varsBoleto(info, b)));
       window.open(`https://wa.me/55${fone}?text=${msg}`, '_blank');
     } catch (err) {
       alert(parseError(err));

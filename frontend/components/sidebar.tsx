@@ -19,6 +19,7 @@ import {
   CalendarCheck,
   ChevronLeft,
   ChevronRight,
+  Settings,
 } from 'lucide-react';
 
 import { clearSession } from '@/lib/auth';
@@ -53,10 +54,11 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: 'Equipe & Config',
     items: [
-      { href: '/usuarios',   label: 'Equipe',      icon: ShieldCheck },
-      { href: '/relatorios', label: 'Relatórios',  icon: BarChart2 },
-      { href: '/integracao', label: 'Integração',  icon: PlugZap },
-      { href: '/auditoria',  label: 'Auditoria',   icon: ScrollText },
+      { href: '/usuarios',      label: 'Equipe',        icon: ShieldCheck },
+      { href: '/relatorios',    label: 'Relatórios',    icon: BarChart2 },
+      { href: '/integracao',    label: 'Integração',    icon: PlugZap },
+      { href: '/auditoria',     label: 'Auditoria',     icon: ScrollText },
+      { href: '/configuracoes', label: 'Configurações', icon: Settings },
     ],
   },
 ];
