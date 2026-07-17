@@ -315,6 +315,8 @@ function BillingTableSection({
   onBatchReceive,
   onBatchCancel,
   onBatchMaint,
+  batchActions,
+  rowActionLabel,
 }: {
   billings: Billing[];
   loading: boolean;
@@ -333,7 +335,10 @@ function BillingTableSection({
   onBatchReceive?: () => void;
   onBatchCancel?: () => void;
   onBatchMaint?: () => void;
+  batchActions?: Array<'receive' | 'cancel' | 'maint'>;
+  rowActionLabel?: string;
 }) {
+  const acoesLote = batchActions ?? ['receive', 'cancel', 'maint'];
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const in7 = new Date(today); in7.setDate(in7.getDate() + 7);
 
@@ -381,9 +386,9 @@ function BillingTableSection({
       {batchIds && batchIds.length > 0 && (
         <div className="mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-brand-300 bg-brand-50 px-4 py-2.5 text-sm dark:border-brand-700 dark:bg-brand-950/30">
           <span className="font-bold text-brand-800 dark:text-brand-200">{batchIds.length} selecionada(s)</span>
-          {onBatchReceive && <Button onClick={onBatchReceive} className="!py-1.5 text-xs">Receber em lote</Button>}
-          {onBatchMaint && <Button variant="secondary" onClick={onBatchMaint} className="!py-1.5 text-xs">Alterar venc./valor</Button>}
-          {onBatchCancel && <Button variant="secondary" onClick={onBatchCancel} className="!py-1.5 text-xs">Cancelar em lote</Button>}
+          {onBatchReceive && acoesLote.includes('receive') && <Button onClick={onBatchReceive} className="!py-1.5 text-xs">Receber em lote</Button>}
+          {onBatchMaint && acoesLote.includes('maint') && <Button variant="secondary" onClick={onBatchMaint} className="!py-1.5 text-xs">Alterar venc./valor</Button>}
+          {onBatchCancel && acoesLote.includes('cancel') && <Button variant="secondary" onClick={onBatchCancel} className="!py-1.5 text-xs">Cancelar em lote</Button>}
           <button type="button" onClick={() => onBatchIdsChange?.([])} className="ml-auto text-xs text-slate-400 underline hover:text-slate-600 dark:hover:text-slate-200">
             Limpar seleção
           </button>
@@ -452,7 +457,9 @@ function BillingTableSection({
                     <Td className="font-mono font-semibold">{formatCurrency(b.amount)}</Td>
                     <Td><Badge variant={statusVariant(b.status)}>{statusLabel(b.status)}</Badge></Td>
                     <Td>
-                      <Button variant="secondary" onClick={() => onSelect(b)} className="px-3 py-1.5 text-xs">Detalhes</Button>
+                      <Button variant="secondary" onClick={() => onSelect(b)} className="px-3 py-1.5 text-xs">
+                        {rowActionLabel && (b.status === 'pendente' || b.status === 'vencida') ? rowActionLabel : 'Detalhes'}
+                      </Button>
                     </Td>
                   </Tr>
                 ))}
@@ -517,8 +524,11 @@ export default function FinanceiroPage() {
   const [payingPayable, setPayingPayable] = useState<Payable | null>(null);
   const [payPayableForm, setPayPayableForm] = useState({ payment_date: new Date().toISOString().slice(0, 10), payment_method: 'pix' });
 
-  // Modais do menu (tudo dentro do Financeiro, sem trocar de tela)
-  const [carteiraModal, setCarteiraModal] = useState(false);
+  // Modais do menu (tudo dentro do Financeiro, sem trocar de tela).
+  // O modo define o comportamento da carteira: linha vai direto para a ação
+  // do card clicado e o lote mostra só os botões correspondentes.
+  type CarteiraMode = 'full' | 'situacao' | 'situacao-lote' | 'manutencao' | 'manutencao-lote';
+  const [carteiraMode, setCarteiraMode] = useState<CarteiraMode | null>(null);
   const [envioModal, setEnvioModal] = useState(false);
   const [envioClientId, setEnvioClientId] = useState('');
   const [envioCliente, setEnvioCliente] = useState<{ id: number; name: string; phone?: string | null; email?: string | null } | null>(null);
@@ -565,6 +575,15 @@ export default function FinanceiroPage() {
     const tab = params.get('tab');
     if (tab === 'overview' || tab === 'management' || tab === 'payables') setActiveTab(tab);
   }, []);
+
+  // Clique na linha da carteira: vai direto para a ação do card que abriu o
+  // modal (alterar situação → registrar pagamento; manutenção → ajustar).
+  function carteiraRowSelect(b: Billing) {
+    const aberta = b.status === 'pendente' || b.status === 'vencida';
+    setSelectedBilling(b);
+    if (carteiraMode === 'situacao' && aberta) setReceiveModal(true);
+    if (carteiraMode === 'manutencao' && aberta) setAdjustModal(true);
+  }
 
   // Seleção de cliente no modal "Enviar boletos" — carrega contato + abertas
   async function selecionarClienteEnvio(id: string) {
@@ -1175,15 +1194,15 @@ export default function FinanceiroPage() {
         <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {([
             { label: 'Fechamento', Icon: Lock, run: () => { window.location.href = '/fechamento'; } },
-            { label: 'Alterar situação boleto', Icon: PenSquare, run: () => setCarteiraModal(true) },
-            { label: 'Alterar situação boleto em lote', Icon: ListChecks, run: () => setCarteiraModal(true) },
-            { label: 'Manutenção de título', Icon: Banknote, run: () => setCarteiraModal(true) },
-            { label: 'Manutenção de título em lote', Icon: Layers, run: () => setCarteiraModal(true) },
+            { label: 'Alterar situação boleto', Icon: PenSquare, run: () => setCarteiraMode('situacao') },
+            { label: 'Alterar situação boleto em lote', Icon: ListChecks, run: () => setCarteiraMode('situacao-lote') },
+            { label: 'Manutenção de título', Icon: Banknote, run: () => setCarteiraMode('manutencao') },
+            { label: 'Manutenção de título em lote', Icon: Layers, run: () => setCarteiraMode('manutencao-lote') },
             { label: 'Enviar boletos via e-mail / WhatsApp', Icon: Mail, run: () => setEnvioModal(true) },
             { label: 'Módulo de Gestor Financeiro (MGF)', Icon: PieChart, run: () => switchTab('overview') },
             { label: 'Emitir boleto avulso', Icon: Barcode, run: () => { setModalError(''); setNewBillingModal(true); } },
             { label: 'Contas a Pagar', Icon: Wallet, run: () => switchTab('payables') },
-            { label: 'Contas a Receber', Icon: Coins, run: () => setCarteiraModal(true) },
+            { label: 'Contas a Receber', Icon: Coins, run: () => setCarteiraMode('full') },
             { label: 'Cadastrar Contas', Icon: FilePlus, run: () => { setModalError(''); setPayableModal(true); } },
           ] as { label: string; Icon: React.ElementType; run: () => void }[]).map(({ label, Icon, run }) => (
             <button
@@ -1542,6 +1561,51 @@ export default function FinanceiroPage() {
         </section>
       )}
 
+      {/* ── Modal: Carteira de cobranças (cards do Menu) ─────────────────────
+          IMPORTANTE: renderizado ANTES dos modais de detalhe/receber/ajustar
+          para que eles empilhem POR CIMA desta carteira (ordem do DOM). */}
+      {(() => {
+        const titulos: Record<CarteiraMode, { t: string; s: string; rotulo?: string; lote?: Array<'receive' | 'cancel' | 'maint'> }> = {
+          'full':            { t: 'Contas a Receber',                s: 'Carteira completa de cobranças' },
+          'situacao':        { t: 'Alterar situação boleto',        s: 'Clique em "Alterar situação" para registrar o pagamento (ou cancelar pelo detalhe)', rotulo: 'Alterar situação' },
+          'situacao-lote':   { t: 'Alterar situação em lote',       s: 'Marque os boletos e use Receber/Cancelar em lote', lote: ['receive', 'cancel'] },
+          'manutencao':      { t: 'Manutenção de título',           s: 'Clique em "Manutenção" para alterar valor/vencimento com justificativa', rotulo: 'Manutenção' },
+          'manutencao-lote': { t: 'Manutenção de título em lote',   s: 'Marque os títulos e use "Alterar venc./valor"', lote: ['maint'] },
+        };
+        const cfg = carteiraMode ? titulos[carteiraMode] : null;
+        return (
+          <Modal
+            open={!!carteiraMode}
+            onClose={() => { setCarteiraMode(null); setSelectedBillingIds([]); }}
+            title={cfg?.t ?? 'Carteira de cobranças'}
+            subtitle={cfg?.s}
+            size="2xl"
+          >
+            <BillingTableSection
+              billings={billings}
+              loading={loading}
+              billingView="all"
+              billingSearch={billingSearch}
+              billingStatusFilter={billingStatusFilter}
+              onViewToggle={() => {}}
+              onSearchChange={setBillingSearch}
+              onStatusFilterChange={setBillingStatusFilter}
+              onRefresh={() => token && loadData(token)}
+              onSelect={carteiraRowSelect}
+              selectedId={selectedBilling?.id}
+              onNewBilling={canEdit ? () => { setModalError(''); setNewBillingModal(true); } : undefined}
+              batchIds={selectedBillingIds}
+              onBatchIdsChange={canEdit && (carteiraMode === 'full' || carteiraMode?.endsWith('-lote')) ? setSelectedBillingIds : undefined}
+              onBatchReceive={() => setBatchReceiveModal(true)}
+              onBatchCancel={handleBatchCancel}
+              onBatchMaint={() => { setModalError(''); setBatchMaintModal(true); }}
+              batchActions={cfg?.lote}
+              rowActionLabel={cfg?.rotulo}
+            />
+          </Modal>
+        );
+      })()}
+
       {/* ── Modals (unchanged) ── */}
 
       <Modal open={!!selectedBilling} onClose={() => setSelectedBilling(null)} title={selectedBilling?.title ?? selectedBilling?.client_name ?? 'Cobrança'} subtitle="Detalhes da cobrança" size="md">
@@ -1842,35 +1906,6 @@ export default function FinanceiroPage() {
             <Button type="button" disabled={!canEdit || processing} onClick={handleBatchMaint}>{processing ? 'Aplicando...' : 'Aplicar em lote'}</Button>
           </div>
         </div>
-      </Modal>
-
-      {/* ── Modal: Carteira de cobranças (aberto pelos cards do Menu) ── */}
-      <Modal
-        open={carteiraModal}
-        onClose={() => { setCarteiraModal(false); setSelectedBillingIds([]); }}
-        title="Carteira de cobranças"
-        subtitle="Alterar situação, manutenção de título (individual ou em lote) e contas a receber"
-        size="2xl"
-      >
-        <BillingTableSection
-          billings={billings}
-          loading={loading}
-          billingView="all"
-          billingSearch={billingSearch}
-          billingStatusFilter={billingStatusFilter}
-          onViewToggle={() => {}}
-          onSearchChange={setBillingSearch}
-          onStatusFilterChange={setBillingStatusFilter}
-          onRefresh={() => token && loadData(token)}
-          onSelect={b => setSelectedBilling(b)}
-          selectedId={selectedBilling?.id}
-          onNewBilling={canEdit ? () => { setModalError(''); setNewBillingModal(true); } : undefined}
-          batchIds={selectedBillingIds}
-          onBatchIdsChange={canEdit ? setSelectedBillingIds : undefined}
-          onBatchReceive={() => setBatchReceiveModal(true)}
-          onBatchCancel={handleBatchCancel}
-          onBatchMaint={() => { setModalError(''); setBatchMaintModal(true); }}
-        />
       </Modal>
 
       {/* ── Modal: Enviar boletos via e-mail / WhatsApp ── */}
