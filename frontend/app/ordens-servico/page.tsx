@@ -728,8 +728,10 @@ export default function ServiceOrdersPage() {
               <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-600 dark:border-slate-700 dark:text-slate-200 dark:hover:border-cyan-400 dark:hover:text-cyan-300" onClick={() => setForm((prev) => ({ ...prev, checklistItems: [...prev.checklistItems, ''] }))}>Adicionar item</button>
             </div>
             <div className="mt-4 space-y-3">
+              {/* key só pelo índice: com o texto na key, cada letra digitada
+                  remontava o input e o foco era perdido (bug da "1 letra só") */}
               {form.checklistItems.map((item, index) => (
-                <div key={`${index}-${item}`} className="flex items-center gap-3">
+                <div key={index} className="flex items-center gap-3">
                   <input className={fieldClass} value={item} onChange={(e) => updateChecklist(index, e.target.value)} placeholder={`Item ${index + 1}`} />
                   <button type="button" className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700" onClick={() => setForm((prev) => ({ ...prev, checklistItems: prev.checklistItems.filter((_, itemIndex) => itemIndex !== index).length ? prev.checklistItems.filter((_, itemIndex) => itemIndex !== index) : [''] }))}>Remover</button>
                 </div>

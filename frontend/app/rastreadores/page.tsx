@@ -13,6 +13,7 @@ import { Table, TableHead, Th, TableBody, Tr, Td } from '@/components/ui/table';
 import { EmptyState, TableSkeleton } from '@/components/ui/empty-state';
 import { usePagination, Pagination } from '@/components/ui/pagination';
 import { ExportButton } from '@/components/ui/export-button';
+import { ClientAutocomplete } from '@/components/ui/client-autocomplete';
 import { apiFetch } from '@/lib/api';
 import { onlyDigits, formatCpfCnpj } from '@/lib/format';
 import { useAuthGuard } from '@/lib/use-auth-guard';
@@ -628,13 +629,18 @@ export default function RastreadoresPage() {
 
           <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-5 dark:border-slate-800 dark:bg-slate-950/60">
             <p className="text-sm font-semibold text-slate-900 dark:text-white">Vínculo do cliente</p>
-            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Busque por CPF/CNPJ e o sistema selecionará automaticamente o cliente correspondente.</p>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Busque pelo nome (a lista aparece enquanto digita) ou por CPF/CNPJ.</p>
             <div className="mt-4 grid gap-4 md:grid-cols-[1fr_auto]">
               <input className={fieldClass} placeholder="CPF/CNPJ do cliente" value={form.client_lookup_document} onChange={(e) => setForm((prev) => ({ ...prev, client_lookup_document: formatCpfCnpj(e.target.value) }))} />
               <Button type="button" onClick={findClientByDocument}>Buscar cliente</Button>
             </div>
             <div className="mt-4 grid gap-4 md:grid-cols-2">
-              <select className={fieldClass} value={form.client_id} onChange={(e) => setForm((prev) => ({ ...prev, client_id: e.target.value, vehicle_id: '', link_plan_id: '' }))}><option value="">Sem cliente</option>{clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select>
+              <ClientAutocomplete
+                clients={clients}
+                value={form.client_id}
+                onChange={(id) => setForm((prev) => ({ ...prev, client_id: id, vehicle_id: '', link_plan_id: '' }))}
+                placeholder="Buscar cliente por nome…"
+              />
               <select className={fieldClass} value={form.vehicle_id} onChange={(e) => {
                 const vid = e.target.value;
                 const veh = filteredVehicles.find((v) => String(v.id) === vid);
@@ -719,20 +725,11 @@ export default function RastreadoresPage() {
                 </div>
               )}
             </div>
-            <input className={fieldClass} placeholder="Firmware" value={form.firmware} onChange={(e) => setForm((prev) => ({ ...prev, firmware: e.target.value.slice(0, 60) }))} />
             <input className={fieldClass} placeholder="Linha / MSISDN" value={form.sim_number} onChange={(e) => setForm((prev) => ({ ...prev, sim_number: onlyDigits(e.target.value).slice(0, 20) }))} />
             <input className={fieldClass} placeholder="ICCID" value={form.sim_iccid} onChange={(e) => setForm((prev) => ({ ...prev, sim_iccid: onlyDigits(e.target.value).slice(0, 22) }))} />
             <label className="block">
-              <span className="mb-1 block text-xs font-semibold text-slate-500 dark:text-slate-400">Data de aquisição</span>
-              <input type="date" className={fieldClass} value={form.acquisition_date} onChange={(e) => setForm((prev) => ({ ...prev, acquisition_date: e.target.value }))} />
-            </label>
-            <label className="block">
               <span className="mb-1 block text-xs font-semibold text-slate-500 dark:text-slate-400">Data de instalação</span>
               <input type="date" className={fieldClass} value={form.install_date} onChange={(e) => setForm((prev) => ({ ...prev, install_date: e.target.value }))} />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-xs font-semibold text-slate-500 dark:text-slate-400">Garantia válida até</span>
-              <input type="date" className={fieldClass} value={form.warranty_until} onChange={(e) => setForm((prev) => ({ ...prev, warranty_until: e.target.value }))} />
             </label>
             <textarea className={`${areaClass} md:col-span-3`} placeholder="Observações técnicas" value={form.notes} onChange={(e) => setForm((prev) => ({ ...prev, notes: e.target.value.slice(0, 500) }))} />
           </div>
