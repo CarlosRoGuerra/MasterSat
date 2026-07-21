@@ -255,15 +255,43 @@ def gerar_boleto(db: Session, billing: Billing, client: Client) -> AilosBoleto:
 
     payload = montar_payload_boleto(billing, client)
 
-    resp = ailos_client.request(
-        db, 'POST',
-        _PATH_GERAR_BOLETO.format(convenio=settings.ailos_numero_convenio),
-        json_body=payload,
-        billing_id=billing.id,
-    )
+    try:
+        resp = ailos_client.request(
+            db, 'POST',
+            _PATH_GERAR_BOLETO.format(convenio=settings.ailos_numero_convenio),
+            json_body=payload,
+            billing_id=billing.id,
+        )
+    except ailos_client.AilosApiError as exc:
+        # "Boleto já cadastrado": a Ailos já tem este título (uma tentativa
+        # anterior registrou lá mas não persistiu localmente). Em vez de falhar
+        # e deixar o cliente sem boleto pagável, recupera os dados oficiais
+        # consultando pelo numeroDocumento (= billing.id).
+        msg = (exc.ailos_message or '').lower()
+        if exc.status_code == 400 and ('cadastrad' in msg or 'já existe' in msg or 'ja existe' in msg):
+            recuperado = _recuperar_boleto_existente(db, billing, payload)
+            if recuperado is not None and recuperado.linha_digitavel:
+                return recuperado
+        raise
 
     response_body = resp.json if isinstance(resp.json, dict) else {}
     return _upsert_ailos_boleto(db, billing.id, payload, response_body)
+
+
+def _recuperar_boleto_existente(db: Session, billing: Billing, payload: dict) -> AilosBoleto | None:
+    """Recupera um boleto que já existe na Ailos mas não localmente,
+    consultando pelo numeroDocumento (= billing.id) e persistindo os dados
+    oficiais. Retorna None se a consulta não trouxer um boleto utilizável."""
+    try:
+        resp = consultar_boleto(db, str(billing.id))
+    except (ailos_client.AilosError, ailos_client.AilosApiError):
+        return None
+    dados = resp
+    if isinstance(resp, list):
+        dados = resp[0] if resp else None
+    if not isinstance(dados, dict):
+        return None
+    return _upsert_ailos_boleto(db, billing.id, payload, dados)
 
 
 def gerar_boleto_lote(db: Session, billings: list[Billing], clients_by_id: dict[int, Client]) -> AilosLote:

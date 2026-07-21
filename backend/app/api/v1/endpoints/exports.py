@@ -269,9 +269,70 @@ def export_billings(
 # Exportar relatório de inadimplentes
 # ---------------------------------------------------------------------------
 
+def _delinquents_pdf(results) -> StreamingResponse:
+    """Relatório de inadimplentes em PDF, pronto para imprimir."""
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=landscape(A4),
+                            leftMargin=12 * mm, rightMargin=12 * mm,
+                            topMargin=12 * mm, bottomMargin=12 * mm,
+                            title='Relatório de Inadimplentes — MasterSat')
+    styles = getSampleStyleSheet()
+    elems = [
+        Paragraph('MASTERSAT — Relatório de Clientes Inadimplentes', styles['Title']),
+        Paragraph(f'Emitido em {date.today().strftime("%d/%m/%Y")}', styles['Normal']),
+        Spacer(1, 8),
+    ]
+
+    header = ['Nome', 'CPF/CNPJ', 'Telefone', 'Cobr. Vencidas', 'Valor em Aberto', 'Venc. + Antigo']
+    data = [header]
+    total_geral = 0.0
+    for r in results:
+        valor = float(r.total_valor or 0)
+        total_geral += valor
+        data.append([
+            r.name,
+            r.cpf_cnpj or '',
+            r.phone or '',
+            str(r.total_vencidas),
+            f'R$ {valor:,.2f}'.replace(',', 'X').replace('.', ',').replace('X', '.'),
+            r.vencimento_mais_antigo.strftime('%d/%m/%Y') if r.vencimento_mais_antigo else '',
+        ])
+    data.append(['', '', '', 'TOTAL', f'R$ {total_geral:,.2f}'.replace(',', 'X').replace('.', ',').replace('X', '.'), ''])
+
+    table = Table(data, repeatRows=1, colWidths=[75 * mm, 40 * mm, 35 * mm, 28 * mm, 40 * mm, 32 * mm])
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1E3A5F')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 8),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#F1F5F9')]),
+        ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#FEE2E2')),
+        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+        ('ALIGN', (3, 0), (-1, -1), 'RIGHT'),
+        ('GRID', (0, 0), (-1, -1), 0.3, colors.HexColor('#CBD5E1')),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+    ]))
+    elems.append(table)
+    doc.build(elems)
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type='application/pdf',
+        headers={'Content-Disposition': 'inline; filename="inadimplentes.pdf"'},
+    )
+
+
 @router.get('/delinquents')
 def export_delinquents(
-    fmt: str = Query(default='csv', pattern='^(csv|xlsx)$'),
+    fmt: str = Query(default='csv', pattern='^(csv|xlsx|pdf)$'),
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*VIEW_ROLES)),
 ):
@@ -298,6 +359,9 @@ def export_delinquents(
         .order_by(func.sum(Billing.amount).desc())
         .all()
     )
+
+    if fmt == 'pdf':
+        return _delinquents_pdf(results)
 
     headers = ['ID', 'Nome', 'CPF/CNPJ', 'E-mail', 'Telefone',
                'Qtd. Cobranças Vencidas', 'Valor Total em Aberto', 'Vencimento Mais Antigo']

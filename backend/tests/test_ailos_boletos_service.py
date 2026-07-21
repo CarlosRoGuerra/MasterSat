@@ -149,6 +149,32 @@ class TestGerarBoleto:
         assert boleto.pix_emv == '00020126580014BR.GOV.BCB.PIX6304ABCD'
         assert boleto.pix_qr_base64 == 'iVBORw0KGgoBASE64PNG=='
 
+    def test_ja_cadastrado_recupera_via_consulta(self, db, billing_pendente, cliente):
+        # A Ailos já tem o boleto (HTTP 400 "Boleto já cadastrado"), mas o
+        # MasterSat não guardou localmente. Em vez de falhar, deve consultar
+        # pelo numeroDocumento e persistir os dados oficiais (boleto pagável).
+        _preencher_endereco(cliente, db)
+        erro_400 = _resp(400, json_data={'mensagem': f'Boleto já cadastrado - {billing_pendente.id}'})
+        consulta = _resp(200, json_data=_boleto_response(billing_pendente.id, nosso_numero='99999999'))
+
+        with patch('app.services.ailos_client.requests') as mock_requests:
+            mock_requests.request.side_effect = [erro_400, consulta]
+            boleto = gerar_boleto(db, billing_pendente, cliente)
+
+        assert boleto.linha_digitavel == 'LINHA-DIGITAVEL'
+        assert boleto.nosso_numero == '99999999'
+        assert mock_requests.request.call_count == 2  # POST (falhou) + GET (recuperou)
+
+    def test_ja_cadastrado_mas_consulta_vazia_propaga_erro(self, db, billing_pendente, cliente):
+        _preencher_endereco(cliente, db)
+        erro_400 = _resp(400, json_data={'mensagem': 'Boleto já cadastrado'})
+        consulta_vazia = _resp(200, json_data=[])
+
+        with patch('app.services.ailos_client.requests') as mock_requests:
+            mock_requests.request.side_effect = [erro_400, consulta_vazia]
+            with pytest.raises(ailos_client.AilosApiError):
+                gerar_boleto(db, billing_pendente, cliente)
+
     def test_reexecucao_idempotente_nao_reregistra(self, db, billing_pendente, cliente):
         # Já registrado (tem linha digitável) → re-executar NÃO chama a Ailos de
         # novo (evita "título já cadastrado") e devolve o mesmo boleto.
