@@ -15,6 +15,7 @@ import { FormField, FormGrid, FormSection, FormDivider } from '@/components/ui/f
 import { Badge, statusVariant, statusLabel } from '@/components/ui/badge';
 import { EmptyState, TableSkeleton } from '@/components/ui/empty-state';
 import { Table, TableHead, Th, TableBody, Tr, Td } from '@/components/ui/table';
+import { usePagination, Pagination } from '@/components/ui/pagination';
 import { ExportButton } from '@/components/ui/export-button';
 import { apiFetch, API_URL } from '@/lib/api';
 import { enviarBoletoEmail, enviarBoletoWhats } from '@/lib/boleto-mensagem';
@@ -58,6 +59,7 @@ type Client = {
   optante_simples?: string | null;
   delivery_method?: string | null;
   send_boleto_whatsapp?: boolean | null;
+  trade_name?: string | null;
 };
 
 type ClientDocument = {
@@ -182,6 +184,7 @@ type ClientFormState = {
   optante_simples: string;
   delivery_method: string;
   send_boleto_whatsapp: boolean;
+  trade_name: string;
 };
 
 const initialForm: ClientFormState = {
@@ -218,6 +221,7 @@ const initialForm: ClientFormState = {
   optante_simples: 'sim',
   delivery_method: 'email',
   send_boleto_whatsapp: false,
+  trade_name: '',
 };
 
 const documentCategoryOptions = ['cnh', 'rg', 'cpf', 'contrato', 'comprovante_endereco', 'cartao_cnpj', 'contrato_social', 'outro'];
@@ -260,6 +264,33 @@ function ActionBtn({ color, icon: Icon, title, onClick }: { color: string; icon:
   );
 }
 
+// Cabeçalho de coluna ordenável (padrão do sistema de referência)
+type ClientSortField = 'id' | 'name' | 'trade_name' | 'cpf_cnpj' | 'status';
+type ClientSort = { field: ClientSortField; dir: 'asc' | 'desc' };
+
+function SortTh({
+  field, label, sort, onSort, className,
+}: {
+  field: ClientSortField;
+  label: string;
+  sort: ClientSort;
+  onSort: (f: ClientSortField) => void;
+  className?: string;
+}) {
+  const active = sort.field === field;
+  return (
+    <th
+      onClick={() => onSort(field)}
+      className={`cursor-pointer select-none px-3 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 transition-colors hover:text-slate-700 dark:hover:text-slate-300 ${className ?? ''}`}
+    >
+      {label}{' '}
+      <span className={active ? 'text-brand-600 dark:text-brand-400' : 'text-slate-300 dark:text-slate-600'}>
+        {active ? (sort.dir === 'asc' ? '↑' : '↓') : '↕'}
+      </span>
+    </th>
+  );
+}
+
 function cardKeyHandler(event: React.KeyboardEvent<HTMLElement>, callback: () => void) {
   if (event.key === 'Enter' || event.key === ' ') {
     event.preventDefault();
@@ -297,6 +328,29 @@ export default function ClientesPage() {
   const [uploading, setUploading] = useState(false);
   const [clientTimeline, setClientTimeline] = useState<TimelineEvent[]>([]);
   const [timelineLoading, setTimelineLoading] = useState(false);
+
+  // Ordenação + paginação da tabela (padrão do sistema de referência)
+  const [clientSort, setClientSort] = useState<ClientSort>({ field: 'name', dir: 'asc' });
+  const [pageSize, setPageSize] = useState(10);
+
+  function toggleClientSort(field: ClientSortField) {
+    setClientSort((prev) =>
+      prev.field === field ? { field, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { field, dir: 'asc' },
+    );
+  }
+
+  const sortedClients = useMemo(() => {
+    const { field, dir } = clientSort;
+    const factor = dir === 'asc' ? 1 : -1;
+    return [...clients].sort((a, b) => {
+      if (field === 'id') return (a.id - b.id) * factor;
+      const av = String((a as unknown as Record<string, unknown>)[field] ?? '').toLowerCase();
+      const bv = String((b as unknown as Record<string, unknown>)[field] ?? '').toLowerCase();
+      return av.localeCompare(bv, 'pt-BR') * factor;
+    });
+  }, [clients, clientSort]);
+
+  const pg = usePagination(sortedClients, pageSize);
 
   // Modal "Veículos vinculados ao cliente"
   const [vehiclesModalOpen, setVehiclesModalOpen] = useState(false);
@@ -770,6 +824,7 @@ export default function ClientesPage() {
       optante_simples: client.optante_simples || 'sim',
       delivery_method: client.delivery_method || 'email',
       send_boleto_whatsapp: !!client.send_boleto_whatsapp,
+      trade_name: client.trade_name || '',
     });
     setDocFiles([]);
     setModalOpen(true);
@@ -889,6 +944,7 @@ export default function ClientesPage() {
         optante_simples: form.optante_simples || null,
         delivery_method: form.delivery_method || null,
         send_boleto_whatsapp: form.send_boleto_whatsapp,
+        trade_name: form.trade_name.trim() || null,
       };
 
       const saved = isEditing && selectedClient
@@ -985,8 +1041,19 @@ export default function ClientesPage() {
               </div>
             }
           />
-          <div className="mt-4 flex flex-wrap gap-3">
-            <Input placeholder="Buscar por nome, CPF/CNPJ ou e-mail" value={search} onChange={(e) => setSearch(e.target.value)} className="max-w-xs" />
+          {/* Barra no padrão do sistema de referência: resultados por página à
+              esquerda, filtros no meio e "Pesquisar" à direita */}
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2">
+              <Select
+                value={String(pageSize)}
+                onChange={(e) => { setPageSize(Number(e.target.value)); pg.setPage(1); }}
+                className="w-20"
+              >
+                {[10, 25, 50, 100].map((n) => <option key={n} value={n}>{n}</option>)}
+              </Select>
+              <span className="text-sm text-slate-500 dark:text-slate-400">resultados por página</span>
+            </div>
             <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="w-44">
               <option value="">Todos os status</option>
               <option value="ativo">Ativo</option>
@@ -1002,6 +1069,15 @@ export default function ClientesPage() {
             <Button type="button" variant="secondary" onClick={() => token && loadClients(token)} disabled={loading}>
               {loading ? 'Atualizando…' : 'Filtrar'}
             </Button>
+            <div className="ml-auto flex items-center gap-2">
+              <span className="text-sm text-slate-500 dark:text-slate-400">Pesquisar</span>
+              <Input
+                placeholder="Nome, fantasia, CPF/CNPJ ou e-mail"
+                value={search}
+                onChange={(e) => { setSearch(e.target.value); pg.setPage(1); }}
+                className="w-64"
+              />
+            </div>
           </div>
 
           <div className="mt-4">
@@ -1010,27 +1086,30 @@ export default function ClientesPage() {
             ) : clients.length === 0 ? (
               <EmptyState icon={Users} title="Nenhum cliente encontrado" description="Ajuste os filtros ou cadastre o primeiro cliente." action={canEdit ? <Button onClick={openCreateModal} className="gap-2"><Plus className="h-4 w-4" />Adicionar cliente</Button> : undefined} />
             ) : (
+              <>
               <Table>
                 <TableHead>
-                  <Th>Cliente</Th>
-                  <Th>Documento</Th>
-                  <Th>Contato</Th>
-                  <Th>Status</Th>
-                  <Th className="w-40" />
+                  <SortTh field="id" label="Matrícula" sort={clientSort} onSort={toggleClientSort} className="w-24" />
+                  <SortTh field="name" label="Nome" sort={clientSort} onSort={toggleClientSort} />
+                  <SortTh field="trade_name" label="Nome fantasia" sort={clientSort} onSort={toggleClientSort} />
+                  <SortTh field="cpf_cnpj" label="CPF/CNPJ" sort={clientSort} onSort={toggleClientSort} />
+                  <SortTh field="status" label="Situação" sort={clientSort} onSort={toggleClientSort} />
+                  <Th className="w-40">Ações</Th>
                 </TableHead>
                 <TableBody>
-                  {clients.map((client) => {
+                  {pg.slice.map((client) => {
                     const vehicles = vehiclesByClient[client.id] || [];
                     return (
                       <Tr key={client.id}>
+                        <Td className="text-sm text-slate-500">{client.id}</Td>
                         <Td>
                           <p className="font-medium text-slate-900 dark:text-white">{client.name}</p>
                           <p className="text-xs text-slate-400">{client.type === 'pj' ? 'Pessoa Jurídica' : 'Pessoa Física'} · {vehicles.length} veículo(s)</p>
                         </Td>
-                        <Td className="font-mono text-xs">{formatCpfCnpj(client.cpf_cnpj)}</Td>
+                        <Td className="text-sm">{client.trade_name || '—'}</Td>
                         <Td>
-                          <p className="text-sm">{client.email || '—'}</p>
-                          <p className="text-xs text-slate-400">{client.phone ? formatPhone(client.phone) : ''}</p>
+                          <p className="font-mono text-xs">{formatCpfCnpj(client.cpf_cnpj)}</p>
+                          <p className="text-xs text-slate-400">{client.email || (client.phone ? formatPhone(client.phone) : '')}</p>
                         </Td>
                         <Td>
                           <Badge variant={statusVariant(client.status)}>{statusLabel(client.status)}</Badge>
@@ -1066,6 +1145,17 @@ export default function ClientesPage() {
                   })}
                 </TableBody>
               </Table>
+
+              {/* Rodapé: contagem + paginação (padrão do sistema de referência) */}
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  {pg.total === 0
+                    ? 'Nenhum registro'
+                    : `Mostrando de ${pg.start} até ${pg.end} de ${pg.total} registro(s)`}
+                </p>
+              </div>
+              <Pagination {...pg} onPage={pg.setPage} className="mt-1" />
+              </>
             )}
           </div>
         </Card>
@@ -1273,6 +1363,9 @@ export default function ClientesPage() {
             <FormGrid cols={2}>
               <FormField label="Nome / razão social" required>
                 <Input placeholder="Nome completo ou razão social" value={form.name} onChange={(e) => handleChange('name', e.target.value)} required />
+              </FormField>
+              <FormField label="Nome fantasia" hint="Opcional — usado principalmente para pessoa jurídica">
+                <Input placeholder="Nome fantasia" value={form.trade_name} onChange={(e) => handleChange('trade_name', e.target.value)} />
               </FormField>
               <FormGrid cols={2}>
                 <FormField label="Tipo de pessoa" required>

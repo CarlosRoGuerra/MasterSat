@@ -102,6 +102,7 @@ def list_items(
         stmt = stmt.where(
             or_(
                 Client.name.ilike(term),
+                Client.trade_name.ilike(term),
                 Client.cpf_cnpj.ilike(term),
                 Client.email.ilike(term),
                 Client.phone.ilike(term),

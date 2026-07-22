@@ -13,6 +13,8 @@ class Client(Base, TimestampMixin, SoftDeleteMixin):
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(180), index=True)
+    # Nome fantasia (PJ) — exibido na listagem ao lado da razão social
+    trade_name: Mapped[str | None] = mapped_column(String(180), nullable=True)
     cpf_cnpj: Mapped[str] = mapped_column(String(18), unique=True, index=True)
     type: Mapped[str] = mapped_column(String(20), default='pf')
     status: Mapped[ClientStatus] = mapped_column(Enum(ClientStatus), default=ClientStatus.ACTIVE)

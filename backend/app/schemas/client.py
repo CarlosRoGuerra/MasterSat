@@ -35,6 +35,7 @@ def normalize_email_list(value: list[str] | None) -> list[str] | None:
 
 class ClientBase(BaseModel):
     name: str
+    trade_name: str | None = None
     cpf_cnpj: str
     type: str = 'pf'
     status: ClientStatus = ClientStatus.ACTIVE
@@ -124,6 +125,7 @@ class ClientCreate(ClientBase):
 
 class ClientUpdate(BaseModel):
     name: str | None = None
+    trade_name: str | None = None
     cpf_cnpj: str | None = None
     type: str | None = None
     status: ClientStatus | None = None

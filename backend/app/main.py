@@ -76,6 +76,7 @@ def ensure_schema_updates():
                 'optante_simples': 'ALTER TABLE clients ADD COLUMN optante_simples VARCHAR(3)',
                 'delivery_method': 'ALTER TABLE clients ADD COLUMN delivery_method VARCHAR(20)',
                 'send_boleto_whatsapp': 'ALTER TABLE clients ADD COLUMN send_boleto_whatsapp BOOLEAN DEFAULT FALSE',
+                'trade_name': 'ALTER TABLE clients ADD COLUMN trade_name VARCHAR(180)',
             }
             for column_name, sql in client_alter_statements.items():
                 if column_name not in client_columns:
