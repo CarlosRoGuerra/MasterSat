@@ -1,7 +1,7 @@
 'use client';
 
 import { FormEvent, Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { TrendingUp, AlertTriangle, FileText, CheckCircle2, Clock, MoreHorizontal, ChevronDown, ChevronRight, Lock, PenSquare, ListChecks, Banknote, Layers, Mail, PieChart, Barcode, Wallet, Coins, FilePlus } from 'lucide-react';
+import { TrendingUp, AlertTriangle, FileText, CheckCircle2, Clock, MoreHorizontal, ChevronDown, ChevronRight, Lock, PenSquare, ListChecks, Banknote, Layers, Mail, PieChart, Barcode, Wallet, Coins, FilePlus, Tags } from 'lucide-react';
 
 import { PageShell } from '@/components/page-shell';
 import { Card } from '@/components/ui/card';
@@ -1201,6 +1201,7 @@ export default function FinanceiroPage() {
             { label: 'Enviar boletos via e-mail / WhatsApp', Icon: Mail, run: () => setEnvioModal(true) },
             { label: 'Módulo de Gestor Financeiro (MGF)', Icon: PieChart, run: () => switchTab('overview') },
             { label: 'Emitir boleto avulso', Icon: Barcode, run: () => { setModalError(''); setNewBillingModal(true); } },
+            { label: 'Planos e Serviços (tabela de preços)', Icon: Tags, run: () => switchTab('management') },
             { label: 'Contas a Pagar', Icon: Wallet, run: () => switchTab('payables') },
             { label: 'Contas a Receber', Icon: Coins, run: () => setCarteiraMode('full') },
             { label: 'Cadastrar Contas', Icon: FilePlus, run: () => { setModalError(''); setPayableModal(true); } },
@@ -1423,6 +1424,62 @@ export default function FinanceiroPage() {
                       </Td>
                     </Tr>
                   ))}
+                </TableBody>
+              </Table>
+            )}
+          </Card>
+
+          {/* ── Serviços / produtos: catálogo com preço-base editável ── */}
+          <Card>
+            <div className="mb-3 flex items-center justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">
+                  Serviços e produtos ({serviceProducts.length})
+                </p>
+                <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+                  Preço-base de cada serviço (instalação, desinstalação, visita técnica…). O valor pode ser ajustado no lançamento.
+                </p>
+              </div>
+              <Button variant="secondary" onClick={openCreateProduct} className="text-xs px-3 py-1.5">
+                Adicionar serviço
+              </Button>
+            </div>
+            {serviceProducts.length === 0 ? (
+              <EmptyState title="Nenhum serviço" description="Cadastre os serviços cobrados (instalação, desinstalação, visita técnica…)." />
+            ) : (
+              <Table>
+                <TableHead>
+                  <Th>Nome</Th>
+                  <Th>Categoria</Th>
+                  <Th>Preço base</Th>
+                  <Th>Parcelamento</Th>
+                  <Th>Automático</Th>
+                  <Th>Situação</Th>
+                  <Th className="w-12" />
+                </TableHead>
+                <TableBody>
+                  {[...serviceProducts]
+                    .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
+                    .map(sp => (
+                      <Tr key={sp.id}>
+                        <Td>
+                          <p className="font-medium">{sp.name}</p>
+                          {sp.description && <p className="text-xs text-slate-400">{sp.description}</p>}
+                        </Td>
+                        <Td className="text-xs capitalize">{sp.category || '—'}</Td>
+                        <Td className="font-mono font-semibold">{formatCurrency(sp.default_price)}</Td>
+                        <Td className="text-xs">{sp.allow_installments ? 'Permite' : 'À vista'}</Td>
+                        <Td className="text-xs">{sp.auto_add_on_uninstall ? 'Na desinstalação' : '—'}</Td>
+                        <Td>
+                          <Badge variant={sp.active ? 'success' : 'default'}>{sp.active ? 'Ativo' : 'Inativo'}</Badge>
+                        </Td>
+                        <Td>
+                          <div className="flex justify-end">
+                            {canEdit && <RowMenu onEdit={() => openEditProduct(sp)} onDelete={() => handleDeleteProduct(sp)} disabled={processing} />}
+                          </div>
+                        </Td>
+                      </Tr>
+                    ))}
                 </TableBody>
               </Table>
             )}
