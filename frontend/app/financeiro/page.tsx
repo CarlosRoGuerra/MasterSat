@@ -1250,46 +1250,6 @@ export default function FinanceiroPage() {
           </section>
 
           <section className="mt-6 space-y-6">
-            {/* ── 6. Chart (taller) + Delinquents ── */}
-            <Card>
-              <div className="grid gap-4 lg:grid-cols-2">
-                <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-5 dark:border-slate-800 dark:bg-slate-950/60">
-                  <p className="mb-1 text-xs font-bold uppercase tracking-widest text-slate-500">Faturamento mensal</p>
-                  <p className="mb-3 text-xs text-slate-400">Receita recebida por mês · passe o mouse para detalhes</p>
-                  <BarChart
-                    items={revenue.slice(-8).map(r => ({ label: r.label, value: r.total_received, secondaryValue: r.total_billed }))}
-                    formatValue={formatCurrency}
-                    height={220}
-                    emptyMessage="Sem dados de faturamento."
-                  />
-                </div>
-                <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-5 dark:border-slate-800 dark:bg-slate-950/60">
-                  <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-500">
-                    Clientes inadimplentes{delinquents.length > 0 ? ` (${delinquents.length})` : ''}
-                  </p>
-                  <div className="space-y-2">
-                    {delinquents.length === 0 ? (
-                      <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
-                        <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                        Nenhum cliente inadimplente no momento.
-                      </div>
-                    ) : delinquents.slice(0, 5).map(item => (
-                      <div key={item.client_id} className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm dark:border-slate-800 dark:bg-slate-900">
-                        <div className="min-w-0">
-                          <p className="truncate font-semibold text-slate-900 dark:text-white">{item.client_name}</p>
-                          <p className="text-xs text-slate-500">{item.overdue_count} cobrança(s) vencida(s)</p>
-                        </div>
-                        <span className="ml-3 shrink-0 font-bold text-rose-600 dark:text-rose-400">{formatCurrency(item.total_open)}</span>
-                      </div>
-                    ))}
-                    {delinquents.length > 5 && (
-                      <p className="text-xs text-slate-400">+ {delinquents.length - 5} outros clientes</p>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </Card>
-
             {/* CNAB export buttons */}
             {token && canEdit && (
               <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -1344,6 +1304,46 @@ export default function FinanceiroPage() {
               onBatchCancel={handleBatchCancel}
               onBatchMaint={() => { setModalError(''); setBatchMaintModal(true); }}
             />
+
+            {/* ── Gráficos no rodapé (Faturamento + Inadimplentes) ── */}
+            <Card>
+              <div className="grid gap-4 lg:grid-cols-2">
+                <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-5 dark:border-slate-800 dark:bg-slate-950/60">
+                  <p className="mb-1 text-xs font-bold uppercase tracking-widest text-slate-500">Faturamento mensal</p>
+                  <p className="mb-3 text-xs text-slate-400">Receita recebida por mês · passe o mouse para detalhes</p>
+                  <BarChart
+                    items={revenue.slice(-8).map(r => ({ label: r.label, value: r.total_received, secondaryValue: r.total_billed }))}
+                    formatValue={formatCurrency}
+                    height={220}
+                    emptyMessage="Sem dados de faturamento."
+                  />
+                </div>
+                <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-5 dark:border-slate-800 dark:bg-slate-950/60">
+                  <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-500">
+                    Clientes inadimplentes{delinquents.length > 0 ? ` (${delinquents.length})` : ''}
+                  </p>
+                  <div className="space-y-2">
+                    {delinquents.length === 0 ? (
+                      <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+                        <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                        Nenhum cliente inadimplente no momento.
+                      </div>
+                    ) : delinquents.slice(0, 5).map(item => (
+                      <div key={item.client_id} className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm dark:border-slate-800 dark:bg-slate-900">
+                        <div className="min-w-0">
+                          <p className="truncate font-semibold text-slate-900 dark:text-white">{item.client_name}</p>
+                          <p className="text-xs text-slate-500">{item.overdue_count} cobrança(s) vencida(s)</p>
+                        </div>
+                        <span className="ml-3 shrink-0 font-bold text-rose-600 dark:text-rose-400">{formatCurrency(item.total_open)}</span>
+                      </div>
+                    ))}
+                    {delinquents.length > 5 && (
+                      <p className="text-xs text-slate-400">+ {delinquents.length - 5} outros clientes</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </Card>
           </section>
         </>
       )}

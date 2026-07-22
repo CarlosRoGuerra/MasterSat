@@ -16,8 +16,18 @@ import { EmptyState, Skeleton } from '@/components/ui/empty-state';
 import { ExportButton } from '@/components/ui/export-button';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { RevenueChart } from '@/components/ui/revenue-chart';
-import { apiFetch } from '@/lib/api';
+import { apiFetch, API_URL } from '@/lib/api';
 import { useAuthGuard } from '@/lib/use-auth-guard';
+
+async function abrirPdfInadimplentes(token: string) {
+  const resp = await fetch(`${API_URL.replace(/\/+$/, '')}/exports/delinquents?fmt=pdf`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!resp.ok) throw new Error(`Erro ${resp.status} ao gerar o PDF`);
+  const url = URL.createObjectURL(await resp.blob());
+  window.open(url, '_blank');
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
 type RevenueMonth = {
@@ -351,6 +361,52 @@ export default function RelatoriosPage() {
         </div>
       </Card>
 
+      {/* ── Exportar dados (no topo, antes dos gráficos) ─────────────────── */}
+      <Card className="mb-6">
+        <div className="mb-4 flex items-center gap-2">
+          <Download className="h-4 w-4 text-slate-500" />
+          <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Exportar dados</h3>
+          <span className="ml-1 text-[11px] text-slate-400 dark:text-slate-500">
+            período: {fmtDate(dateFrom)} – {fmtDate(dateTo)}
+          </span>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {[
+            { label: 'Clientes',      path: 'exports/clients',    basename: 'clientes',     icon: Users,          color: 'bg-blue-50 text-blue-600 dark:bg-blue-950/30 dark:text-blue-400' },
+            { label: 'Veículos',      path: 'exports/vehicles',   basename: 'veiculos',     icon: FileText,       color: 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/30 dark:text-emerald-400' },
+            { label: 'Rastreadores',  path: 'exports/trackers',   basename: 'rastreadores', icon: TrendingUp,     color: 'bg-brand-50 text-brand-600 dark:bg-brand-950/30 dark:text-brand-400' },
+            { label: 'Inadimplentes', path: 'exports/delinquents',basename: 'inadimplentes',icon: AlertTriangle,  color: 'bg-rose-50 text-rose-600 dark:bg-rose-950/30 dark:text-rose-400' },
+          ].map(({ label, path, basename, icon: Icon, color }) =>
+            token ? (
+              <div key={label} className="flex items-center justify-between rounded-xl border border-slate-200 px-4 py-3 dark:border-slate-700">
+                <div className="flex items-center gap-3">
+                  <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${color}`}>
+                    <Icon className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-slate-700 dark:text-slate-300">{label}</p>
+                    <p className="text-[11px] text-slate-400">{label === 'Inadimplentes' ? 'CSV · Excel · PDF' : 'CSV · Excel'}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  {label === 'Inadimplentes' && (
+                    <button
+                      type="button"
+                      title="Imprimir em PDF"
+                      onClick={() => abrirPdfInadimplentes(token).catch(e => setError(e instanceof Error ? e.message : 'Erro ao gerar PDF'))}
+                      className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-semibold text-rose-700 transition hover:bg-rose-100 dark:border-rose-900/40 dark:bg-rose-950/30 dark:text-rose-400"
+                    >
+                      PDF
+                    </button>
+                  )}
+                  <ExportButton path={path} basename={basename} token={token} />
+                </div>
+              </div>
+            ) : null,
+          )}
+        </div>
+      </Card>
+
       <div className="grid gap-6 xl:grid-cols-2">
 
         {/* ── Receita por período ─────────────────────────────────────────── */}
@@ -455,11 +511,20 @@ export default function RelatoriosPage() {
                 {refreshing ? 'Atualizando…' : 'Atualizar agora'}
               </Button>
               {token && (
-                <ExportButton
-                  path="exports/delinquents"
-                  basename="inadimplentes"
-                  token={token}
-                />
+                <>
+                  <Button
+                    variant="secondary"
+                    onClick={() => abrirPdfInadimplentes(token).catch(e => setError(e instanceof Error ? e.message : 'Erro ao gerar PDF'))}
+                    className="gap-1.5 text-xs"
+                  >
+                    <FileText className="h-3.5 w-3.5" /> Imprimir PDF
+                  </Button>
+                  <ExportButton
+                    path="exports/delinquents"
+                    basename="inadimplentes"
+                    token={token}
+                  />
+                </>
               )}
             </div>
           </div>
@@ -528,40 +593,6 @@ export default function RelatoriosPage() {
           </div>
         </Card>
       </div>
-
-      {/* ── Exportar dados ───────────────────────────────────────────────── */}
-      <Card className="mt-6">
-        <div className="mb-4 flex items-center gap-2">
-          <Download className="h-4 w-4 text-slate-500" />
-          <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Exportar dados</h3>
-          <span className="ml-1 text-[11px] text-slate-400 dark:text-slate-500">
-            período: {fmtDate(dateFrom)} – {fmtDate(dateTo)}
-          </span>
-        </div>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {[
-            { label: 'Clientes',      path: 'exports/clients',    basename: 'clientes',     icon: Users,          color: 'bg-blue-50 text-blue-600 dark:bg-blue-950/30 dark:text-blue-400' },
-            { label: 'Veículos',      path: 'exports/vehicles',   basename: 'veiculos',     icon: FileText,       color: 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/30 dark:text-emerald-400' },
-            { label: 'Rastreadores',  path: 'exports/trackers',   basename: 'rastreadores', icon: TrendingUp,     color: 'bg-brand-50 text-brand-600 dark:bg-brand-950/30 dark:text-brand-400' },
-            { label: 'Inadimplentes', path: 'exports/delinquents',basename: 'inadimplentes',icon: AlertTriangle,  color: 'bg-rose-50 text-rose-600 dark:bg-rose-950/30 dark:text-rose-400' },
-          ].map(({ label, path, basename, icon: Icon, color }) =>
-            token ? (
-              <div key={label} className="flex items-center justify-between rounded-xl border border-slate-200 px-4 py-3 dark:border-slate-700">
-                <div className="flex items-center gap-3">
-                  <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${color}`}>
-                    <Icon className="h-4 w-4" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium text-slate-700 dark:text-slate-300">{label}</p>
-                    <p className="text-[11px] text-slate-400">CSV · Excel</p>
-                  </div>
-                </div>
-                <ExportButton path={path} basename={basename} token={token} />
-              </div>
-            ) : null,
-          )}
-        </div>
-      </Card>
     </PageShell>
   );
 }

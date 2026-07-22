@@ -33,8 +33,8 @@ export function PageShell({
           </div>
         </header>
 
-        {/* Content */}
-        <div className="mx-auto max-w-screen-xl px-6 py-6">
+        {/* Content — largura total (padrão do sistema antigo), sem cap central */}
+        <div className="w-full px-6 py-6">
           {children}
         </div>
       </main>
