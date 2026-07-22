@@ -36,7 +36,19 @@ export function Th({
 }
 
 export function TableBody({ children }: { children: ReactNode }) {
-  return <tbody className="divide-y divide-slate-100 dark:divide-slate-800">{children}</tbody>;
+  // Zebra: linhas pares em branco, ímpares em amarelo bem claro (facilita
+  // acompanhar a linha na horizontal em tabelas largas). `even:` respeita a
+  // ordem real das linhas renderizadas; linhas selecionadas têm prioridade.
+  return (
+    <tbody
+      className={clsx(
+        'divide-y divide-slate-100 dark:divide-slate-800',
+        '[&>tr:nth-child(even)]:bg-amber-50/60 dark:[&>tr:nth-child(even)]:bg-slate-800/40',
+      )}
+    >
+      {children}
+    </tbody>
+  );
 }
 
 export function Tr({
@@ -55,8 +67,9 @@ export function Tr({
       onClick={onClick}
       className={clsx(
         'transition-colors',
-        onClick && 'cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/50',
-        selected && 'bg-brand-50/60 dark:bg-brand-950/30',
+        // `!` para vencer a zebra do tbody (que tem especificidade maior)
+        onClick && 'cursor-pointer hover:!bg-slate-100 dark:hover:!bg-slate-800/70',
+        selected && '!bg-brand-100/70 dark:!bg-brand-950/40',
         className,
       )}
     >
