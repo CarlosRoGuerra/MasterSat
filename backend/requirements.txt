@@ -13,6 +13,11 @@ alembic==1.13.2
 bcrypt==4.0.1
 minio==7.2.7
 requests==2.32.3
+# requests valida chardet >= 3.0.2, < 6.0.0. Sem esse teto a imagem instala
+# chardet 7.x e todo comando loga RequestsDependencyWarning. É só ruído hoje,
+# mas o mTLS do Emissor Nacional passa por essa pilha e o aviso atrapalharia
+# o diagnóstico de um erro de TLS real.
+chardet<6
 zeep==4.3.1
 openpyxl==3.1.5
 reportlab==4.2.2
