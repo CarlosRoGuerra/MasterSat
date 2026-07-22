@@ -1127,14 +1127,7 @@ export default function VeiculosPage() {
       )}
       {guardLoading ? <p className="mb-4 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">Validando sessão...</p> : null}
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="Veículos cadastrados" value={stats.total} hint="Base total de ativos" icon="🚗" />
-        <StatCard label="Em operação" value={stats.active} hint="Status ativo/aprovado" tone="success" icon="✅" />
-        <StatCard label="Sem rastreador" value={stats.withoutTracker} hint="Exigem ação técnica" tone="warning" icon="📍" />
-        <StatCard label="Retirados" value={stats.removed} hint="Veículos desinstalados" tone="danger" icon="↩️" />
-      </section>
-
-      <section className="mt-6">
+      <section>
         <Card>
           <SectionHeader
             eyebrow="Cadastro"
@@ -1237,6 +1230,14 @@ export default function VeiculosPage() {
             )}
           </div>
         </Card>
+      </section>
+
+      {/* Indicadores abaixo do cadastro (padrão de todas as telas) */}
+      <section className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <StatCard label="Veículos cadastrados" value={stats.total} hint="Base total de ativos" icon="🚗" />
+        <StatCard label="Em operação" value={stats.active} hint="Status ativo/aprovado" tone="success" icon="✅" />
+        <StatCard label="Sem rastreador" value={stats.withoutTracker} hint="Exigem ação técnica" tone="warning" icon="📍" />
+        <StatCard label="Retirados" value={stats.removed} hint="Veículos desinstalados" tone="danger" icon="↩️" />
       </section>
 
       {/* Modal de detalhes */}

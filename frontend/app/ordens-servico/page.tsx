@@ -485,14 +485,7 @@ export default function ServiceOrdersPage() {
       )}
       {guardLoading ? <p className="mb-4 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">Validando sessão...</p> : null}
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="Ordens registradas" value={stats.total} hint="Base operacional total" icon="🧾" />
-        <StatCard label="Abertas" value={stats.open} hint="Pendentes de início" tone="warning" icon="📌" />
-        <StatCard label="Em andamento" value={stats.inProgress} hint="Execução em campo" tone="brand" icon="🛠️" />
-        <StatCard label="Concluídas" value={stats.completed} hint="Prontas para auditoria" tone="success" icon="✅" />
-      </section>
-
-      <section className="mt-6">
+      <section>
         <Card>
           <SectionHeader
             eyebrow="Operação"
@@ -544,6 +537,14 @@ export default function ServiceOrdersPage() {
             />
           </div>
         </Card>
+      </section>
+
+      {/* Indicadores abaixo do cadastro (padrão de todas as telas) */}
+      <section className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <StatCard label="Ordens registradas" value={stats.total} hint="Base operacional total" icon="🧾" />
+        <StatCard label="Abertas" value={stats.open} hint="Pendentes de início" tone="warning" icon="📌" />
+        <StatCard label="Em andamento" value={stats.inProgress} hint="Execução em campo" tone="brand" icon="🛠️" />
+        <StatCard label="Concluídas" value={stats.completed} hint="Prontas para auditoria" tone="success" icon="✅" />
       </section>
 
       {/* Modal de detalhes */}

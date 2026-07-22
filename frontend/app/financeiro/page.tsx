@@ -1224,33 +1224,7 @@ export default function FinanceiroPage() {
       ══════════════════════════════════════════════════════════════ */}
       {activeTab === 'overview' && (
         <>
-          {/* ── 3. KPIs with variation indicators ── */}
-          <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <div>
-              <StatCard label="Recebido no mês" value={formatCurrency(summary?.paid_this_month ?? 0)} hint="Receita consolidada" tone="success" icon={<TrendingUp className="h-5 w-5" />} />
-              {monthlyVariation !== null ? (
-                <p className={`mt-1.5 text-xs font-semibold ${monthlyVariation >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
-                  {monthlyVariation >= 0 ? '↑' : '↓'} {Math.abs(monthlyVariation).toFixed(1)}% vs mês anterior
-                </p>
-              ) : (
-                <p className="mt-1.5 text-xs text-slate-400">— vs mês anterior</p>
-              )}
-            </div>
-            <div>
-              <StatCard label="Pendentes" value={summary?.pending_billings ?? 0} hint={formatCurrency(summary?.pending_amount ?? 0)} tone="brand" icon={<Clock className="h-5 w-5" />} />
-              <p className="mt-1.5 text-xs text-slate-400">— vs mês anterior</p>
-            </div>
-            <div>
-              <StatCard label="Vencidas" value={summary?.overdue_billings ?? 0} hint={formatCurrency(summary?.overdue_amount ?? 0)} tone="danger" icon={<AlertTriangle className="h-5 w-5" />} />
-              <p className="mt-1.5 text-xs text-slate-400">— vs mês anterior</p>
-            </div>
-            <div>
-              <StatCard label="Contratos ativos" value={summary?.active_contracts ?? 0} hint={`${summary?.active_plans ?? 0} plano(s) em uso`} icon={<FileText className="h-5 w-5" />} />
-              <p className="mt-1.5 text-xs text-slate-400">— vs mês anterior</p>
-            </div>
-          </section>
-
-          <section className="mt-6 space-y-6">
+          <section className="space-y-6">
             {/* CNAB export buttons */}
             {token && canEdit && (
               <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -1306,7 +1280,32 @@ export default function FinanceiroPage() {
               onBatchMaint={() => { setModalError(''); setBatchMaintModal(true); }}
             />
 
-            {/* ── Gráficos no rodapé (Faturamento + Inadimplentes) ── */}
+            {/* ── Indicadores + gráficos no rodapé ── */}
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <div>
+                <StatCard label="Recebido no mês" value={formatCurrency(summary?.paid_this_month ?? 0)} hint="Receita consolidada" tone="success" icon={<TrendingUp className="h-5 w-5" />} />
+                {monthlyVariation !== null ? (
+                  <p className={`mt-1.5 text-xs font-semibold ${monthlyVariation >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                    {monthlyVariation >= 0 ? '↑' : '↓'} {Math.abs(monthlyVariation).toFixed(1)}% vs mês anterior
+                  </p>
+                ) : (
+                  <p className="mt-1.5 text-xs text-slate-400">— vs mês anterior</p>
+                )}
+              </div>
+              <div>
+                <StatCard label="Pendentes" value={summary?.pending_billings ?? 0} hint={formatCurrency(summary?.pending_amount ?? 0)} tone="brand" icon={<Clock className="h-5 w-5" />} />
+                <p className="mt-1.5 text-xs text-slate-400">— vs mês anterior</p>
+              </div>
+              <div>
+                <StatCard label="Vencidas" value={summary?.overdue_billings ?? 0} hint={formatCurrency(summary?.overdue_amount ?? 0)} tone="danger" icon={<AlertTriangle className="h-5 w-5" />} />
+                <p className="mt-1.5 text-xs text-slate-400">— vs mês anterior</p>
+              </div>
+              <div>
+                <StatCard label="Contratos ativos" value={summary?.active_contracts ?? 0} hint={`${summary?.active_plans ?? 0} plano(s) em uso`} icon={<FileText className="h-5 w-5" />} />
+                <p className="mt-1.5 text-xs text-slate-400">— vs mês anterior</p>
+              </div>
+            </div>
+
             <Card>
               <div className="grid gap-4 lg:grid-cols-2">
                 <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-5 dark:border-slate-800 dark:bg-slate-950/60">
