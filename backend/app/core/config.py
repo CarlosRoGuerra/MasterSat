@@ -95,9 +95,56 @@ class Settings(BaseSettings):
     nfse_incentivador_cultural: int = 2    # 1=Sim, 2=Não
     nfse_iss_retido: int = 2               # 1=Sim, 2=Não
     nfse_discriminacao_padrao: str = 'MONITORAMENTO E RASTREAMENTO DE VEICULOS'
-    nfse_cert_path: str = ''               # opcional — .pfx/.p12 para assinar
+    # ── PIS/COFINS — grupo TributosFederais, OBRIGATÓRIO no padrão Nota
+    # Nacional ("Obriga informar Pis/Cofins"). As tags antigas ValorPis/
+    # ValorCofins foram descontinuadas (erro E923).
+    # Defaults de optante do Simples Nacional (PIS/COFINS recolhidos no DAS):
+    # CST 08 = operação sem incidência, base e alíquotas zeradas, sem retenção.
+    # ⚠ CONFIRME COM O CONTADOR antes de emitir em produção.
+    nfse_pis_cofins_cst: str = '08'
+    nfse_pis_cofins_base: str = '0.00'
+    nfse_aliquota_pis: str = '0.00'
+    nfse_aliquota_cofins: str = '0.00'
+    # 0 = PIS/COFINS/CSLL não retidos
+    nfse_tipo_retencao_pis_cofins: str = '0'
+    nfse_cert_path: str = ''               # .pfx/.p12 — OBRIGATÓRIO no Emissor Nacional
     nfse_cert_senha: str = ''
     nfse_timeout_seconds: int = 60
+
+    # ── NFS-e Emissor Nacional (SNNFSe / Sefin Nacional, REST) ───────────────
+    # Joinville encerrou a emissão municipal em 20/07/2026 (erro E930 no
+    # webservice antigo). 'nacional' usa este módulo; 'joinville' mantém o
+    # legado só para consultar notas já emitidas.
+    nfse_provedor: str = 'nacional'         # 'nacional' | 'joinville'
+    # 'producao_restrita' = ambiente de testes; 'producao' emite nota REAL
+    nfse_nac_ambiente: str = 'producao_restrita'
+    nfse_nac_serie: str = '1'
+    nfse_nac_ver_aplic: str = 'MasterSat-1.0'
+    # opSimpNac: 1=Não optante, 2=Optante MEI, 3=Optante ME/EPP
+    nfse_nac_op_simples_nacional: str = '3'
+    # regApTribSN (só quando opSimpNac=3): 1=Federais e municipal pelo SN,
+    # 2=Federais pelo SN e ISSQN por fora, 3=Federais e municipal por fora
+    nfse_nac_reg_apur_simples: str = '1'
+    nfse_nac_regime_especial: str = '0'     # 0 = Nenhum
+    # Código de tributação nacional (6 dígitos), da aba MUN.INCID_INFO.SERV. do
+    # ANEXO I. NÃO é o ItemListaServico de 4 dígitos do padrão antigo.
+    # 110501 = "Serviços relacionados ao monitoramento e rastreamento a
+    #           distância [...] de veículos, cargas, pessoas [...] por meio de
+    #           telefonia móvel, transmissão de satélites, rádio [...]"
+    #           → é a descrição literal do serviço da MasterSat (LC116 11.05).
+    # ⚠ DECISÃO FISCAL PENDENTE: no cadastro de Joinville a empresa está sob o
+    # item 11.02, cujo código nacional é 110201 ("Vigilância, segurança ou
+    # monitoramento de bens, pessoas e semoventes"). Confirmar com o contador
+    # qual usar — código inexistente na lista nacional é rejeitado com E0310.
+    nfse_nac_cod_trib_nacional: str = '110501'
+    nfse_nac_cod_nbs: str = ''              # opcional
+    nfse_nac_trib_issqn: str = '1'          # 1 = Operação tributável
+    nfse_nac_tipo_ret_issqn: str = '1'      # 1 = Não retido
+    # Percentual do Simples p/ o grupo totTrib. Vazio → envia indTotTrib=0.
+    nfse_nac_perc_trib_simples: str = ''
+    # Algoritmos da assinatura XMLDSig — validar no 1º teste em produção restrita
+    nfse_nac_alg_assinatura: str = 'rsa-sha256'
+    nfse_nac_alg_digest: str = 'sha256'
 
     # Rate limiting
     rate_limit_default: str = '200/minute'

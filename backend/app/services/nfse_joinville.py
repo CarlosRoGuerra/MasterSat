@@ -144,6 +144,26 @@ def _montar_tomador(inf: etree._Element, client: Client) -> None:
         etree.SubElement(contato, 'Email').text = _norm(client.email, 100)
 
 
+def _validar_endereco_tomador(client: Client) -> None:
+    """O padrão Nota Nacional valida o endereço do tomador. Falhar aqui, com a
+    lista do que falta no cadastro, é melhor do que tomar uma rejeição
+    genérica da prefeitura depois do envio."""
+    faltando = [
+        rotulo for rotulo, valor in (
+            ('logradouro', client.address_line),
+            ('número', client.address_number),
+            ('bairro', client.neighborhood),
+            ('CEP', client.zip_code),
+            ('UF', client.state),
+        ) if not (valor or '').strip()
+    ]
+    if faltando:
+        raise NfseError(
+            'Endereço do tomador incompleto para emissão da NFS-e '
+            f'(padrão Nota Nacional). Preencha no cadastro do cliente: {", ".join(faltando)}.'
+        )
+
+
 def _sim_nao_code(value: str | None, default: int) -> str:
     """Converte a preferência do cliente ('sim'/'nao') para o código ABRASF
     (1=Sim, 2=Não). None/vazio → usa o default global do .env."""
@@ -183,6 +203,17 @@ def montar_inf_rps(billing: Billing, client: Client, numero_rps: str) -> tuple[e
     etree.SubElement(valores, 'BaseCalculo').text = valor
     etree.SubElement(valores, 'Aliquota').text = settings.nfse_aliquota_iss
     etree.SubElement(valores, 'ValorLiquidoNfse').text = valor
+    # TributosFederais/PisCofins — obrigatório no padrão Nota Nacional. Os 5
+    # campos são 1-1 no schema; substitui as tags ValorPis/ValorCofins, que
+    # foram descontinuadas (E923).
+    trib_fed = etree.SubElement(valores, 'TributosFederais')
+    pis_cofins = etree.SubElement(trib_fed, 'PisCofins')
+    etree.SubElement(pis_cofins, 'CST').text = settings.nfse_pis_cofins_cst
+    etree.SubElement(pis_cofins, 'ValorBaseCalculoPisCofins').text = settings.nfse_pis_cofins_base
+    etree.SubElement(pis_cofins, 'PercentualAliquotaPis').text = settings.nfse_aliquota_pis
+    etree.SubElement(pis_cofins, 'PercentualAliquotaCofins').text = settings.nfse_aliquota_cofins
+    etree.SubElement(pis_cofins, 'TipoRetencaoPisCofins').text = settings.nfse_tipo_retencao_pis_cofins
+
     etree.SubElement(servico, 'ItemListaServico').text = settings.nfse_item_lista_servico
     etree.SubElement(servico, 'Discriminacao').text = _norm(
         billing.title or settings.nfse_discriminacao_padrao, 2000
@@ -353,6 +384,8 @@ def emitir_nfse(db: Session, billing: Billing, client: Client) -> NfseNota:
     # (None/'sim' → emite; mantém compatibilidade com clientes antigos sem o campo).
     if (client.issue_invoice or 'sim') == 'nao':
         raise NfseError('Cliente configurado para NÃO emitir nota fiscal (campo "Emitir Nota Fiscal" = Não no cadastro).')
+
+    _validar_endereco_tomador(client)
 
     nota = db.query(NfseNota).filter_by(billing_id=billing.id).first()
     if nota and nota.status == 'emitida':
