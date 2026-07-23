@@ -118,7 +118,12 @@ class Settings(BaseSettings):
     nfse_provedor: str = 'nacional'         # 'nacional' | 'joinville'
     # 'producao_restrita' = ambiente de testes; 'producao' emite nota REAL
     nfse_nac_ambiente: str = 'producao_restrita'
-    nfse_nac_serie: str = '1'
+    # Série da DPS. Joinville padronizou as faixas no portal da NF-em:
+    # 40000 = aplicativo próprio com integração via API à Sefin Nacional (nosso
+    # caso), 60000 = emissor móvel (MEI), 70000 = emissor web (padrão do portal),
+    # 80000 = transcrição manual. Não confundir com a série 3000 do webservice
+    # municipal antigo.
+    nfse_nac_serie: str = '40000'
     nfse_nac_ver_aplic: str = 'MasterSat-1.0'
     # opSimpNac: 1=Não optante, 2=Optante MEI, 3=Optante ME/EPP
     nfse_nac_op_simples_nacional: str = '3'

@@ -91,6 +91,15 @@ def test_id_dps_tem_45_caracteres_e_estrutura_correta():
     assert ident[30:] == '42'.zfill(15)
 
 
+def test_serie_e_a_faixa_de_integracao_via_api():
+    """
+    Joinville padronizou: 40000 = aplicativo próprio integrando via API com a
+    Sefin Nacional. 60000/70000/80000 são móvel/web/transcrição manual.
+    """
+    assert settings.nfse_nac_serie == '40000'
+    assert _q(montar_dps(_billing(), _client(), '6'), 'infDPS', 'serie').text == '40000'
+
+
 def test_infdps_carrega_o_id_como_atributo():
     dps = montar_dps(_billing(), _client(), '7')
     assert _q(dps, 'infDPS').get('Id') == id_dps('7')
