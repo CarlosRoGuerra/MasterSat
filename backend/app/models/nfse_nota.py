@@ -28,6 +28,8 @@ class NfseNota(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     billing_id: Mapped[int] = mapped_column(ForeignKey('billings.id'), unique=True, index=True)
+    # Lote de emissão em massa (NULL = emissão avulsa de uma cobrança só)
+    lote_id: Mapped[int | None] = mapped_column(ForeignKey('nfse_lotes.id'), nullable=True, index=True)
 
     # RPS enviado
     numero_rps: Mapped[str | None] = mapped_column(String(15), nullable=True)

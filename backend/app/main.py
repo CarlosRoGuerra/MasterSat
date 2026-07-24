@@ -17,7 +17,7 @@ from app.core.config import settings
 from app.core.limiter import limiter
 from app.core.security import get_password_hash
 from app.db.session import Base, SessionLocal, engine
-from app.models import ailos_api_log, ailos_boleto, ailos_client_token, ailos_integration, ailos_lote, ailos_retorno_arquivo, audit_log, billing, billing_change_log, client, client_charge_item, closure_job, contract, document, integration_log, password_reset_token, payable, plan, service_order, service_order_status_log, service_product, system_setting, tracker, tracker_history, uninstall_event, user, vehicle  # noqa: F401 — side-effect imports that register models with SQLAlchemy Base
+from app.models import ailos_api_log, ailos_boleto, ailos_client_token, ailos_integration, ailos_lote, ailos_retorno_arquivo, audit_log, billing, billing_change_log, client, client_charge_item, closure_job, contract, document, integration_log, nfse_lote, nfse_nota, password_reset_token, payable, plan, service_order, service_order_status_log, service_product, system_setting, tracker, tracker_history, uninstall_event, user, vehicle  # noqa: F401 — side-effect imports that register models with SQLAlchemy Base
 from app.core.audit import AuditMiddleware
 from app.models.enums import UserRole
 from app.models.user import User
@@ -105,6 +105,11 @@ def ensure_schema_updates():
             ailos_integ_columns = {column['name'] for column in inspector.get_columns('ailos_integrations')}
             if 'auto_relogin_failures' not in ailos_integ_columns:
                 conn.execute(text('ALTER TABLE ailos_integrations ADD COLUMN auto_relogin_failures INTEGER DEFAULT 0'))
+
+        if inspector.has_table('nfse_notas'):
+            nfse_nota_columns = {column['name'] for column in inspector.get_columns('nfse_notas')}
+            if 'lote_id' not in nfse_nota_columns:
+                conn.execute(text('ALTER TABLE nfse_notas ADD COLUMN lote_id INTEGER REFERENCES nfse_lotes(id)'))
 
         if inspector.has_table('documents'):
             document_columns = {column['name'] for column in inspector.get_columns('documents')}

@@ -20,26 +20,33 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_roles
-from app.core.config import settings
 from app.db.session import get_db
 from app.models.billing import Billing
 from app.models.client import Client
 from app.models.enums import UserRole
 from app.models.nfse_nota import NfseNota
-from app.schemas.nfse import NfseClientItem, NfseOut
-from app.services import nfse_joinville, nfse_nacional
+from app.models.user import User
+from app.schemas.nfse import (
+    ElegiveisOut,
+    LoteDetalhe,
+    LoteEmitirIn,
+    LoteResumo,
+    NfseClientItem,
+    NfseOut,
+)
+from app.services import nfse_joinville, nfse_lote, nfse_nacional, nfse_provider
 
 router = APIRouter()
 
 ALLOWED_ROLES = (UserRole.ADMIN, UserRole.FINANCIAL)
 
 # Os dois módulos definem NfseError/NfseApiError próprios; o handler trata ambos.
-_ERROS_CONFIG = (nfse_joinville.NfseError, nfse_nacional.NfseError)
-_ERROS_API = (nfse_joinville.NfseApiError, nfse_nacional.NfseApiError)
+_ERROS_CONFIG = nfse_provider.ErrosConfig
+_ERROS_API = nfse_provider.ErrosApi
 
 
 def _provedor():
-    return nfse_joinville if settings.nfse_provedor == 'joinville' else nfse_nacional
+    return nfse_provider.modulo()
 
 
 def _raise_nfse_error(exc: Exception) -> NoReturn:
@@ -93,6 +100,65 @@ def emitir(
         return _provedor().emitir_nfse(db, billing, client)
     except (*_ERROS_CONFIG, *_ERROS_API) as exc:
         _raise_nfse_error(exc)
+
+
+# ── Emissão em lote ─────────────────────────────────────────────────────────
+# Estas rotas /lotes/... precisam vir ANTES de GET /{billing_id} (que espera int),
+# senão o path param sombreia /lotes.
+
+@router.get('/lotes/elegiveis', response_model=ElegiveisOut)
+def lote_elegiveis(
+    period_label: str,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    """Etapa de conferência: clientes do lote de fechamento com 'Emitir NF = Sim'."""
+    return nfse_lote.listar_elegiveis(db, period_label)
+
+
+@router.post('/lotes', response_model=LoteResumo, status_code=201)
+def lote_emitir(
+    payload: LoteEmitirIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    """Confirma a emissão em massa das cobranças selecionadas (assíncrona)."""
+    try:
+        lote = nfse_lote.criar_lote(
+            db,
+            payload.period_label,
+            payload.billing_ids,
+            competencia=payload.competencia,
+            codigo_servico=payload.codigo_servico,
+            discriminacao=payload.discriminacao,
+            criado_por=user.id,
+        )
+    except nfse_lote.LoteError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return nfse_lote._lote_resumo(lote)
+
+
+@router.get('/lotes', response_model=list[LoteResumo])
+def lote_listar(
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    """Histórico de lotes emitidos (monitoramento)."""
+    return nfse_lote.listar_lotes(db, min(limit, 300))
+
+
+@router.get('/lotes/{lote_id}', response_model=LoteDetalhe)
+def lote_detalhe(
+    lote_id: int,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    """Drill-down: status individual de cada nota do lote."""
+    detalhe = nfse_lote.consultar_lote(db, lote_id)
+    if detalhe is None:
+        raise HTTPException(status_code=404, detail='Lote não encontrado')
+    return detalhe
 
 
 @router.get('/{billing_id}', response_model=NfseOut)

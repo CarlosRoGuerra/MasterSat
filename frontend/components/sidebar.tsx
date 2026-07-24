@@ -17,6 +17,7 @@ import {
   ScrollText,
   BarChart2,
   CalendarCheck,
+  Receipt,
   ChevronLeft,
   ChevronRight,
   Settings,
@@ -49,6 +50,7 @@ const NAV_GROUPS: NavGroup[] = [
       { href: '/ordens-servico', label: 'Ordens de serviço', icon: ClipboardList },
       { href: '/financeiro',     label: 'Financeiro',        icon: Wallet },
       { href: '/fechamento',     label: 'Fechamento',        icon: CalendarCheck },
+      { href: '/notas-fiscais',  label: 'Notas Fiscais',     icon: Receipt },
     ],
   },
   {

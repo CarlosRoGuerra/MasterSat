@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class NfseOut(BaseModel):
@@ -32,3 +32,69 @@ class NfseClientItem(NfseOut):
 
     valor: float | None = None
     titulo: str | None = None
+
+
+# ── Emissão em lote ─────────────────────────────────────────────────────────
+
+class LoteEmitirIn(BaseModel):
+    """Confirmação de emissão em massa (etapa 'Confirmar e Emitir')."""
+
+    period_label: str = Field(..., description="Lote de fechamento, ex.: '07/2026'")
+    billing_ids: list[int] = Field(..., min_length=1, description='Cobranças selecionadas')
+    competencia: date | None = None
+    codigo_servico: str | None = None
+    discriminacao: str | None = None
+
+
+class LoteResumo(BaseModel):
+    """Visão geral de um lote de emissão (listagem)."""
+
+    id: int
+    period_label: str
+    competencia: str | None = None
+    codigo_servico: str | None = None
+    discriminacao: str | None = None
+    status: str
+    total_notas: int
+    total_autorizadas: int
+    total_erro: int
+    criado_em: str | None = None
+    concluido_em: str | None = None
+
+
+class LoteNotaItem(BaseModel):
+    """Linha do drill-down: status individual de uma nota do lote."""
+
+    nota_id: int
+    billing_id: int
+    tomador: str
+    cpf_cnpj: str | None = None
+    valor: float
+    numero_nfse: str | None = None
+    status: str
+    chave_acesso: str | None = None
+    link_visualizacao: str | None = None
+    erro_codigo: str | None = None
+    erro_mensagem: str | None = None
+
+
+class LoteDetalhe(LoteResumo):
+    itens: list[LoteNotaItem] = []
+
+
+class ElegivelItem(BaseModel):
+    billing_id: int
+    client_id: int
+    tomador: str
+    cpf_cnpj: str | None = None
+    tipo: str | None = None
+    valor: float
+    titulo: str | None = None
+    reprocessamento: bool = False
+
+
+class ElegiveisOut(BaseModel):
+    period_label: str
+    total_elegiveis: int
+    ja_emitidas: int
+    itens: list[ElegivelItem] = []

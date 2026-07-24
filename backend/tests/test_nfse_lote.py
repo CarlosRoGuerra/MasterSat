@@ -1,0 +1,316 @@
+"""Testes da emissão de NFS-e em lote (a partir de um fechamento financeiro)."""
+from __future__ import annotations
+
+from datetime import date
+from decimal import Decimal
+
+import pytest
+
+from app.models.billing import Billing
+from app.models.client import Client
+from app.models.enums import BillingStatus, ClientStatus, UserRole
+from app.models.nfse_lote import NfseLote
+from app.models.nfse_nota import NfseNota
+from app.services import nfse_lote
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _client(db, nome, *, emitir='sim', doc='11144477735', tipo='pf', deleted=False):
+    c = Client(
+        name=nome, cpf_cnpj=doc, type=tipo, status=ClientStatus.ACTIVE,
+        issue_invoice=emitir, is_deleted=deleted,
+    )
+    db.add(c)
+    db.commit()
+    db.refresh(c)
+    return c
+
+
+def _billing(db, client, *, period='07/2026', amount='120.00', deleted=False):
+    b = Billing(
+        client_id=client.id, amount=Decimal(amount), due_date=date(2026, 7, 10),
+        status=BillingStatus.PENDING, period_label=period, title='MENSALIDADE',
+        billing_type='recorrente', is_deleted=deleted,
+    )
+    db.add(b)
+    db.commit()
+    db.refresh(b)
+    return b
+
+
+def _nota(db, billing, *, status, lote_id=None):
+    n = NfseNota(billing_id=billing.id, status=status, lote_id=lote_id)
+    db.add(n)
+    db.commit()
+    db.refresh(n)
+    return n
+
+
+# ---------------------------------------------------------------------------
+# Elegibilidade
+# ---------------------------------------------------------------------------
+
+def test_elegiveis_apenas_clientes_com_emitir_nf_sim(db):
+    c_sim = _client(db, 'COM NF', emitir='sim', doc='111')
+    c_nao = _client(db, 'SEM NF', emitir='nao', doc='222')
+    c_nulo = _client(db, 'NULO', emitir=None, doc='333')
+    _billing(db, c_sim)
+    _billing(db, c_nao)
+    _billing(db, c_nulo)
+
+    res = nfse_lote.listar_elegiveis(db, '07/2026')
+    nomes = {i['tomador'] for i in res['itens']}
+    assert nomes == {'COM NF'}
+    assert res['total_elegiveis'] == 1
+
+
+def test_elegiveis_filtra_por_lote_de_fechamento(db):
+    c = _client(db, 'CLIENTE')
+    _billing(db, c, period='07/2026')
+    _billing(db, c, period='08/2026')
+
+    res = nfse_lote.listar_elegiveis(db, '07/2026')
+    assert res['total_elegiveis'] == 1
+
+
+def test_elegiveis_ignora_cobranca_deletada(db):
+    c = _client(db, 'CLIENTE')
+    _billing(db, c, deleted=True)
+    assert nfse_lote.listar_elegiveis(db, '07/2026')['total_elegiveis'] == 0
+
+
+def test_idempotencia_nota_emitida_nao_reaparece(db):
+    c = _client(db, 'CLIENTE')
+    b = _billing(db, c)
+    _nota(db, b, status='emitida')
+
+    res = nfse_lote.listar_elegiveis(db, '07/2026')
+    assert res['total_elegiveis'] == 0
+    assert res['ja_emitidas'] == 1
+
+
+@pytest.mark.parametrize('status_em_voo', ['pending', 'processing'])
+def test_idempotencia_nota_em_voo_nao_reaparece(db, status_em_voo):
+    c = _client(db, 'CLIENTE')
+    b = _billing(db, c)
+    _nota(db, b, status=status_em_voo)
+    assert nfse_lote.listar_elegiveis(db, '07/2026')['total_elegiveis'] == 0
+
+
+def test_nota_com_erro_reaparece_para_reprocessamento(db):
+    c = _client(db, 'CLIENTE')
+    b = _billing(db, c)
+    _nota(db, b, status='erro')
+
+    res = nfse_lote.listar_elegiveis(db, '07/2026')
+    assert res['total_elegiveis'] == 1
+    assert res['itens'][0]['reprocessamento'] is True
+
+
+# ---------------------------------------------------------------------------
+# Criação do lote (transacional)
+# ---------------------------------------------------------------------------
+
+def test_criar_lote_cria_notas_pendentes_vinculadas(db):
+    c1 = _client(db, 'C1', doc='111')
+    c2 = _client(db, 'C2', doc='222')
+    b1 = _billing(db, c1)
+    b2 = _billing(db, c2)
+
+    lote = nfse_lote.criar_lote(
+        db, '07/2026', [b1.id, b2.id],
+        competencia=date(2026, 7, 1), codigo_servico='11.02',
+        discriminacao='Monitoramento', criado_por=9, emitir_async=False,
+    )
+
+    assert lote.status == 'processando'
+    assert lote.total_notas == 2
+    notas = db.query(NfseNota).filter(NfseNota.lote_id == lote.id).all()
+    assert len(notas) == 2
+    assert all(n.status == 'pending' for n in notas)
+
+
+def test_criar_lote_ignora_ids_nao_elegiveis(db):
+    c_sim = _client(db, 'SIM', emitir='sim', doc='111')
+    c_nao = _client(db, 'NAO', emitir='nao', doc='222')
+    b_sim = _billing(db, c_sim)
+    b_nao = _billing(db, c_nao)
+
+    lote = nfse_lote.criar_lote(db, '07/2026', [b_sim.id, b_nao.id], emitir_async=False)
+    assert lote.total_notas == 1
+
+
+def test_criar_lote_sem_selecao_falha(db):
+    with pytest.raises(nfse_lote.LoteError, match='Nenhuma cobrança'):
+        nfse_lote.criar_lote(db, '07/2026', [], emitir_async=False)
+
+
+def test_criar_lote_tudo_ja_emitido_avisa_lote_processado(db):
+    c = _client(db, 'CLIENTE')
+    b = _billing(db, c)
+    _nota(db, b, status='emitida')
+
+    with pytest.raises(nfse_lote.LoteError, match='já processado|Nenhum registro'):
+        nfse_lote.criar_lote(db, '07/2026', [b.id], emitir_async=False)
+
+
+def test_criar_lote_reaproveita_nota_de_erro(db):
+    c = _client(db, 'CLIENTE')
+    b = _billing(db, c)
+    nota_antiga = _nota(db, b, status='erro')
+
+    lote = nfse_lote.criar_lote(db, '07/2026', [b.id], emitir_async=False)
+    db.refresh(nota_antiga)
+    # mesma linha (billing_id é único), agora vinculada ao lote e rependente
+    assert nota_antiga.lote_id == lote.id
+    assert nota_antiga.status == 'pending'
+    assert db.query(NfseNota).filter_by(billing_id=b.id).count() == 1
+
+
+# ---------------------------------------------------------------------------
+# Emissão de cada nota (worker) + fechamento
+# ---------------------------------------------------------------------------
+
+def test_emitir_uma_sucesso_marca_emitida(db):
+    c = _client(db, 'CLIENTE')
+    b = _billing(db, c)
+    lote = nfse_lote.criar_lote(db, '07/2026', [b.id], emitir_async=False)
+    nota = db.query(NfseNota).filter_by(lote_id=lote.id).first()
+
+    def fake_ok(db_, billing_, client_):
+        n = db_.query(NfseNota).filter_by(billing_id=billing_.id).first()
+        n.status = 'emitida'
+        n.numero_nfse = '2026000001'
+        db_.commit()
+
+    nfse_lote._emitir_uma(db, nota, fake_ok)
+    db.refresh(nota)
+    assert nota.status == 'emitida'
+    assert nota.numero_nfse == '2026000001'
+
+
+def test_emitir_uma_erro_marca_erro_com_mensagem(db):
+    from app.services.nfse_nacional import NfseError
+
+    c = _client(db, 'CLIENTE')
+    b = _billing(db, c)
+    lote = nfse_lote.criar_lote(db, '07/2026', [b.id], emitir_async=False)
+    nota = db.query(NfseNota).filter_by(lote_id=lote.id).first()
+
+    def fake_falha(db_, billing_, client_):
+        raise NfseError('Certificado digital obrigatório para o Emissor Nacional.')
+
+    nfse_lote._emitir_uma(db, nota, fake_falha)
+    db.refresh(nota)
+    assert nota.status == 'erro'
+    assert 'Certificado' in nota.erro_mensagem
+
+
+def test_fechar_lote_deriva_situacao_dos_contadores(db):
+    c1 = _client(db, 'C1', doc='111')
+    c2 = _client(db, 'C2', doc='222')
+    b1, b2 = _billing(db, c1), _billing(db, c2)
+    lote = nfse_lote.criar_lote(db, '07/2026', [b1.id, b2.id], emitir_async=False)
+    notas = db.query(NfseNota).filter_by(lote_id=lote.id).order_by(NfseNota.id).all()
+    notas[0].status = 'emitida'
+    notas[1].status = 'erro'
+    db.commit()
+
+    nfse_lote._fechar_lote(db, lote.id)
+    db.refresh(lote)
+    assert lote.status == 'com_erro'
+    assert lote.total_autorizadas == 1
+    assert lote.total_erro == 1
+    assert lote.concluido_em is not None
+
+
+def test_fechar_lote_tudo_ok_fica_concluido(db):
+    c = _client(db, 'CLIENTE')
+    b = _billing(db, c)
+    lote = nfse_lote.criar_lote(db, '07/2026', [b.id], emitir_async=False)
+    db.query(NfseNota).filter_by(lote_id=lote.id).first().status = 'emitida'
+    db.commit()
+
+    nfse_lote._fechar_lote(db, lote.id)
+    db.refresh(lote)
+    assert lote.status == 'concluido'
+    assert lote.total_erro == 0
+
+
+# ---------------------------------------------------------------------------
+# Drill-down
+# ---------------------------------------------------------------------------
+
+def test_consultar_lote_traz_status_individual(db):
+    c = _client(db, 'TOMADOR X')
+    b = _billing(db, c, amount='89.90')
+    lote = nfse_lote.criar_lote(db, '07/2026', [b.id], emitir_async=False)
+
+    detalhe = nfse_lote.consultar_lote(db, lote.id)
+    assert detalhe['id'] == lote.id
+    assert len(detalhe['itens']) == 1
+    item = detalhe['itens'][0]
+    assert item['tomador'] == 'TOMADOR X'
+    assert item['valor'] == 89.90
+    assert item['status'] == 'pending'
+
+
+def test_consultar_lote_inexistente_retorna_none(db):
+    assert nfse_lote.consultar_lote(db, 9999) is None
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
+
+def test_endpoint_elegiveis(db, http_fin):
+    c = _client(db, 'CLIENTE API')
+    _billing(db, c)
+    r = http_fin.get('/api/v1/nfse/lotes/elegiveis', params={'period_label': '07/2026'})
+    assert r.status_code == 200
+    assert r.json()['total_elegiveis'] == 1
+
+
+def test_endpoint_emitir_lote_cria_e_retorna(db, http_fin, monkeypatch):
+    # Não dispara thread real: substitui o worker por no-op.
+    monkeypatch.setattr(nfse_lote, '_emitir_lote_worker', lambda lote_id: None)
+    c = _client(db, 'CLIENTE API')
+    b = _billing(db, c)
+    r = http_fin.post('/api/v1/nfse/lotes', json={
+        'period_label': '07/2026', 'billing_ids': [b.id], 'codigo_servico': '11.02',
+    })
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body['total_notas'] == 1
+    assert body['status'] == 'processando'
+
+
+def test_endpoint_emitir_lote_sem_elegiveis_retorna_422(db, http_fin):
+    c = _client(db, 'SEM NF', emitir='nao')
+    b = _billing(db, c)
+    r = http_fin.post('/api/v1/nfse/lotes', json={
+        'period_label': '07/2026', 'billing_ids': [b.id],
+    })
+    assert r.status_code == 422
+
+
+def test_endpoint_listar_e_detalhar_lote(db, http_fin):
+    c = _client(db, 'CLIENTE API')
+    b = _billing(db, c)
+    lote = nfse_lote.criar_lote(db, '07/2026', [b.id], emitir_async=False)
+
+    r = http_fin.get('/api/v1/nfse/lotes')
+    assert r.status_code == 200
+    assert any(l['id'] == lote.id for l in r.json())
+
+    r = http_fin.get(f'/api/v1/nfse/lotes/{lote.id}')
+    assert r.status_code == 200
+    assert r.json()['itens'][0]['billing_id'] == b.id
+
+
+def test_endpoint_lote_exige_perfil_autorizado(db, http_cliente):
+    r = http_cliente.get('/api/v1/nfse/lotes/elegiveis', params={'period_label': '07/2026'})
+    assert r.status_code == 403
