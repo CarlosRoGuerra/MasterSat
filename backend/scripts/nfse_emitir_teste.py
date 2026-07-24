@@ -26,6 +26,16 @@ from app.core.config import settings                      # noqa: E402
 from app.services import nfse_nacional as nf              # noqa: E402
 
 
+def _salvar_xml(chave: str | None, xml: str) -> None:
+    """Grava o XML da NFS-e em scripts/nfse_saida/ para inspeção."""
+    saida = Path(__file__).resolve().parent / 'nfse_saida'
+    saida.mkdir(exist_ok=True)
+    nome = f'nfse_{chave or "sem_chave"}.xml'
+    caminho = saida / nome
+    caminho.write_text(xml, encoding='utf-8')
+    print('XML salvo em   :', caminho)
+
+
 def _tomador_de_teste():
     return SimpleNamespace(
         name='CLIENTE TESTE PRODUCAO RESTRITA', cpf_cnpj='00000000000191',
@@ -71,6 +81,9 @@ def main() -> int:
                   '| chave:', nota.chave_acesso)
             if nota.erro_mensagem:
                 print('erro:', nota.erro_mensagem)
+            # O XML da NFS-e também fica salvo no banco (nfse_notas.xml_retorno).
+            if nota.status == 'emitida' and nota.xml_retorno:
+                _salvar_xml(nota.chave_acesso, nota.xml_retorno)
             return 0 if nota.status == 'emitida' else 1
         finally:
             db.close()
@@ -105,6 +118,7 @@ def main() -> int:
             raiz = etree.fromstring(xml_nfse.encode())
             num = raiz.find('.//{http://www.sped.fazenda.gov.br/nfse}nNFSe')
             print('número NFS-e   :', num.text if num is not None else '?')
+            _salvar_xml(chave, xml_nfse)
         return 0
 
     print('Rejeição:', corpo.get('erros') or corpo)
