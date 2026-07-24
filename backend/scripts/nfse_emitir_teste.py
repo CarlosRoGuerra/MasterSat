@@ -55,6 +55,9 @@ def main() -> int:
         from app.db.session import SessionLocal
         from app.models.billing import Billing
         from app.models.client import Client
+        # Registra TODOS os modelos no metadata (como o main.py) para resolver as
+        # FKs entre tabelas no flush — senão dá NoReferencedTableError.
+        import app.models.registry_all  # noqa: F401
         db = SessionLocal()
         try:
             billing = db.get(Billing, int(args[0]))
