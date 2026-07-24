@@ -215,10 +215,8 @@ export default function NotasFiscaisPage() {
         <Card className="mt-4 p-0">
           <Table>
             <TableHead>
-              <Tr>
-                <Th>Tomador</Th><Th>CPF/CNPJ</Th><Th className="text-right">Valor</Th>
-                <Th>Nº NFS-e</Th><Th>Situação</Th><Th>Retorno</Th><Th>Ações</Th>
-              </Tr>
+              <Th>Tomador</Th><Th>CPF/CNPJ</Th><Th className="text-right">Valor</Th>
+              <Th>Nº NFS-e</Th><Th>Situação</Th><Th>Retorno</Th><Th>Ações</Th>
             </TableHead>
             <TableBody>
               {loteAberto.itens.map((n) => (
@@ -325,14 +323,12 @@ export default function NotasFiscaisPage() {
             </div>
             <Table>
               <TableHead>
-                <Tr>
-                  <Th className="w-10">
-                    <input type="checkbox" aria-label="Selecionar todos"
-                           checked={selecionados.size === elegiveis.itens.length && elegiveis.itens.length > 0}
-                           onChange={toggleTodos} />
-                  </Th>
-                  <Th>Tomador</Th><Th>CPF/CNPJ</Th><Th>Cobrança</Th><Th className="text-right">Valor</Th>
-                </Tr>
+                <Th className="w-10">
+                  <input type="checkbox" aria-label="Selecionar todos"
+                         checked={selecionados.size === elegiveis.itens.length && elegiveis.itens.length > 0}
+                         onChange={toggleTodos} />
+                </Th>
+                <Th>Tomador</Th><Th>CPF/CNPJ</Th><Th>Cobrança</Th><Th className="text-right">Valor</Th>
               </TableHead>
               <TableBody>
                 {elegiveis.itens.map((i) => (
@@ -369,11 +365,9 @@ export default function NotasFiscaisPage() {
         ) : (
           <Table>
             <TableHead>
-              <Tr>
-                <Th>Lote</Th><Th>Fechamento</Th><Th>Situação</Th>
-                <Th className="text-center">Notas</Th><Th className="text-center">Autorizadas</Th>
-                <Th className="text-center">Erros</Th><Th>Data</Th><Th></Th>
-              </Tr>
+              <Th>Lote</Th><Th>Fechamento</Th><Th>Situação</Th>
+              <Th className="text-center">Notas</Th><Th className="text-center">Autorizadas</Th>
+              <Th className="text-center">Erros</Th><Th>Data</Th><Th></Th>
             </TableHead>
             <TableBody>
               {lotes.map((l) => (

@@ -22,4 +22,9 @@ zeep==4.3.1
 openpyxl==3.1.5
 reportlab==4.2.2
 signxml==3.2.2
+# signxml 3.2.2 referencia curvas EC (ex.: SECT163K1) que a cryptography 43+
+# REMOVEU — sem este teto o container instala a 44 e o `import signxml` quebra
+# com "module ... 'ec' has no attribute 'SECT163K1'", derrubando a assinatura
+# da DPS. Faixa <43 mantém as curvas. Ao subir signxml (>=4) este teto sai.
+cryptography>=42,<43
 lxml==5.3.0
