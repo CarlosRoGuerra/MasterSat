@@ -75,11 +75,15 @@ def main() -> int:
     # Sem billing_id: monta/assina/envia um tomador de teste (sem tocar no banco).
     import base64
     import gzip
+    import time
 
     from lxml import etree
 
-    billing = SimpleNamespace(id=1, title='MENSALIDADE MONITORAMENTO', amount=Decimal('10.00'))
-    dps = nf.montar_dps(billing, _tomador_de_teste(), '1')
+    # Número de DPS único por execução (senão E0014: DPS já existe). TSNumDPS
+    # exige começar com dígito não-zero — o epoch atual (~1.7e9) atende.
+    numero = str(int(time.time()))
+    billing = SimpleNamespace(id=numero, title='MENSALIDADE MONITORAMENTO', amount=Decimal('10.00'))
+    dps = nf.montar_dps(billing, _tomador_de_teste(), numero)
     nf.validar_dps(dps)
     xml_bytes = nf._serializar_dps(nf.assinar_dps(dps))
     resp = nf._post('/nfse', {'dpsXmlGZipB64': nf._compactar(xml_bytes)})
