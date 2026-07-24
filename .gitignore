@@ -30,6 +30,12 @@ nginx/cloudflare.ini
 backend/scripts/ailos_cooperado_jwt.json
 backend/scripts/ailos_login_gerado.json
 
+# ─── Certificado digital ICP-Brasil / e-CNPJ (chave privada — NUNCA versionar) ──
+*.pfx
+*.p12
+*.PFX
+*.P12
+
 # ─── Artefatos gerados em testes (não versionar) ─────────────────────────────
 backend/nfse_rps_teste.xml
 backend/scripts/nfse_rps_teste.xml
