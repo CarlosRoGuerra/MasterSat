@@ -121,11 +121,37 @@ def test_descricao_usa_o_titulo_do_billing():
     assert _q(dps, 'infDPS', 'serv', 'cServ', 'xDescServ').text == 'INSTALACAO DE RASTREADOR'
 
 
-def test_prestador_vai_com_cnpj_im_e_regime():
+def test_prestador_vai_com_cnpj_e_regime_sem_im_por_padrao():
+    """Joinville rejeita a IM do prestador (E0120): por padrão não a enviamos."""
     prest = _q(montar_dps(_billing(), _client(), '11'), 'infDPS', 'prest')
     assert _q(prest, 'CNPJ').text == settings.nfse_cnpj
-    assert _q(prest, 'IM').text == settings.nfse_inscricao_municipal
+    assert _q(prest, 'IM') is None
     assert _q(prest, 'regTrib', 'opSimpNac').text == settings.nfse_nac_op_simples_nacional
+
+
+def test_prestador_envia_im_se_ligado(monkeypatch):
+    monkeypatch.setattr(settings, 'nfse_nac_enviar_im', True)
+    prest = _q(montar_dps(_billing(), _client(), '11'), 'infDPS', 'prest')
+    assert _q(prest, 'IM').text == settings.nfse_inscricao_municipal
+
+
+def test_simples_usa_ptottribsn_e_nao_indtottrib():
+    """ME/EPP (opSimpNac=3): totTrib deve trazer pTotTribSN (E0712)."""
+    tot = _q(montar_dps(_billing(), _client(), '11'), 'infDPS', 'valores', 'trib', 'totTrib')
+    assert _q(tot, 'pTotTribSN') is not None
+    assert _q(tot, 'indTotTrib') is None
+
+
+def test_nao_optante_usa_indtottrib(monkeypatch):
+    monkeypatch.setattr(settings, 'nfse_nac_op_simples_nacional', '1')
+    tot = _q(montar_dps(_billing(), _client(), '11'), 'infDPS', 'valores', 'trib', 'totTrib')
+    assert _q(tot, 'indTotTrib') is not None
+    assert _q(tot, 'pTotTribSN') is None
+
+
+def test_assinatura_usa_canonicalizacao_exclusiva():
+    """C14N exclusiva — comprovado na produção restrita (inclusiva dá E0714)."""
+    assert settings.nfse_nac_c14n == 'http://www.w3.org/2001/10/xml-exc-c14n#'
 
 
 def test_tomador_pj_usa_cnpj_e_pf_usa_cpf():

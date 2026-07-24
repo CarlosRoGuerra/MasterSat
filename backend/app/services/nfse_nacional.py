@@ -164,7 +164,11 @@ def _codigo_municipio_tomador(client: Client) -> str:
 def _montar_prestador(inf: etree._Element) -> None:
     prest = _sub(inf, 'prest')
     _sub(prest, 'CNPJ', _only_digits(settings.nfse_cnpj))
-    if settings.nfse_inscricao_municipal:
+    # IM do prestador: COMPROVADO na produção restrita que Joinville rejeita com
+    # E0120 ("IM não deve ser informado, pois não existem informações
+    # complementares registradas no CNC"). Por padrão NÃO enviamos. Ligar via
+    # NFSE_NAC_ENVIAR_IM só se um município exigir.
+    if settings.nfse_nac_enviar_im and settings.nfse_inscricao_municipal:
         _sub(prest, 'IM', _only_digits(settings.nfse_inscricao_municipal))
     reg = _sub(prest, 'regTrib')
     # opSimpNac: 1=Não optante, 2=Optante MEI, 3=Optante ME/EPP
@@ -216,11 +220,14 @@ def _montar_valores(inf: etree._Element, billing: Billing) -> None:
     # tpRetISSQN: 1=Não retido, 2=Retido pelo tomador, 3=Retido pelo intermediário
     _sub(mun, 'tpRetISSQN', settings.nfse_nac_tipo_ret_issqn)
 
-    # totTrib é um <choice>: informamos indTotTrib=0 (não informar valor estimado
-    # de tributos, Decreto 8.264/2014) ou o percentual do Simples, nunca ambos.
+    # totTrib é um <choice>. COMPROVADO na produção restrita: para optante do
+    # Simples (MEI/ME/EPP) NÃO se pode usar indTotTrib — dá E0712 ("Para ME/EPP
+    # o indicador de valor total de tributos não pode ser informado"); tem que
+    # ser pTotTribSN (percentual aproximado dos tributos do Simples). Para não
+    # optante, mantém indTotTrib=0 (Decreto 8.264/2014).
     tot = _sub(trib, 'totTrib')
-    if settings.nfse_nac_perc_trib_simples:
-        _sub(tot, 'pTotTribSN', settings.nfse_nac_perc_trib_simples)
+    if settings.nfse_nac_op_simples_nacional in ('2', '3'):
+        _sub(tot, 'pTotTribSN', settings.nfse_nac_perc_trib_simples or '0.00')
     else:
         _sub(tot, 'indTotTrib', '0')
 
@@ -383,7 +390,10 @@ def assinar_dps(dps: etree._Element) -> etree._Element:
         method=methods.enveloped,
         signature_algorithm=settings.nfse_nac_alg_assinatura,
         digest_algorithm=settings.nfse_nac_alg_digest,
-        c14n_algorithm='http://www.w3.org/TR/2001/REC-xml-c14n-20010315',
+        # CANONICALIZAÇÃO EXCLUSIVA (xml-exc-c14n#). COMPROVADO na produção
+        # restrita: com a C14N inclusiva (padrão da NF-e) a Sefin Nacional
+        # rejeita com E0714 "erro na assinatura"; com a exclusiva, aceita.
+        c14n_algorithm=settings.nfse_nac_c14n,
     )
     # RN de recepção E1228: "Uso de prefixo de namespace não permitido na área
     # de dados descompactada". O signxml assina com <ds:Signature> por padrão —
@@ -414,9 +424,19 @@ def _garantir_sem_prefixo(dps: etree._Element) -> None:
         )
 
 
-def _compactar(xml: str) -> str:
-    """XML → gzip → base64, que é como a API recebe a DPS."""
-    return base64.b64encode(gzip.compress(xml.encode('utf-8'))).decode('ascii')
+def _compactar(xml) -> str:
+    """XML (str ou bytes) → gzip → base64, que é como a API recebe a DPS."""
+    data = xml.encode('utf-8') if isinstance(xml, str) else xml
+    return base64.b64encode(gzip.compress(data)).decode('ascii')
+
+
+def _serializar_dps(dps: etree._Element) -> bytes:
+    """
+    Serializa a DPS assinada em bytes UTF-8 COM a declaração <?xml ... ?>.
+    COMPROVADO: sem a declaração, a Sefin rejeita com E1229 ("Xml não está
+    utilizando codificação UTF-8").
+    """
+    return etree.tostring(dps, encoding='UTF-8', xml_declaration=True)
 
 
 def _descompactar(b64: str) -> str:
@@ -485,17 +505,17 @@ def emitir_nfse(db: Session, billing: Billing, client: Client) -> NfseNota:
     dps = montar_dps(billing, client, numero_dps)
     validar_dps(dps)
     assinada = assinar_dps(dps)
-    xml = etree.tostring(assinada, encoding='unicode')
+    xml_bytes = _serializar_dps(assinada)  # UTF-8 com declaração (E1229)
 
     nota.numero_rps = numero_dps
     nota.serie_rps = settings.nfse_nac_serie
-    nota.xml_envio = xml
+    nota.xml_envio = xml_bytes.decode('utf-8')
     nota.status = 'pending'
     nota.erro_codigo = None
     nota.erro_mensagem = None
     db.commit()
 
-    resp = _post('/nfse', {'dpsXmlGZipB64': _compactar(xml)})
+    resp = _post('/nfse', {'dpsXmlGZipB64': _compactar(xml_bytes)})
 
     if resp.status_code not in (200, 201):
         mensagem = _erro_da_resposta(resp)

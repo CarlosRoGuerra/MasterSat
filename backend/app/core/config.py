@@ -145,11 +145,17 @@ class Settings(BaseSettings):
     nfse_nac_cod_nbs: str = ''              # opcional
     nfse_nac_trib_issqn: str = '1'          # 1 = Operação tributável
     nfse_nac_tipo_ret_issqn: str = '1'      # 1 = Não retido
-    # Percentual do Simples p/ o grupo totTrib. Vazio → envia indTotTrib=0.
-    nfse_nac_perc_trib_simples: str = ''
-    # Algoritmos da assinatura XMLDSig — validar no 1º teste em produção restrita
+    # IM do prestador: Joinville rejeita (E0120). Só ligar se um município exigir.
+    nfse_nac_enviar_im: bool = False
+    # Percentual aproximado dos tributos do Simples (pTotTribSN, Lei 12.741).
+    # OBRIGATÓRIO p/ optante do Simples (indTotTrib dá E0712). ⚠ Valor real vem
+    # do contador; '6.00' é um placeholder que a produção restrita aceitou.
+    nfse_nac_perc_trib_simples: str = '6.00'
+    # Algoritmos da assinatura XMLDSig — COMPROVADOS na produção restrita
+    # (emissão HTTP 201): SHA-256 + canonicalização EXCLUSIVA (xml-exc-c14n#).
     nfse_nac_alg_assinatura: str = 'rsa-sha256'
     nfse_nac_alg_digest: str = 'sha256'
+    nfse_nac_c14n: str = 'http://www.w3.org/2001/10/xml-exc-c14n#'
 
     # Rate limiting
     rate_limit_default: str = '200/minute'
