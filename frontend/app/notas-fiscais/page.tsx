@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   FileText, RefreshCw, CheckCircle2, AlertTriangle, Loader2,
-  Receipt, DollarSign, ListChecks, ChevronLeft, ExternalLink,
+  Receipt, ListChecks, ChevronLeft, ExternalLink, FileDown,
 } from 'lucide-react';
 
 import { PageShell } from '@/components/page-shell';
@@ -14,7 +14,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { MetricCard } from '@/components/ui/metric-card';
 import { Badge } from '@/components/ui/badge';
 import { ErrorBanner } from '@/components/ui/error-banner';
-import { apiFetch } from '@/lib/api';
+import { apiFetch, API_URL } from '@/lib/api';
 import { useAuthGuard } from '@/lib/use-auth-guard';
 
 /* ── Tipos ─────────────────────────────────────────────────────────────── */
@@ -180,6 +180,21 @@ export default function NotasFiscaisPage() {
     } catch (err) { setError(parseErr(err)); }
   }
 
+  async function baixarDanfse(billingId: number) {
+    setError('');
+    try {
+      const url = `${API_URL.replace(/\/+$/, '')}/nfse/${billingId}/danfse`;
+      const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      if (!resp.ok) {
+        let detail = `HTTP ${resp.status}`;
+        try { detail = (await resp.json())?.detail || detail; } catch { /* noop */ }
+        throw new Error(detail);
+      }
+      const blob = await resp.blob();
+      window.open(window.URL.createObjectURL(blob), '_blank');
+    } catch (err) { setError(parseErr(err)); }
+  }
+
   const totalSelecionado = elegiveis
     ? elegiveis.itens.filter((i) => selecionados.has(i.billing_id)).reduce((s, i) => s + i.valor, 0)
     : 0;
@@ -232,11 +247,19 @@ export default function NotasFiscaisPage() {
                       : '—'}
                   </Td>
                   <Td>
-                    {n.status === 'emitida' && n.link_visualizacao ? (
-                      <a href={n.link_visualizacao} target="_blank" rel="noopener noreferrer"
-                         className="inline-flex items-center gap-1 text-sm font-semibold text-brand-700 hover:underline dark:text-brand-400">
-                        Ver <ExternalLink className="h-3.5 w-3.5" />
-                      </a>
+                    {n.status === 'emitida' ? (
+                      <div className="flex items-center gap-3">
+                        <button onClick={() => baixarDanfse(n.billing_id)}
+                          className="inline-flex items-center gap-1 text-sm font-semibold text-brand-700 hover:underline dark:text-brand-400">
+                          <FileDown className="h-3.5 w-3.5" /> DANFSE
+                        </button>
+                        {n.link_visualizacao && (
+                          <a href={n.link_visualizacao} target="_blank" rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-sm text-slate-500 hover:underline">
+                            Portal <ExternalLink className="h-3.5 w-3.5" />
+                          </a>
+                        )}
+                      </div>
                     ) : '—'}
                   </Td>
                 </Tr>

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import NoReturn
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_roles
@@ -159,6 +159,29 @@ def lote_detalhe(
     if detalhe is None:
         raise HTTPException(status_code=404, detail='Lote não encontrado')
     return detalhe
+
+
+@router.get('/{billing_id}/danfse')
+def danfse(
+    billing_id: int,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    """DANFSE — o PDF visual/imprimível da NFS-e (o que se envia ao tomador)."""
+    nota = db.query(NfseNota).filter_by(billing_id=billing_id).first()
+    if nota is None or nota.status != 'emitida' or not nota.chave_acesso:
+        raise HTTPException(status_code=404, detail='NFS-e emitida não encontrada para esta cobrança')
+    if _provedor() is not nfse_nacional:
+        raise HTTPException(status_code=400, detail='DANFSE disponível apenas no Emissor Nacional')
+    try:
+        pdf = nfse_nacional.baixar_danfse(nota.chave_acesso)
+    except (*_ERROS_CONFIG, *_ERROS_API) as exc:
+        _raise_nfse_error(exc)
+    return Response(
+        content=pdf,
+        media_type='application/pdf',
+        headers={'Content-Disposition': f'inline; filename=nfse-{nota.numero_nfse or billing_id}.pdf'},
+    )
 
 
 @router.get('/{billing_id}', response_model=NfseOut)

@@ -52,6 +52,12 @@ _AMBIENTES = {
     'producao_restrita': ('2', 'https://sefin.producaorestrita.nfse.gov.br/API/SefinNacional'),
 }
 
+# ADN (Ambiente de Dados Nacional) — de onde se baixa o DANFSE (PDF da nota).
+_ADN = {
+    'producao': 'https://adn.nfse.gov.br',
+    'producao_restrita': 'https://adn.producaorestrita.nfse.gov.br',
+}
+
 _SCHEMA_DIR = Path(__file__).parent / 'schemas' / 'nfse_nacional'
 
 # Fuso de Brasília (UTC-3). O container roda em UTC; dhEmi é TSDateTimeUTC e
@@ -592,3 +598,32 @@ def consultar_por_chave(chave_acesso: str) -> str:
     corpo = resp.json()
     b64 = corpo.get('nfseXmlGZipB64') or corpo.get('NfseXmlGZipB64')
     return _descompactar(b64) if b64 else str(corpo)
+
+
+def baixar_danfse(chave_acesso: str) -> bytes:
+    """
+    Baixa o DANFSE (PDF visual da NFS-e) do ADN, via mTLS. É a versão
+    "modelada"/imprimível da nota — o que se envia ao tomador. COMPROVADO:
+    GET {adn}/danfse/{chave} → application/pdf.
+    """
+    base = _ADN.get(settings.nfse_nac_ambiente)
+    if not base:
+        raise NfseError(
+            f'NFSE_NAC_AMBIENTE inválido para DANFSE: {settings.nfse_nac_ambiente!r}'
+        )
+    try:
+        resp = requests.get(
+            f'{base}/danfse/{chave_acesso}',
+            headers={'Accept': 'application/pdf'},
+            cert=_par_pem_mtls(),
+            timeout=settings.nfse_timeout_seconds,
+        )
+    except requests.RequestException as exc:
+        raise NfseApiError(f'Falha ao baixar o DANFSE: {exc}') from exc
+
+    if resp.status_code != 200 or 'pdf' not in resp.headers.get('Content-Type', '').lower():
+        raise NfseApiError(
+            f'DANFSE indisponível (HTTP {resp.status_code}): {resp.text[:300]}',
+            status_code=resp.status_code,
+        )
+    return resp.content
