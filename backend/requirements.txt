@@ -22,9 +22,14 @@ zeep==4.3.1
 openpyxl==3.1.5
 reportlab==4.2.2
 signxml==3.2.2
-# signxml 3.2.2 referencia curvas EC (ex.: SECT163K1) que a cryptography 43+
-# REMOVEU — sem este teto o container instala a 44 e o `import signxml` quebra
-# com "module ... 'ec' has no attribute 'SECT163K1'", derrubando a assinatura
-# da DPS. Faixa <43 mantém as curvas. Ao subir signxml (>=4) este teto sai.
-cryptography>=42,<43
+# A pilha de assinatura XMLDSig do signxml 3.2.2 exige versões antigas de DUAS
+# libs, comprovado em venv local (build+sign+validate da DPS):
+#   - cryptography: referencia curvas EC (ex.: SECT163K1) removidas na 43+, então
+#     precisa de <43. Sem teto o container pega a 44 e `import signxml` quebra.
+#   - pyOpenSSL: usa OpenSSL.crypto.verify/sign, removidos na 24, então <24. E a
+#     pyOpenSSL 23.x por sua vez fixa cryptography em <42.
+# Resultado da resolução: cryptography 41.0.7 + pyOpenSSL 23.3.0. Ao subir o
+# signxml (>=4, que fala com libs modernas) estes dois tetos saem juntos.
+cryptography>=41,<42
+pyOpenSSL>=23,<24
 lxml==5.3.0
