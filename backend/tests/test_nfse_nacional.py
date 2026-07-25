@@ -210,16 +210,27 @@ def test_cep_malformado_e_recusado_antes_do_xsd():
         montar_dps(_billing(), _client(zip_code='892'), '22')
 
 
-def test_codigo_de_tributacao_existe_na_lista_nacional():
-    """
-    cTribNac tem 6 dígitos e precisa existir na lista nacional (E0310). O valor
-    de 4 dígitos do padrão antigo (1102) seria rejeitado.
-    """
+def test_codigo_de_tributacao_default_e_de_6_digitos():
+    """cTribNac tem 6 dígitos (E0310 se não existir na lista nacional)."""
     codigo = settings.nfse_nac_cod_trib_nacional
     assert len(codigo) == 6 and codigo.isdigit()
-    assert codigo in {'110501', '110201'}, 'código fora das opções validadas no ANEXO I'
     dps = montar_dps(_billing(), _client(), '17')
     assert _q(dps, 'infDPS', 'serv', 'cServ', 'cTribNac').text == codigo
+
+
+@pytest.mark.parametrize('entrada,esperado', [
+    ('140101', '140101'),        # manutenção
+    ('150307', '150307'),        # locação
+    ('11.02.01', '110201'),      # aceita formato pontuado e normaliza
+])
+def test_codigo_de_tributacao_selecionavel_por_emissao(entrada, esperado):
+    dps = montar_dps(_billing(), _client(), '17', cod_trib_nacional=entrada)
+    assert _q(dps, 'infDPS', 'serv', 'cServ', 'cTribNac').text == esperado
+
+
+def test_codigo_vazio_cai_no_default():
+    dps = montar_dps(_billing(), _client(), '17', cod_trib_nacional='')
+    assert _q(dps, 'infDPS', 'serv', 'cServ', 'cTribNac').text == settings.nfse_nac_cod_trib_nacional
 
 
 def test_dps_nao_usa_prefixo_de_namespace():

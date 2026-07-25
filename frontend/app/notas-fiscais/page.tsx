@@ -58,6 +58,13 @@ type LoteNota = {
 };
 type LoteDetalhe = LoteResumo & { itens: LoteNota[] };
 
+/* ── Códigos de tributação nacional usados pela MasterSat ──────────────── */
+const CODIGOS_SERVICO = [
+  { codigo: '110201', rotulo: '11.02.01 — Monitoramento / rastreamento (mensalidade)' },
+  { codigo: '140101', rotulo: '14.01.01 — Manutenção / instalação em veículos' },
+  { codigo: '150307', rotulo: '15.03.07 — Locação de equipamentos (aluguel do rastreador)' },
+];
+
 /* ── Helpers ───────────────────────────────────────────────────────────── */
 const brl = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
@@ -90,7 +97,7 @@ export default function NotasFiscaisPage() {
 
   // Etapa 1 — parâmetros
   const [month, setMonth] = useState('');
-  const [codigoServico, setCodigoServico] = useState('11.02');
+  const [codigoServico, setCodigoServico] = useState(CODIGOS_SERVICO[0].codigo);
   const [discriminacao, setDiscriminacao] = useState('');
 
   // Etapa 2 — conferência
@@ -293,12 +300,16 @@ export default function NotasFiscaisPage() {
             <input type="month" value={month} onChange={(e) => setMonth(e.target.value)}
                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-900" />
           </label>
-          <label className="text-sm">
-            <span className="mb-1 block font-medium text-slate-600 dark:text-slate-300">Serviço do município</span>
-            <input value={codigoServico} onChange={(e) => setCodigoServico(e.target.value)} placeholder="11.02"
-                   className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-900" />
-          </label>
           <label className="text-sm lg:col-span-2">
+            <span className="mb-1 block font-medium text-slate-600 dark:text-slate-300">Serviço prestado (código de tributação)</span>
+            <select value={codigoServico} onChange={(e) => setCodigoServico(e.target.value)}
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-900">
+              {CODIGOS_SERVICO.map((c) => (
+                <option key={c.codigo} value={c.codigo}>{c.rotulo}</option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm">
             <span className="mb-1 block font-medium text-slate-600 dark:text-slate-300">Discriminação / observação</span>
             <input value={discriminacao} onChange={(e) => setDiscriminacao(e.target.value)}
                    placeholder="Descrição do serviço no corpo da nota"

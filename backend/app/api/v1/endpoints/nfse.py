@@ -87,6 +87,8 @@ def listar(
 @router.post('/emitir/{billing_id}', response_model=NfseOut)
 def emitir(
     billing_id: int,
+    cod_trib_nacional: str | None = Query(
+        default=None, description='Código de tributação nacional (ex.: 110201); vazio usa o padrão'),
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*ALLOWED_ROLES)),
 ):
@@ -97,7 +99,7 @@ def emitir(
     if client is None:
         raise HTTPException(status_code=404, detail='Cliente da cobrança não encontrado')
     try:
-        return _provedor().emitir_nfse(db, billing, client)
+        return _provedor().emitir_nfse(db, billing, client, cod_trib_nacional=cod_trib_nacional)
     except (*_ERROS_CONFIG, *_ERROS_API) as exc:
         _raise_nfse_error(exc)
 

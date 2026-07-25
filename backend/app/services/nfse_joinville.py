@@ -372,10 +372,14 @@ def _aplicar_erro(nota: NfseNota, erros: list[dict]) -> None:
 # Fluxo principal
 # ---------------------------------------------------------------------------
 
-def emitir_nfse(db: Session, billing: Billing, client: Client) -> NfseNota:
+def emitir_nfse(db: Session, billing: Billing, client: Client,
+                cod_trib_nacional: str | None = None) -> NfseNota:
     """
     Emite a NFS-e de um billing: monta o RPS, envia o lote e consulta o
     resultado. Idempotente: se já houver NFS-e emitida para o billing, retorna-a.
+
+    ``cod_trib_nacional`` é ignorado (o webservice municipal usa o item de serviço
+    próprio); existe só para manter a mesma assinatura do provedor nacional.
     """
     if not settings.nfse_enabled:
         raise NfseError('Integração NFS-e desabilitada (NFSE_ENABLED=false)')

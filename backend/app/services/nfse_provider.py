@@ -21,5 +21,5 @@ def modulo():
     return nfse_joinville if settings.nfse_provedor == 'joinville' else nfse_nacional
 
 
-def emitir_nfse(db, billing, client):
-    return modulo().emitir_nfse(db, billing, client)
+def emitir_nfse(db, billing, client, cod_trib_nacional=None):
+    return modulo().emitir_nfse(db, billing, client, cod_trib_nacional=cod_trib_nacional)

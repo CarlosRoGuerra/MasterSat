@@ -200,14 +200,17 @@ def _montar_tomador(inf: etree._Element, client: Client) -> None:
         _sub(toma, 'email', _norm(client.email, 80))
 
 
-def _montar_servico(inf: etree._Element, billing: Billing) -> None:
+def _montar_servico(inf: etree._Element, billing: Billing,
+                    cod_trib_nacional: str | None = None) -> None:
     serv = _sub(inf, 'serv')
     loc = _sub(serv, 'locPrest')
     _sub(loc, 'cLocPrestacao', settings.nfse_codigo_municipio)
     cserv = _sub(serv, 'cServ')
-    # cTribNac: código da lista de serviços NACIONAL (6 dígitos), não o da LC116
-    # em 4 dígitos usado no padrão antigo. 11.02 (monitoramento) → 110200.
-    _sub(cserv, 'cTribNac', settings.nfse_nac_cod_trib_nacional)
+    # cTribNac: código da lista de serviços NACIONAL (6 dígitos), selecionável por
+    # emissão conforme o serviço (110201 monitoramento / 140101 manutenção /
+    # 150307 locação). Aceita formato "11.02.01" e normaliza para "110201".
+    codigo = _only_digits(cod_trib_nacional) or settings.nfse_nac_cod_trib_nacional
+    _sub(cserv, 'cTribNac', codigo)
     _sub(cserv, 'xDescServ', _norm(
         billing.title or settings.nfse_discriminacao_padrao, 2000))
     if settings.nfse_nac_cod_nbs:
@@ -263,8 +266,13 @@ def validar_cadastro_tomador(client: Client) -> None:
         )
 
 
-def montar_dps(billing: Billing, client: Client, numero_dps: str) -> etree._Element:
-    """Monta o <DPS> completo (sem assinatura) para um Billing/Client."""
+def montar_dps(billing: Billing, client: Client, numero_dps: str,
+               cod_trib_nacional: str | None = None) -> etree._Element:
+    """Monta o <DPS> completo (sem assinatura) para um Billing/Client.
+
+    ``cod_trib_nacional`` permite escolher o código de tributação por emissão
+    (conforme o serviço); vazio usa o default do .env.
+    """
     tp_amb, _ = _ambiente()
     validar_cadastro_tomador(client)
     agora = dt.datetime.now(_TZ_BRASILIA)
@@ -286,7 +294,7 @@ def montar_dps(billing: Billing, client: Client, numero_dps: str) -> etree._Elem
 
     _montar_prestador(inf)
     _montar_tomador(inf, client)
-    _montar_servico(inf, billing)
+    _montar_servico(inf, billing, cod_trib_nacional)
     _montar_valores(inf, billing)
     return dps
 
@@ -487,10 +495,14 @@ def _erro_da_resposta(resp: requests.Response) -> str:
 # Fluxo principal
 # ---------------------------------------------------------------------------
 
-def emitir_nfse(db: Session, billing: Billing, client: Client) -> NfseNota:
+def emitir_nfse(db: Session, billing: Billing, client: Client,
+                cod_trib_nacional: str | None = None) -> NfseNota:
     """
     Emite a NFS-e de um billing pelo Emissor Nacional. Idempotente: se já houver
     nota emitida para o billing, retorna-a sem reenviar.
+
+    ``cod_trib_nacional`` escolhe o código de tributação do serviço nesta emissão
+    (vazio = default do .env).
     """
     if not settings.nfse_enabled:
         raise NfseError('Integração NFS-e desabilitada (NFSE_ENABLED=false)')
@@ -508,7 +520,7 @@ def emitir_nfse(db: Session, billing: Billing, client: Client) -> NfseNota:
         db.add(nota)
 
     numero_dps = str(billing.id)
-    dps = montar_dps(billing, client, numero_dps)
+    dps = montar_dps(billing, client, numero_dps, cod_trib_nacional)
     validar_dps(dps)
     assinada = assinar_dps(dps)
     xml_bytes = _serializar_dps(assinada)  # UTF-8 com declaração (E1229)

@@ -132,16 +132,13 @@ class Settings(BaseSettings):
     nfse_nac_reg_apur_simples: str = '1'
     nfse_nac_regime_especial: str = '0'     # 0 = Nenhum
     # Código de tributação nacional (6 dígitos), da aba MUN.INCID_INFO.SERV. do
-    # ANEXO I. NÃO é o ItemListaServico de 4 dígitos do padrão antigo.
-    # 110501 = "Serviços relacionados ao monitoramento e rastreamento a
-    #           distância [...] de veículos, cargas, pessoas [...] por meio de
-    #           telefonia móvel, transmissão de satélites, rádio [...]"
-    #           → é a descrição literal do serviço da MasterSat (LC116 11.05).
-    # ⚠ DECISÃO FISCAL PENDENTE: no cadastro de Joinville a empresa está sob o
-    # item 11.02, cujo código nacional é 110201 ("Vigilância, segurança ou
-    # monitoramento de bens, pessoas e semoventes"). Confirmar com o contador
-    # qual usar — código inexistente na lista nacional é rejeitado com E0310.
-    nfse_nac_cod_trib_nacional: str = '110501'
+    # ANEXO I. SELECIONÁVEL por emissão conforme o serviço prestado. Os três que
+    # a MasterSat usa (confirmados pelo cliente):
+    #   110201 (11.02.01) — Vigilância/segurança/MONITORAMENTO (mensalidade)
+    #   140101 (14.01.01) — Manutenção/conservação de veículos (instalação)
+    #   150307 (15.03.07) — LOCAÇÃO de bens e equipamentos (aluguel do rastreador)
+    # Este é só o DEFAULT quando a emissão não informa o código.
+    nfse_nac_cod_trib_nacional: str = '110201'
     nfse_nac_cod_nbs: str = ''              # opcional
     nfse_nac_trib_issqn: str = '1'          # 1 = Operação tributável
     nfse_nac_tipo_ret_issqn: str = '1'      # 1 = Não retido

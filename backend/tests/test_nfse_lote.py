@@ -180,7 +180,7 @@ def test_emitir_uma_sucesso_marca_emitida(db):
     lote = nfse_lote.criar_lote(db, '07/2026', [b.id], emitir_async=False)
     nota = db.query(NfseNota).filter_by(lote_id=lote.id).first()
 
-    def fake_ok(db_, billing_, client_):
+    def fake_ok(db_, billing_, client_, cod_trib_nacional=None):
         n = db_.query(NfseNota).filter_by(billing_id=billing_.id).first()
         n.status = 'emitida'
         n.numero_nfse = '2026000001'
@@ -192,6 +192,26 @@ def test_emitir_uma_sucesso_marca_emitida(db):
     assert nota.numero_nfse == '2026000001'
 
 
+def test_emitir_uma_repassa_codigo_de_tributacao(db):
+    c = _client(db, 'CLIENTE')
+    b = _billing(db, c)
+    lote = nfse_lote.criar_lote(db, '07/2026', [b.id], codigo_servico='150307',
+                                emitir_async=False)
+    nota = db.query(NfseNota).filter_by(lote_id=lote.id).first()
+
+    recebido = {}
+
+    def fake(db_, billing_, client_, cod_trib_nacional=None):
+        recebido['cod'] = cod_trib_nacional
+        n = db_.query(NfseNota).filter_by(billing_id=billing_.id).first()
+        n.status = 'emitida'
+        db_.commit()
+
+    # simula o worker: passa o código do lote
+    nfse_lote._emitir_uma(db, nota, fake, lote.codigo_servico)
+    assert recebido['cod'] == '150307'
+
+
 def test_emitir_uma_erro_marca_erro_com_mensagem(db):
     from app.services.nfse_nacional import NfseError
 
@@ -200,7 +220,7 @@ def test_emitir_uma_erro_marca_erro_com_mensagem(db):
     lote = nfse_lote.criar_lote(db, '07/2026', [b.id], emitir_async=False)
     nota = db.query(NfseNota).filter_by(lote_id=lote.id).first()
 
-    def fake_falha(db_, billing_, client_):
+    def fake_falha(db_, billing_, client_, cod_trib_nacional=None):
         raise NfseError('Certificado digital obrigatório para o Emissor Nacional.')
 
     nfse_lote._emitir_uma(db, nota, fake_falha)

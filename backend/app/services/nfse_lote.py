@@ -165,11 +165,13 @@ def _emitir_lote_worker(lote_id: int) -> None:
 
     db = SessionLocal()
     try:
+        lote = db.get(NfseLote, lote_id)
+        codigo = lote.codigo_servico if lote else None
         notas = db.query(NfseNota).filter(
             NfseNota.lote_id == lote_id, NfseNota.status == 'pending'
         ).all()
         for nota in notas:
-            _emitir_uma(db, nota, nfse_provider.emitir_nfse)
+            _emitir_uma(db, nota, nfse_provider.emitir_nfse, codigo)
         _fechar_lote(db, lote_id)
     except Exception:  # pragma: no cover — rede de segurança da thread
         logger.exception('Falha inesperada ao processar lote NFS-e %s', lote_id)
@@ -178,7 +180,7 @@ def _emitir_lote_worker(lote_id: int) -> None:
         db.close()
 
 
-def _emitir_uma(db: Session, nota: NfseNota, emitir_fn) -> None:
+def _emitir_uma(db: Session, nota: NfseNota, emitir_fn, cod_trib_nacional=None) -> None:
     billing = db.get(Billing, nota.billing_id)
     client = db.get(Client, billing.client_id) if billing else None
     if billing is None or client is None:
@@ -187,7 +189,7 @@ def _emitir_uma(db: Session, nota: NfseNota, emitir_fn) -> None:
         db.commit()
         return
     try:
-        emitir_fn(db, billing, client)
+        emitir_fn(db, billing, client, cod_trib_nacional=cod_trib_nacional)
     except Exception as exc:  # NfseError/NfseApiError e afins
         # emitir_nfse já pode ter marcado 'erro' e commitado; garante a mensagem.
         db.rollback()
