@@ -62,7 +62,12 @@ services:
     # Remove mapeamento de porta direta — só expõe via nginx
     ports: !reset []
     expose: ["8000"]
-    volumes: !reset []   # sem bind-mount/hot-reload em produção
+    # Sem bind-mount de código em produção. ÚNICA exceção: o certificado e-CNPJ
+    # A1 (.pfx), montado do host somente-leitura. O .pfx NUNCA entra na imagem
+    # nem no git — fica só no host, em NFSE_CERT_DIR (padrão /opt/mastersat/certs).
+    # No .env: NFSE_CERT_PATH=/certs/ecnpj.pfx
+    volumes: !override
+      - ${NFSE_CERT_DIR:-/opt/mastersat/certs}:/certs:ro
     # Sem --reload em produção; múltiplos workers para usar os núcleos da VPS.
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "3", "--proxy-headers", "--forwarded-allow-ips=*"]
     depends_on:
