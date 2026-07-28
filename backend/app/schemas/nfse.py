@@ -98,3 +98,41 @@ class ElegiveisOut(BaseModel):
     total_elegiveis: int
     ja_emitidas: int
     itens: list[ElegivelItem] = []
+
+
+class NotaListItem(BaseModel):
+    """Linha da listagem geral de notas (tela "Notas")."""
+
+    nota_id: int
+    billing_id: int
+    lote_id: int | None = None
+    tomador: str
+    cpf_cnpj: str | None = None
+    valor: float
+    nosso_numero: str | None = None
+    numero_nfse: str | None = None
+    status: str
+    chave_acesso: str | None = None
+    link_visualizacao: str | None = None
+    erro_codigo: str | None = None
+    erro_mensagem: str | None = None
+    tem_xml: bool = False
+    data_ocorrencia: str | None = None
+
+
+class NotasOut(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    itens: list[NotaListItem] = []
+
+
+class ResumoOut(BaseModel):
+    """Balanço do mês para o painel."""
+
+    competencia: str
+    autorizadas: int
+    negadas: int
+    processando: int
+    total: int
+    total_geral: int

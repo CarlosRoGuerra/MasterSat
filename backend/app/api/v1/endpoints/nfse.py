@@ -33,6 +33,8 @@ from app.schemas.nfse import (
     LoteResumo,
     NfseClientItem,
     NfseOut,
+    NotasOut,
+    ResumoOut,
 )
 from app.services import nfse_joinville, nfse_lote, nfse_nacional, nfse_provider
 
@@ -104,18 +106,49 @@ def emitir(
         _raise_nfse_error(exc)
 
 
+# ── Painel e listagem geral ─────────────────────────────────────────────────
+# Estas rotas de path fixo precisam vir ANTES de GET /{billing_id} (que espera
+# int), senão o path param as sombreia.
+
+@router.get('/resumo', response_model=ResumoOut)
+def resumo(
+    competencia: str | None = Query(default=None, description='YYYY-MM; vazio = mês corrente'),
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    """Balanço do mês (autorizadas × negadas) para o painel."""
+    return nfse_lote.resumo(db, competencia)
+
+
+@router.get('/notas', response_model=NotasOut)
+def notas(
+    busca: str | None = None,
+    situacao: str | None = Query(default=None, pattern='^(emitida|erro|pending|processing)$'),
+    period_label: str | None = None,
+    limit: int = Query(default=25, le=200),
+    offset: int = 0,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    """Listagem paginada de todas as NFS-e (tela "Notas")."""
+    return nfse_lote.listar_notas(
+        db, busca=busca, situacao=situacao, period_label=period_label,
+        limit=limit, offset=offset,
+    )
+
+
 # ── Emissão em lote ─────────────────────────────────────────────────────────
-# Estas rotas /lotes/... precisam vir ANTES de GET /{billing_id} (que espera int),
-# senão o path param sombreia /lotes.
 
 @router.get('/lotes/elegiveis', response_model=ElegiveisOut)
 def lote_elegiveis(
     period_label: str,
+    busca: str | None = None,
+    tipo: str | None = Query(default=None, pattern='^(pf|pj)$'),
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*ALLOWED_ROLES)),
 ):
     """Etapa de conferência: clientes do lote de fechamento com 'Emitir NF = Sim'."""
-    return nfse_lote.listar_elegiveis(db, period_label)
+    return nfse_lote.listar_elegiveis(db, period_label, busca=busca, tipo=tipo)
 
 
 @router.post('/lotes', response_model=LoteResumo, status_code=201)
@@ -183,6 +216,24 @@ def danfse(
         content=pdf,
         media_type='application/pdf',
         headers={'Content-Disposition': f'inline; filename=nfse-{nota.numero_nfse or billing_id}.pdf'},
+    )
+
+
+@router.get('/{billing_id}/xml')
+def xml_nfse(
+    billing_id: int,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    """XML da NFS-e — o documento fiscal em si (o que se guarda/transmite)."""
+    nota = db.query(NfseNota).filter_by(billing_id=billing_id).first()
+    if nota is None or not nota.xml_retorno:
+        raise HTTPException(status_code=404, detail='XML da NFS-e não disponível para esta cobrança')
+    return Response(
+        content=nota.xml_retorno,
+        media_type='application/xml',
+        headers={'Content-Disposition':
+                 f'attachment; filename=nfse-{nota.numero_nfse or billing_id}.xml'},
     )
 
 

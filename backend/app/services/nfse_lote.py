@@ -22,9 +22,11 @@ import logging
 import threading
 from datetime import date, datetime, timezone
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
+from app.models.ailos_boleto import AilosBoleto
 from app.models.billing import Billing
 from app.models.client import Client
 from app.models.nfse_lote import NfseLote
@@ -45,28 +47,40 @@ class LoteError(Exception):
 # Elegibilidade
 # ---------------------------------------------------------------------------
 
-def listar_elegiveis(db: Session, period_label: str) -> dict:
+def listar_elegiveis(
+    db: Session,
+    period_label: str,
+    *,
+    busca: str | None = None,
+    tipo: str | None = None,
+) -> dict:
     """
     Candidatos à emissão no lote de fechamento informado: cobranças cujo cliente
     tem ``issue_invoice == 'sim'`` e que ainda não possuem NFS-e emitida/em voo.
+
+    ``busca`` filtra por nome/razão social ou CPF/CNPJ; ``tipo`` por pf/pj.
     """
-    rows = (
-        db.query(Billing, Client, NfseNota)
+    query = (
+        db.query(Billing, Client, NfseNota, AilosBoleto)
         .join(Client, Client.id == Billing.client_id)
         .outerjoin(NfseNota, NfseNota.billing_id == Billing.id)
+        .outerjoin(AilosBoleto, AilosBoleto.billing_id == Billing.id)
         .filter(
             Billing.is_deleted.is_(False),
             Billing.period_label == period_label,
             Client.is_deleted.is_(False),
             Client.issue_invoice == 'sim',
         )
-        .order_by(Client.name)
-        .all()
     )
+    if (busca or '').strip():
+        alvo = f'%{busca.strip()}%'
+        query = query.filter(or_(Client.name.ilike(alvo), Client.cpf_cnpj.ilike(alvo)))
+    if tipo in ('pf', 'pj'):
+        query = query.filter(Client.type == tipo)
 
     itens: list[dict] = []
     ja_emitidas = 0
-    for billing, client, nota in rows:
+    for billing, client, nota, boleto in query.order_by(Client.name).all():
         if nota is not None and nota.status in _STATUS_BLOQUEIA_REEMISSAO:
             if nota.status == 'emitida':
                 ja_emitidas += 1
@@ -77,6 +91,8 @@ def listar_elegiveis(db: Session, period_label: str) -> dict:
             'tomador': client.name,
             'cpf_cnpj': client.cpf_cnpj,
             'tipo': client.type,
+            'cidade': client.city,
+            'nosso_numero': boleto.nosso_numero if boleto else None,
             'valor': float(billing.amount) if billing.amount is not None else 0.0,
             'titulo': billing.title,
             # Cobrança com nota em 'erro' → reprocessamento
@@ -246,6 +262,98 @@ def consultar_lote(db: Session, lote_id: int) -> dict | None:
         'erro_mensagem': nota.erro_mensagem,
     } for nota, billing, client in rows]
     return {**_lote_resumo(lote), 'itens': itens}
+
+
+# ---------------------------------------------------------------------------
+# Listagem geral de notas + balanço (painel)
+# ---------------------------------------------------------------------------
+
+def _intervalo_do_mes(competencia: str | None) -> tuple[datetime, datetime]:
+    """'YYYY-MM' → (início, fim exclusivo) em UTC. Vazio = mês corrente."""
+    hoje = datetime.now(timezone.utc)
+    ano, mes = hoje.year, hoje.month
+    if competencia:
+        try:
+            ano, mes = (int(p) for p in competencia.split('-')[:2])
+        except (ValueError, TypeError):
+            pass
+    inicio = datetime(ano, mes, 1, tzinfo=timezone.utc)
+    fim = datetime(ano + (mes == 12), (mes % 12) + 1, 1, tzinfo=timezone.utc)
+    return inicio, fim
+
+
+def listar_notas(
+    db: Session,
+    *,
+    busca: str | None = None,
+    situacao: str | None = None,
+    period_label: str | None = None,
+    limit: int = 25,
+    offset: int = 0,
+) -> dict:
+    """Listagem paginada de TODAS as NFS-e (tela "Notas"), com contexto da
+    cobrança, do tomador e do boleto (nosso número)."""
+    query = (
+        db.query(NfseNota, Billing, Client, AilosBoleto)
+        .join(Billing, Billing.id == NfseNota.billing_id)
+        .join(Client, Client.id == Billing.client_id)
+        .outerjoin(AilosBoleto, AilosBoleto.billing_id == Billing.id)
+        .filter(Billing.is_deleted.is_(False))
+    )
+    if (busca or '').strip():
+        alvo = f'%{busca.strip()}%'
+        query = query.filter(or_(
+            Client.name.ilike(alvo),
+            Client.cpf_cnpj.ilike(alvo),
+            NfseNota.numero_nfse.ilike(alvo),
+        ))
+    if situacao:
+        query = query.filter(NfseNota.status == situacao)
+    if period_label:
+        query = query.filter(Billing.period_label == period_label)
+
+    total = query.count()
+    rows = query.order_by(NfseNota.id.desc()).offset(max(offset, 0)).limit(limit).all()
+
+    itens = [{
+        'nota_id': nota.id,
+        'billing_id': nota.billing_id,
+        'lote_id': nota.lote_id,
+        'tomador': client.name,
+        'cpf_cnpj': client.cpf_cnpj,
+        'valor': float(billing.amount) if billing.amount is not None else 0.0,
+        'nosso_numero': boleto.nosso_numero if boleto else None,
+        'numero_nfse': nota.numero_nfse,
+        'status': nota.status,
+        'chave_acesso': nota.chave_acesso,
+        'link_visualizacao': nota.link_visualizacao,
+        'erro_codigo': nota.erro_codigo,
+        'erro_mensagem': nota.erro_mensagem,
+        'tem_xml': bool(nota.xml_retorno),
+        'data_ocorrencia': (nota.data_emissao or getattr(nota, 'created_at', None) or None)
+                           and (nota.data_emissao or nota.created_at).isoformat(),
+    } for nota, billing, client, boleto in rows]
+
+    return {'total': total, 'limit': limit, 'offset': offset, 'itens': itens}
+
+
+def resumo(db: Session, competencia: str | None = None) -> dict:
+    """Balanço do mês para o painel: autorizadas × negadas (+ em processamento)."""
+    inicio, fim = _intervalo_do_mes(competencia)
+    base = db.query(NfseNota).filter(
+        NfseNota.created_at >= inicio, NfseNota.created_at < fim
+    )
+    autorizadas = base.filter(NfseNota.status == 'emitida').count()
+    negadas = base.filter(NfseNota.status == 'erro').count()
+    processando = base.filter(NfseNota.status.in_(('pending', 'processing'))).count()
+    return {
+        'competencia': inicio.strftime('%m/%Y'),
+        'autorizadas': autorizadas,
+        'negadas': negadas,
+        'processando': processando,
+        'total': autorizadas + negadas + processando,
+        'total_geral': db.query(NfseNota).count(),
+    }
 
 
 def _lote_resumo(lote: NfseLote) -> dict:

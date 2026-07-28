@@ -334,3 +334,130 @@ def test_endpoint_listar_e_detalhar_lote(db, http_fin):
 def test_endpoint_lote_exige_perfil_autorizado(db, http_cliente):
     r = http_cliente.get('/api/v1/nfse/lotes/elegiveis', params={'period_label': '07/2026'})
     assert r.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Filtros na conferência (nome / tipo de pessoa)
+# ---------------------------------------------------------------------------
+
+def test_elegiveis_filtra_por_nome_ou_documento(db):
+    a = _client(db, 'TRANSPORTES ALFA', doc='111')
+    b = _client(db, 'BETA COMERCIO', doc='222')
+    _billing(db, a)
+    _billing(db, b)
+
+    assert [i['tomador'] for i in
+            nfse_lote.listar_elegiveis(db, '07/2026', busca='alfa')['itens']] == ['TRANSPORTES ALFA']
+    assert [i['tomador'] for i in
+            nfse_lote.listar_elegiveis(db, '07/2026', busca='222')['itens']] == ['BETA COMERCIO']
+
+
+def test_elegiveis_filtra_por_tipo_de_pessoa(db):
+    pf = _client(db, 'PESSOA FISICA', doc='111', tipo='pf')
+    pj = _client(db, 'EMPRESA LTDA', doc='222', tipo='pj')
+    _billing(db, pf)
+    _billing(db, pj)
+
+    assert [i['tomador'] for i in
+            nfse_lote.listar_elegiveis(db, '07/2026', tipo='pj')['itens']] == ['EMPRESA LTDA']
+
+
+def test_elegiveis_traz_nosso_numero_do_boleto(db):
+    from app.models.ailos_boleto import AilosBoleto
+
+    c = _client(db, 'CLIENTE')
+    b = _billing(db, c)
+    db.add(AilosBoleto(billing_id=b.id, numero_convenio='102004', nosso_numero='2587'))
+    db.commit()
+
+    assert nfse_lote.listar_elegiveis(db, '07/2026')['itens'][0]['nosso_numero'] == '2587'
+
+
+# ---------------------------------------------------------------------------
+# Listagem geral de notas + balanço
+# ---------------------------------------------------------------------------
+
+def test_listar_notas_pagina_e_conta_o_total(db):
+    c = _client(db, 'CLIENTE')
+    for _ in range(3):
+        _nota(db, _billing(db, c), status='emitida')
+
+    pagina = nfse_lote.listar_notas(db, limit=2, offset=0)
+    assert pagina['total'] == 3
+    assert len(pagina['itens']) == 2
+    assert nfse_lote.listar_notas(db, limit=2, offset=2)['total'] == 3
+
+
+def test_listar_notas_filtra_por_situacao_e_busca(db):
+    ok = _client(db, 'CLIENTE OK', doc='111')
+    ruim = _client(db, 'CLIENTE RUIM', doc='222')
+    _nota(db, _billing(db, ok), status='emitida')
+    _nota(db, _billing(db, ruim), status='erro')
+
+    assert nfse_lote.listar_notas(db, situacao='erro')['total'] == 1
+    assert nfse_lote.listar_notas(db, busca='OK')['itens'][0]['tomador'] == 'CLIENTE OK'
+
+
+def test_listar_notas_expoe_contexto_da_cobranca(db):
+    c = _client(db, 'TOMADOR X')
+    b = _billing(db, c, amount='89.90')
+    nota = _nota(db, b, status='emitida')
+    nota.numero_nfse = '7'
+    nota.xml_retorno = '<NFSe/>'
+    db.commit()
+
+    item = nfse_lote.listar_notas(db)['itens'][0]
+    assert item['tomador'] == 'TOMADOR X'
+    assert item['valor'] == 89.90
+    assert item['numero_nfse'] == '7'
+    assert item['tem_xml'] is True
+
+
+def test_resumo_conta_autorizadas_e_negadas_do_mes(db):
+    c = _client(db, 'CLIENTE')
+    _nota(db, _billing(db, c), status='emitida')
+    _nota(db, _billing(db, c), status='erro')
+    _nota(db, _billing(db, c), status='pending')
+
+    r = nfse_lote.resumo(db)
+    assert (r['autorizadas'], r['negadas'], r['processando']) == (1, 1, 1)
+    assert r['total'] == 3
+
+
+# ---------------------------------------------------------------------------
+# Endpoints do painel
+# ---------------------------------------------------------------------------
+
+def test_endpoint_resumo(db, http_fin):
+    c = _client(db, 'CLIENTE')
+    _nota(db, _billing(db, c), status='emitida')
+    r = http_fin.get('/api/v1/nfse/resumo')
+    assert r.status_code == 200
+    assert r.json()['autorizadas'] == 1
+
+
+def test_endpoint_notas(db, http_fin):
+    c = _client(db, 'CLIENTE API')
+    _nota(db, _billing(db, c), status='emitida')
+    r = http_fin.get('/api/v1/nfse/notas', params={'limit': 10})
+    assert r.status_code == 200
+    assert r.json()['total'] == 1
+
+
+def test_endpoint_xml_devolve_o_documento(db, http_fin):
+    c = _client(db, 'CLIENTE')
+    b = _billing(db, c)
+    nota = _nota(db, b, status='emitida')
+    nota.xml_retorno = '<NFSe versao="1.01"/>'
+    db.commit()
+
+    r = http_fin.get(f'/api/v1/nfse/{b.id}/xml')
+    assert r.status_code == 200
+    assert r.headers['content-type'].startswith('application/xml')
+    assert '<NFSe' in r.text
+
+
+def test_endpoint_xml_404_quando_nao_ha_nota(db, http_fin):
+    c = _client(db, 'CLIENTE')
+    b = _billing(db, c)
+    assert http_fin.get(f'/api/v1/nfse/{b.id}/xml').status_code == 404
