@@ -194,7 +194,8 @@ class TrackerLinkPayload(BaseModel):
     vehicle_id: int
     plan_id: int | None = None
     start_date: date = Field(default_factory=date.today)
-    billing_day: int | None = Field(default=None, ge=1, le=28)
+    # 1..31 — meses curtos são ajustados por normalize_due_date()
+    billing_day: int | None = Field(default=None, ge=1, le=31)
     payment_method: str | None = None
     billing_modality: str = 'boleto'
     notes: str | None = None

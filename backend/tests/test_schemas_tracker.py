@@ -188,16 +188,17 @@ class TestTrackerLinkPayload:
         assert p.billing_day == 1
 
     def test_billing_day_max(self):
-        p = TrackerLinkPayload(vehicle_id=1, billing_day=28)
-        assert p.billing_day == 28
+        """31 é válido — normalize_due_date() ajusta nos meses mais curtos."""
+        p = TrackerLinkPayload(vehicle_id=1, billing_day=31)
+        assert p.billing_day == 31
 
     def test_billing_day_zero_rejected(self):
         with pytest.raises(ValidationError):
             TrackerLinkPayload(vehicle_id=1, billing_day=0)
 
-    def test_billing_day_29_rejected(self):
+    def test_billing_day_32_rejected(self):
         with pytest.raises(ValidationError):
-            TrackerLinkPayload(vehicle_id=1, billing_day=29)
+            TrackerLinkPayload(vehicle_id=1, billing_day=32)
 
     def test_billing_day_negative_rejected(self):
         with pytest.raises(ValidationError):

@@ -12,6 +12,7 @@ import { SectionHeader } from '@/components/ui/section-header';
 import { Input, Textarea } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { FormField, FormGrid, FormSection, FormDivider } from '@/components/ui/form-field';
+import { BillingDayInput, erroDiaVencimento } from '@/components/ui/billing-day-input';
 import { Badge, statusVariant, statusLabel } from '@/components/ui/badge';
 import { EmptyState, TableSkeleton } from '@/components/ui/empty-state';
 import { Table, TableHead, Th, TableBody, Tr, Td } from '@/components/ui/table';
@@ -1479,15 +1480,13 @@ export default function ClientesPage() {
             </FormGrid>
             <FormField
               label="Dia de vencimento preferido"
-              hint="1 a 28 — usado como padrão ao gerar contratos e cobranças para este cliente"
+              hint="1 a 31 — usado como padrão ao gerar contratos e cobranças. Em meses mais curtos, cai no último dia."
+              error={erroDiaVencimento(form.billing_day) ?? undefined}
             >
-              <Input
-                type="number"
-                min={1}
-                max={28}
-                placeholder="Ex.: 20"
+              <BillingDayInput
                 value={form.billing_day}
-                onChange={(e) => setForm((p) => ({ ...p, billing_day: e.target.value.slice(0, 2) }))}
+                onChange={(v) => setForm((p) => ({ ...p, billing_day: v }))}
+                placeholder="Ex.: 20"
                 className="max-w-[120px]"
               />
             </FormField>

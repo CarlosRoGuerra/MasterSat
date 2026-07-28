@@ -5,6 +5,7 @@ import { Check, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ClientAutocomplete } from '@/components/ui/client-autocomplete';
 import { TrackerAutocomplete } from '@/components/ui/tracker-autocomplete';
+import { BillingDayInput } from '@/components/ui/billing-day-input';
 import { apiFetch } from '@/lib/api';
 import { fetchAddressByCep } from '@/lib/cep';
 import { formatZipCode, onlyDigits } from '@/lib/format';
@@ -173,9 +174,6 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
 
   // Step 3 — plan + billing
   const [pf, setPf] = useState({ plan_id: '', payment_method: 'boleto', billing_day: '' });
-  // Mantém o input do dia de vencimento visível enquanto digita (senão o campo
-  // sumia no primeiro dígito: "10" travava em "1")
-  const [editingBillingDay, setEditingBillingDay] = useState(false);
   const [selectedProductIds, setSelectedProductIds] = useState<number[]>([]);
 
   // Load remote data once on open
@@ -962,29 +960,12 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
                         </p>
                       </div>
                       <div className="shrink-0">
-                        {editingBillingDay || !pf.billing_day ? (
-                          <input
-                            className={fieldClass}
-                            type="number"
-                            min={1}
-                            max={28}
-                            placeholder="Informar dia"
-                            autoFocus={editingBillingDay}
-                            value={pf.billing_day}
-                            onChange={e => setPf(prev => ({ ...prev, billing_day: e.target.value }))}
-                            onFocus={() => setEditingBillingDay(true)}
-                            onBlur={() => setEditingBillingDay(false)}
-                            style={{ width: 120 }}
-                          />
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => { setEditingBillingDay(true); setPf(prev => ({ ...prev, billing_day: '' })); }}
-                            className="text-xs text-slate-400 underline hover:text-slate-600 dark:hover:text-slate-200"
-                          >
-                            Usar outro dia
-                          </button>
-                        )}
+                        <BillingDayInput
+                          value={pf.billing_day}
+                          onChange={v => setPf(prev => ({ ...prev, billing_day: v }))}
+                          placeholder="Dia"
+                          className="w-24 text-center"
+                        />
                       </div>
                     </div>
                   </div>

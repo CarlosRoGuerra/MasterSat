@@ -11,7 +11,10 @@ class ContractBase(BaseModel):
     start_date: date
     end_date: date | None = None
     status: str = 'ativo'
-    billing_day: int | None = Field(default=None, ge=1, le=28)
+    # 1..31 — normalize_due_date() já reduz para o último dia do mês quando o
+    # mês é mais curto (dia 31 em fevereiro vira 28/29), então limitar em 28
+    # apenas impedia vencimentos comuns como dia 30.
+    billing_day: int | None = Field(default=None, ge=1, le=31)
     payment_method: str | None = None
     bank: str | None = None
     notes: str | None = None
@@ -30,7 +33,10 @@ class ContractUpdate(BaseModel):
     start_date: date | None = None
     end_date: date | None = None
     status: str | None = None
-    billing_day: int | None = Field(default=None, ge=1, le=28)
+    # 1..31 — normalize_due_date() já reduz para o último dia do mês quando o
+    # mês é mais curto (dia 31 em fevereiro vira 28/29), então limitar em 28
+    # apenas impedia vencimentos comuns como dia 30.
+    billing_day: int | None = Field(default=None, ge=1, le=31)
     payment_method: str | None = None
     bank: str | None = None
     notes: str | None = None

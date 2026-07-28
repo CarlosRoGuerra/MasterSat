@@ -2,7 +2,7 @@
 Testes de validação Pydantic para schemas de Contract.
 
 Cobertos:
-- Limites de billing_day (ge=1, le=28)
+- Limites de billing_day (ge=1, le=31)
 - Limites de billing_cycles (ge=1, le=60)
 - Defaults esperados
 - Campos opcionais / parciais no ContractUpdate
@@ -47,12 +47,22 @@ class TestContractCreateBillingDay:
                 billing_day=0,
             )
 
-    def test_billing_day_29_rejected(self):
+    def test_billing_day_31_accepted(self):
+        """Dias 29..31 são válidos: normalize_due_date() reduz para o último dia
+        do mês quando o mês é mais curto."""
+        c = ContractCreate(
+            client_id=1, plan_id=1,
+            start_date=date(2025, 1, 15),
+            billing_day=31,
+        )
+        assert c.billing_day == 31
+
+    def test_billing_day_32_rejected(self):
         with pytest.raises(ValidationError):
             ContractCreate(
                 client_id=1, plan_id=1,
                 start_date=date(2025, 1, 15),
-                billing_day=29,
+                billing_day=32,
             )
 
     def test_billing_day_negative_rejected(self):
@@ -196,7 +206,7 @@ class TestContractUpdate:
 
     def test_billing_day_update_out_of_range(self):
         with pytest.raises(ValidationError):
-            ContractUpdate(billing_day=29)
+            ContractUpdate(billing_day=32)
 
     def test_status_update(self):
         u = ContractUpdate(status="cancelado")

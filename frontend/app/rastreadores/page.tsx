@@ -14,6 +14,7 @@ import { EmptyState, TableSkeleton } from '@/components/ui/empty-state';
 import { usePagination, Pagination } from '@/components/ui/pagination';
 import { ExportButton } from '@/components/ui/export-button';
 import { ClientAutocomplete } from '@/components/ui/client-autocomplete';
+import { BillingDayInput, erroDiaVencimento } from '@/components/ui/billing-day-input';
 import { apiFetch } from '@/lib/api';
 import { onlyDigits, formatCpfCnpj } from '@/lib/format';
 import { useAuthGuard } from '@/lib/use-auth-guard';
@@ -688,21 +689,24 @@ export default function RastreadoresPage() {
                     {/* Dia de vencimento: herdado do cliente */}
                     <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-700 dark:bg-slate-900/50">
                       <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">Dia do vencimento</p>
-                      {form.link_billing_day ? (
-                        <p className="mt-1 text-sm font-bold text-slate-900 dark:text-white">
-                          Todo dia <span className="text-brand-700 dark:text-brand-300">{form.link_billing_day}</span>
-                          <span className="ml-2 text-xs font-normal text-slate-400"> · herdado do cliente</span>
+                      {/* O input fica SEMPRE montado: antes ele era renderizado
+                          só quando o campo estava vazio, então sumia no primeiro
+                          dígito e "10" travava em "1". */}
+                      <div className="mt-1 flex items-center justify-between gap-3">
+                        <p className="text-xs text-slate-500 dark:text-slate-400">
+                          {form.link_billing_day
+                            ? <>Todo dia <span className="font-bold text-brand-700 dark:text-brand-300">{form.link_billing_day}</span> · herdado do cliente</>
+                            : <span className="text-amber-600 dark:text-amber-400">Selecione um veículo para herdar, ou informe ao lado</span>}
                         </p>
-                      ) : (
-                        <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
-                          Selecione um veículo para herdar automaticamente ou
-                          <input
-                            type="number" min={1} max={28}
-                            placeholder=" informe o dia"
-                            value={form.link_billing_day}
-                            onChange={(e) => setForm((prev) => ({ ...prev, link_billing_day: e.target.value }))}
-                            className="ml-1 w-20 rounded border border-amber-300 bg-white px-2 py-0.5 text-xs text-slate-700 dark:border-amber-700 dark:bg-slate-800 dark:text-white"
-                          />
+                        <BillingDayInput
+                          value={form.link_billing_day}
+                          onChange={(v) => setForm((prev) => ({ ...prev, link_billing_day: v }))}
+                          className="w-20 shrink-0 text-center"
+                        />
+                      </div>
+                      {erroDiaVencimento(form.link_billing_day) && (
+                        <p className="mt-1 text-xs text-rose-600 dark:text-rose-400">
+                          {erroDiaVencimento(form.link_billing_day)}
                         </p>
                       )}
                     </div>

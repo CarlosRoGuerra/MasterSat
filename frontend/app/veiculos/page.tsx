@@ -10,6 +10,7 @@ import { StatCard } from '@/components/ui/stat-card';
 import { SectionHeader } from '@/components/ui/section-header';
 import { Badge, statusVariant, statusLabel } from '@/components/ui/badge';
 import { ClientAutocomplete } from '@/components/ui/client-autocomplete';
+import { BillingDayInput } from '@/components/ui/billing-day-input';
 import { Table, TableHead, Th, TableBody, Tr, Td } from '@/components/ui/table';
 import { EmptyState, TableSkeleton } from '@/components/ui/empty-state';
 import { Input } from '@/components/ui/input';
@@ -349,9 +350,6 @@ function LinkTrackerForm({
   const set = (key: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     onChange({ ...form, [key]: e.target.value });
 
-  // Mantém o input do dia visível enquanto o usuário digita (senão o campo
-  // sumia no primeiro dígito: "10" travava em "1")
-  const [editingDay, setEditingDay] = useState(false);
 
   const selectedPlan = plans.find((p) => String(p.id) === form.plan_id);
   const isMonthlyPlan = !selectedPlan?.billing_interval_months || selectedPlan.billing_interval_months === 1;
@@ -509,29 +507,12 @@ function LinkTrackerForm({
               </p>
             </div>
             <div className="shrink-0">
-              {editingDay || !form.billing_day ? (
-                <input
-                  className={fieldClass}
-                  type="number"
-                  min={1}
-                  max={28}
-                  placeholder="Informar dia"
-                  autoFocus={editingDay}
-                  value={form.billing_day}
-                  onChange={set('billing_day')}
-                  onFocus={() => setEditingDay(true)}
-                  onBlur={() => setEditingDay(false)}
-                  style={{ width: 120 }}
-                />
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => { setEditingDay(true); onChange({ ...form, billing_day: '' }); }}
-                  className="text-xs text-slate-400 underline hover:text-slate-600 dark:hover:text-slate-200"
-                >
-                  Usar outro dia
-                </button>
-              )}
+              <BillingDayInput
+                value={form.billing_day}
+                onChange={(v) => onChange({ ...form, billing_day: v })}
+                placeholder="Dia"
+                className="w-24 text-center"
+              />
             </div>
           </div>
         </div>

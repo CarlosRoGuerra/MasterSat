@@ -52,7 +52,8 @@ class ClientBase(BaseModel):
     state: str | None = None
     address: str | None = None
     notes: str | None = None
-    billing_day: int | None = Field(default=None, ge=1, le=28)
+    # 1..31 — meses curtos são ajustados por normalize_due_date()
+    billing_day: int | None = Field(default=None, ge=1, le=31)
     rg_ie: str | None = None
     birth_date: date | None = None
     emergency_contacts: list[EmergencyContact] | None = None
@@ -142,7 +143,8 @@ class ClientUpdate(BaseModel):
     state: str | None = None
     address: str | None = None
     notes: str | None = None
-    billing_day: int | None = Field(default=None, ge=1, le=28)
+    # 1..31 — meses curtos são ajustados por normalize_due_date()
+    billing_day: int | None = Field(default=None, ge=1, le=31)
     rg_ie: str | None = None
     birth_date: date | None = None
     emergency_contacts: list[EmergencyContact] | None = None

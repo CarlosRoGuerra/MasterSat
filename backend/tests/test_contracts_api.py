@@ -205,8 +205,15 @@ class TestCreateContrato:
 
     def test_billing_day_out_of_range_422(self, http, cliente, plan):
         r = http.post(PREFIX + "/", json=self._payload(
-            cliente.id, plan.id, billing_day=29))
+            cliente.id, plan.id, billing_day=32))
         assert r.status_code == 422
+
+    def test_billing_day_30_aceito(self, http, cliente, plan):
+        """Dia 30 é comum e era barrado pelo limite antigo de 28."""
+        r = http.post(PREFIX + "/", json=self._payload(
+            cliente.id, plan.id, billing_day=30))
+        assert r.status_code == 200
+        assert r.json()["billing_day"] == 30
 
     def test_billing_cycles_out_of_range_422(self, http, cliente, plan):
         r = http.post(PREFIX + "/", json=self._payload(
@@ -298,8 +305,14 @@ class TestUpdateContrato:
         assert r.json()["billing_day"] == 10
 
     def test_update_billing_day_out_of_range(self, http, contrato):
-        r = http.put(f"{PREFIX}/{contrato.id}", json={"billing_day": 30})
+        r = http.put(f"{PREFIX}/{contrato.id}", json={"billing_day": 32})
         assert r.status_code == 422
+
+    def test_update_billing_day_30(self, http, contrato):
+        """Trocar o vencimento para dia 30 precisa SALVAR (era barrado por le=28)."""
+        r = http.put(f"{PREFIX}/{contrato.id}", json={"billing_day": 30})
+        assert r.status_code == 200
+        assert r.json()["billing_day"] == 30
 
     def test_xss_in_notes(self, http, contrato):
         xss = "<img src=x onerror=alert(1)>"
