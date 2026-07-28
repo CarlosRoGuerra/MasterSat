@@ -97,6 +97,59 @@ function statusBadge(status: string) {
   }
 }
 
+/** Texto amigável do tempo restante do certificado. */
+function tempoParaExpirar(dias: number | null | undefined): string {
+  if (dias === null || dias === undefined) return '—';
+  if (dias < 0) {
+    const d = Math.abs(dias);
+    return `Vencido há ${d} ${d === 1 ? 'dia' : 'dias'}`;
+  }
+  if (dias === 0) return 'Expira hoje';
+  if (dias === 1) return 'Expira amanhã';
+  if (dias < 45) return `${dias} dias`;
+  const meses = Math.floor(dias / 30);
+  return `${meses} ${meses === 1 ? 'mês' : 'meses'} (${dias} dias)`;
+}
+
+/** Severidade do certificado: vencido → vermelho, ≤30 dias → amarelo. */
+function severidadeCertificado(c: Certificado | null): 'ok' | 'alerta' | 'vencido' | null {
+  if (!c) return null;
+  if (c.vencido || (c.dias_para_vencer ?? 0) < 0) return 'vencido';
+  if ((c.dias_para_vencer ?? 999) <= 30) return 'alerta';
+  return 'ok';
+}
+
+/** Faixa de aviso do certificado — aparece em todas as abas, porque um
+ *  certificado vencido impede QUALQUER emissão. */
+function AvisoCertificado({ cert, onIr }: { cert: Certificado | null; onIr: () => void }) {
+  const sev = severidadeCertificado(cert);
+  if (!cert || sev === null || sev === 'ok') return null;
+
+  const vencido = sev === 'vencido';
+  const cls = vencido
+    ? 'border-rose-300 bg-rose-50 text-rose-900 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200'
+    : 'border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200';
+
+  return (
+    <div className={`flex flex-wrap items-center gap-3 rounded-xl border px-4 py-3 text-sm ${cls}`}>
+      <AlertTriangle className="h-4 w-4 shrink-0" />
+      <p className="flex-1">
+        <strong>
+          {vencido
+            ? 'Certificado digital vencido — a emissão de NFS-e está bloqueada.'
+            : `Certificado digital expira em ${cert.dias_para_vencer} ${cert.dias_para_vencer === 1 ? 'dia' : 'dias'}.`}
+        </strong>{' '}
+        {vencido
+          ? `Venceu em ${dataBR(cert.valido_ate)}. Emita um novo na Autoridade Certificadora e cadastre aqui.`
+          : `Vence em ${dataBR(cert.valido_ate)}. Providencie a renovação para não interromper o faturamento.`}
+      </p>
+      <button onClick={onIr} className="shrink-0 font-semibold underline underline-offset-2">
+        Atualizar certificado
+      </button>
+    </div>
+  );
+}
+
 const inputCls =
   'w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900';
 
@@ -326,6 +379,7 @@ export default function NotasFiscaisPage() {
   const totalSelecionado = elegiveis
     ? elegiveis.itens.filter((i) => selecionados.has(i.billing_id)).reduce((s, i) => s + i.valor, 0)
     : 0;
+  const sevCert = severidadeCertificado(certificado);
 
   if (authLoading) {
     return (
@@ -434,6 +488,9 @@ export default function NotasFiscaisPage() {
           </button>
         ))}
       </div>
+
+      {/* Aviso de vencimento — visível em qualquer aba */}
+      <AvisoCertificado cert={certificado} onIr={() => setAba('certificado')} />
 
       {error && <ErrorBanner message={error} />}
       {feedback && (
@@ -791,9 +848,9 @@ export default function NotasFiscaisPage() {
                     {certificado.nome_arquivo ? ` · ${certificado.nome_arquivo}` : ''}
                   </p>
                 </div>
-                {certificado.vencido ? (
+                {sevCert === 'vencido' ? (
                   <Badge variant="danger">Vencido</Badge>
-                ) : (certificado.dias_para_vencer ?? 999) <= 30 ? (
+                ) : sevCert === 'alerta' ? (
                   <Badge variant="warning">Vence em {certificado.dias_para_vencer} dias</Badge>
                 ) : (
                   <Badge variant="success">Ativo</Badge>
@@ -813,8 +870,14 @@ export default function NotasFiscaisPage() {
                   <p className="text-slate-700 dark:text-slate-200">{dataBR(certificado.valido_ate)}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-slate-400">Cadastrado em</p>
-                  <p className="text-slate-700 dark:text-slate-200">{dataBR(certificado.enviado_em)}</p>
+                  <p className="text-xs text-slate-400">Tempo para expirar</p>
+                  <p className={`font-semibold ${
+                    sevCert === 'vencido' ? 'text-rose-600 dark:text-rose-400'
+                    : sevCert === 'alerta' ? 'text-amber-600 dark:text-amber-400'
+                    : 'text-emerald-600 dark:text-emerald-400'
+                  }`}>
+                    {tempoParaExpirar(certificado.dias_para_vencer)}
+                  </p>
                 </div>
               </div>
             </Card>
@@ -853,11 +916,22 @@ export default function NotasFiscaisPage() {
                        placeholder="Preenchido a partir do arquivo enviado"
                        className={`${inputCls} bg-slate-50 text-slate-500 dark:bg-slate-800`} />
               </Campo>
-              <Campo label="Data de vencimento">
-                <input readOnly value={certificado ? dataBR(certificado.valido_ate) : ''}
-                       placeholder="Preenchido a partir do arquivo enviado"
-                       className={`${inputCls} bg-slate-50 text-slate-500 dark:bg-slate-800`} />
-              </Campo>
+              <div className="grid grid-cols-2 gap-3">
+                <Campo label="Data de vencimento">
+                  <input readOnly value={certificado ? dataBR(certificado.valido_ate) : ''}
+                         placeholder="Do arquivo"
+                         className={`${inputCls} bg-slate-50 text-slate-500 dark:bg-slate-800`} />
+                </Campo>
+                <Campo label="Tempo para expirar">
+                  <input readOnly value={certificado ? tempoParaExpirar(certificado.dias_para_vencer) : ''}
+                         placeholder="Do arquivo"
+                         className={`${inputCls} bg-slate-50 font-semibold dark:bg-slate-800 ${
+                           sevCert === 'vencido' ? 'text-rose-600 dark:text-rose-400'
+                           : sevCert === 'alerta' ? 'text-amber-600 dark:text-amber-400'
+                           : 'text-slate-500'
+                         }`} />
+                </Campo>
+              </div>
             </div>
             <p className="mt-3 text-xs text-slate-500">
               Titular, CNPJ e validade são lidos do próprio arquivo — não precisam ser digitados.

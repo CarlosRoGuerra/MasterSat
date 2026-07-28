@@ -117,6 +117,32 @@ def test_material_pem_sem_certificado_cadastrado(db):
     assert nfse_certificado.material_pem(db) is None
 
 
+def _registro_com_validade(dias: int) -> NfseCertificado:
+    """Registro em memória com vencimento relativo — para testar o alerta."""
+    return NfseCertificado(
+        titular='TESTE', arquivo_cifrado=b'x', senha_cifrada='y',
+        valido_ate=dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=dias, hours=1),
+    )
+
+
+@pytest.mark.parametrize('dias,esperado_vencido', [(365, False), (10, False), (-5, True)])
+def test_para_dict_calcula_tempo_restante(dias, esperado_vencido):
+    d = nfse_certificado.para_dict(_registro_com_validade(dias))
+    assert d['vencido'] is esperado_vencido
+    assert d['dias_para_vencer'] == dias
+
+
+def test_para_dict_aceita_data_sem_fuso(db):
+    """O SQLite devolve datetime ingênuo; comparar com aware levantava TypeError."""
+    registro = NfseCertificado(
+        titular='TESTE', arquivo_cifrado=b'x', senha_cifrada='y',
+        valido_ate=dt.datetime.now() + dt.timedelta(days=30),  # sem tzinfo
+    )
+    d = nfse_certificado.para_dict(registro)
+    assert d['vencido'] is False
+    assert d['dias_para_vencer'] is not None
+
+
 def test_para_dict_nao_expoe_arquivo_nem_senha(db):
     registro = nfse_certificado.salvar(db, _pfx(), SENHA)
     d = nfse_certificado.para_dict(registro)
