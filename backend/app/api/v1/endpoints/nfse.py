@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Respon
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_roles
+from app.core.crypto import CryptoError
 from app.db.session import get_db
 from app.models.billing import Billing
 from app.models.client import Client
@@ -177,6 +178,13 @@ async def certificado_cadastrar(
         )
     except nfse_certificado.CertificadoError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except CryptoError as exc:
+        # Sem chave de criptografia não dá para guardar o .pfx com segurança.
+        raise HTTPException(
+            status_code=503,
+            detail='Armazenamento seguro indisponível: AILOS_TOKEN_ENCRYPTION_KEY '
+                   f'não configurada ou inválida no servidor. ({exc})',
+        ) from exc
     return nfse_certificado.para_dict(registro)
 
 

@@ -51,6 +51,24 @@ def _cnpj_do_certificado(cert) -> str | None:
     return digitos[:14] if len(digitos) >= 14 else None
 
 
+def _validade(cert) -> tuple[dt.datetime, dt.datetime]:
+    """
+    (início, fim) da validade, sempre com fuso UTC.
+
+    A propriedade ``not_valid_before_utc`` só existe a partir da cryptography
+    42. O container roda a 41.x — presa por ``pyOpenSSL<24``, que o signxml
+    exige para assinar a DPS. Nessa versão só há ``not_valid_before``, que é
+    ingênuo mas já está em UTC.
+    """
+    try:
+        return cert.not_valid_before_utc, cert.not_valid_after_utc
+    except AttributeError:
+        return (
+            cert.not_valid_before.replace(tzinfo=dt.timezone.utc),
+            cert.not_valid_after.replace(tzinfo=dt.timezone.utc),
+        )
+
+
 def inspecionar(arquivo: bytes, senha: str) -> dict:
     """
     Abre o .pfx e devolve os dados do certificado. Levanta ``CertificadoError``
@@ -67,13 +85,14 @@ def inspecionar(arquivo: bytes, senha: str) -> dict:
     if chave is None or cert is None:
         raise CertificadoError('O arquivo não contém chave privada e certificado.')
 
+    inicio, fim = _validade(cert)
+    emissor_cn = cert.issuer.get_attributes_for_oid(NameOID.COMMON_NAME)
     return {
         'titular': _texto_do_subject(cert, NameOID.COMMON_NAME) or 'Certificado sem CN',
-        'emissor': (cert.issuer.get_attributes_for_oid(NameOID.COMMON_NAME) or [None])[0]
-                   and cert.issuer.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value,
+        'emissor': emissor_cn[0].value if emissor_cn else None,
         'cnpj': _cnpj_do_certificado(cert),
-        'valido_de': cert.not_valid_before_utc,
-        'valido_ate': cert.not_valid_after_utc,
+        'valido_de': inicio,
+        'valido_ate': fim,
     }
 
 

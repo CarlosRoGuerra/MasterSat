@@ -63,6 +63,25 @@ def test_inspecionar_extrai_titular_cnpj_e_validade():
     assert dados['valido_ate'] > dt.datetime.now(dt.timezone.utc)
 
 
+def test_validade_funciona_na_cryptography_antiga():
+    """
+    O container roda cryptography 41 (presa por pyOpenSSL<24, exigida pelo
+    signxml), que NÃO tem not_valid_before_utc — só not_valid_before, ingênuo.
+    Este teste simula essa versão; sem o fallback, a leitura do .pfx quebrava
+    com AttributeError só dentro do container.
+    """
+    class CertAntigo:
+        not_valid_before = dt.datetime(2026, 7, 24, 14, 0, 0)   # sem tzinfo
+        not_valid_after = dt.datetime(2027, 7, 24, 14, 0, 0)
+
+        def __getattr__(self, nome):  # o _utc não existe nessa versão
+            raise AttributeError(nome)
+
+    inicio, fim = nfse_certificado._validade(CertAntigo())
+    assert inicio.tzinfo is dt.timezone.utc and fim.tzinfo is dt.timezone.utc
+    assert fim.year == 2027
+
+
 def test_inspecionar_recusa_senha_errada():
     with pytest.raises(nfse_certificado.CertificadoError, match='senha'):
         nfse_certificado.inspecionar(_pfx(), 'senha-errada')
