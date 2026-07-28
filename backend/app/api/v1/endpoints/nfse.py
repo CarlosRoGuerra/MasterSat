@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import NoReturn
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_roles
@@ -27,6 +27,7 @@ from app.models.enums import UserRole
 from app.models.nfse_nota import NfseNota
 from app.models.user import User
 from app.schemas.nfse import (
+    CertificadoOut,
     ElegiveisOut,
     LoteDetalhe,
     LoteEmitirIn,
@@ -36,7 +37,13 @@ from app.schemas.nfse import (
     NotasOut,
     ResumoOut,
 )
-from app.services import nfse_joinville, nfse_lote, nfse_nacional, nfse_provider
+from app.services import (
+    nfse_certificado,
+    nfse_joinville,
+    nfse_lote,
+    nfse_nacional,
+    nfse_provider,
+)
 
 router = APIRouter()
 
@@ -135,6 +142,42 @@ def notas(
         db, busca=busca, situacao=situacao, period_label=period_label,
         limit=limit, offset=offset,
     )
+
+
+# ── Certificado digital ─────────────────────────────────────────────────────
+
+@router.get('/certificado', response_model=CertificadoOut | None)
+def certificado_atual(
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    """Certificado A1 ativo (sem expor arquivo nem senha). None = nenhum."""
+    return nfse_certificado.para_dict(nfse_certificado.obter_ativo(db))
+
+
+@router.post('/certificado', response_model=CertificadoOut, status_code=201)
+async def certificado_cadastrar(
+    arquivo: UploadFile = File(..., description='e-CNPJ A1 (.pfx / .p12)'),
+    senha: str = Form(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(UserRole.ADMIN)),
+):
+    """
+    Cadastra o certificado. Titular, CNPJ, emissor e validade são LIDOS do
+    próprio arquivo — o operador só envia o .pfx e a senha. Só ADMIN.
+    """
+    conteudo = await arquivo.read()
+    if not conteudo:
+        raise HTTPException(status_code=422, detail='Arquivo do certificado vazio.')
+    if len(conteudo) > 512 * 1024:
+        raise HTTPException(status_code=422, detail='Arquivo muito grande para um .pfx (máx. 512 KB).')
+    try:
+        registro = nfse_certificado.salvar(
+            db, conteudo, senha, nome_arquivo=arquivo.filename, enviado_por=user.id,
+        )
+    except nfse_certificado.CertificadoError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return nfse_certificado.para_dict(registro)
 
 
 # ── Emissão em lote ─────────────────────────────────────────────────────────

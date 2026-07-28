@@ -23,6 +23,7 @@ from app.models import (  # noqa: F401
     contract,
     document,
     integration_log,
+    nfse_certificado,
     nfse_lote,
     nfse_nota,
     password_reset_token,

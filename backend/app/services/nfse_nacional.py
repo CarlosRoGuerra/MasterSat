@@ -344,16 +344,39 @@ def validar_dps(dps: etree._Element) -> None:
 # Certificado, assinatura e transporte
 # ---------------------------------------------------------------------------
 
+def _material_do_banco() -> tuple[bytes, bytes] | None:
+    """Certificado cadastrado pela tela (tabela nfse_certificados), se houver.
+    Falha de banco não derruba a emissão — cai no .env."""
+    try:
+        from app.db.session import SessionLocal
+        from app.services import nfse_certificado
+        db = SessionLocal()
+        try:
+            return nfse_certificado.material_pem(db)
+        finally:
+            db.close()
+    except Exception:  # noqa: BLE001 — sem banco/tabela, usa o arquivo do .env
+        return None
+
+
 @lru_cache(maxsize=1)
 def _material_certificado() -> tuple[bytes, bytes]:
-    """Carrega o .pfx e devolve (chave_pem, certificado_pem)."""
+    """
+    (chave_pem, certificado_pem). Prioridade: certificado ATIVO cadastrado na
+    tela → NFSE_CERT_PATH do .env. O cache é limpo ao cadastrar um novo.
+    """
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.serialization import pkcs12
+
+    do_banco = _material_do_banco()
+    if do_banco is not None:
+        return do_banco
 
     if not settings.nfse_cert_path:
         raise NfseError(
             'Certificado digital obrigatório para o Emissor Nacional. '
-            'Configure NFSE_CERT_PATH (e-CNPJ A1, .pfx/.p12) e NFSE_CERT_SENHA.'
+            'Cadastre o e-CNPJ A1 na tela Notas Fiscais → Certificado, ou '
+            'configure NFSE_CERT_PATH/NFSE_CERT_SENHA.'
         )
     caminho = Path(settings.nfse_cert_path)
     if not caminho.exists():

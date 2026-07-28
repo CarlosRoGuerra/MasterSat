@@ -1,8 +1,10 @@
 """
-Criptografia simétrica (Fernet) para tokens/códigos sensíveis da integração
-Ailos (cooperado token, authorization code, client app token).
+Criptografia simétrica (Fernet) para segredos guardados em banco: tokens da
+integração Ailos (cooperado token, authorization code, client app token) e o
+certificado digital A1 da NFS-e (arquivo .pfx + senha).
 
-A chave é configurada via AILOS_TOKEN_ENCRYPTION_KEY. Para gerar uma nova:
+A chave é configurada via AILOS_TOKEN_ENCRYPTION_KEY (nome herdado do primeiro
+uso; hoje protege todos os segredos em repouso). Para gerar uma nova:
     python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 """
 from __future__ import annotations
@@ -40,6 +42,19 @@ def decrypt_token(value: str) -> str:
         return _fernet().decrypt(value.encode('ascii')).decode('utf-8')
     except InvalidToken as exc:
         raise CryptoError('Token criptografado inválido ou corrompido') from exc
+
+
+def encrypt_bytes(value: bytes) -> bytes:
+    """Criptografa bytes crus (ex.: o .pfx do certificado A1)."""
+    return _fernet().encrypt(value)
+
+
+def decrypt_bytes(value: bytes) -> bytes:
+    """Descriptografa bytes previamente gerados por encrypt_bytes."""
+    try:
+        return _fernet().decrypt(value)
+    except InvalidToken as exc:
+        raise CryptoError('Conteúdo criptografado inválido ou corrompido') from exc
 
 
 def mask_token(value: str | None) -> str:

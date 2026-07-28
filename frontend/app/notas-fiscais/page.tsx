@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   FileText, RefreshCw, CheckCircle2, AlertTriangle, Loader2, Receipt,
   ListChecks, ChevronLeft, ExternalLink, FileDown, FileCode2, Search,
-  LayoutDashboard, Layers, Plus, SlidersHorizontal,
+  LayoutDashboard, Layers, Plus, SlidersHorizontal, ShieldCheck, Upload,
 } from 'lucide-react';
 
 import { PageShell } from '@/components/page-shell';
@@ -53,7 +53,13 @@ type Resumo = {
   total: number; total_geral: number;
 };
 
-type Aba = 'painel' | 'notas' | 'lotes' | 'gerar';
+type Certificado = {
+  id: number; titular: string; cnpj: string | null; emissor: string | null;
+  nome_arquivo: string | null; valido_de: string | null; valido_ate: string | null;
+  dias_para_vencer: number | null; vencido: boolean; ativo: boolean; enviado_em: string | null;
+};
+
+type Aba = 'painel' | 'notas' | 'lotes' | 'gerar' | 'certificado';
 
 /* ── Códigos de tributação nacional usados pela MasterSat ──────────────── */
 const CODIGOS_SERVICO = [
@@ -152,6 +158,12 @@ export default function NotasFiscaisPage() {
   const [lotes, setLotes] = useState<LoteResumo[]>([]);
   const [loteAberto, setLoteAberto] = useState<LoteDetalhe | null>(null);
 
+  // Certificado digital
+  const [certificado, setCertificado] = useState<Certificado | null>(null);
+  const [arquivoCert, setArquivoCert] = useState<File | null>(null);
+  const [senhaCert, setSenhaCert] = useState('');
+  const [salvandoCert, setSalvandoCert] = useState(false);
+
   // Geração de lote
   const [month, setMonth] = useState('');
   const [codigoServico, setCodigoServico] = useState(CODIGOS_SERVICO[0].codigo);
@@ -186,7 +198,14 @@ export default function NotasFiscaisPage() {
     apiFetch<Notas>(`/nfse/notas?${p}`, {}, token).then(setNotas).catch((e) => setError(parseErr(e)));
   }, [token, porPagina, paginaNotas, buscaNotas, situacaoFiltro]);
 
-  useEffect(() => { carregarResumo(); carregarLotes(); }, [carregarResumo, carregarLotes]);
+  const carregarCertificado = useCallback(() => {
+    if (!token) return;
+    apiFetch<Certificado | null>('/nfse/certificado', {}, token)
+      .then(setCertificado).catch(() => {});
+  }, [token]);
+
+  useEffect(() => { carregarResumo(); carregarLotes(); carregarCertificado(); },
+            [carregarResumo, carregarLotes, carregarCertificado]);
   useEffect(() => { if (aba === 'notas') carregarNotas(); }, [aba, carregarNotas]);
 
   // Polling enquanto houver lote processando (na tela do lote ou na lista).
@@ -261,6 +280,24 @@ export default function NotasFiscaisPage() {
     try {
       setLoteAberto(await apiFetch<LoteDetalhe>(`/nfse/lotes/${id}`, {}, token));
     } catch (err) { setError(parseErr(err)); }
+  }
+
+  async function salvarCertificado() {
+    if (!arquivoCert || !senhaCert) {
+      setError('Selecione o arquivo do certificado e informe a senha.');
+      return;
+    }
+    setError(''); setFeedback(''); setSalvandoCert(true);
+    try {
+      const form = new FormData();
+      form.append('arquivo', arquivoCert);
+      form.append('senha', senhaCert);
+      const novo = await apiFetch<Certificado>('/nfse/certificado',
+                                               { method: 'POST', body: form }, token);
+      setCertificado(novo);
+      setArquivoCert(null); setSenhaCert('');
+      setFeedback(`Certificado de ${novo.titular} cadastrado. Válido até ${dataBR(novo.valido_ate)}.`);
+    } catch (err) { setError(parseErr(err)); } finally { setSalvandoCert(false); }
   }
 
   async function baixarArquivo(billingId: number, tipo: 'danfse' | 'xml') {
@@ -373,6 +410,7 @@ export default function NotasFiscaisPage() {
     { id: 'notas', label: 'Notas', icon: Receipt },
     { id: 'lotes', label: 'Lotes', icon: Layers },
     { id: 'gerar', label: 'Gerar lote', icon: Plus },
+    { id: 'certificado', label: 'Certificado', icon: ShieldCheck },
   ];
 
   return (
@@ -734,6 +772,104 @@ export default function NotasFiscaisPage() {
               </Card>
             )
           )}
+        </>
+      )}
+      {/* ── CERTIFICADO DIGITAL ── */}
+      {aba === 'certificado' && (
+        <>
+          {/* Situação atual */}
+          {certificado ? (
+            <Card className="p-5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+                    Certificado em uso
+                  </h2>
+                  <p className="mt-2 font-medium text-slate-900 dark:text-white">{certificado.titular}</p>
+                  <p className="text-xs text-slate-500">
+                    {certificado.emissor ?? 'Emissor não identificado'}
+                    {certificado.nome_arquivo ? ` · ${certificado.nome_arquivo}` : ''}
+                  </p>
+                </div>
+                {certificado.vencido ? (
+                  <Badge variant="danger">Vencido</Badge>
+                ) : (certificado.dias_para_vencer ?? 999) <= 30 ? (
+                  <Badge variant="warning">Vence em {certificado.dias_para_vencer} dias</Badge>
+                ) : (
+                  <Badge variant="success">Ativo</Badge>
+                )}
+              </div>
+              <div className="mt-4 grid grid-cols-2 gap-4 border-t border-slate-100 pt-4 text-sm dark:border-slate-800 sm:grid-cols-4">
+                <div>
+                  <p className="text-xs text-slate-400">CNPJ</p>
+                  <p className="tabular-nums text-slate-700 dark:text-slate-200">{certificado.cnpj ?? '—'}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-slate-400">Válido de</p>
+                  <p className="text-slate-700 dark:text-slate-200">{dataBR(certificado.valido_de)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-slate-400">Vencimento</p>
+                  <p className="text-slate-700 dark:text-slate-200">{dataBR(certificado.valido_ate)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-slate-400">Cadastrado em</p>
+                  <p className="text-slate-700 dark:text-slate-200">{dataBR(certificado.enviado_em)}</p>
+                </div>
+              </div>
+            </Card>
+          ) : (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+              <p className="font-semibold">Nenhum certificado cadastrado</p>
+              <p className="mt-1">
+                Sem o certificado A1 não é possível emitir NFS-e — ele assina a nota e autentica a
+                conexão com a Sefin Nacional. Se o sistema estiver usando o certificado do arquivo
+                de configuração, cadastre-o aqui para poder trocá-lo sem acesso ao servidor.
+              </p>
+            </div>
+          )}
+
+          {/* Upload */}
+          <Card className="p-5">
+            <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+              {certificado ? 'Substituir certificado' : 'Cadastrar certificado'}
+            </h2>
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              <Campo label="Certificado digital (.pfx / .p12) *">
+                <input
+                  type="file" accept=".pfx,.p12"
+                  onChange={(e) => setArquivoCert(e.target.files?.[0] ?? null)}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-sm file:font-medium dark:border-slate-700 dark:bg-slate-900 dark:file:bg-slate-800 dark:file:text-slate-200"
+                />
+              </Campo>
+              <Campo label="Senha do certificado *">
+                <input type="password" value={senhaCert} autoComplete="new-password"
+                       onChange={(e) => setSenhaCert(e.target.value)}
+                       placeholder="Senha definida no download do certificado"
+                       className={inputCls} />
+              </Campo>
+              <Campo label="Descrição do certificado">
+                <input readOnly value={certificado?.titular ?? ''}
+                       placeholder="Preenchido a partir do arquivo enviado"
+                       className={`${inputCls} bg-slate-50 text-slate-500 dark:bg-slate-800`} />
+              </Campo>
+              <Campo label="Data de vencimento">
+                <input readOnly value={certificado ? dataBR(certificado.valido_ate) : ''}
+                       placeholder="Preenchido a partir do arquivo enviado"
+                       className={`${inputCls} bg-slate-50 text-slate-500 dark:bg-slate-800`} />
+              </Campo>
+            </div>
+            <p className="mt-3 text-xs text-slate-500">
+              Titular, CNPJ e validade são lidos do próprio arquivo — não precisam ser digitados.
+              O arquivo e a senha ficam criptografados no banco.
+            </p>
+            <div className="mt-4 flex justify-end">
+              <Button onClick={salvarCertificado} disabled={salvandoCert || !arquivoCert || !senhaCert}>
+                {salvandoCert ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                Gravar
+              </Button>
+            </div>
+          </Card>
         </>
       )}
     </PageShell>

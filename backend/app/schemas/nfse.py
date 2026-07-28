@@ -127,6 +127,22 @@ class NotasOut(BaseModel):
     itens: list[NotaListItem] = []
 
 
+class CertificadoOut(BaseModel):
+    """Certificado A1 cadastrado — nunca inclui o arquivo nem a senha."""
+
+    id: int
+    titular: str
+    cnpj: str | None = None
+    emissor: str | None = None
+    nome_arquivo: str | None = None
+    valido_de: str | None = None
+    valido_ate: str | None = None
+    dias_para_vencer: int | None = None
+    vencido: bool = False
+    ativo: bool = True
+    enviado_em: str | None = None
+
+
 class ResumoOut(BaseModel):
     """Balanço do mês para o painel."""
 
