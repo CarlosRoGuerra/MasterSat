@@ -53,6 +53,20 @@ type ClientOption = { id: number; name: string; cpf_cnpj: string; billing_day?: 
 type VehicleOption = { id: number; client_id: number; plate: string; model?: string | null };
 type ManufacturerOption = { code: string; description: string };
 type PlanOption = { id: number; name: string; price: number };
+
+type LoteItem = {
+  imei: string;
+  situacao: 'criado' | 'ja_existe' | 'repetido_no_lote' | 'invalido';
+  motivo?: string | null;
+  tracker_id?: number | null;
+};
+type LoteResultado = {
+  simulacao: boolean;
+  total_enviados: number;
+  criados: number;
+  ignorados: number;
+  itens: LoteItem[];
+};
 type TrackerHistory = { id: number; action: string; previous_vehicle_id?: number | null; new_vehicle_id?: number | null; previous_client_id?: number | null; new_client_id?: number | null; new_status?: string | null; event_date?: string | null; notes?: string | null; created_at?: string | null };
 type ContractInfo = { id: number; plan_name?: string | null; status: string; monthly_value?: number | null; start_date?: string | null; next_due_date?: string | null };
 
@@ -227,6 +241,14 @@ export default function RastreadoresPage() {
   const [modalError, setModalError] = useState('');
   const [manufacturerError, setManufacturerError] = useState('');
 
+  // ── Cadastro em lote ──
+  const [loteOpen, setLoteOpen] = useState(false);
+  const [loteImeis, setLoteImeis] = useState('');
+  const [loteForm, setLoteForm] = useState({ brand: '', model: '', status: 'em_estoque', carrier: '', notes: '' });
+  const [loteResultado, setLoteResultado] = useState<LoteResultado | null>(null);
+  const [loteBusy, setLoteBusy] = useState(false);
+  const [loteError, setLoteError] = useState('');
+
   async function loadBaseData(currentToken: string) {
     setLoading(true);
     setError('');
@@ -314,6 +336,50 @@ export default function RastreadoresPage() {
   function resetForm() {
     setForm(initialForm);
     setIsEditing(false);
+  }
+
+  /* ── Cadastro em lote ────────────────────────────────────────────────── */
+
+  /** Aceita a lista colada em qualquer formato: uma por linha, vírgula, ponto
+   *  e vírgula, tabulação ou espaço (é comum vir de planilha). */
+  const imeisDaCaixa = () =>
+    loteImeis.split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
+
+  function abrirLote() {
+    setLoteImeis('');
+    setLoteForm({ brand: '', model: '', status: 'em_estoque', carrier: '', notes: '' });
+    setLoteResultado(null);
+    setLoteError('');
+    setLoteOpen(true);
+  }
+
+  async function enviarLote(simular: boolean) {
+    const imeis = imeisDaCaixa();
+    if (imeis.length === 0) { setLoteError('Cole ao menos um IMEI.'); return; }
+    if (!loteForm.brand.trim() || !loteForm.model.trim()) {
+      setLoteError('Informe a marca e o modelo — eles valem para todos do lote.');
+      return;
+    }
+    setLoteError(''); setLoteBusy(true);
+    try {
+      const res = await apiFetch<LoteResultado>('/trackers/lote', {
+        method: 'POST',
+        body: JSON.stringify({
+          imeis,
+          brand: loteForm.brand.trim(),
+          model: loteForm.model.trim(),
+          status: loteForm.status,
+          carrier: loteForm.carrier.trim() || null,
+          notes: loteForm.notes.trim() || null,
+          simular,
+        }),
+      }, token);
+      setLoteResultado(res);
+      if (!simular) {
+        setFeedback(`${res.criados} rastreador(es) cadastrado(s).${res.ignorados ? ` ${res.ignorados} ignorado(s).` : ''}`);
+        if (token) loadBaseData(token);
+      }
+    } catch (err) { setLoteError(parseError(err)); } finally { setLoteBusy(false); }
   }
 
   function openCreateModal() {
@@ -473,6 +539,7 @@ export default function RastreadoresPage() {
             actions={
               <div className="flex items-center gap-2">
                 {token && <ExportButton path="exports/trackers" basename="rastreadores" token={token} params={{ status: statusFilter, client_id: clientFilter }} />}
+                {canEdit && <Button variant="secondary" onClick={abrirLote}>Cadastrar em lote</Button>}
                 {canEdit && <Button onClick={openCreateModal}>Adicionar rastreador</Button>}
               </div>
             }
@@ -628,6 +695,117 @@ export default function RastreadoresPage() {
             )}
           </div>
         )}
+      </Modal>
+
+      {/* ── Cadastro em lote ── */}
+      <Modal
+        open={loteOpen}
+        onClose={() => setLoteOpen(false)}
+        title="Cadastrar rastreadores em lote"
+        description="Cole os IMEIs recebidos na remessa. Marca, modelo e demais campos valem para todos."
+        size="xl"
+      >
+        <div className="space-y-5">
+          {loteError && (
+            <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{loteError}</p>
+          )}
+
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-slate-600 dark:text-slate-400">
+              IMEIs / números de série <span className="text-rose-500">*</span>
+            </label>
+            <textarea
+              className={fieldClass}
+              rows={7}
+              placeholder={'Um por linha — ou separados por vírgula.\n\n869671075760726\n869731058404187\n907076841'}
+              value={loteImeis}
+              onChange={(e) => { setLoteImeis(e.target.value); setLoteResultado(null); }}
+            />
+            <p className="mt-1 text-xs text-slate-400">
+              {imeisDaCaixa().length} número(s) na lista · aceita quebra de linha, vírgula, ponto e vírgula ou tabulação (colar da planilha funciona)
+            </p>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-slate-600 dark:text-slate-400">
+                Marca <span className="text-rose-500">*</span>
+              </label>
+              <input className={fieldClass} value={loteForm.brand} placeholder="Ex.: Suntech"
+                     onChange={(e) => setLoteForm((p) => ({ ...p, brand: e.target.value }))} />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-slate-600 dark:text-slate-400">
+                Modelo <span className="text-rose-500">*</span>
+              </label>
+              <input className={fieldClass} value={loteForm.model} placeholder="Ex.: ST310U"
+                     onChange={(e) => setLoteForm((p) => ({ ...p, model: e.target.value }))} />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-slate-600 dark:text-slate-400">Situação</label>
+              <select className={fieldClass} value={loteForm.status}
+                      onChange={(e) => setLoteForm((p) => ({ ...p, status: e.target.value }))}>
+                {statusOptions.map((o) => <option key={o} value={o}>{o.replace(/_/g, ' ')}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-slate-600 dark:text-slate-400">Operadora do chip</label>
+              <input className={fieldClass} value={loteForm.carrier} placeholder="Ex.: Vivo"
+                     onChange={(e) => setLoteForm((p) => ({ ...p, carrier: e.target.value }))} />
+            </div>
+            <div className="md:col-span-2">
+              <label className="mb-1 block text-xs font-semibold text-slate-600 dark:text-slate-400">Observações</label>
+              <input className={fieldClass} value={loteForm.notes} placeholder="Ex.: Nota fiscal 1234 — remessa de 29/07"
+                     onChange={(e) => setLoteForm((p) => ({ ...p, notes: e.target.value }))} />
+            </div>
+          </div>
+
+          {/* Conferência antes de gravar */}
+          {loteResultado && (
+            <div className="rounded-2xl border border-slate-200 dark:border-slate-700">
+              <div className="flex flex-wrap items-center gap-4 border-b border-slate-100 px-4 py-3 text-sm dark:border-slate-800">
+                <span className="font-semibold text-slate-700 dark:text-slate-200">
+                  {loteResultado.simulacao ? 'Conferência' : 'Resultado'}
+                </span>
+                <span className="text-emerald-600 dark:text-emerald-400">
+                  {loteResultado.criados} {loteResultado.simulacao ? 'a cadastrar' : 'cadastrado(s)'}
+                </span>
+                {loteResultado.ignorados > 0 && (
+                  <span className="text-amber-600 dark:text-amber-400">{loteResultado.ignorados} ignorado(s)</span>
+                )}
+                <span className="text-slate-400">de {loteResultado.total_enviados} enviado(s)</span>
+              </div>
+              <div className="max-h-56 overflow-y-auto">
+                {loteResultado.itens.filter((i) => i.situacao !== 'criado').length === 0 ? (
+                  <p className="px-4 py-3 text-sm text-slate-500">Todos os números estão válidos e disponíveis.</p>
+                ) : (
+                  <ul className="divide-y divide-slate-100 text-sm dark:divide-slate-800">
+                    {loteResultado.itens.filter((i) => i.situacao !== 'criado').map((i, idx) => (
+                      <li key={`${i.imei}-${idx}`} className="flex items-center justify-between gap-3 px-4 py-2">
+                        <span className="font-mono text-slate-700 dark:text-slate-200">{i.imei || '—'}</span>
+                        <span className="text-xs text-slate-500">
+                          {i.situacao === 'ja_existe' && 'Já cadastrado'}
+                          {i.situacao === 'repetido_no_lote' && 'Repetido na lista'}
+                          {i.situacao === 'invalido' && (i.motivo || 'Inválido')}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="flex flex-wrap justify-end gap-3">
+            <Button variant="ghost" onClick={() => setLoteOpen(false)}>Fechar</Button>
+            <Button variant="secondary" onClick={() => enviarLote(true)} disabled={loteBusy}>
+              {loteBusy ? 'Conferindo…' : 'Conferir'}
+            </Button>
+            <Button onClick={() => enviarLote(false)} disabled={loteBusy || imeisDaCaixa().length === 0}>
+              {loteBusy ? 'Cadastrando…' : `Cadastrar ${imeisDaCaixa().length || ''}`}
+            </Button>
+          </div>
+        </div>
       </Modal>
 
       <Modal open={modalOpen} onClose={() => { setModalOpen(false); resetForm(); setModalError(''); }} title={isEditing ? 'Editar rastreador' : 'Novo rastreador'} description="Cadastre o equipamento em um fluxo mais limpo, com foco no identificador técnico, vínculo e dados essenciais." size="xl">

@@ -712,3 +712,106 @@ class TestRastreadorEdgeCases:
         data = r.json()
         assert "malicious_field" not in data
         assert "__class__" not in data
+
+
+# ---------------------------------------------------------------------------
+# Cadastro em lote — POST /trackers/lote
+# ---------------------------------------------------------------------------
+
+class TestCadastroEmLote:
+    """Recebimento de remessa: vários IMEIs de uma vez, com os campos comuns."""
+
+    def _lote(self, imeis, **kw):
+        base = {'imeis': imeis, 'brand': 'Teltonika', 'model': 'FMB920'}
+        base.update(kw)
+        return base
+
+    def test_cria_todos_os_imeis_validos(self, http, db):
+        from app.models.tracker import Tracker
+
+        r = http.post(PREFIX + '/lote', json=self._lote(['111110001', '111110002', '111110003']))
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert (body['criados'], body['ignorados']) == (3, 0)
+        assert db.query(Tracker).filter(Tracker.imei.in_(
+            ['111110001', '111110002', '111110003'])).count() == 3
+
+    def test_campos_comuns_aplicados_a_todos(self, http, db):
+        from app.models.tracker import Tracker
+
+        http.post(PREFIX + '/lote', json=self._lote(
+            ['222220001', '222220002'], brand='Suntech', model='ST310U', carrier='Vivo'))
+        criados = db.query(Tracker).filter(Tracker.imei.like('22222%')).all()
+        assert len(criados) == 2
+        assert all(t.brand == 'Suntech' and t.model == 'ST310U' and t.carrier == 'Vivo'
+                   for t in criados)
+
+    def test_imei_repetido_no_lote_e_ignorado_uma_vez(self, http, db):
+        from app.models.tracker import Tracker
+
+        r = http.post(PREFIX + '/lote', json=self._lote(['333330001', '333330001']))
+        body = r.json()
+        assert body['criados'] == 1
+        assert any(i['situacao'] == 'repetido_no_lote' for i in body['itens'])
+        assert db.query(Tracker).filter_by(imei='333330001').count() == 1
+
+    def test_imei_ja_cadastrado_nao_derruba_o_lote(self, http, db):
+        from app.models.tracker import Tracker
+
+        http.post(PREFIX + '/', json={'imei': '444440001', 'brand': 'X', 'model': 'Y'})
+        r = http.post(PREFIX + '/lote', json=self._lote(['444440001', '444440002']))
+        assert r.status_code == 200
+        body = r.json()
+        assert body['criados'] == 1  # só o novo
+        item = next(i for i in body['itens'] if i['imei'] == '444440001')
+        assert item['situacao'] == 'ja_existe' and item['tracker_id']
+        assert db.query(Tracker).filter_by(imei='444440002').count() == 1
+
+    def test_imei_invalido_e_reportado_sem_bloquear(self, http):
+        r = http.post(PREFIX + '/lote', json=self._lote(['123', '555550001']))
+        body = r.json()
+        assert body['criados'] == 1
+        invalido = next(i for i in body['itens'] if i['situacao'] == 'invalido')
+        assert 'dígitos' in invalido['motivo']
+
+    def test_normaliza_imei_com_separadores(self, http, db):
+        from app.models.tracker import Tracker
+
+        http.post(PREFIX + '/lote', json=self._lote(['666-660.001 ']))
+        assert db.query(Tracker).filter_by(imei='666660001').count() == 1
+
+    def test_simular_nao_grava_nada(self, http, db):
+        from app.models.tracker import Tracker
+
+        r = http.post(PREFIX + '/lote', json=self._lote(
+            ['777770001', '777770002'], simular=True))
+        body = r.json()
+        assert body['simulacao'] is True
+        assert body['criados'] == 2          # relatório do que SERIA criado
+        assert db.query(Tracker).filter(Tracker.imei.like('77777%')).count() == 0
+
+    def test_registra_historico_de_cada_rastreador(self, http, db):
+        from app.models.tracker import Tracker
+        from app.models.tracker_history import TrackerHistory
+
+        http.post(PREFIX + '/lote', json=self._lote(['888880001']))
+        tracker = db.query(Tracker).filter_by(imei='888880001').first()
+        hist = db.query(TrackerHistory).filter_by(tracker_id=tracker.id).all()
+        assert len(hist) == 1
+        assert hist[0].action == 'created' and 'lote' in hist[0].notes.lower()
+
+    def test_lista_vazia_rejeitada(self, http):
+        assert http.post(PREFIX + '/lote', json=self._lote([])).status_code == 422
+
+    def test_marca_e_modelo_obrigatorios(self, http):
+        r = http.post(PREFIX + '/lote', json={'imeis': ['999990001'], 'brand': ' ', 'model': 'X'})
+        assert r.status_code == 422
+
+    def test_limite_de_500_por_lote(self, http):
+        r = http.post(PREFIX + '/lote', json=self._lote(
+            [str(9000000 + i) for i in range(501)]))
+        assert r.status_code == 422
+
+    def test_perfil_sem_permissao_nao_cadastra(self, http_fin):
+        r = http_fin.post(PREFIX + '/lote', json=self._lote(['101010001']))
+        assert r.status_code == 403

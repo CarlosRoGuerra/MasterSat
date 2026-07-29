@@ -18,7 +18,16 @@ from app.models.tracker_history import TrackerHistory
 from app.models.user import User
 from app.models.vehicle import Vehicle
 from app.schemas.contract import ContractOut
-from app.schemas.tracker import TrackerCreate, TrackerHistoryOut, TrackerLinkPayload, TrackerOut, TrackerUpdate
+from app.schemas.tracker import (
+    TrackerCreate,
+    TrackerHistoryOut,
+    TrackerLinkPayload,
+    TrackerLoteIn,
+    TrackerLoteItem,
+    TrackerLoteOut,
+    TrackerOut,
+    TrackerUpdate,
+)
 
 router = APIRouter()
 
@@ -253,6 +262,99 @@ def create_item(
     db.commit()
     db.refresh(tracker)
     return _tracker_to_out(tracker, db)
+
+
+@router.post('/lote', response_model=TrackerLoteOut)
+def create_lote(
+    payload: TrackerLoteIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(*EDIT_ROLES)),
+):
+    """
+    Cadastra vários rastreadores de uma vez (recebimento de remessa).
+
+    Cada IMEI é classificado individualmente — um IMEI repetido ou já
+    cadastrado NÃO derruba o lote inteiro, só é ignorado e reportado. Com
+    ``simular=True`` nada é gravado, o que permite conferir antes de confirmar.
+    """
+    comuns = payload.model_dump(exclude={'imeis', 'simular'})
+
+    itens: list[TrackerLoteItem] = []
+    vistos: set[str] = set()
+    a_criar: list[str] = []
+
+    for bruto in payload.imeis:
+        imei = ''.join(filter(str.isdigit, bruto or ''))
+        if len(imei) < 5:
+            itens.append(TrackerLoteItem(
+                imei=bruto.strip(), situacao='invalido',
+                motivo='Precisa ter ao menos 5 dígitos',
+            ))
+            continue
+        if imei in vistos:
+            itens.append(TrackerLoteItem(
+                imei=imei, situacao='repetido_no_lote',
+                motivo='Aparece mais de uma vez na lista',
+            ))
+            continue
+        vistos.add(imei)
+
+        existente = db.scalar(
+            select(Tracker).where(Tracker.imei == imei, Tracker.is_deleted.is_(False))
+        )
+        if existente:
+            itens.append(TrackerLoteItem(
+                imei=imei, situacao='ja_existe', tracker_id=existente.id,
+                motivo='Já cadastrado no sistema',
+            ))
+            continue
+
+        itens.append(TrackerLoteItem(imei=imei, situacao='criado'))
+        a_criar.append(imei)
+
+    if payload.simular:
+        return TrackerLoteOut(
+            simulacao=True,
+            total_enviados=len(payload.imeis),
+            criados=len(a_criar),
+            ignorados=len(payload.imeis) - len(a_criar),
+            itens=itens,
+        )
+
+    # Grava tudo numa transação: se algo falhar, nenhum rastreador entra pela metade.
+    try:
+        por_imei: dict[str, Tracker] = {}
+        for imei in a_criar:
+            tracker = Tracker(**comuns, imei=imei, serial_number=imei)
+            db.add(tracker)
+            db.flush()
+            por_imei[imei] = tracker
+            _register_history(
+                db, tracker,
+                action='created',
+                previous_vehicle_id=None, new_vehicle_id=None,
+                previous_client_id=None, new_client_id=None,
+                previous_status=None,
+                new_status=tracker.status.value if isinstance(tracker.status, TrackerStatus) else str(tracker.status),
+                created_by_user_id=current_user.id,
+                notes='Cadastro em lote',
+            )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    for item in itens:
+        if item.situacao == 'criado' and item.imei in por_imei:
+            item.tracker_id = por_imei[item.imei].id
+
+    return TrackerLoteOut(
+        simulacao=False,
+        total_enviados=len(payload.imeis),
+        criados=len(a_criar),
+        ignorados=len(payload.imeis) - len(a_criar),
+        itens=itens,
+    )
 
 
 @router.get('/{item_id}', response_model=TrackerOut)

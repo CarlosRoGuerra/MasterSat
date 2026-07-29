@@ -203,3 +203,60 @@ class TrackerLinkPayload(BaseModel):
     interveniente_client_id: int | None = None
     # Banco emissor do boleto deste contrato
     bank: str | None = 'ailos'
+
+
+# ── Cadastro em lote ────────────────────────────────────────────────────────
+
+class TrackerLoteIn(BaseModel):
+    """
+    Cadastro de vários rastreadores de uma vez: uma lista de IMEIs mais os
+    campos comuns (marca, modelo etc.) que valem para todos.
+
+    Com ``simular=True`` nada é gravado — devolve o mesmo relatório para o
+    operador conferir antes de confirmar.
+    """
+
+    imeis: list[str] = Field(..., min_length=1, max_length=500)
+    brand: str
+    model: str
+    status: TrackerStatus = TrackerStatus.STOCK
+    carrier: str | None = None
+    sim_status: str | None = None
+    firmware: str | None = None
+    external_manufacturer_id: int | None = None
+    external_manufacturer_label: str | None = None
+    equipment_type: int | None = None
+    communication_type: int | None = None
+    chip_type: int | None = None
+    acquisition_date: date | None = None
+    warranty_until: date | None = None
+    notes: str | None = None
+    simular: bool = False
+
+    @field_validator('brand', 'model')
+    @classmethod
+    def obrigatorio(cls, value: str) -> str:
+        value = (value or '').strip()
+        if not value:
+            raise ValueError('Campo obrigatório')
+        return value
+
+
+class TrackerLoteItem(BaseModel):
+    """Resultado de um IMEI do lote.
+
+    situacao: 'criado' | 'ja_existe' | 'repetido_no_lote' | 'invalido'
+    """
+
+    imei: str
+    situacao: str
+    motivo: str | None = None
+    tracker_id: int | None = None
+
+
+class TrackerLoteOut(BaseModel):
+    simulacao: bool
+    total_enviados: int
+    criados: int
+    ignorados: int
+    itens: list[TrackerLoteItem] = []
