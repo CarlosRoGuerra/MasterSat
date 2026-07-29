@@ -11,6 +11,7 @@ import { SectionHeader } from '@/components/ui/section-header';
 import { Badge, statusVariant, statusLabel } from '@/components/ui/badge';
 import { ClientAutocomplete } from '@/components/ui/client-autocomplete';
 import { BillingDayInput } from '@/components/ui/billing-day-input';
+import { useDebouncedValue, useEffectSkipFirst } from '@/lib/use-debounced-value';
 import { Table, TableHead, Th, TableBody, Tr, Td } from '@/components/ui/table';
 import { EmptyState, TableSkeleton } from '@/components/ui/empty-state';
 import { Input } from '@/components/ui/input';
@@ -857,6 +858,12 @@ export default function VeiculosPage() {
     loadVehicles(token);
   }, [token]);
 
+  // Busca/filtros dinâmicos (sem precisar clicar em "Filtrar")
+  const searchDebounced = useDebouncedValue(search);
+  useEffectSkipFirst(() => {
+    if (token) loadVehicles(token);
+  }, [searchDebounced, statusFilter, clientFilter]);
+
   useEffect(() => {
     if (!token || !selectedVehicle) {
       setVehicleDocuments([]);
@@ -1135,7 +1142,7 @@ export default function VeiculosPage() {
               {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
             <Button type="button" variant="secondary" onClick={() => token && loadVehicles(token)} disabled={loading}>
-              {loading ? 'Atualizando…' : 'Filtrar'}
+              {loading ? 'Atualizando…' : 'Atualizar'}
             </Button>
           </div>
 

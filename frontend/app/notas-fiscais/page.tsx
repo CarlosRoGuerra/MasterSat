@@ -19,6 +19,7 @@ import { DonutChart } from '@/components/ui/donut-chart';
 import { Pagination } from '@/components/ui/pagination';
 import { apiFetch, API_URL } from '@/lib/api';
 import { useAuthGuard } from '@/lib/use-auth-guard';
+import { useDebouncedValue } from '@/lib/use-debounced-value';
 
 /* ── Tipos ─────────────────────────────────────────────────────────────── */
 type Elegivel = {
@@ -240,16 +241,20 @@ export default function NotasFiscaisPage() {
     apiFetch<LoteResumo[]>('/nfse/lotes', {}, token).then(setLotes).catch(() => {});
   }, [token]);
 
+  // Busca no servidor: espera parar de digitar para não disparar uma
+  // requisição por tecla (e evitar resposta antiga sobrescrevendo a nova).
+  const buscaNotasDebounced = useDebouncedValue(buscaNotas);
+
   const carregarNotas = useCallback(() => {
     if (!token) return;
     const p = new URLSearchParams({
       limit: String(porPagina),
       offset: String((paginaNotas - 1) * porPagina),
     });
-    if (buscaNotas.trim()) p.set('busca', buscaNotas.trim());
+    if (buscaNotasDebounced.trim()) p.set('busca', buscaNotasDebounced.trim());
     if (situacaoFiltro) p.set('situacao', situacaoFiltro);
     apiFetch<Notas>(`/nfse/notas?${p}`, {}, token).then(setNotas).catch((e) => setError(parseErr(e)));
-  }, [token, porPagina, paginaNotas, buscaNotas, situacaoFiltro]);
+  }, [token, porPagina, paginaNotas, buscaNotasDebounced, situacaoFiltro]);
 
   const carregarCertificado = useCallback(() => {
     if (!token) return;

@@ -19,6 +19,7 @@ import { ClientAutocomplete } from '@/components/ui/client-autocomplete';
 import { API_URL, apiFetch } from '@/lib/api';
 import { enviarBoletoEmail, enviarBoletoWhats } from '@/lib/boleto-mensagem';
 import { useAuthGuard } from '@/lib/use-auth-guard';
+import { useDebouncedValue, useEffectSkipFirst } from '@/lib/use-debounced-value';
 
 /* ── Types ──────────────────────────────────────────────────────────── */
 type BillingInterval = 1 | 3 | 6 | 12;
@@ -704,6 +705,26 @@ export default function FinanceiroPage() {
     }
   }
 
+  /** Recarrega só a lista de cobranças. O loadData busca 11 endpoints — usar
+   *  ele na busca dinâmica recarregaria planos, clientes, gráficos e KPIs a
+   *  cada tecla. */
+  async function loadBillingsOnly(currentToken: string) {
+    setLoading(true);
+    try {
+      const query = new URLSearchParams();
+      if (billingSearch) query.set('search', billingSearch);
+      if (billingStatusFilter) query.set('status', billingStatusFilter);
+      query.set('limit', '300');
+      const billingsRes = await apiFetch<Billing[]>(`/billings?${query.toString()}`, {}, currentToken);
+      setBillings(billingsRes);
+      if (selectedBilling) setSelectedBilling(billingsRes.find(b => b.id === selectedBilling.id) || null);
+    } catch (err) {
+      setError(parseError(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   useEffect(() => {
     if (!token) return;
     loadData(token);
@@ -712,6 +733,12 @@ export default function FinanceiroPage() {
       .then(setAilosStatus)
       .catch(() => setAilosStatus(null));
   }, [token]);
+
+  // Busca/filtro dinâmicos das cobranças
+  const billingSearchDebounced = useDebouncedValue(billingSearch);
+  useEffectSkipFirst(() => {
+    if (token) loadBillingsOnly(token);
+  }, [billingSearchDebounced, billingStatusFilter]);
 
   useEffect(() => {
     if (token && activeTab === 'payables') loadPayables(token);

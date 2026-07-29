@@ -13,6 +13,7 @@ import { Input, Textarea } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { FormField, FormGrid, FormSection, FormDivider } from '@/components/ui/form-field';
 import { BillingDayInput, erroDiaVencimento } from '@/components/ui/billing-day-input';
+import { useDebouncedValue, useEffectSkipFirst } from '@/lib/use-debounced-value';
 import { Badge, statusVariant, statusLabel } from '@/components/ui/badge';
 import { EmptyState, TableSkeleton } from '@/components/ui/empty-state';
 import { Table, TableHead, Th, TableBody, Tr, Td } from '@/components/ui/table';
@@ -497,6 +498,13 @@ export default function ClientesPage() {
     if (!token) return;
     loadClients(token);
   }, [token]);
+
+  // Busca/filtros dinâmicos: recarrega ao parar de digitar ou ao trocar um
+  // filtro, sem precisar clicar em "Filtrar".
+  const searchDebounced = useDebouncedValue(search);
+  useEffectSkipFirst(() => {
+    if (token) loadClients(token);
+  }, [searchDebounced, statusFilter, typeFilter]);
 
   async function openVehiclesModal(client: Client) {
     setVehiclesModalClient(client);
@@ -1068,7 +1076,7 @@ export default function ClientesPage() {
               <option value="pj">Pessoa jurídica</option>
             </Select>
             <Button type="button" variant="secondary" onClick={() => token && loadClients(token)} disabled={loading}>
-              {loading ? 'Atualizando…' : 'Filtrar'}
+              {loading ? 'Atualizando…' : 'Atualizar'}
             </Button>
             <div className="ml-auto flex items-center gap-2">
               <span className="text-sm text-slate-500 dark:text-slate-400">Pesquisar</span>

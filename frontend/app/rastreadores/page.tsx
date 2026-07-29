@@ -15,6 +15,7 @@ import { usePagination, Pagination } from '@/components/ui/pagination';
 import { ExportButton } from '@/components/ui/export-button';
 import { ClientAutocomplete } from '@/components/ui/client-autocomplete';
 import { BillingDayInput, erroDiaVencimento } from '@/components/ui/billing-day-input';
+import { useDebouncedValue, useEffectSkipFirst } from '@/lib/use-debounced-value';
 import { apiFetch } from '@/lib/api';
 import { onlyDigits, formatCpfCnpj } from '@/lib/format';
 import { useAuthGuard } from '@/lib/use-auth-guard';
@@ -267,6 +268,12 @@ export default function RastreadoresPage() {
     loadBaseData(token);
   }, [token]);
 
+  // Busca/filtros dinâmicos (sem precisar clicar em "Filtrar")
+  const searchDebounced = useDebouncedValue(search);
+  useEffectSkipFirst(() => {
+    if (token) loadBaseData(token);
+  }, [searchDebounced, statusFilter, clientFilter, vehicleFilter]);
+
   useEffect(() => {
     if (!token || !selectedTracker) {
       setHistory([]);
@@ -481,7 +488,7 @@ export default function RastreadoresPage() {
               {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
             <Button variant="secondary" onClick={() => token && loadBaseData(token)} disabled={loading}>
-              {loading ? 'Atualizando…' : 'Filtrar'}
+              {loading ? 'Atualizando…' : 'Atualizar'}
             </Button>
           </div>
           <div className="mt-4">

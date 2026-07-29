@@ -15,6 +15,7 @@ import { EmptyState, TableSkeleton } from '@/components/ui/empty-state';
 import { usePagination, Pagination } from '@/components/ui/pagination';
 import { apiFetch } from '@/lib/api';
 import { useAuthGuard } from '@/lib/use-auth-guard';
+import { useDebouncedValue, useEffectSkipFirst } from '@/lib/use-debounced-value';
 
 
 type OrderType = 'instalacao' | 'manutencao' | 'retirada' | 'visita_tecnica';
@@ -321,6 +322,12 @@ export default function ServiceOrdersPage() {
     loadBaseData(token);
   }, [token]);
 
+  // Busca/filtros dinâmicos (sem precisar clicar em "Filtrar")
+  const searchDebounced = useDebouncedValue(search);
+  useEffectSkipFirst(() => {
+    if (token) loadBaseData(token);
+  }, [searchDebounced, statusFilter, typeFilter, clientFilter, vehicleFilter, technicianFilter]);
+
   useEffect(() => {
     if (!token || !selectedOrder) {
       setLogs([]);
@@ -511,7 +518,7 @@ export default function ServiceOrdersPage() {
               {technicians.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
             </select>
             <Button variant="secondary" onClick={() => token && loadBaseData(token)} disabled={loading}>
-              {loading ? 'Atualizando…' : 'Filtrar'}
+              {loading ? 'Atualizando…' : 'Atualizar'}
             </Button>
             <Button variant="ghost" onClick={() => { setSearch(''); setStatusFilter(''); setTypeFilter(''); setClientFilter(''); setVehicleFilter(''); setTechnicianFilter(''); }}>
               Limpar
