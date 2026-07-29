@@ -1,7 +1,7 @@
 'use client';
 
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { Users, AlertTriangle, Building2, CheckCircle2, FileText, Wrench, CheckCircle, Clock, AlertCircle, Download, Plus, Trash2, Car, Coins, DollarSign, Flag, Mail, MessageCircle, PawPrint, Pencil, Printer, Receipt } from 'lucide-react';
+import { Users, AlertTriangle, Building2, CheckCircle2, FileText, Wrench, CheckCircle, Clock, AlertCircle, Download, Plus, Trash2, Car, Coins, DollarSign, Flag, Mail, MessageCircle, PawPrint, Pencil, Printer, Receipt, Search } from 'lucide-react';
 
 import { PageShell } from '@/components/page-shell';
 import { Card } from '@/components/ui/card';
@@ -1050,41 +1050,60 @@ export default function ClientesPage() {
               </div>
             }
           />
-          {/* Barra no padrão do sistema de referência: resultados por página à
-              esquerda, filtros no meio e "Pesquisar" à direita */}
-          <div className="mt-4 flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-2">
-              <Select
-                value={String(pageSize)}
-                onChange={(e) => { setPageSize(Number(e.target.value)); pg.setPage(1); }}
-                className="w-20"
-              >
-                {[10, 25, 50, 100].map((n) => <option key={n} value={n}>{n}</option>)}
-              </Select>
-              <span className="text-sm text-slate-500 dark:text-slate-400">resultados por página</span>
-            </div>
-            <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="w-44">
+          {/* Filtros à esquerda, busca à direita. Os controles têm largura fixa
+              e `shrink-0` para não esticarem/espremerem conforme o conteúdo. */}
+          <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2">
+            <Select
+              value={String(pageSize)}
+              onChange={(e) => { setPageSize(Number(e.target.value)); pg.setPage(1); }}
+              className="w-[72px] shrink-0"
+              aria-label="Resultados por página"
+            >
+              {[10, 25, 50, 100].map((n) => <option key={n} value={n}>{n}</option>)}
+            </Select>
+            <span className="shrink-0 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">
+              por página
+            </span>
+
+            <Select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="w-44 shrink-0"
+              aria-label="Filtrar por status"
+            >
               <option value="">Todos os status</option>
               <option value="ativo">Ativo</option>
               <option value="inativo">Inativo</option>
               <option value="inadimplente">Inadimplente</option>
               <option value="suspenso">Suspenso</option>
             </Select>
-            <Select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="w-40">
+            <Select
+              value={typeFilter}
+              onChange={(e) => setTypeFilter(e.target.value)}
+              className="w-40 shrink-0"
+              aria-label="Filtrar por tipo"
+            >
               <option value="">Todos os tipos</option>
               <option value="pf">Pessoa física</option>
               <option value="pj">Pessoa jurídica</option>
             </Select>
-            <Button type="button" variant="secondary" onClick={() => token && loadClients(token)} disabled={loading}>
+            <Button
+              type="button"
+              variant="secondary"
+              className="shrink-0"
+              onClick={() => token && loadClients(token)}
+              disabled={loading}
+            >
               {loading ? 'Atualizando…' : 'Atualizar'}
             </Button>
-            <div className="ml-auto flex items-center gap-2">
-              <span className="text-sm text-slate-500 dark:text-slate-400">Pesquisar</span>
+
+            <div className="relative ml-auto w-full sm:w-80">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
               <Input
-                placeholder="Nome, fantasia, CPF/CNPJ ou e-mail"
+                placeholder="Pesquisar por nome, CPF/CNPJ ou e-mail"
                 value={search}
                 onChange={(e) => { setSearch(e.target.value); pg.setPage(1); }}
-                className="w-64"
+                className="w-full pl-9"
               />
             </div>
           </div>
