@@ -509,10 +509,14 @@ export default function ServiceOrdersPage() {
               <option value="">Todos os tipos</option>
               {orderTypeOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
-            <select className={fieldClass} style={{ width: 200 }} value={clientFilter} onChange={(e) => setClientFilter(e.target.value)}>
-              <option value="">Todos os clientes</option>
-              {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+            <div style={{ width: 240 }}>
+              <ClientAutocomplete
+                clients={clients}
+                value={clientFilter}
+                onChange={setClientFilter}
+                placeholder="Todos os clientes"
+              />
+            </div>
             <select className={fieldClass} style={{ width: 180 }} value={technicianFilter} onChange={(e) => setTechnicianFilter(e.target.value)}>
               <option value="">Todos os técnicos</option>
               {technicians.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}

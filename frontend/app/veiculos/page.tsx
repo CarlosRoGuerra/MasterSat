@@ -1137,10 +1137,14 @@ export default function VeiculosPage() {
               <option value="retirado">Retirado</option>
               <option value="bloqueado">Bloqueado</option>
             </select>
-            <select className={fieldClass} style={{ width: 220 }} value={clientFilter} onChange={(e) => setClientFilter(e.target.value)}>
-              <option value="">Todos os clientes</option>
-              {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+            <div style={{ width: 260 }}>
+              <ClientAutocomplete
+                clients={clients}
+                value={clientFilter}
+                onChange={setClientFilter}
+                placeholder="Todos os clientes"
+              />
+            </div>
             <Button type="button" variant="secondary" onClick={() => token && loadVehicles(token)} disabled={loading}>
               {loading ? 'Atualizando…' : 'Atualizar'}
             </Button>

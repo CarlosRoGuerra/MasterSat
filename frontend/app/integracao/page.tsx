@@ -8,6 +8,7 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { StatCard } from '@/components/ui/stat-card';
 import { SectionHeader } from '@/components/ui/section-header';
+import { TrackerAutocomplete } from '@/components/ui/tracker-autocomplete';
 import { apiFetch } from '@/lib/api';
 import { useAuthGuard } from '@/lib/use-auth-guard';
 
@@ -284,10 +285,12 @@ export default function IntegracaoPage() {
             <Card>
               <SectionHeader eyebrow="Chip" title="Alterar status do SIM Card" description="Ativa, bloqueia, cancela ou suspende o chip via Multiportal." />
               <div className="mt-4 grid gap-3 md:grid-cols-[1fr_auto_auto]">
-                <select className={fieldClass} value={chipTrackerId} onChange={(e) => setChipTrackerId(e.target.value)}>
-                  <option value="">Selecionar rastreador</option>
-                  {trackers.map((t) => <option key={t.id} value={t.id}>{t.imei} — {t.client_name || 'sem cliente'}</option>)}
-                </select>
+                <TrackerAutocomplete
+                  trackers={trackers}
+                  value={chipTrackerId}
+                  onChange={setChipTrackerId}
+                  placeholder="Buscar rastreador por IMEI, marca ou modelo…"
+                />
                 <select className={fieldClass} value={chipStatus} onChange={(e) => setChipStatus(e.target.value)}>
                   <option value="1">Ativo</option>
                   <option value="2">Bloqueado</option>

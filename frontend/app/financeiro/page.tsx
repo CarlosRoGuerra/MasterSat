@@ -1814,7 +1814,13 @@ export default function FinanceiroPage() {
         <form className="space-y-5" onSubmit={submitContract}>
           {modalError && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>}
           <div className="grid gap-4 md:grid-cols-2">
-            <select className={fieldClass} value={contractForm.client_id} onChange={e => setContractForm(p => ({ ...p, client_id: e.target.value, vehicle_id: '', tracker_id: '' }))} required><option value="">Selecione o cliente</option>{clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
+            <ClientAutocomplete
+              clients={clients}
+              value={contractForm.client_id}
+              onChange={(id) => setContractForm(p => ({ ...p, client_id: id, vehicle_id: '', tracker_id: '' }))}
+              placeholder="Selecione o cliente"
+              required
+            />
             <select className={fieldClass} value={contractForm.plan_id} onChange={e => setContractForm(p => ({ ...p, plan_id: e.target.value }))} required><option value="">Selecione o plano</option>{plans.filter(p => p.active || String(p.id) === contractForm.plan_id).map(p => <option key={p.id} value={p.id}>{p.name} • {intervalLabel(p.billing_interval_months)}</option>)}</select>
             <select className={fieldClass} value={contractForm.vehicle_id} onChange={e => setContractForm(p => ({ ...p, vehicle_id: e.target.value, tracker_id: '' }))}><option value="">Sem veículo específico</option>{contractVehicles.map(v => <option key={v.id} value={v.id}>{v.plate}{v.model ? ` • ${v.model}` : ''}</option>)}</select>
             <select className={fieldClass} value={contractForm.tracker_id} onChange={e => setContractForm(p => ({ ...p, tracker_id: e.target.value }))}><option value="">Sem rastreador específico</option>{contractTrackers.map(t => <option key={t.id} value={t.id}>{t.imei}{t.model ? ` • ${t.model}` : ''}</option>)}</select>
@@ -1839,7 +1845,13 @@ export default function FinanceiroPage() {
         <form className="space-y-5" onSubmit={submitChargeItem}>
           {modalError && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>}
           <div className="grid gap-4 md:grid-cols-2">
-            <select className={fieldClass} value={chargeItemForm.client_id} onChange={e => setChargeItemForm(p => ({ ...p, client_id: e.target.value, contract_id: '', vehicle_id: '', tracker_id: '' }))} required><option value="">Selecione o cliente</option>{clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
+            <ClientAutocomplete
+              clients={clients}
+              value={chargeItemForm.client_id}
+              onChange={(id) => setChargeItemForm(p => ({ ...p, client_id: id, contract_id: '', vehicle_id: '', tracker_id: '' }))}
+              placeholder="Selecione o cliente"
+              required
+            />
             <select className={fieldClass} value={chargeItemForm.contract_id} onChange={e => { const sel = visibleContracts.find(c => c.id === Number(e.target.value)); setChargeItemForm(p => ({ ...p, contract_id: e.target.value, vehicle_id: sel?.vehicle_id ? String(sel.vehicle_id) : p.vehicle_id, tracker_id: sel?.tracker_id ? String(sel.tracker_id) : p.tracker_id })); }}><option value="">Sem contrato</option>{visibleContracts.map(c => <option key={c.id} value={c.id}>{c.client_name} • {c.plan_name || 'Contrato'}{c.vehicle_plate ? ` • ${c.vehicle_plate}` : ''}</option>)}</select>
             <select className={fieldClass} value={chargeItemForm.vehicle_id} onChange={e => setChargeItemForm(p => ({ ...p, vehicle_id: e.target.value, tracker_id: '' }))}><option value="">Sem veículo</option>{chargeVehicles.map(v => <option key={v.id} value={v.id}>{v.plate}{v.model ? ` • ${v.model}` : ''}</option>)}</select>
             <select className={fieldClass} value={chargeItemForm.tracker_id} onChange={e => setChargeItemForm(p => ({ ...p, tracker_id: e.target.value }))}><option value="">Sem rastreador</option>{chargeTrackers.map(t => <option key={t.id} value={t.id}>{t.imei}{t.model ? ` • ${t.model}` : ''}</option>)}</select>

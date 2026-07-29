@@ -6,7 +6,8 @@ import clsx from 'clsx';
 
 type TrackerOption = {
   id: number;
-  imei: string;
+  // Rastreador pode estar cadastrado sem IMEI (ainda não lido/importado).
+  imei?: string | null;
   brand?: string | null;
   model?: string | null;
 };
@@ -53,7 +54,7 @@ export function TrackerAutocomplete({
     ? trackers.filter((t) => {
         const q = query.trim().toLowerCase();
         return (
-          t.imei.toLowerCase().includes(q) ||
+          (t.imei ?? '').toLowerCase().includes(q) ||
           (t.brand ?? '').toLowerCase().includes(q) ||
           (t.model ?? '').toLowerCase().includes(q)
         );
@@ -81,7 +82,7 @@ export function TrackerAutocomplete({
       {selected && !focused ? (
         <div className="flex items-center gap-2 rounded-xl border border-brand-300 bg-brand-50 px-3.5 py-2.5 dark:border-brand-700 dark:bg-brand-950/30">
           <span className="flex-1 truncate font-mono text-sm font-medium text-brand-800 dark:text-brand-200">
-            {selected.imei}
+            {selected.imei || 'Sem IMEI'}
           </span>
           {(selected.brand || selected.model) && (
             <span className="shrink-0 text-xs text-brand-500 dark:text-brand-400">
@@ -107,7 +108,7 @@ export function TrackerAutocomplete({
             type="text"
             value={query}
             disabled={disabled}
-            placeholder={selected ? selected.imei : placeholder}
+            placeholder={selected ? (selected.imei || 'Sem IMEI') : placeholder}
             autoComplete="off"
             onFocus={() => { setFocused(true); setOpen(true); }}
             onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
@@ -148,7 +149,7 @@ export function TrackerAutocomplete({
                 className="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left text-sm transition-colors hover:bg-slate-50 dark:hover:bg-slate-800"
               >
                 <span className="font-mono font-medium text-slate-900 dark:text-white">
-                  {highlight(tracker.imei, query)}
+                  {highlight(tracker.imei || 'Sem IMEI', query)}
                 </span>
                 {(tracker.brand || tracker.model) && (
                   <span className="shrink-0 text-xs text-slate-400">
