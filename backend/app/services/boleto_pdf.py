@@ -533,6 +533,24 @@ def _draw_pix_image(c, b64: str, x: float, y_top: float, size_mm: float = 28.0) 
 # ─────────────────────────────────────────────────────────────────────────────
 # FUNÇÃO PRINCIPAL
 # ─────────────────────────────────────────────────────────────────────────────
+def gerar_recibo_pdf(dados: DadosBoleto) -> bytes:
+    """
+    Recibo de pagamento AVULSO — o mesmo layout aprovado que sai no topo do
+    boleto (logo, CNPJ, dados da empresa, box do cliente, tabela de itens,
+    data por extenso e assinatura), só que sozinho na página.
+
+    Usado pelo botão "Recibo" das cobranças pagas. Antes existia um segundo
+    desenho, cru (só texto solto), que era o que de fato saía para o cliente.
+    """
+    buf = io.BytesIO()
+    c = pdfcanvas.Canvas(buf, pagesize=A4)
+    c.setTitle(f"Recibo MASTERSAT - {dados.billing_id}")
+    _draw_recibo(c, dados, _ft(12))
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
 def gerar_boleto_pdf(dados: DadosBoleto) -> bytes:
     buf = io.BytesIO()
     c = pdfcanvas.Canvas(buf, pagesize=A4)

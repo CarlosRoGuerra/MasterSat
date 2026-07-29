@@ -210,30 +210,43 @@ def export_xlsx(search: str | None = None, status: str | None = None, client_id:
     return StreamingResponse(output, media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', headers={'Content-Disposition': 'attachment; filename=financeiro.xlsx'})
 
 
-def _receipt_pdf(billing: Billing, client_name: str | None) -> BytesIO:
-    buffer = BytesIO()
-    pdf = canvas.Canvas(buffer, pagesize=A4)
-    pdf.setTitle(f'Recibo {billing.receipt_number or billing.id}')
-    y = 800
-    pdf.setFont('Helvetica-Bold', 18)
-    pdf.drawString(50, y, 'Recibo de Pagamento')
-    y -= 40
-    pdf.setFont('Helvetica', 11)
-    lines = [
-        f'Recibo: {billing.receipt_number or "-"}',
-        f'Cliente: {client_name or billing.client_id}',
-        f'Título: {billing.title or billing.notes or "Cobrança"}',
-        f'Valor: R$ {decimal_to_float(billing.paid_amount or billing.amount):.2f}',
-        f'Data de pagamento: {billing.payment_date.strftime("%d/%m/%Y") if billing.payment_date else "-"}',
-        f'Forma de pagamento: {billing.payment_method or "-"}',
-    ]
-    for line in lines:
-        pdf.drawString(50, y, line)
-        y -= 24
-    pdf.showPage()
-    pdf.save()
-    buffer.seek(0)
-    return buffer
+def _receipt_pdf(billing: Billing, client: Client | None) -> BytesIO:
+    """
+    Recibo no layout aprovado pelo cliente (logo, CNPJ, dados da empresa, box
+    do pagador, tabela de itens e assinatura) — o mesmo que sai no topo do
+    boleto, reaproveitado de boleto_pdf.
+    """
+    from decimal import Decimal
+
+    from app.services.boleto_ailos import DadosBoleto
+    from app.services.boleto_pdf import gerar_recibo_pdf
+
+    valor = Decimal(str(decimal_to_float(billing.paid_amount or billing.amount)))
+    endereco = ' '.join(filter(None, [
+        (client.address_line if client else None),
+        (client.address_number if client else None),
+        (client.neighborhood if client else None),
+    ])) if client else ''
+
+    dados = DadosBoleto(
+        billing_id=billing.id,
+        # Campos da ficha de compensação não são usados no recibo, mas a
+        # dataclass os exige — o recibo avulso não desenha código de barras.
+        nosso_numero='', nosso_numero_dv='', nosso_numero_display='',
+        codigo_barras='', linha_digitavel='',
+        data_emissao=billing.payment_date or date.today(),
+        data_vencimento=billing.due_date,
+        valor=valor,
+        sacado_nome=(client.name if client else '') or '',
+        sacado_cpf_cnpj=(client.cpf_cnpj if client else '') or '',
+        sacado_endereco=endereco,
+        sacado_cidade=(client.city if client else '') or '',
+        sacado_cep=(client.zip_code if client else '') or '',
+        sacado_uf=(client.state if client else '') or '',
+        sacado_ie=(getattr(client, 'rg_ie', '') if client else '') or '',
+        itens=[(billing.title or billing.notes or 'Cobrança', float(valor))],
+    )
+    return BytesIO(gerar_recibo_pdf(dados))
 
 
 @router.get('/{item_id}/receipt')
@@ -241,11 +254,12 @@ def download_receipt(item_id: int, db: Session = Depends(get_db), _: object = De
     row = base_query(db).filter(Billing.id == item_id).first()
     if not row:
         raise HTTPException(status_code=404, detail='Cobrança não encontrada')
-    # base_query retorna 6 colunas; só as duas primeiras interessam aqui
-    billing, client_name, *_ = row
+    # base_query retorna 6 colunas; só a primeira interessa aqui
+    billing, *_ = row
     if billing.status != BillingStatus.PAID:
         raise HTTPException(status_code=400, detail='Recibo disponível apenas para cobranças pagas')
-    buffer = _receipt_pdf(billing, client_name)
+    client = db.get(Client, billing.client_id)
+    buffer = _receipt_pdf(billing, client)
     filename = f'recibo-{billing.receipt_number or item_id}.pdf'
     return StreamingResponse(buffer, media_type='application/pdf', headers={'Content-Disposition': f'inline; filename={filename}'})
 
