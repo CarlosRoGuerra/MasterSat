@@ -266,11 +266,169 @@ def export_billings(
 
 
 # ---------------------------------------------------------------------------
+# Relatório de cobranças por período (pagas / em aberto / vencidas)
+# ---------------------------------------------------------------------------
+
+_SITUACAO_LABEL = {
+    'paga': 'Paga', 'pendente': 'Em aberto', 'vencida': 'Vencida', 'cancelada': 'Cancelada',
+}
+
+
+def _billings_report_pdf(linhas, situacao: str, periodo_por: str,
+                         date_from: date | None, date_to: date | None) -> StreamingResponse:
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=landscape(A4),
+                            leftMargin=12 * mm, rightMargin=12 * mm,
+                            topMargin=12 * mm, bottomMargin=12 * mm,
+                            title='Relatório de Cobranças — MasterSat')
+    styles = getSampleStyleSheet()
+    titulo = {
+        'paga': 'Cobranças Pagas', 'pendente': 'Cobranças em Aberto',
+        'vencida': 'Cobranças Vencidas', 'cancelada': 'Cobranças Canceladas',
+    }.get(situacao, 'Cobranças')
+    por = 'pagamento' if periodo_por == 'pagamento' else 'vencimento'
+    de = date_from.strftime('%d/%m/%Y') if date_from else '—'
+    ate = date_to.strftime('%d/%m/%Y') if date_to else '—'
+
+    elems = [
+        Paragraph(f'MASTERSAT — Relatório de {titulo}', styles['Title']),
+        Paragraph(f'Emitido em {date.today().strftime("%d/%m/%Y")}', styles['Normal']),
+        Paragraph(f'<b>PERÍODO DE {de} ATÉ {ate}</b> (por data de {por})', styles['Normal']),
+        Spacer(1, 8),
+    ]
+
+    header = ['Cliente', 'Título', 'Vencimento', 'Pagamento', 'Valor', 'Valor Pago', 'Situação']
+    data = [header]
+    total, total_pago = 0.0, 0.0
+    for ln in linhas:
+        total += ln['valor']
+        total_pago += ln['valor_pago']
+        data.append([
+            ln['cliente'], ln['titulo'],
+            ln['vencimento'].strftime('%d/%m/%Y') if ln['vencimento'] else '',
+            ln['pagamento'].strftime('%d/%m/%Y') if ln['pagamento'] else '—',
+            _brl(ln['valor']), _brl(ln['valor_pago']) if ln['valor_pago'] else '—',
+            _SITUACAO_LABEL.get(ln['situacao'], ln['situacao']),
+        ])
+    data.append(['', '', '', 'TOTAL', _brl(total), _brl(total_pago), f'{len(linhas)} cobrança(s)'])
+
+    table = Table(data, repeatRows=1,
+                  colWidths=[70 * mm, 55 * mm, 27 * mm, 27 * mm, 30 * mm, 30 * mm, 26 * mm])
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1E3A5F')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 8),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#F1F5F9')]),
+        ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#DCFCE7')),
+        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+        ('ALIGN', (2, 0), (-1, -1), 'RIGHT'),
+        ('GRID', (0, 0), (-1, -1), 0.3, colors.HexColor('#CBD5E1')),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+    ]))
+    elems.append(table)
+    doc.build(elems)
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type='application/pdf',
+        headers={'Content-Disposition': 'inline; filename="relatorio-cobrancas.pdf"'},
+    )
+
+
+@router.get('/billings-report')
+def export_billings_report(
+    fmt: str = Query(default='pdf', pattern='^(csv|xlsx|pdf)$'),
+    situacao: str = Query(default='paga', pattern='^(paga|pendente|vencida|cancelada|todas)$'),
+    periodo_por: str = Query(default='pagamento', pattern='^(pagamento|vencimento)$',
+                             description='Qual data o período filtra'),
+    date_from: date | None = None,
+    date_to: date | None = None,
+    client_id: int | None = None,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*VIEW_ROLES)),
+):
+    """
+    Relatório de cobranças por período.
+
+    ``periodo_por`` é o que responde "quais clientes pagaram do dia 10 ao 15":
+    com 'pagamento', o período filtra a DATA DE PAGAMENTO; com 'vencimento',
+    filtra o vencimento (útil para o que está em aberto).
+    """
+    campo = Billing.payment_date if periodo_por == 'pagamento' else Billing.due_date
+
+    query = (
+        db.query(Billing, Client.name.label('cliente'))
+        .join(Client, Client.id == Billing.client_id)
+        .filter(Billing.is_deleted.is_(False), Client.is_deleted.is_(False))
+    )
+    if situacao != 'todas':
+        query = query.filter(Billing.status == BillingStatus(situacao))
+    if client_id:
+        query = query.filter(Billing.client_id == client_id)
+    if date_from:
+        query = query.filter(campo >= date_from)
+    if date_to:
+        query = query.filter(campo <= date_to)
+    # Filtrar por pagamento sem data pagas seria sem sentido — exclui os não pagos
+    if periodo_por == 'pagamento' and (date_from or date_to):
+        query = query.filter(Billing.payment_date.isnot(None))
+
+    linhas = [
+        {
+            'cliente': cliente,
+            'titulo': b.title or b.notes or '',
+            'vencimento': b.due_date,
+            'pagamento': b.payment_date,
+            'valor': float(b.amount or 0),
+            'valor_pago': float(b.paid_amount or 0),
+            'situacao': b.status.value if hasattr(b.status, 'value') else str(b.status),
+            'forma': b.payment_method or '',
+        }
+        for b, cliente in query.order_by(campo.desc().nullslast(), Client.name).limit(5000).all()
+    ]
+
+    if fmt == 'pdf':
+        return _billings_report_pdf(linhas, situacao, periodo_por, date_from, date_to)
+
+    headers = ['Cliente', 'Título', 'Vencimento', 'Pagamento', 'Valor', 'Valor Pago',
+               'Situação', 'Forma de Pagamento']
+    rows = [
+        [
+            ln['cliente'], ln['titulo'],
+            ln['vencimento'].strftime('%d/%m/%Y') if ln['vencimento'] else '',
+            ln['pagamento'].strftime('%d/%m/%Y') if ln['pagamento'] else '',
+            ln['valor'], ln['valor_pago'],
+            _SITUACAO_LABEL.get(ln['situacao'], ln['situacao']), ln['forma'],
+        ]
+        for ln in linhas
+    ]
+    return _build_response(fmt, headers, rows, 'relatorio-cobrancas')
+
+
+# ---------------------------------------------------------------------------
 # Exportar relatório de inadimplentes
 # ---------------------------------------------------------------------------
 
-def _delinquents_pdf(results) -> StreamingResponse:
-    """Relatório de inadimplentes em PDF, pronto para imprimir."""
+def _brl(valor: float) -> str:
+    return f'R$ {valor:,.2f}'.replace(',', 'X').replace('.', ',').replace('X', '.')
+
+
+def _delinquents_pdf(linhas, due_from: date | None, due_to: date | None) -> StreamingResponse:
+    """
+    Relatório de inadimplentes em PDF, pronto para imprimir.
+
+    Uma linha por COBRANÇA vencida (não por cliente): o cliente precisa ver o
+    valor, o vencimento e o número do boleto de cada uma para cobrar.
+    """
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4, landscape
     from reportlab.lib.styles import getSampleStyleSheet
@@ -286,26 +444,32 @@ def _delinquents_pdf(results) -> StreamingResponse:
     elems = [
         Paragraph('MASTERSAT — Relatório de Clientes Inadimplentes', styles['Title']),
         Paragraph(f'Emitido em {date.today().strftime("%d/%m/%Y")}', styles['Normal']),
-        Spacer(1, 8),
     ]
+    if due_from or due_to:
+        de = due_from.strftime('%d/%m/%y') if due_from else '—'
+        ate = due_to.strftime('%d/%m/%y') if due_to else '—'
+        elems.append(Paragraph(
+            f'<b>PERÍODO DE {de} ATÉ {ate}</b> (por data de vencimento)', styles['Normal']))
+    elems.append(Spacer(1, 8))
 
-    header = ['Nome', 'CPF/CNPJ', 'Telefone', 'Cobr. Vencidas', 'Valor em Aberto', 'Venc. + Antigo']
+    header = ['Nome', 'Valor', 'Data de Vencimento', 'Número do Boleto', 'Dias em Atraso']
     data = [header]
     total_geral = 0.0
-    for r in results:
-        valor = float(r.total_valor or 0)
+    hoje = date.today()
+    for ln in linhas:
+        valor = float(ln['valor'] or 0)
         total_geral += valor
+        venc = ln['vencimento']
         data.append([
-            r.name,
-            r.cpf_cnpj or '',
-            r.phone or '',
-            str(r.total_vencidas),
-            f'R$ {valor:,.2f}'.replace(',', 'X').replace('.', ',').replace('X', '.'),
-            r.vencimento_mais_antigo.strftime('%d/%m/%Y') if r.vencimento_mais_antigo else '',
+            ln['cliente'],
+            _brl(valor),
+            venc.strftime('%d/%m/%Y') if venc else '',
+            ln['nosso_numero'] or '—',
+            str((hoje - venc).days) if venc else '',
         ])
-    data.append(['', '', '', 'TOTAL', f'R$ {total_geral:,.2f}'.replace(',', 'X').replace('.', ',').replace('X', '.'), ''])
+    data.append(['', '', '', 'VALOR TOTAL VENCIDO', _brl(total_geral)])
 
-    table = Table(data, repeatRows=1, colWidths=[75 * mm, 40 * mm, 35 * mm, 28 * mm, 40 * mm, 32 * mm])
+    table = Table(data, repeatRows=1, colWidths=[95 * mm, 35 * mm, 40 * mm, 45 * mm, 35 * mm])
     table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1E3A5F')),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
@@ -314,7 +478,7 @@ def _delinquents_pdf(results) -> StreamingResponse:
         ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#F1F5F9')]),
         ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#FEE2E2')),
         ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
-        ('ALIGN', (3, 0), (-1, -1), 'RIGHT'),
+        ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
         ('GRID', (0, 0), (-1, -1), 0.3, colors.HexColor('#CBD5E1')),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ('TOPPADDING', (0, 0), (-1, -1), 4),
@@ -333,45 +497,56 @@ def _delinquents_pdf(results) -> StreamingResponse:
 @router.get('/delinquents')
 def export_delinquents(
     fmt: str = Query(default='csv', pattern='^(csv|xlsx|pdf)$'),
+    due_from: date | None = Query(default=None, description='Vencimento a partir de'),
+    due_to: date | None = Query(default=None, description='Vencimento até'),
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*VIEW_ROLES)),
 ):
-    from sqlalchemy import func
+    """
+    Cobranças vencidas, uma linha por cobrança (com valor, vencimento e nosso
+    número), opcionalmente restritas a um período de vencimento.
+    """
+    from app.models.ailos_boleto import AilosBoleto
 
-    results = (
-        db.query(
-            Client.id,
-            Client.name,
-            Client.cpf_cnpj,
-            Client.email,
-            Client.phone,
-            func.count(Billing.id).label('total_vencidas'),
-            func.sum(Billing.amount).label('total_valor'),
-            func.min(Billing.due_date).label('vencimento_mais_antigo'),
-        )
-        .join(Billing, Billing.client_id == Client.id)
+    query = (
+        db.query(Billing, Client.name.label('cliente'), AilosBoleto.nosso_numero)
+        .join(Client, Client.id == Billing.client_id)
+        .outerjoin(AilosBoleto, AilosBoleto.billing_id == Billing.id)
         .filter(
             Client.is_deleted.is_(False),
             Billing.is_deleted.is_(False),
             Billing.status == BillingStatus.OVERDUE,
         )
-        .group_by(Client.id, Client.name, Client.cpf_cnpj, Client.email, Client.phone)
-        .order_by(func.sum(Billing.amount).desc())
-        .all()
     )
+    if due_from:
+        query = query.filter(Billing.due_date >= due_from)
+    if due_to:
+        query = query.filter(Billing.due_date <= due_to)
+
+    linhas = [
+        {
+            'cliente': cliente,
+            'titulo': billing.title or '',
+            'valor': float(billing.amount or 0),
+            'vencimento': billing.due_date,
+            'nosso_numero': nosso_numero,
+        }
+        for billing, cliente, nosso_numero in
+        query.order_by(Client.name, Billing.due_date).all()
+    ]
 
     if fmt == 'pdf':
-        return _delinquents_pdf(results)
+        return _delinquents_pdf(linhas, due_from, due_to)
 
-    headers = ['ID', 'Nome', 'CPF/CNPJ', 'E-mail', 'Telefone',
-               'Qtd. Cobranças Vencidas', 'Valor Total em Aberto', 'Vencimento Mais Antigo']
+    headers = ['Nome', 'Título', 'Valor', 'Data de Vencimento', 'Número do Boleto', 'Dias em Atraso']
+    hoje = date.today()
     rows = [
         [
-            r.id, r.name, r.cpf_cnpj, r.email or '', r.phone or '',
-            r.total_vencidas,
-            float(r.total_valor or 0),
-            r.vencimento_mais_antigo.strftime('%d/%m/%Y') if r.vencimento_mais_antigo else '',
+            ln['cliente'], ln['titulo'], ln['valor'],
+            ln['vencimento'].strftime('%d/%m/%Y') if ln['vencimento'] else '',
+            ln['nosso_numero'] or '',
+            (hoje - ln['vencimento']).days if ln['vencimento'] else '',
         ]
-        for r in results
+        for ln in linhas
     ]
     return _build_response(fmt, headers, rows, 'inadimplentes')

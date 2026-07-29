@@ -19,14 +19,32 @@ import { RevenueChart } from '@/components/ui/revenue-chart';
 import { apiFetch, API_URL } from '@/lib/api';
 import { useAuthGuard } from '@/lib/use-auth-guard';
 
-async function abrirPdfInadimplentes(token: string) {
-  const resp = await fetch(`${API_URL.replace(/\/+$/, '')}/exports/delinquents?fmt=pdf`, {
+/** Abre um export protegido em nova aba (PDF) ou baixa (CSV/Excel). */
+async function abrirExport(token: string, path: string, baixarComo?: string) {
+  const resp = await fetch(`${API_URL.replace(/\/+$/, '')}/${path}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  if (!resp.ok) throw new Error(`Erro ${resp.status} ao gerar o PDF`);
+  if (!resp.ok) {
+    let detalhe = `Erro ${resp.status}`;
+    try { detalhe = (await resp.json())?.detail || detalhe; } catch { /* noop */ }
+    throw new Error(detalhe);
+  }
   const url = URL.createObjectURL(await resp.blob());
-  window.open(url, '_blank');
+  if (baixarComo) {
+    const a = document.createElement('a');
+    a.href = url; a.download = baixarComo;
+    document.body.appendChild(a); a.click(); a.remove();
+  } else {
+    window.open(url, '_blank');
+  }
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+async function abrirPdfInadimplentes(token: string, de?: string, ate?: string) {
+  const p = new URLSearchParams({ fmt: 'pdf' });
+  if (de) p.set('due_from', de);
+  if (ate) p.set('due_to', ate);
+  return abrirExport(token, `exports/delinquents?${p}`);
 }
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
@@ -119,6 +137,10 @@ export default function RelatoriosPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [showAllDelinquents, setShowAllDelinquents] = useState(false);
+
+  /* ── Relatório de cobranças por período ── */
+  const [relSituacao, setRelSituacao] = useState('paga');
+  const [relPeriodoPor, setRelPeriodoPor] = useState('pagamento');
 
   const [error, setError] = useState('');
   const [feedback, setFeedback] = useState('');
@@ -361,6 +383,66 @@ export default function RelatoriosPage() {
         </div>
       </Card>
 
+      {/* ── Relatório de cobranças por período ───────────────────────────── */}
+      <Card className="mb-6">
+        <div className="mb-1 flex items-center gap-2">
+          <FileText className="h-4 w-4 text-slate-500" />
+          <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Relatório de cobranças</h3>
+        </div>
+        <p className="mb-4 text-xs text-slate-500 dark:text-slate-400">
+          Ex.: quais clientes <strong>pagaram</strong> entre dois dias — escolha “Pagas” e filtre por data de pagamento.
+        </p>
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="text-sm">
+            <span className="mb-1 block text-xs font-semibold text-slate-600 dark:text-slate-400">Situação</span>
+            <select
+              value={relSituacao}
+              onChange={(e) => setRelSituacao(e.target.value)}
+              className="w-44 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900"
+            >
+              <option value="paga">Pagas (baixadas)</option>
+              <option value="pendente">Em aberto</option>
+              <option value="vencida">Vencidas</option>
+              <option value="todas">Todas</option>
+            </select>
+          </label>
+          <label className="text-sm">
+            <span className="mb-1 block text-xs font-semibold text-slate-600 dark:text-slate-400">Filtrar período por</span>
+            <select
+              value={relPeriodoPor}
+              onChange={(e) => setRelPeriodoPor(e.target.value)}
+              className="w-48 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900"
+            >
+              <option value="pagamento">Data de pagamento</option>
+              <option value="vencimento">Data de vencimento</option>
+            </select>
+          </label>
+          <p className="pb-2 text-xs text-slate-400">
+            Período: {fmtDate(dateFrom)} – {fmtDate(dateTo)}
+          </p>
+          <div className="ml-auto flex items-center gap-2">
+            <Button
+              variant="secondary"
+              onClick={() => token && abrirExport(
+                token,
+                `exports/billings-report?fmt=csv&situacao=${relSituacao}&periodo_por=${relPeriodoPor}&date_from=${dateFrom}&date_to=${dateTo}`,
+                'relatorio-cobrancas.csv',
+              ).catch(e => setError(e instanceof Error ? e.message : 'Erro ao gerar o relatório'))}
+            >
+              <Download className="h-4 w-4" /> CSV
+            </Button>
+            <Button
+              onClick={() => token && abrirExport(
+                token,
+                `exports/billings-report?fmt=pdf&situacao=${relSituacao}&periodo_por=${relPeriodoPor}&date_from=${dateFrom}&date_to=${dateTo}`,
+              ).catch(e => setError(e instanceof Error ? e.message : 'Erro ao gerar o relatório'))}
+            >
+              <FileText className="h-4 w-4" /> Gerar PDF
+            </Button>
+          </div>
+        </div>
+      </Card>
+
       {/* ── Exportar dados (no topo, antes dos gráficos) ─────────────────── */}
       <Card className="mb-6">
         <div className="mb-4 flex items-center gap-2">
@@ -393,7 +475,7 @@ export default function RelatoriosPage() {
                     <button
                       type="button"
                       title="Imprimir em PDF"
-                      onClick={() => abrirPdfInadimplentes(token).catch(e => setError(e instanceof Error ? e.message : 'Erro ao gerar PDF'))}
+                      onClick={() => abrirPdfInadimplentes(token, dateFrom, dateTo).catch(e => setError(e instanceof Error ? e.message : 'Erro ao gerar PDF'))}
                       className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-semibold text-rose-700 transition hover:bg-rose-100 dark:border-rose-900/40 dark:bg-rose-950/30 dark:text-rose-400"
                     >
                       PDF
@@ -514,7 +596,7 @@ export default function RelatoriosPage() {
                 <>
                   <Button
                     variant="secondary"
-                    onClick={() => abrirPdfInadimplentes(token).catch(e => setError(e instanceof Error ? e.message : 'Erro ao gerar PDF'))}
+                    onClick={() => abrirPdfInadimplentes(token, dateFrom, dateTo).catch(e => setError(e instanceof Error ? e.message : 'Erro ao gerar PDF'))}
                     className="gap-1.5 text-xs"
                   >
                     <FileText className="h-3.5 w-3.5" /> Imprimir PDF
