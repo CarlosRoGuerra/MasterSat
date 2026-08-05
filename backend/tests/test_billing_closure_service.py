@@ -389,3 +389,87 @@ class TestGenerateClosurePdf:
         sim = simulate_closure(db, REF_MONTH)
         pdf = generate_closure_pdf(sim)
         assert pdf.tell() == 0
+
+
+# ---------------------------------------------------------------------------
+# Relatório de simulação no formato do sistema antigo
+# ---------------------------------------------------------------------------
+
+class TestFormatoSimulacao:
+    """O relatório agrupa por INTERVENIENTE e detalha veículo → rastreadores.
+    Um veículo pode ter mais de um equipamento, cada um com sua mensalidade."""
+
+    def _item(self, **kw):
+        from datetime import date as _date
+        base = dict(
+            contract_id=1, client_name='CLIENTE X', interveniente_nome='CLIENTE X',
+            vehicle_id=10, vehicle_plate='ABC1234', vehicle_type='caminhao',
+            vehicle_created_at=_date(2024, 1, 2), contract_start_date=_date(2024, 1, 3),
+            tracker_imei='111111', tracker_install_date=_date(2024, 1, 4),
+            billing_amount=64.99, billing_day=10, due_date=_date(2026, 9, 10),
+            first_month_charges=[],
+        )
+        base.update(kw)
+        return base
+
+    def _texto(self, itens, ref='08/2026'):
+        from app.services.billing_closure import montar_linhas_simulacao
+        return '\n'.join(montar_linhas_simulacao({'reference_month': ref, 'items': itens}))
+
+    def test_cabecalho_traz_interveniente_e_matriz(self):
+        txt = self._texto([self._item(interveniente_nome='ABR EXPRESS')])
+        assert 'INTERVENIENTE: ABR EXPRESS' in txt
+        assert 'MATRIZ/FILIAL: MASTERSAT' in txt
+        assert 'MÊS REFERENTE: 08/2026' in txt
+        assert 'MÊS VENCIMENTO: 09/2026' in txt
+
+    def test_quantidade_de_veiculos_conta_veiculos_nao_contratos(self):
+        """ABR tem 4 veículos → QUANTIDADE VEÍCULOS: 4."""
+        itens = [self._item(contract_id=i, vehicle_id=i, vehicle_plate=f'AAA{i}')
+                 for i in range(1, 5)]
+        assert 'QUANTIDADE VEÍCULOS: 4' in self._texto(itens)
+
+    def test_um_veiculo_com_dois_equipamentos(self):
+        """ACQUE tem 1 veículo com 2 rastreadores: conta 1 veículo, soma os dois."""
+        itens = [
+            self._item(contract_id=1, tracker_imei='7352113'),
+            self._item(contract_id=2, tracker_imei='7352114'),
+        ]
+        txt = self._texto(itens)
+        assert 'QUANTIDADE VEÍCULOS: 1' in txt
+        assert txt.count('RASTREADOR: DATA INSTALAÇÃO') == 2
+        assert txt.count('TOTAL RASTREADOR:') == 2
+        assert 'TOTAL VEÍCULO:' in txt and '129,98' in txt
+
+    def test_produtos_entram_com_soma_e_no_total_do_veiculo(self):
+        itens = [self._item(first_month_charges=[
+            {'title': 'MENSALIDADE EM ABERTO EM 5X 1/5', 'amount': 96.19}])]
+        txt = self._texto(itens)
+        assert 'PRODUTO - MENSALIDADE EM ABERTO EM 5X 1/5' in txt
+        assert 'SOMA PRODUTOS:' in txt and '96,19' in txt
+        assert '161,18' in txt          # 64,99 + 96,19
+
+    def test_totais_do_boleto_por_interveniente(self):
+        itens = [
+            self._item(contract_id=1, vehicle_id=1, interveniente_nome='A'),
+            self._item(contract_id=2, vehicle_id=2, interveniente_nome='B'),
+        ]
+        txt = self._texto(itens)
+        assert txt.count('TOTAL BOLETO S/ IMPOSTOS:') == 2
+        assert txt.count('TOTAL BOLETO C/ IMPOSTOS:') == 2
+
+    def test_valores_alinhados_na_mesma_coluna(self):
+        """Rastreador e totais têm de terminar na mesma coluna, senão a
+        coluna de valores sai em degrau."""
+        txt = self._texto([self._item()])
+        linhas = [l for l in txt.splitlines()
+                  if 'MENSALIDADE 64,99:' in l or 'TOTAL RASTREADOR:' in l]
+        assert len({len(l.rstrip()) for l in linhas}) == 1
+
+    def test_sem_itens_nao_quebra(self):
+        assert 'Nenhum contrato' in self._texto([])
+
+    def test_pdf_gera(self):
+        from app.services.billing_closure import generate_closure_pdf
+        buf = generate_closure_pdf({'reference_month': '08/2026', 'items': [self._item()]})
+        assert buf.getvalue()[:5] == b'%PDF-'

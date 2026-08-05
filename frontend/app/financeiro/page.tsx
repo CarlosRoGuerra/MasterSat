@@ -734,6 +734,13 @@ export default function FinanceiroPage() {
       .catch(() => setAilosStatus(null));
   }, [token]);
 
+  // O banner de erro fica no topo da página; em listas longas (planos,
+  // cobranças) a mensagem aparecia fora da tela e a ação parecia falhar em
+  // silêncio. Ao surgir um erro, sobe até ele.
+  useEffect(() => {
+    if (error) window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [error]);
+
   // Busca/filtro dinâmicos das cobranças
   const billingSearchDebounced = useDebouncedValue(billingSearch);
   useEffectSkipFirst(() => {

@@ -174,6 +174,25 @@ class TestDeletePlan:
         r = http.delete(f"{PREFIX}/99999")
         assert r.status_code == 404
 
+    def test_delete_com_contrato_ativo_diz_quantos_e_o_que_fazer(self, http, db, plan, cliente):
+        """Antes só dizia "possui contratos ativos" — o operador ficava sem saída."""
+        from datetime import date
+
+        from app.models.contract import Contract
+
+        db.add(Contract(client_id=cliente.id, plan_id=plan.id,
+                        start_date=date(2026, 1, 1), status='ativo'))
+        db.commit()
+
+        r = http.delete(f"{PREFIX}/{plan.id}")
+        assert r.status_code == 400
+        detalhe = r.json()['detail']
+        assert plan.name in detalhe          # qual plano
+        assert '1 contrato' in detalhe       # quantos travam
+        assert 'desative' in detalhe.lower()  # o que fazer
+        db.refresh(plan)
+        assert plan.is_deleted is False
+
     def test_operational_cannot_delete(self, http_op, plan):
         r = http_op.delete(f"{PREFIX}/{plan.id}")
         assert r.status_code == 403

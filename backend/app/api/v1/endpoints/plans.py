@@ -83,9 +83,22 @@ def delete_item(item_id: int, db: Session = Depends(get_db), _: object = Depends
     obj = db.get(Plan, item_id)
     if not obj or obj.is_deleted:
         raise HTTPException(status_code=404, detail='Plano não encontrado')
-    active_contract = db.query(Contract).filter(Contract.is_deleted == False, Contract.plan_id == item_id, Contract.status == 'ativo').first()
-    if active_contract:
-        raise HTTPException(status_code=400, detail='Este plano possui contratos ativos e não pode ser removido.')
+    # Diz QUANTOS contratos travam a exclusão e o que fazer — só "possui
+    # contratos ativos" deixava o operador sem saída.
+    ativos = db.query(Contract).filter(
+        Contract.is_deleted == False,  # noqa: E712
+        Contract.plan_id == item_id,
+        Contract.status == 'ativo',
+    ).count()
+    if ativos:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f'O plano "{obj.name}" não pode ser removido: há {ativos} '
+                f'contrato(s) ativo(s) usando ele. Migre esses contratos para '
+                f'outro plano ou desative o plano em vez de excluir.'
+            ),
+        )
     obj.is_deleted = True
     db.commit()
     return {'message': 'Plano removido com sucesso'}

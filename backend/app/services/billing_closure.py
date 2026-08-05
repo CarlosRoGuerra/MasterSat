@@ -7,7 +7,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from io import BytesIO
 
 from sqlalchemy import func, or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.models.billing import Billing
 from app.models.client import Client
@@ -246,7 +246,11 @@ def simulate_closure(
 ) -> dict:
     refresh_overdue_statuses(db)
 
-    query = db.query(Contract, Client, Plan, Vehicle, Tracker).join(
+    # Cliente que responde pela cobrança (interveniente). Sem ele, o próprio
+    # cliente do contrato é o responsável — é por ele que o relatório agrupa.
+    Interveniente = aliased(Client)
+
+    query = db.query(Contract, Client, Plan, Vehicle, Tracker, Interveniente).join(
         Client, Client.id == Contract.client_id
     ).join(
         Plan, Plan.id == Contract.plan_id
@@ -254,6 +258,8 @@ def simulate_closure(
         Vehicle, Vehicle.id == Contract.vehicle_id
     ).outerjoin(
         Tracker, Tracker.id == Contract.tracker_id
+    ).outerjoin(
+        Interveniente, Interveniente.id == Contract.interveniente_client_id
     ).filter(
         Contract.is_deleted.is_(False),
         Contract.status == 'ativo',
@@ -269,7 +275,7 @@ def simulate_closure(
         query = query.filter(Client.id == client_id)
 
     items = []
-    for contract, client, plan, vehicle, tracker in query.all():
+    for contract, client, plan, vehicle, tracker, interveniente in query.all():
         due_date = _billing_due_in_month(contract, plan, reference_month)
         if due_date is None:
             continue
@@ -326,6 +332,16 @@ def simulate_closure(
             'due_date': due_date,
             'already_generated': already,
             'billing_day': contract.billing_day,
+            # Campos usados pelo relatório de simulação (formato do SGR):
+            # agrupa por interveniente e detalha veículo + rastreadores.
+            'interveniente_nome': (interveniente.name if interveniente else client.name),
+            'vehicle_id': vehicle.id if vehicle else None,
+            'vehicle_type': (vehicle.type if vehicle else None),
+            'vehicle_created_at': (
+                vehicle.created_at.date() if vehicle and getattr(vehicle, 'created_at', None) else None
+            ),
+            'contract_start_date': contract.start_date,
+            'tracker_install_date': (tracker.install_date if tracker else None),
         })
 
     # Exclui dos serviços avulsos os itens já embutidos em cobranças de primeiro mês
@@ -628,244 +644,171 @@ def execute_closure(
     }
 
 
+
+# ---------------------------------------------------------------------------
+# Relatório de simulação de fechamento (formato do sistema antigo)
+# ---------------------------------------------------------------------------
+# Texto monoespaçado, agrupado por INTERVENIENTE (quem paga o boleto), com um
+# bloco por veículo e uma linha por rastreador — um veículo pode ter mais de um
+# equipamento, e cada um tem a própria mensalidade.
+
+_LARGURA = 96          # colunas do relatório
+_SEP = '=' * _LARGURA
+_EMPRESA = 'MASTERSAT COMERCIO E SERVIÇOS DE RASTREAMENTO LTDA'
+
+
+def _v(valor: float) -> str:
+    """Valor no padrão brasileiro, sem símbolo (o relatório é monoespaçado)."""
+    return f'{valor:,.2f}'.replace(',', 'X').replace('.', ',').replace('X', '.')
+
+
+def _d(valor: date | None) -> str:
+    return valor.strftime('%d/%m/%Y') if valor else '//'
+
+
+def _par(esquerda: str, direita: str, largura: int = _LARGURA) -> str:
+    """Duas colunas na mesma linha: uma à esquerda, outra à direita."""
+    espaco = max(1, largura - len(esquerda) - len(direita))
+    return f'{esquerda}{" " * espaco}{direita}'
+
+
+def _total(rotulo: str, valor: float, recuo: int = 40) -> str:
+    """
+    Linha de total: rótulo recuado e valor à direita.
+
+    Os 12 caracteres finais alinham na MESMA coluna do valor das linhas de
+    rastreador (8 + 74 + 12 = 94), senão a coluna de valores fica em degrau.
+    """
+    corpo = f'{rotulo:<42}{_v(valor):>12}'
+    return ' ' * recuo + corpo
+
+
+def montar_linhas_simulacao(simulation: dict) -> list[str]:
+    """
+    Monta o relatório como lista de linhas de texto.
+
+    Separado da geração do PDF para poder ser testado sem abrir o arquivo.
+    """
+    agora = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
+    linhas: list[str] = [_SEP, f'Simulação Fechamento: {agora}'.center(_LARGURA), _SEP, '']
+
+    itens = simulation.get('items') or []
+    if not itens:
+        linhas.append('Nenhum contrato a faturar no período.')
+        return linhas
+
+    # 1) agrupa por interveniente  2) dentro dele, por veículo
+    por_interveniente: dict[str, list[dict]] = defaultdict(list)
+    for item in itens:
+        por_interveniente[item.get('interveniente_nome') or item['client_name']].append(item)
+
+    mes_ref = simulation.get('reference_month', '')
+
+    for interveniente, do_grupo in sorted(por_interveniente.items()):
+        por_veiculo: dict[object, list[dict]] = defaultdict(list)
+        for item in do_grupo:
+            # sem veículo, cada contrato é seu próprio grupo
+            por_veiculo[item.get('vehicle_id') or f'c{item["contract_id"]}'].append(item)
+
+        venc = do_grupo[0].get('due_date')
+        mes_venc = venc.strftime('%m/%Y') if venc else ''
+
+        linhas.append(f'INTERVENIENTE: {interveniente}')
+        linhas.append(f'MATRIZ/FILIAL: {_EMPRESA}')
+        linhas.append('')
+        linhas.append(_par(
+            f'MÊS REFERENTE: {mes_ref}',
+            _par(f'MÊS VENCIMENTO: {mes_venc}',
+                 f'QUANTIDADE VEÍCULOS: {len(por_veiculo)}', 62),
+        ))
+        linhas.append('')
+
+        total_grupo = 0.0
+        for contratos in por_veiculo.values():
+            primeiro = contratos[0]
+            venc_v = primeiro.get('due_date')
+            dia = primeiro.get('billing_day') or (venc_v.day if venc_v else '')
+
+            linhas.append(f'CLIENTE: {primeiro["client_name"]}')
+            linhas.append(_par(
+                f'PLACA: {primeiro.get("vehicle_plate") or "—"}',
+                f'TIPO VEÍCULO: {(primeiro.get("vehicle_type") or "—").upper()}', 78))
+            linhas.append(_par(
+                f'DATA CADASTRO: {_d(primeiro.get("vehicle_created_at"))}',
+                f'RASTREADOR: {primeiro.get("tracker_imei") or "—"}', 78))
+            linhas.append(_par(
+                f'DATA CONTRATO: {_d(primeiro.get("contract_start_date"))}',
+                f'VENCIMENTO: {dia}[{_d(venc_v)}]', 78))
+            linhas.append('')
+
+            total_veiculo = 0.0
+            for c in contratos:
+                mensalidade = float(c.get('billing_amount') or 0)
+                instalacao = _d(c.get('tracker_install_date'))
+                rotulo = f'RASTREADOR: DATA INSTALAÇÃO [{instalacao}] - MENSALIDADE {_v(mensalidade)}:'
+                linhas.append(' ' * 8 + f'{rotulo:<74}{_v(mensalidade):>12}'.rstrip())
+
+                # Serviços/produtos embutidos na primeira cobrança
+                produtos = c.get('first_month_charges') or []
+                soma_produtos = 0.0
+                for prod in produtos:
+                    val = float(prod.get('amount') or 0)
+                    soma_produtos += val
+                    desc = f'PRODUTO - {str(prod.get("title") or "").upper()}:'
+                    linhas.append(' ' * 8 + f'{desc:<74}{_v(val):>12}'.rstrip())
+                if produtos:
+                    linhas.append(_total('SOMA PRODUTOS:', soma_produtos))
+
+                linhas.append(_total('TOTAL RASTREADOR:', mensalidade))
+                linhas.append('')
+                total_veiculo += mensalidade + soma_produtos
+
+            linhas.append(_total('TOTAL VEÍCULO:', total_veiculo))
+            linhas.append('')
+            total_grupo += total_veiculo
+
+        # Sem impostos configurados, os dois totais são iguais — as duas linhas
+        # existem porque o relatório de referência as traz.
+        linhas.append(_total('TOTAL BOLETO S/ IMPOSTOS:', total_grupo))
+        linhas.append(_total('TOTAL BOLETO C/ IMPOSTOS:', total_grupo))
+        linhas.append(_SEP)
+
+    return linhas
+
+
 def generate_closure_pdf(simulation: dict) -> BytesIO:
-    import os
-    from datetime import datetime as _dt
-    from reportlab.lib.pagesizes import A4, landscape
+    """Simulação de fechamento em PDF, no formato monoespaçado do SGR."""
+    from reportlab.lib.pagesizes import A4
     from reportlab.lib.units import mm
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Spacer, Paragraph
-    from reportlab.lib.styles import ParagraphStyle
-    from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
-    from reportlab.lib import colors
+    from reportlab.pdfgen import canvas as pdfcanvas
 
-    # ── Brand colours ──────────────────────────────────────────────────────
-    C_YELLOW   = colors.HexColor('#F0A500')
-    C_BLACK    = colors.HexColor('#1A1A1A')
-    C_DARK     = colors.HexColor('#2D2D2D')
-    C_WHITE    = colors.white
-    C_LY       = colors.HexColor('#FFF8E7')   # light yellow row
-    C_GRAY     = colors.HexColor('#E8E8E8')
-
-    PAGE      = landscape(A4)   # 297 × 210 mm
-    W, H      = PAGE
-    LM = 15 * mm
-    RM = 15 * mm
-    CW = W - LM - RM            # ≈ 267 mm usable
-    NOW = _dt.now().strftime('%d/%m/%Y  %H:%M')
-    # Absolute path regardless of working directory
-    _here = os.path.abspath(os.path.dirname(__file__))
-    LOGO = os.path.normpath(os.path.join(_here, '..', '..', '..', 'logotipo.png'))
+    linhas = montar_linhas_simulacao(simulation)
 
     buffer = BytesIO()
+    c = pdfcanvas.Canvas(buffer, pagesize=A4)
+    c.setTitle('Simulação de Fechamento — MasterSat')
+    largura, altura = A4
+    margem = 10 * mm
+    topo = altura - margem
+    passo = 3.3 * mm
+    fonte = 6.5
 
-    # ── Paragraph styles ───────────────────────────────────────────────────
-    ps_cell = ParagraphStyle('cell', fontName='Helvetica', fontSize=7.5,
-                              textColor=C_DARK, leading=10, alignment=TA_LEFT)
-    ps_cell_bold = ParagraphStyle('cellb', fontName='Helvetica-Bold', fontSize=7.5,
-                                   textColor=C_DARK, leading=10)
-    ps_comp = ParagraphStyle('comp', fontName='Helvetica', fontSize=7,
-                              textColor=C_DARK, leading=9.5, alignment=TA_LEFT)
+    y = topo
+    pagina = 1
+    for linha in linhas:
+        if y < margem + 8 * mm:
+            c.setFont('Courier', 6)
+            c.drawCentredString(largura / 2, margem, f'Página {pagina}')
+            c.showPage()
+            pagina += 1
+            y = topo
+        c.setFont('Courier', fonte)
+        c.drawString(margem, y, linha)
+        y -= passo
 
-    # ── Header / footer drawn on every page ────────────────────────────────
-    def _header_footer(canvas, doc):
-        canvas.saveState()
-
-        # Yellow header band (28 mm) — shorter for landscape
-        canvas.setFillColor(C_YELLOW)
-        canvas.rect(0, H - 28 * mm, W, 28 * mm, fill=1, stroke=0)
-
-        # Logo (left)
-        if os.path.exists(LOGO):
-            try:
-                canvas.drawImage(LOGO, LM, H - 26 * mm,
-                                 width=55 * mm, height=22 * mm,
-                                 preserveAspectRatio=True, mask='auto')
-            except Exception:
-                pass
-
-        # Title + info (right)
-        canvas.setFillColor(C_BLACK)
-        canvas.setFont('Helvetica-Bold', 14)
-        canvas.drawRightString(W - RM, H - 13 * mm, 'Simulação de Fechamento')
-        canvas.setFont('Helvetica', 8.5)
-        canvas.drawRightString(W - RM, H - 20 * mm,
-                               f'Período: {simulation["reference_month"]}   •   Gerado em: {NOW}')
-
-        # Separator line
-        canvas.setStrokeColor(C_BLACK)
-        canvas.setLineWidth(2)
-        canvas.line(0, H - 28 * mm, W, H - 28 * mm)
-
-        # Dark footer band (10 mm)
-        canvas.setFillColor(C_DARK)
-        canvas.rect(0, 0, W, 10 * mm, fill=1, stroke=0)
-        canvas.setFillColor(C_WHITE)
-        canvas.setFont('Helvetica', 7)
-        canvas.drawString(LM, 3.8 * mm,
-                          'MasterSat Rastreamento  ·  Solução completa em Rastreamento')
-        canvas.drawRightString(W - RM, 3.8 * mm, f'Página {doc.page}')
-
-        canvas.restoreState()
-
-    # ── Document ───────────────────────────────────────────────────────────
-    doc = SimpleDocTemplate(
-        buffer, pagesize=PAGE,
-        leftMargin=LM, rightMargin=RM,
-        topMargin=34 * mm,   # clears 28mm header + gap
-        bottomMargin=15 * mm,
-    )
-
-    story: list = []
-
-    # ── KPI summary bar ────────────────────────────────────────────────────
-    kpi_vals = [
-        ('Contratos', str(simulation['total_contracts'])),
-        ('A gerar',   str(simulation['to_generate'])),
-        ('Mensalidades', f'R$ {simulation["total_amount"]:.2f}'),
-        ('Taxas retirada', f'R$ {simulation.get("total_uninstall_fees", 0):.2f}'),
-        ('TOTAL GERAL', f'R$ {simulation.get("grand_total", simulation["total_amount"]):.2f}'),
-    ]
-    kpi_row_labels = [[k for k, _ in kpi_vals]]
-    kpi_row_values = [[v for _, v in kpi_vals]]
-    kpi_t = Table(kpi_row_labels + kpi_row_values,
-                  colWidths=[CW / 5] * 5, rowHeights=[5.5 * mm, 8 * mm])
-    kpi_t.setStyle(TableStyle([
-        # Label row
-        ('BACKGROUND',   (0, 0), (-1, 0), C_DARK),
-        ('TEXTCOLOR',    (0, 0), (-1, 0), colors.HexColor('#AAAAAA')),
-        ('FONTNAME',     (0, 0), (-1, 0), 'Helvetica'),
-        ('FONTSIZE',     (0, 0), (-1, 0), 6.5),
-        ('ALIGN',        (0, 0), (-1, 0), 'CENTER'),
-        ('VALIGN',       (0, 0), (-1, 0), 'MIDDLE'),
-        # Value row
-        ('BACKGROUND',   (0, 1), (-1, 1), C_BLACK),
-        ('TEXTCOLOR',    (0, 1), (-1, 1), C_WHITE),
-        ('FONTNAME',     (0, 1), (-4, 1), 'Helvetica-Bold'),
-        ('FONTSIZE',     (0, 1), (-1, 1), 9),
-        ('ALIGN',        (0, 1), (-1, 1), 'CENTER'),
-        ('VALIGN',       (0, 1), (-1, 1), 'MIDDLE'),
-        # Highlight total geral in yellow
-        ('BACKGROUND',   (-1, 0), (-1, 1), C_YELLOW),
-        ('TEXTCOLOR',    (-1, 0), (-1, 0), C_BLACK),
-        ('TEXTCOLOR',    (-1, 1), (-1, 1), C_BLACK),
-        ('FONTNAME',     (-1, 1), (-1, 1), 'Helvetica-Bold'),
-        # Dividers
-        ('LINEAFTER',    (0, 0), (-2, 1), 0.5, colors.HexColor('#444444')),
-        ('LINEBELOW',    (0, 1), (-1, 1), 2, C_YELLOW),
-        ('TOPPADDING',   (0, 0), (-1, -1), 2),
-        ('BOTTOMPADDING',(0, 0), (-1, -1), 2),
-    ]))
-    story.append(kpi_t)
-    story.append(Spacer(1, 5 * mm))
-
-    # ── Helpers ────────────────────────────────────────────────────────────
-    def section_bar(label: str):
-        t = Table([[label]], colWidths=[CW], rowHeights=[7 * mm])
-        t.setStyle(TableStyle([
-            ('BACKGROUND',   (0, 0), (-1, -1), C_BLACK),
-            ('TEXTCOLOR',    (0, 0), (-1, -1), C_YELLOW),
-            ('FONTNAME',     (0, 0), (-1, -1), 'Helvetica-Bold'),
-            ('FONTSIZE',     (0, 0), (-1, -1), 9),
-            ('LEFTPADDING',  (0, 0), (-1, -1), 8),
-            ('VALIGN',       (0, 0), (-1, -1), 'MIDDLE'),
-        ]))
-        return t
-
-    def data_table(header: list, rows: list, widths: list) -> Table:
-        t = Table([header] + rows, colWidths=widths, repeatRows=1)
-        cmds = [
-            ('BACKGROUND',    (0, 0), (-1, 0), C_DARK),
-            ('TEXTCOLOR',     (0, 0), (-1, 0), C_WHITE),
-            ('FONTNAME',      (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE',      (0, 0), (-1, -1), 7.5),
-            ('ALIGN',         (0, 0), (-1, -1), 'LEFT'),
-            ('VALIGN',        (0, 0), (-1, -1), 'MIDDLE'),
-            ('LINEBELOW',     (0, 0), (-1, 0), 2, C_YELLOW),
-            ('GRID',          (0, 0), (-1, -1), 0.25, C_GRAY),
-            ('TOPPADDING',    (0, 0), (-1, -1), 3.5),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 3.5),
-            ('LEFTPADDING',   (0, 0), (-1, -1), 5),
-            ('RIGHTPADDING',  (0, 0), (-1, -1), 5),
-        ]
-        for i in range(1, len(rows) + 1):
-            bg = C_LY if i % 2 == 0 else C_WHITE
-            cmds.append(('BACKGROUND', (0, i), (-1, i), bg))
-        t.setStyle(TableStyle(cmds))
-        return t
-
-    def fmt_due(d):
-        return d.strftime('%d/%m/%Y') if hasattr(d, 'strftime') else str(d)
-
-    # ── Mensalidades ───────────────────────────────────────────────────────
-    if simulation['items']:
-        story.append(section_bar('  MENSALIDADES RECORRENTES'))
-        story.append(Spacer(1, 1.5 * mm))
-        hdr = ['CLIENTE', 'TIPO', 'VEÍCULO', 'PLANO', 'VENCIMENTO', 'COMPOSIÇÃO DA COBRANÇA', 'VALOR (R$)', 'STATUS']
-        rows = []
-        for item in simulation['items']:
-            charges = item.get('first_month_charges', [])
-            if item.get('is_prorata') and not charges:
-                comp_lines = [f'Pró-rata {item["prorated_days"]}/{item["days_in_month"]} dias']
-            elif charges:
-                comp_lines = [f'Mensalidade: R$ {item["billing_amount"]:.2f}']
-                comp_lines += [f'+ {c["title"]}: R$ {c["amount"]:.2f}' for c in charges]
-            else:
-                comp_lines = ['Mensalidade integral']
-            comp_para = Paragraph('<br/>'.join(comp_lines), ps_comp)
-            status = 'Gerado' if item['already_generated'] else 'A gerar'
-            rows.append([
-                Paragraph(item['client_name'], ps_cell),
-                'PJ' if item['client_type'] == 'pj' else 'PF',
-                item['vehicle_plate'] or '—',
-                Paragraph(item['plan_name'], ps_cell),
-                fmt_due(item['due_date']),
-                comp_para,
-                f'{item["total_first_billing"]:.2f}',
-                status,
-            ])
-        # Landscape widths — total ≈ 267 mm
-        story.append(data_table(hdr, rows,
-            [55*mm, 9*mm, 22*mm, 26*mm, 20*mm, 85*mm, 22*mm, 16*mm]))
-        story.append(Spacer(1, 5 * mm))
-
-    # ── Desinstalações ─────────────────────────────────────────────────────
-    if simulation.get('uninstall_events'):
-        story.append(section_bar('  TAXAS DE DESINSTALAÇÃO'))
-        story.append(Spacer(1, 1.5 * mm))
-        hdr = ['CLIENTE', 'TIPO', 'VEÍCULO', 'DATA RETIRADA', 'VALOR (R$)', 'STATUS']
-        rows = []
-        for item in simulation['uninstall_events']:
-            rows.append([
-                Paragraph(item['client_name'], ps_cell),
-                'PJ' if item['client_type'] == 'pj' else 'PF',
-                item['vehicle_plate'] or '—',
-                fmt_due(item['uninstall_date']),
-                f'{item["fee_amount"]:.2f}',
-                item.get('skip_reason') or 'A gerar',
-            ])
-        story.append(data_table(hdr, rows,
-            [90*mm, 11*mm, 30*mm, 30*mm, 24*mm, 60*mm]))
-        story.append(Spacer(1, 5 * mm))
-
-    # ── Serviços avulsos ───────────────────────────────────────────────────
-    if simulation.get('charge_items'):
-        story.append(section_bar('  SERVIÇOS E COBRANÇAS AVULSAS'))
-        story.append(Spacer(1, 1.5 * mm))
-        hdr = ['CLIENTE', 'TIPO', 'VEÍCULO', 'TÍTULO', 'PARCELAS', 'VALOR/PARCELA', 'TOTAL (R$)']
-        rows = []
-        for item in simulation['charge_items']:
-            rows.append([
-                Paragraph(item['client_name'], ps_cell),
-                'PJ' if item['client_type'] == 'pj' else 'PF',
-                item['vehicle_plate'] or '—',
-                Paragraph(item['title'], ps_cell),
-                f'{item["generated_count"] + 1}–{item["installment_count"]}',
-                f'{item["per_installment_amount"]:.2f}',
-                f'{item["total_remaining"]:.2f}',
-            ])
-        story.append(data_table(hdr, rows,
-            [70*mm, 10*mm, 26*mm, 60*mm, 18*mm, 26*mm, 24*mm]))
-
-    doc.build(story, onFirstPage=_header_footer, onLaterPages=_header_footer)
+    c.setFont('Courier', 6)
+    c.drawCentredString(largura / 2, margem, f'Página {pagina}')
+    c.showPage()
+    c.save()
     buffer.seek(0)
     return buffer
