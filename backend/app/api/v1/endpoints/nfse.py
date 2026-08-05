@@ -276,6 +276,25 @@ def danfse(
     )
 
 
+def _municipio_do_tomador(db: Session, billing_id: int) -> dict[str, str]:
+    """
+    CEP → "Cidade/UF", para o endereço do tomador não sair como "3304557".
+
+    O XML nomeia só os municípios de emissão/prestação/incidência; o do tomador
+    vem apenas como código IBGE. O cadastro do cliente tem o nome, e casa pelo
+    CEP — que está nos dois lados —, então o papel nunca contradiz o XML.
+    """
+    linha = (
+        db.query(Client.zip_code, Client.city, Client.state)
+        .join(Billing, Billing.client_id == Client.id)
+        .filter(Billing.id == billing_id)
+        .first()
+    )
+    if not linha or not linha.zip_code or not linha.city:
+        return {}
+    return {linha.zip_code: f'{linha.city}/{linha.state}' if linha.state else linha.city}
+
+
 @router.get('/{billing_id}/danfse-local')
 def danfse_local(
     billing_id: int,
@@ -297,6 +316,7 @@ def danfse_local(
             nota.xml_retorno,
             nfse_nacional.url_consulta_publica(nota.chave_acesso)
             if nota.chave_acesso else None,
+            municipio_por_cep=_municipio_do_tomador(db, billing_id),
         )
     except nfse_danfse.DanfseError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -320,7 +340,9 @@ def xml_nfse(
         raise HTTPException(status_code=404, detail='XML da NFS-e não disponível para esta cobrança')
     return Response(
         content=nota.xml_retorno,
-        media_type='application/xml',
+        # Sem o charset explícito, editor/navegador cai no padrão latin-1 e a
+        # acentuação da descrição do serviço vira "VigilÃ¢ncia".
+        media_type='application/xml; charset=utf-8',
         headers={'Content-Disposition':
                  f'attachment; filename=nfse-{nota.numero_nfse or billing_id}.xml'},
     )

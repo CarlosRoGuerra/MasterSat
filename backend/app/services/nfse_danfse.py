@@ -23,6 +23,7 @@ import html
 import io
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from lxml import etree
 from reportlab.graphics.barcode import qr
@@ -31,15 +32,20 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.lib.utils import ImageReader
+from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 NS_NFSE = 'http://www.sped.fazenda.gov.br/nfse'
 NS_JOINVILLE = 'http://www.publica.inf.br'
 
-_CINZA_TITULO = colors.HexColor('#E8EDF3')
-_BORDA = colors.HexColor('#9AA7B4')
+# Paleta da marca: o logo é preto + amarelo, e brand-500 (#FFB800) é o mesmo
+# tom usado como acento no app (tailwind.config).
+_OURO = colors.HexColor('#FFB800')
+_OURO_CLARO = colors.HexColor('#FFF6DB')
+_TINTA = colors.HexColor('#14181F')      # preto do logotipo
+_BORDA = colors.HexColor('#D6DDE5')
 _TEXTO = colors.HexColor('#1F2933')
-_ROTULO = colors.HexColor('#5B6B7B')
+_ROTULO = colors.HexColor('#6B7A8A')
 
 
 class DanfseError(Exception):
@@ -67,23 +73,61 @@ class Danfse:
     formato: str = 'nacional'   # 'nacional' | 'joinville'
     numero: str = ''
     serie: str = ''
+    numero_dps: str = ''
+    numero_dfe: str = ''
+    situacao: str = ''
     chave: str = ''
     codigo_verificacao: str = ''
     data_emissao: str = ''
     competencia: str = ''
     municipio_emissao: str = ''
     municipio_prestacao: str = ''
+    municipio_incidencia: str = ''
     teste: bool = False
     prestador: Pessoa = field(default_factory=Pessoa)
     tomador: Pessoa = field(default_factory=Pessoa)
     descricao_servico: str = ''
     codigo_servico: str = ''
     descricao_tributacao: str = ''
+    # Tributação — o que a consulta pública mostra e faltava no papel
+    regime_simples: str = ''
+    regime_apuracao: str = ''
+    regime_especial: str = ''
+    tributacao_issqn: str = ''
+    retencao_issqn: str = ''
+    tributos_aprox: str = ''
     valores: list[tuple[str, str]] = field(default_factory=list)
     valor_liquido: str = ''
     outras_informacoes: str = ''
     origem: str = ''
     consulta_url: str = ''
+
+
+# Tabelas do leiaute (tiposSimples_v1.01.xsd) — traduzem os códigos crus.
+_OP_SIMPLES = {
+    '1': 'Não optante',
+    '2': 'Optante — Microempreendedor Individual (MEI)',
+    '3': 'Optante — Microempresa ou EPP (ME/EPP)',
+}
+_REG_APURACAO = {
+    '1': 'Tributos federais e municipal pelo Simples Nacional',
+    '2': 'Federais pelo Simples Nacional; ISSQN fora do SN',
+    '3': 'Tributos federais e municipal fora do Simples Nacional',
+}
+_REG_ESPECIAL = {
+    '0': 'Nenhum', '1': 'Ato cooperado (cooperativa)', '2': 'Estimativa',
+    '3': 'Microempresa municipal', '4': 'Notário ou registrador',
+    '5': 'Profissional autônomo', '6': 'Sociedade de profissionais', '9': 'Outros',
+}
+_TRIB_ISSQN = {
+    '1': 'Operação tributável', '2': 'Imunidade',
+    '3': 'Exportação de serviço', '4': 'Não incidência',
+}
+_RET_ISSQN = {'1': 'Não retido', '2': 'Retido pelo tomador', '3': 'Retido pelo intermediário'}
+_SITUACAO = {
+    '100': 'NFS-e gerada', '102': 'NFS-e de decisão judicial',
+    '103': 'NFS-e avulsa', '107': 'NFS-e MEI',
+}
 
 
 # ---------------------------------------------------------------------------
@@ -162,13 +206,18 @@ def _data_hora(valor: str) -> str:
     return valor or ''
 
 
-def _endereco_nacional(end, municipios: dict[str, str]) -> tuple[str, str, str]:
+def _endereco_nacional(end, municipios: dict[str, str],
+                       por_cep: dict[str, str]) -> tuple[str, str, str]:
     """
     (logradouro completo, município/UF, CEP) de um bloco de endereço.
 
     Os dois lados da nota usam tipos diferentes: o emitente é TCEnderecoEmitente,
     com cMun/UF/CEP soltos; o tomador é TCEndereco, que aninha cMun e CEP dentro
     de <endNac>. Aqui aceita as duas formas.
+
+    O nome do município sai, em ordem: dos nomes que o próprio XML traz para
+    aquele código IBGE; do mapa por CEP que o chamador passou; e, em último
+    caso, do código cru — melhor um número do que um campo vazio.
     """
     if end is None:
         return '', '', ''
@@ -181,13 +230,17 @@ def _endereco_nacional(end, municipios: dict[str, str]) -> tuple[str, str, str]:
     cmun = _txt(end, NS_NFSE, 'endNac', 'cMun') or _txt(end, NS_NFSE, 'cMun')
     cep = _txt(end, NS_NFSE, 'endNac', 'CEP') or _txt(end, NS_NFSE, 'CEP')
     uf = _txt(end, NS_NFSE, 'UF')
-    municipio = municipios.get(cmun, cmun)
-    if uf and municipio:
+    municipio = municipios.get(cmun) or por_cep.get(_so_digitos(cep)) or cmun
+    if uf and municipio and not municipio.endswith(f'/{uf}'):
         municipio = f'{municipio}/{uf}'
     return ', '.join(p for p in partes if p), municipio, _cep_formatado(cep)
 
 
-def _ler_nacional(raiz) -> Danfse:
+def _so_digitos(valor: str) -> str:
+    return ''.join(c for c in (valor or '') if c.isdigit())
+
+
+def _ler_nacional(raiz, por_cep: dict[str, str] | None = None) -> Danfse:
     inf = _filho(raiz, NS_NFSE, 'infNFSe')
     if inf is None:
         raise DanfseError('XML da NFS-e sem o bloco infNFSe')
@@ -195,16 +248,23 @@ def _ler_nacional(raiz) -> Danfse:
 
     d = Danfse()
     d.numero = _txt(inf, NS_NFSE, 'nNFSe')
+    d.numero_dfe = _txt(inf, NS_NFSE, 'nDFSe')
+    d.situacao = _SITUACAO.get(_txt(inf, NS_NFSE, 'cStat'), '')
     d.chave = (inf.get('Id') or '').removeprefix('NFS')
     d.data_emissao = _data_hora(_txt(inf, NS_NFSE, 'dhProc'))
     d.municipio_emissao = _txt(inf, NS_NFSE, 'xLocEmi')
     d.municipio_prestacao = _txt(inf, NS_NFSE, 'xLocPrestacao')
+    d.municipio_incidencia = _txt(inf, NS_NFSE, 'xLocIncid')
     d.descricao_tributacao = _txt(inf, NS_NFSE, 'xTribNac')
     d.outras_informacoes = _txt(inf, NS_NFSE, 'xOutInf')
 
-    # Só os municípios que o próprio XML nomeia — dá para traduzir o código do
-    # endereço do tomador sem carregar a tabela do IBGE inteira.
+    # Os endereços só trazem o código IBGE. O XML nomeia alguns municípios
+    # (xLocEmi/xLocPrestacao/xLocIncid); fora esses, o tomador de outra cidade
+    # sairia como "3304557" — daí o mapa por CEP vindo do cadastro.
+    por_cep = {_so_digitos(k): v for k, v in (por_cep or {}).items()}
     municipios: dict[str, str] = {}
+    if _txt(inf, NS_NFSE, 'cLocIncid'):
+        municipios[_txt(inf, NS_NFSE, 'cLocIncid')] = d.municipio_incidencia
     if dps is not None:
         if _txt(dps, NS_NFSE, 'cLocEmi'):
             municipios[_txt(dps, NS_NFSE, 'cLocEmi')] = d.municipio_emissao
@@ -214,7 +274,7 @@ def _ler_nacional(raiz) -> Danfse:
 
     emit = _filho(inf, NS_NFSE, 'emit')
     if emit is not None:
-        end, mun, cep = _endereco_nacional(_filho(emit, NS_NFSE, 'enderNac'), municipios)
+        end, mun, cep = _endereco_nacional(_filho(emit, NS_NFSE, 'enderNac'), municipios, por_cep)
         d.prestador = Pessoa(
             nome=_txt(emit, NS_NFSE, 'xNome'),
             documento=_doc_formatado(_txt(emit, NS_NFSE, 'CNPJ') or _txt(emit, NS_NFSE, 'CPF')),
@@ -226,15 +286,25 @@ def _ler_nacional(raiz) -> Danfse:
 
     if dps is not None:
         d.serie = _txt(dps, NS_NFSE, 'serie')
+        d.numero_dps = _txt(dps, NS_NFSE, 'nDPS')
         d.competencia = _data_hora(_txt(dps, NS_NFSE, 'dCompet'))
         d.teste = _txt(dps, NS_NFSE, 'tpAmb') == '2'
-        d.origem = f'DPS nº {_txt(dps, NS_NFSE, "nDPS")} série {d.serie}'
+        d.origem = f'DPS nº {d.numero_dps} série {d.serie}'
         if not d.data_emissao:
             d.data_emissao = _data_hora(_txt(dps, NS_NFSE, 'dhEmi'))
 
+        reg = _filho(dps, NS_NFSE, 'prest', 'regTrib')
+        if reg is not None:
+            op = _txt(reg, NS_NFSE, 'opSimpNac')
+            d.regime_simples = _OP_SIMPLES.get(op, op)
+            apur = _txt(reg, NS_NFSE, 'regApTribSN')
+            d.regime_apuracao = _REG_APURACAO.get(apur, apur)
+            esp = _txt(reg, NS_NFSE, 'regEspTrib')
+            d.regime_especial = _REG_ESPECIAL.get(esp, esp)
+
         toma = _filho(dps, NS_NFSE, 'toma')
         if toma is not None:
-            end, mun, cep = _endereco_nacional(_filho(toma, NS_NFSE, 'end'), municipios)
+            end, mun, cep = _endereco_nacional(_filho(toma, NS_NFSE, 'end'), municipios, por_cep)
             d.tomador = Pessoa(
                 nome=_txt(toma, NS_NFSE, 'xNome'),
                 documento=_doc_formatado(
@@ -254,16 +324,58 @@ def _ler_nacional(raiz) -> Danfse:
     val = _filho(inf, NS_NFSE, 'valores')
     dps_val = _filho(dps, NS_NFSE, 'valores') if dps is not None else None
     bruto = _txt(dps_val, NS_NFSE, 'vServPrest', 'vServ') if dps_val is not None else ''
-    aliq = _txt(val, NS_NFSE, 'pAliqAplic') if val is not None else ''
-    d.valores = [
-        ('Valor do serviço', _brl(bruto)),
-        ('Base de cálculo', _brl(_txt(val, NS_NFSE, 'vBC')) if val is not None else '—'),
-        ('Alíquota', _pct(aliq) if aliq else '—'),
-        ('ISSQN', _brl(_txt(val, NS_NFSE, 'vISSQN')) if val is not None else '—'),
-        ('Retenções', _brl(_txt(val, NS_NFSE, 'vTotalRet')) if val is not None else '—'),
-    ]
+
+    if dps_val is not None:
+        mun = _filho(dps_val, NS_NFSE, 'trib', 'tribMun')
+        if mun is not None:
+            trib = _txt(mun, NS_NFSE, 'tribISSQN')
+            d.tributacao_issqn = _TRIB_ISSQN.get(trib, trib)
+            ret = _txt(mun, NS_NFSE, 'tpRetISSQN')
+            d.retencao_issqn = _RET_ISSQN.get(ret, ret)
+        d.tributos_aprox = _tributos_aproximados(
+            _filho(dps_val, NS_NFSE, 'trib', 'totTrib'), bruto)
+
+    # No Simples Nacional a Sefin devolve só vLiq: base, alíquota e ISSQN não
+    # existem porque o imposto é recolhido no DAS. Mostrar cinco traços passa a
+    # impressão de nota quebrada, então cada linha só entra se houver valor.
+    linhas = [('Valor do serviço', _brl(bruto) if bruto else '')]
+    if val is not None:
+        linhas += [
+            ('Base de cálculo', _brl(_txt(val, NS_NFSE, 'vBC')) if _txt(val, NS_NFSE, 'vBC') else ''),
+            ('Alíquota', _pct(_txt(val, NS_NFSE, 'pAliqAplic'))
+             if _txt(val, NS_NFSE, 'pAliqAplic') else ''),
+            ('ISSQN', _brl(_txt(val, NS_NFSE, 'vISSQN')) if _txt(val, NS_NFSE, 'vISSQN') else ''),
+            ('Retenções', _brl(_txt(val, NS_NFSE, 'vTotalRet'))
+             if _txt(val, NS_NFSE, 'vTotalRet') else ''),
+        ]
+    if d.tributos_aprox:
+        linhas.append(('Tributos aprox. (Lei 12.741/12)', d.tributos_aprox))
+    d.valores = [(rotulo, valor) for rotulo, valor in linhas if valor]
+
     d.valor_liquido = _brl(_txt(val, NS_NFSE, 'vLiq')) if val is not None else _brl(bruto)
     return d
+
+
+def _tributos_aproximados(tot, valor_servico: str) -> str:
+    """
+    totTrib é um choice: valor fechado, percentual, percentual do Simples ou o
+    indicador de "sem informação". Converte tudo para algo legível.
+    """
+    if tot is None:
+        return ''
+    fechado = _txt(tot, NS_NFSE, 'vTotTrib')
+    if fechado:
+        return _brl(fechado)
+    for tag in ('pTotTribSN', 'pTotTrib'):
+        pct = _txt(tot, NS_NFSE, tag)
+        if not pct:
+            continue
+        try:
+            valor = _brl(str(float(valor_servico) * float(pct) / 100))
+            return f'{valor} ({_pct(pct)})'
+        except (TypeError, ValueError):
+            return _pct(pct)
+    return ''
 
 
 def _ler_joinville(raiz) -> Danfse:
@@ -340,8 +452,13 @@ def _ler_joinville(raiz) -> Danfse:
     return d
 
 
-def ler_xml(xml: str) -> Danfse:
-    """Normaliza o XML da nota (nacional ou Joinville) no modelo do desenho."""
+def ler_xml(xml: str, municipio_por_cep: dict[str, str] | None = None) -> Danfse:
+    """
+    Normaliza o XML da nota (nacional ou Joinville) no modelo do desenho.
+
+    ``municipio_por_cep`` mapeia CEP → "Cidade/UF", para nomear o município
+    de endereços que o XML só identifica pelo código IBGE (ver _ler_nacional).
+    """
     if not (xml or '').strip():
         raise DanfseError('Nota sem XML guardado')
 
@@ -359,7 +476,7 @@ def ler_xml(xml: str) -> Danfse:
         raise DanfseError(f'XML da nota ilegível: {exc}') from exc
 
     if NS_NFSE in (raiz.tag or '') or raiz.find(f'.//{{{NS_NFSE}}}infNFSe') is not None:
-        return _ler_nacional(raiz)
+        return _ler_nacional(raiz, municipio_por_cep)
     if raiz.find(f'.//{{{NS_JOINVILLE}}}InfNfse') is not None:
         return _ler_joinville(raiz)
     raise DanfseError('Formato de XML de NFS-e não reconhecido')
@@ -375,16 +492,38 @@ _P_VALOR = ParagraphStyle('valor', fontName='Helvetica-Bold', fontSize=8.5,
                           textColor=_TEXTO, leading=11)
 _P_TEXTO = ParagraphStyle('texto', fontName='Helvetica', fontSize=8.5,
                           textColor=_TEXTO, leading=12)
-_P_SECAO = ParagraphStyle('secao', fontName='Helvetica-Bold', fontSize=8,
-                          textColor=_TEXTO, leading=10)
+_P_SECAO = ParagraphStyle('secao', fontName='Helvetica-Bold', fontSize=7.5,
+                          textColor=colors.white, leading=10)
 _P_RODAPE = ParagraphStyle('rodape', fontName='Helvetica', fontSize=7,
                            textColor=_ROTULO, leading=9.5)
-_P_TITULO = ParagraphStyle('titulo', fontName='Helvetica-Bold', fontSize=12,
-                           textColor=_TEXTO, leading=15)
+_P_TITULO = ParagraphStyle('titulo', fontName='Helvetica-Bold', fontSize=13,
+                           textColor=_TINTA, leading=16)
+_P_SUBTITULO = ParagraphStyle('subtitulo', fontName='Helvetica', fontSize=8,
+                              textColor=_ROTULO, leading=11)
 _P_CHAVE = ParagraphStyle('chave', fontName='Courier-Bold', fontSize=8.6,
                           textColor=_TEXTO, leading=11)
+_P_TOTAL = ParagraphStyle('total', fontName='Helvetica-Bold', fontSize=15,
+                          textColor=_TINTA, leading=18)
+_P_TOTAL_ROTULO = ParagraphStyle('totalrot', fontName='Helvetica-Bold', fontSize=6.5,
+                                 textColor=_TINTA, leading=8)
 
 _LARGURA = A4[0] - 24 * mm
+_RAIO = 3  # eco do rounded-2xl dos cards do app, na escala do papel
+
+# Logo lido em memória: o repositório mora num caminho com acento e passar o
+# path direto ao ReportLab já quebrou antes (ver boleto_pdf._tmp_copy).
+_LOGO = Path(__file__).parent.parent / 'static' / 'mastersat_logo.png'
+
+
+def _logo_flowable(altura: float):
+    """Logo da MasterSat na proporção original, ou None se o arquivo sumir."""
+    try:
+        dados = _LOGO.read_bytes()
+    except OSError:
+        return None
+    largura_px, altura_px = ImageReader(io.BytesIO(dados)).getSize()
+    # Image quer caminho ou file-like — e o ImageReader acima já consumiu o seu.
+    return Image(io.BytesIO(dados), width=altura * largura_px / altura_px, height=altura)
 
 
 def _campo(rotulo: str, valor: str):
@@ -409,19 +548,24 @@ def _grade(linhas: list[list], larguras: list[float], fundo_titulo=False,
         ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
     ]
     if fundo_titulo:
-        estilo.append(('BACKGROUND', (0, 0), (-1, 0), _CINZA_TITULO))
+        estilo.append(('BACKGROUND', (0, 0), (-1, 0), _OURO_CLARO))
     t.setStyle(TableStyle(estilo + (extra or [])))
     return t
 
 
 def _secao(titulo: str) -> Table:
-    t = Table([[Paragraph(titulo.upper(), _P_SECAO)]], colWidths=[_LARGURA], hAlign='LEFT')
+    """Barra de seção: tarja preta com uma marca dourada na ponta, como os
+    cabeçalhos de card do app."""
+    t = Table([['', Paragraph(titulo.upper(), _P_SECAO)]],
+              colWidths=[2.2 * mm, _LARGURA - 2.2 * mm], hAlign='LEFT')
     t.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, -1), _CINZA_TITULO),
-        ('BOX', (0, 0), (-1, -1), 0.5, _BORDA),
-        ('LEFTPADDING', (0, 0), (-1, -1), 5),
-        ('TOPPADDING', (0, 0), (-1, -1), 3),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ('BACKGROUND', (0, 0), (0, 0), _OURO),
+        ('BACKGROUND', (1, 0), (1, 0), _TINTA),
+        ('LEFTPADDING', (0, 0), (0, 0), 0), ('RIGHTPADDING', (0, 0), (0, 0), 0),
+        ('LEFTPADDING', (1, 0), (1, 0), 6),
+        ('TOPPADDING', (0, 0), (-1, -1), 3.5),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3.5),
+        ('ROUNDEDCORNERS', [_RAIO, _RAIO, _RAIO, _RAIO]),
     ]))
     return t
 
@@ -451,9 +595,10 @@ def _celula(par_rotulo_valor: list) -> Table:
     return t
 
 
-def gerar_danfse_pdf(xml: str, consulta_url: str | None = None) -> bytes:
+def gerar_danfse_pdf(xml: str, consulta_url: str | None = None,
+                     municipio_por_cep: dict[str, str] | None = None) -> bytes:
     """Monta o PDF da nota a partir do XML. Levanta DanfseError se não der."""
-    d = ler_xml(xml)
+    d = ler_xml(xml, municipio_por_cep)
     # Nota antiga não ganha link de conferência: o sistema municipal saiu do ar
     # em 20/07/2026 e levou junto as URLs de verificação dele. Nessas o que vale
     # é o código de verificação, que já sai no cabeçalho.
@@ -466,41 +611,12 @@ def gerar_danfse_pdf(xml: str, consulta_url: str | None = None) -> bytes:
         topMargin=10 * mm, bottomMargin=10 * mm,
         title=f'NFS-e {d.numero}'.strip(), author='MasterSat',
     )
-    hist: list = []
-
-    # ── Cabeçalho: identificação + QR da consulta pública ──
-    ident = _grade([
-        [_celula(_campo('Número da NFS-e', d.numero)),
-         _celula(_campo('Série', d.serie)),
-         _celula(_campo('Competência', d.competencia))],
-        [_celula(_campo('Data e hora de emissão', d.data_emissao)),
-         _celula(_campo('Município de emissão', d.municipio_emissao)),
-         _celula(_campo('Local da prestação', d.municipio_prestacao))],
-    ], [_LARGURA * 0.38, _LARGURA * 0.20, _LARGURA * 0.42])
-
-    titulo = [
-        Paragraph('NOTA FISCAL DE SERVIÇO ELETRÔNICA', _P_TITULO),
-        Paragraph('DANFS-e · Documento Auxiliar da NFS-e', _P_TEXTO),
-    ]
-    if d.codigo_verificacao:
-        titulo.append(Paragraph(f'Código de verificação: <b>{_esc(d.codigo_verificacao)}</b>',
-                                _P_TEXTO))
-
-    cabecalho = Table(
-        [[titulo, _qr(d.consulta_url or d.chave)]],
-        colWidths=[_LARGURA - 30 * mm, 30 * mm], hAlign='LEFT',
-    )
-    cabecalho.setStyle(TableStyle([
-        ('VALIGN', (0, 0), (0, 0), 'MIDDLE'), ('VALIGN', (1, 0), (1, 0), 'MIDDLE'),
-        ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
-        ('LEFTPADDING', (0, 0), (-1, -1), 0), ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-    ]))
-    hist += [cabecalho, Spacer(1, 4 * mm)]
+    hist: list = [_cabecalho(d), Spacer(1, 3.5 * mm)]
 
     if d.teste:
         hist += [_faixa_teste(), Spacer(1, 3 * mm)]
 
-    hist += [ident, Spacer(1, 1.5 * mm)]
+    hist += [_identificacao(d), Spacer(1, 1.5 * mm)]
     if d.chave:
         hist += [_grade([[_celula([Paragraph('CHAVE DE ACESSO', _P_ROTULO),
                                    Paragraph(_esc(d.chave), _P_CHAVE)])]], [_LARGURA]),
@@ -510,27 +626,20 @@ def gerar_danfse_pdf(xml: str, consulta_url: str | None = None) -> bytes:
     hist += [_secao('Tomador de serviços'), _bloco_pessoa(d.tomador), Spacer(1, 3 * mm)]
 
     # ── Serviço ──
-    servico_linhas = [[_celula(_campo('Código de tributação', d.codigo_servico)),
-                       _celula(_campo('Descrição da tributação', d.descricao_tributacao))]]
     hist += [
         _secao('Discriminação dos serviços'),
-        _grade(servico_linhas, [_LARGURA * 0.28, _LARGURA * 0.72]),
+        _grade([[_celula(_campo('Código de tributação', d.codigo_servico)),
+                 _celula(_campo('Descrição da tributação', d.descricao_tributacao))]],
+               [_LARGURA * 0.28, _LARGURA * 0.72]),
         _grade([[Paragraph(_esc(d.descricao_servico) or '—', _P_TEXTO)]], [_LARGURA]),
         Spacer(1, 3 * mm),
     ]
 
-    # ── Valores ──
-    cabec = [Paragraph(r.upper(), _P_ROTULO) for r, _ in d.valores]
-    corpo = [Paragraph(_esc(v), _P_VALOR) for _, v in d.valores]
-    col = _LARGURA / max(len(d.valores), 1)
-    total = _grade([[_celula([Paragraph('VALOR LÍQUIDO DA NFS-E', _P_ROTULO),
-                              Paragraph(_esc(d.valor_liquido), _P_TITULO)])]], [_LARGURA])
-    hist += [
-        _secao('Valores'),
-        _grade([cabec, corpo], [col] * len(d.valores), fundo_titulo=True),
-        total,
-        Spacer(1, 3 * mm),
-    ]
+    tributacao = _bloco_tributacao(d)
+    if tributacao is not None:
+        hist += [_secao('Tributação'), tributacao, Spacer(1, 3 * mm)]
+
+    hist += [_secao('Valores'), *_bloco_valores(d), Spacer(1, 3 * mm)]
 
     if d.outras_informacoes:
         hist += [_secao('Outras informações'),
@@ -540,6 +649,87 @@ def gerar_danfse_pdf(xml: str, consulta_url: str | None = None) -> bytes:
     hist.append(_rodape(d))
     doc.build(hist)
     return buf.getvalue()
+
+
+def _cabecalho(d: Danfse) -> Table:
+    """Logo à esquerda, identificação do documento no meio, QR à direita."""
+    titulo = [
+        Paragraph('NOTA FISCAL DE SERVIÇO ELETRÔNICA', _P_TITULO),
+        Paragraph('DANFS-e · Documento Auxiliar da NFS-e', _P_SUBTITULO),
+    ]
+    if d.codigo_verificacao:
+        titulo.append(Paragraph(
+            f'Código de verificação: <b>{_esc(d.codigo_verificacao)}</b>', _P_SUBTITULO))
+
+    logo = _logo_flowable(11 * mm)
+    largura_logo = 44 * mm if logo is not None else 0
+    linha = [[logo or '', titulo, _qr(d.consulta_url or d.chave)]]
+    t = Table(linha, colWidths=[largura_logo, _LARGURA - largura_logo - 30 * mm, 30 * mm],
+              hAlign='LEFT')
+    t.setStyle(TableStyle([
+        ('VALIGN', (0, 0), (-1, 0), 'MIDDLE'),
+        ('ALIGN', (2, 0), (2, 0), 'RIGHT'),
+        ('LEFTPADDING', (0, 0), (0, 0), 0),
+        ('LEFTPADDING', (1, 0), (1, 0), 6 if logo is not None else 0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ('TOPPADDING', (0, 0), (-1, -1), 0), ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ('LINEBELOW', (0, 0), (-1, 0), 1.6, _OURO),
+    ]))
+    return t
+
+
+def _identificacao(d: Danfse) -> Table:
+    """
+    Número da NFS-e e número/série da DPS são coisas diferentes: a série 40000 é
+    da DPS que enviamos, não da nota. Ficavam lado a lado sugerindo o contrário.
+    """
+    dps = ' / '.join(x for x in (d.numero_dps, d.serie) if x)
+    return _grade([
+        [_celula(_campo('Número da NFS-e', d.numero)),
+         _celula(_campo('Competência', d.competencia)),
+         _celula(_campo('Data e hora de emissão', d.data_emissao))],
+        [_celula(_campo('DPS nº / série', dps)),
+         _celula(_campo('Município de emissão', d.municipio_emissao)),
+         _celula(_campo('Local da prestação', d.municipio_prestacao))],
+    ], [_LARGURA * 0.32, _LARGURA * 0.30, _LARGURA * 0.38])
+
+
+def _bloco_tributacao(d: Danfse) -> Table | None:
+    """O que a consulta pública mostra em "Tributação Municipal" e faltava aqui."""
+    linhas = [
+        [('Tributação do ISSQN', d.tributacao_issqn), ('Retenção do ISSQN', d.retencao_issqn),
+         ('Município de incidência', d.municipio_incidencia)],
+        [('Situação no Simples Nacional', d.regime_simples),
+         ('Regime de apuração', d.regime_apuracao),
+         ('Regime especial de tributação', d.regime_especial)],
+    ]
+    presentes = [linha for linha in linhas if any(v for _, v in linha)]
+    if not presentes:
+        return None
+    return _grade([[_celula(_campo(r, v)) for r, v in linha] for linha in presentes],
+                  [_LARGURA / 3] * 3)
+
+
+def _bloco_valores(d: Danfse) -> list:
+    """Faixa de valores + o líquido em destaque dourado."""
+    total = Table(
+        [[[Paragraph('VALOR LÍQUIDO DA NFS-E', _P_TOTAL_ROTULO),
+           Paragraph(_esc(d.valor_liquido), _P_TOTAL)]]],
+        colWidths=[_LARGURA], hAlign='LEFT')
+    total.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), _OURO),
+        ('LEFTPADDING', (0, 0), (-1, -1), 8), ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+        ('TOPPADDING', (0, 0), (-1, -1), 5), ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ('ROUNDEDCORNERS', [0, 0, _RAIO, _RAIO]),
+    ]))
+    if not d.valores:
+        return [total]
+    col = _LARGURA / len(d.valores)
+    faixa = _grade(
+        [[Paragraph(r.upper(), _P_ROTULO) for r, _ in d.valores],
+         [Paragraph(_esc(v), _P_VALOR) for _, v in d.valores]],
+        [col] * len(d.valores), fundo_titulo=True)
+    return [faixa, total]
 
 
 def _qr(conteudo: str) -> Drawing:
@@ -564,6 +754,7 @@ def _faixa_teste() -> Table:
         ('BOX', (0, 0), (-1, -1), 0.8, colors.HexColor('#E0A030')),
         ('LEFTPADDING', (0, 0), (-1, -1), 6), ('RIGHTPADDING', (0, 0), (-1, -1), 6),
         ('TOPPADDING', (0, 0), (-1, -1), 5), ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+        ('ROUNDEDCORNERS', [_RAIO, _RAIO, _RAIO, _RAIO]),
     ]))
     return t
 
@@ -573,8 +764,13 @@ def _rodape(d: Danfse) -> Table:
         'Documento auxiliar gerado pelo sistema MasterSat a partir do XML autenticado da NFS-e. '
         'O documento fiscal é o XML; este PDF é a sua representação visual.',
     ]
-    if d.origem:
-        linhas.append(f'Origem: {d.origem}.')
+    procedencia = [d.origem]
+    if d.numero_dfe:
+        procedencia.append(f'DFe nº {d.numero_dfe}')
+    if d.situacao:
+        procedencia.append(f'situação: {d.situacao}')
+    if any(procedencia):
+        linhas.append(' · '.join(x for x in procedencia if x) + '.')
     if d.consulta_url:
         linhas.append(f'Confira a autenticidade pela chave de acesso em {d.consulta_url}')
     t = Table([[Paragraph('<br/>'.join(_esc(x) for x in linhas), _P_RODAPE)]],

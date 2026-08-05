@@ -14,6 +14,8 @@ XML_NACIONAL = f'''<?xml version="1.0" encoding="UTF-8"?>
     <xLocEmi>Joinville</xLocEmi>
     <xLocPrestacao>Joinville</xLocPrestacao>
     <nNFSe>17</nNFSe>
+    <cLocIncid>4209102</cLocIncid>
+    <xLocIncid>Joinville</xLocIncid>
     <xTribNac>Vigilancia, seguranca ou monitoramento de bens.</xTribNac>
     <verAplic>1.00</verAplic>
     <ambGer>1</ambGer>
@@ -157,6 +159,86 @@ def test_producao_nao_leva_faixa_de_teste():
 def test_producao_restrita_marca_a_nota_como_sem_valor_fiscal():
     """tpAmb=2 precisa aparecer no papel — senão alguém manda teste ao cliente."""
     assert ler_xml(XML_NACIONAL.replace('<tpAmb>1</tpAmb>', '<tpAmb>2</tpAmb>')).teste is True
+
+
+# --------------------------------------------------------------------------
+# Nota real do Simples Nacional (nNFSe 34, emitida em 05/08/2026)
+#
+# É a forma que a produção devolve de fato: <valores> traz SÓ vLiq, porque no
+# Simples o ISSQN sai no DAS e a Sefin não calcula base, alíquota nem imposto.
+# --------------------------------------------------------------------------
+
+XML_SIMPLES = (
+    XML_NACIONAL
+    .replace('<vBC>651.61</vBC><pAliqAplic>2.00</pAliqAplic>\n      '
+             '<vISSQN>13.03</vISSQN><vTotalRet>0.00</vTotalRet><vLiq>651.61</vLiq>',
+             '<vLiq>651.61</vLiq>')
+    .replace('<prest><CNPJ>14228344000167</CNPJ></prest>',
+             '<prest><CNPJ>14228344000167</CNPJ><regTrib>'
+             '<opSimpNac>3</opSimpNac><regApTribSN>1</regApTribSN>'
+             '<regEspTrib>0</regEspTrib></regTrib></prest>')
+    .replace('<valores><vServPrest><vServ>651.61</vServ></vServPrest></valores>',
+             '<valores><vServPrest><vServ>651.61</vServ></vServPrest><trib>'
+             '<tribMun><tribISSQN>1</tribISSQN><tpRetISSQN>1</tpRetISSQN></tribMun>'
+             '<totTrib><pTotTribSN>6.00</pTotTribSN></totTrib></trib></valores>')
+)
+
+
+def test_simples_nacional_omite_linhas_que_a_sefin_nao_calcula():
+    """Cinco traços em sequência passavam impressão de nota quebrada; o certo é
+    não mostrar a linha que não existe no XML."""
+    d = ler_xml(XML_SIMPLES)
+    rotulos = [r for r, _ in d.valores]
+    assert 'Valor do serviço' in rotulos
+    assert 'Base de cálculo' not in rotulos
+    assert 'Alíquota' not in rotulos
+    assert 'ISSQN' not in rotulos
+    assert d.valor_liquido == 'R$ 651,61'
+
+
+def test_tributos_aproximados_saem_do_percentual_do_simples():
+    """Lei 12.741/2012: o documento tem de trazer o tributo aproximado. Só o
+    percentual vem no XML (pTotTribSN); o valor é calculado sobre vServ."""
+    d = ler_xml(XML_SIMPLES)
+    assert d.tributos_aprox == 'R$ 39,10 (6,00 %)'
+    assert ('Tributos aprox. (Lei 12.741/12)', 'R$ 39,10 (6,00 %)') in d.valores
+
+
+def test_le_o_bloco_de_tributacao_que_a_consulta_publica_mostra():
+    d = ler_xml(XML_SIMPLES)
+    assert d.tributacao_issqn == 'Operação tributável'
+    assert d.retencao_issqn == 'Não retido'
+    assert d.regime_simples == 'Optante — Microempresa ou EPP (ME/EPP)'
+    assert d.regime_apuracao == 'Tributos federais e municipal pelo Simples Nacional'
+    assert d.regime_especial == 'Nenhum'
+    assert d.municipio_incidencia == 'Joinville'
+
+
+def test_numero_da_nfse_nao_se_confunde_com_o_da_dps():
+    """A série 40000 é da DPS que enviamos, não da NFS-e; ficavam lado a lado
+    sugerindo que a nota 34 fosse da série 40000."""
+    d = ler_xml(XML_NACIONAL)
+    assert (d.numero, d.numero_dps, d.serie) == ('17', '17', '40000')
+    assert d.numero_dfe == '17'
+    assert d.situacao == 'NFS-e gerada'
+
+
+def test_municipio_do_tomador_vem_do_cep_quando_o_xml_so_traz_o_codigo():
+    """O XML nomeia emissão/prestação/incidência; o tomador de outra cidade
+    sairia como "3304557"."""
+    fora = XML_NACIONAL.replace('<cMun>4209102</cMun><CEP>89201100</CEP>',
+                                '<cMun>3304557</cMun><CEP>22790725</CEP>')
+    assert ler_xml(fora).tomador.municipio == '3304557'
+    d = ler_xml(fora, {'22790-725': 'Rio de Janeiro/RJ'})
+    assert d.tomador.municipio == 'Rio de Janeiro/RJ'
+    # e o emitente continua vindo do próprio XML
+    assert d.prestador.municipio == 'Joinville/SC'
+
+
+def test_cep_de_municipio_que_o_xml_nomeia_nao_e_sobrescrito():
+    """O nome que veio do documento fiscal tem precedência sobre o cadastro."""
+    d = ler_xml(XML_NACIONAL, {'89201100': 'Cidade Errada/XX'})
+    assert d.tomador.municipio == 'Joinville'
 
 
 # --------------------------------------------------------------------------
