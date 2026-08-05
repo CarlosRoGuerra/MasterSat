@@ -18,6 +18,7 @@ import { ErrorBanner } from '@/components/ui/error-banner';
 import { DonutChart } from '@/components/ui/donut-chart';
 import { Pagination } from '@/components/ui/pagination';
 import { apiFetch, API_URL } from '@/lib/api';
+import { entregarArquivo } from '@/lib/arquivo';
 import { useAuthGuard } from '@/lib/use-auth-guard';
 import { useDebouncedValue } from '@/lib/use-debounced-value';
 
@@ -375,15 +376,12 @@ export default function NotasFiscaisPage() {
         }
         throw new Error(detail);
       }
-      const url = window.URL.createObjectURL(await resp.blob());
-      if (tipo === 'xml') {
-        const a = document.createElement('a');
-        a.href = url; a.download = `nfse-${billingId}.xml`;
-        document.body.appendChild(a); a.click(); a.remove();
-      } else {
-        window.open(url, '_blank');
-      }
-      window.URL.revokeObjectURL(url);
+      // PDF abre em aba (é o que serve para imprimir); XML desce como arquivo.
+      entregarArquivo(
+        await resp.blob(),
+        `nfse-${billingId}.${tipo === 'xml' ? 'xml' : 'pdf'}`,
+        { emNovaAba: tipo !== 'xml' },
+      );
     } catch (err) { setError(parseErr(err)); }
   }
 
