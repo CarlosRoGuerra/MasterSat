@@ -11,6 +11,11 @@ GET  /nfse/                       → lista notas (filtro por client_id) p/ o pa
 POST /nfse/emitir/{billing_id}    → emite a NFS-e da cobrança (ADMIN/FINANCEIRO)
 GET  /nfse/{billing_id}           → status/dados da NFS-e da cobrança
 POST /nfse/consultar/{billing_id} → reconsulta a nota junto ao provedor
+
+PDF da nota, dois caminhos:
+  GET /nfse/{billing_id}/danfse       → DANFSE oficial, baixado do ADN
+  GET /nfse/{billing_id}/danfse-local → montado por nós a partir do XML, para
+      quando o serviço do governo está fora (ver app/services/nfse_danfse.py)
 """
 from __future__ import annotations
 
@@ -40,6 +45,7 @@ from app.schemas.nfse import (
 )
 from app.services import (
     nfse_certificado,
+    nfse_danfse,
     nfse_joinville,
     nfse_lote,
     nfse_nacional,
@@ -267,6 +273,38 @@ def danfse(
         content=pdf,
         media_type='application/pdf',
         headers={'Content-Disposition': f'inline; filename=nfse-{nota.numero_nfse or billing_id}.pdf'},
+    )
+
+
+@router.get('/{billing_id}/danfse-local')
+def danfse_local(
+    billing_id: int,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    """
+    O mesmo PDF, montado por nós a partir do XML guardado.
+
+    Existe porque o DANFSE oficial depende de um serviço do governo que cai
+    (503) e que nem sequer está implantado na produção restrita. Aqui basta ter
+    o XML — e ele está sempre no banco.
+    """
+    nota = db.query(NfseNota).filter_by(billing_id=billing_id).first()
+    if nota is None or not nota.xml_retorno:
+        raise HTTPException(status_code=404, detail='XML da NFS-e não disponível para esta cobrança')
+    try:
+        pdf = nfse_danfse.gerar_danfse_pdf(
+            nota.xml_retorno,
+            nfse_nacional.url_consulta_publica(nota.chave_acesso)
+            if nota.chave_acesso else None,
+        )
+    except nfse_danfse.DanfseError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return Response(
+        content=pdf,
+        media_type='application/pdf',
+        headers={'Content-Disposition':
+                 f'inline; filename=nfse-{nota.numero_nfse or billing_id}.pdf'},
     )
 
 

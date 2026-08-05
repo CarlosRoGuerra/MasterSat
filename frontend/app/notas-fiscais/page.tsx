@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   FileText, RefreshCw, CheckCircle2, AlertTriangle, Loader2, Receipt,
-  ListChecks, ChevronLeft, ExternalLink, FileDown, FileCode2, Search,
+  ListChecks, ChevronLeft, ExternalLink, FileDown, FileCode2, Search, Printer,
   LayoutDashboard, Layers, Plus, SlidersHorizontal, ShieldCheck, Upload,
 } from 'lucide-react';
 
@@ -358,7 +358,7 @@ export default function NotasFiscaisPage() {
     } catch (err) { setError(parseErr(err)); } finally { setSalvandoCert(false); }
   }
 
-  async function baixarArquivo(billingId: number, tipo: 'danfse' | 'xml') {
+  async function baixarArquivo(billingId: number, tipo: 'danfse' | 'danfse-local' | 'xml') {
     setError('');
     try {
       const resp = await fetch(`${API_URL.replace(/\/+$/, '')}/nfse/${billingId}/${tipo}`, {
@@ -367,15 +367,21 @@ export default function NotasFiscaisPage() {
       if (!resp.ok) {
         let detail = `HTTP ${resp.status}`;
         try { detail = (await resp.json())?.detail || detail; } catch { /* noop */ }
+        // O DANFSE oficial depende de um serviço do governo que sai do ar; quem
+        // vê o erro precisa saber que existe o PDF gerado aqui, ao lado.
+        if (tipo === 'danfse') {
+          detail += ' Você pode gerar o PDF pelo botão "Nota em PDF", que monta'
+            + ' o documento a partir do XML e não depende do governo.';
+        }
         throw new Error(detail);
       }
       const url = window.URL.createObjectURL(await resp.blob());
-      if (tipo === 'danfse') {
-        window.open(url, '_blank');
-      } else {
+      if (tipo === 'xml') {
         const a = document.createElement('a');
         a.href = url; a.download = `nfse-${billingId}.xml`;
         document.body.appendChild(a); a.click(); a.remove();
+      } else {
+        window.open(url, '_blank');
       }
       window.URL.revokeObjectURL(url);
     } catch (err) { setError(parseErr(err)); }
@@ -440,8 +446,12 @@ export default function NotasFiscaisPage() {
                   <Td>
                     {n.status === 'emitida' ? (
                       <div className="flex items-center gap-1.5">
-                        <AcaoIcone title="DANFSE (PDF)" onClick={() => baixarArquivo(n.billing_id, 'danfse')}>
+                        <AcaoIcone title="DANFSE oficial (PDF do governo)" onClick={() => baixarArquivo(n.billing_id, 'danfse')}>
                           <FileDown className="h-3.5 w-3.5" />
+                        </AcaoIcone>
+                        <AcaoIcone title="Nota em PDF (gerada do XML)"
+                                   onClick={() => baixarArquivo(n.billing_id, 'danfse-local')}>
+                          <Printer className="h-3.5 w-3.5" />
                         </AcaoIcone>
                         <AcaoIcone title="XML da NFS-e" onClick={() => baixarArquivo(n.billing_id, 'xml')}>
                           <FileCode2 className="h-3.5 w-3.5" />
@@ -606,13 +616,19 @@ export default function NotasFiscaisPage() {
                         <div className="flex items-center gap-1.5">
                           {n.status === 'emitida' && (
                             <>
-                              <AcaoIcone title="DANFSE (PDF)" onClick={() => baixarArquivo(n.billing_id, 'danfse')}>
+                              <AcaoIcone title="DANFSE oficial (PDF do governo)" onClick={() => baixarArquivo(n.billing_id, 'danfse')}>
                                 <FileDown className="h-3.5 w-3.5" />
                               </AcaoIcone>
                               {n.tem_xml && (
-                                <AcaoIcone title="XML da NFS-e" onClick={() => baixarArquivo(n.billing_id, 'xml')}>
-                                  <FileCode2 className="h-3.5 w-3.5" />
-                                </AcaoIcone>
+                                <>
+                                  <AcaoIcone title="Nota em PDF (gerada do XML)"
+                                             onClick={() => baixarArquivo(n.billing_id, 'danfse-local')}>
+                                    <Printer className="h-3.5 w-3.5" />
+                                  </AcaoIcone>
+                                  <AcaoIcone title="XML da NFS-e" onClick={() => baixarArquivo(n.billing_id, 'xml')}>
+                                    <FileCode2 className="h-3.5 w-3.5" />
+                                  </AcaoIcone>
+                                </>
                               )}
                               {n.link_visualizacao && (
                                 <AcaoIcone title="Consulta pública" href={n.link_visualizacao} tone="slate">
