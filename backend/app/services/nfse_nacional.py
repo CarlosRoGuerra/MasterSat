@@ -657,8 +657,38 @@ def baixar_danfse(chave_acesso: str) -> bytes:
         raise NfseApiError(f'Falha ao baixar o DANFSE: {exc}') from exc
 
     if resp.status_code != 200 or 'pdf' not in resp.headers.get('Content-Type', '').lower():
-        raise NfseApiError(
-            f'DANFSE indisponível (HTTP {resp.status_code}): {resp.text[:300]}',
-            status_code=resp.status_code,
-        )
+        raise NfseApiError(_erro_danfse(resp, chave_acesso), status_code=resp.status_code)
     return resp.content
+
+
+def _erro_danfse(resp, chave_acesso: str) -> str:
+    """
+    Traduz a falha do ADN em algo acionável.
+
+    O ADN devolve página HTML nos erros de infraestrutura; jogar esse HTML na
+    tela (era o que acontecia) não diz nada ao operador.
+    """
+    ambiente = 'produção restrita (teste)' if settings.nfse_nac_ambiente == 'producao_restrita' else 'produção'
+
+    if resp.status_code == 404:
+        return (
+            f'O DANFSE desta nota não está disponível no ambiente de {ambiente}. '
+            'A nota existe e o XML continua disponível — no ambiente de teste o '
+            'governo apaga os documentos periodicamente, então notas antigas '
+            'perdem o PDF. Em produção isso não ocorre.'
+        )
+    if resp.status_code in (502, 503, 504):
+        return (
+            f'O servidor do governo (ADN de {ambiente}) está fora do ar no momento '
+            f'(HTTP {resp.status_code}). Isso é indisponibilidade do lado deles — '
+            'tente novamente em alguns minutos. O XML da nota continua disponível.'
+        )
+    if resp.status_code in (401, 403):
+        return (
+            f'O ADN recusou o certificado (HTTP {resp.status_code}). Verifique se o '
+            'certificado cadastrado está válido na aba Certificado.'
+        )
+    # Outros casos: mostra o corpo, mas sem HTML.
+    corpo = re.sub(r'<[^>]+>', ' ', resp.text or '')
+    corpo = ' '.join(corpo.split())[:200]
+    return f'DANFSE indisponível (HTTP {resp.status_code}). {corpo}'.strip()

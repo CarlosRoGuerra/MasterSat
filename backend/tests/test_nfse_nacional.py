@@ -250,3 +250,45 @@ def test_ambiente_invalido_da_erro_de_configuracao(monkeypatch):
     monkeypatch.setattr(settings, 'nfse_nac_ambiente', 'homologacao')
     with pytest.raises(NfseError, match='NFSE_NAC_AMBIENTE'):
         montar_dps(_billing(), _client(), '16')
+
+
+# --------------------------------------------------------------------------
+# Mensagens de erro do DANFSE
+# --------------------------------------------------------------------------
+
+class _RespFake:
+    def __init__(self, status, text='', content_type='text/html'):
+        self.status_code = status
+        self.text = text
+        self.headers = {'Content-Type': content_type}
+
+
+def test_erro_danfse_404_explica_que_o_ambiente_de_teste_apaga():
+    from app.services.nfse_nacional import _erro_danfse
+
+    msg = _erro_danfse(_RespFake(404), 'chave')
+    assert 'XML continua disponível' in msg
+    assert 'apaga' in msg
+
+
+def test_erro_danfse_503_diz_que_e_do_governo():
+    from app.services.nfse_nacional import _erro_danfse
+
+    msg = _erro_danfse(_RespFake(
+        503, '<html><body><h1>503 Service Unavailable</h1></body></html>'), 'chave')
+    assert 'fora do ar' in msg
+    # o HTML cru NÃO pode vazar para a tela
+    assert '<html>' not in msg and '<h1>' not in msg
+
+
+def test_erro_danfse_403_aponta_o_certificado():
+    from app.services.nfse_nacional import _erro_danfse
+
+    assert 'certificado' in _erro_danfse(_RespFake(403), 'chave').lower()
+
+
+def test_erro_danfse_desconhecido_limpa_o_html():
+    from app.services.nfse_nacional import _erro_danfse
+
+    msg = _erro_danfse(_RespFake(418, '<html><body>bule de chá</body></html>'), 'chave')
+    assert '<' not in msg and 'bule de chá' in msg
