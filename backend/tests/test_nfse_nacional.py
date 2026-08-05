@@ -263,22 +263,40 @@ class _RespFake:
         self.headers = {'Content-Type': content_type}
 
 
-def test_erro_danfse_404_explica_que_o_ambiente_de_teste_apaga():
+def test_erro_danfse_404_na_restrita_diz_que_o_servico_nao_existe_la():
+    """Sondagem de 05/08/2026: o ADN restrita devolve 404 em TODA rota /danfse,
+    inclusive na página de documentação. O serviço não está implantado lá — não
+    é documento apagado, e a nota continua íntegra."""
     from app.services.nfse_nacional import _erro_danfse
 
     msg = _erro_danfse(_RespFake(404), 'chave')
-    assert 'XML continua disponível' in msg
-    assert 'apaga' in msg
+    assert 'produção restrita' in msg
+    assert 'emitida' in msg
 
 
-def test_erro_danfse_503_diz_que_e_do_governo():
+def test_erro_danfse_503_diz_que_e_do_governo_e_oferece_a_saida():
     from app.services.nfse_nacional import _erro_danfse
 
     msg = _erro_danfse(_RespFake(
         503, '<html><body><h1>503 Service Unavailable</h1></body></html>'), 'chave')
-    assert 'fora do ar' in msg
+    assert 'sem servidor' in msg
     # o HTML cru NÃO pode vazar para a tela
     assert '<html>' not in msg and '<h1>' not in msg
+    # e o operador precisa sair dali sabendo onde pegar o PDF
+    assert 'consultapublica/?chave=chave' in msg
+
+
+def test_url_de_consulta_publica_segue_o_ambiente(monkeypatch):
+    """Link fixo no portal de produção quebrava para nota emitida em teste."""
+    from app.services import nfse_nacional as nf
+
+    monkeypatch.setattr(settings, 'nfse_nac_ambiente', 'producao')
+    assert nf.url_consulta_publica('K') == 'https://www.nfse.gov.br/consultapublica/?chave=K'
+
+    monkeypatch.setattr(settings, 'nfse_nac_ambiente', 'producao_restrita')
+    assert nf.url_consulta_publica('K') == (
+        'https://www.producaorestrita.nfse.gov.br/consultapublica/?chave=K'
+    )
 
 
 def test_erro_danfse_403_aponta_o_certificado():

@@ -53,9 +53,26 @@ _AMBIENTES = {
 }
 
 # ADN (Ambiente de Dados Nacional) — de onde se baixa o DANFSE (PDF da nota).
+#
+# COMPROVADO (05/08/2026, sondando os dois ambientes com o certificado):
+# a rota antiga `GET {sefin}/DANFSe` responde 501 com a mensagem oficial
+# "Este serviço foi movido para {adn}/danfse/docs/index.html" — ou seja, o
+# prefixo /danfse no ADN é o endereço correto. O que varia é a disponibilidade:
+#   • produção restrita → Kestrel devolve 404 em TODA rota /danfse (inclusive na
+#     página de documentação que o próprio governo indica). O serviço não está
+#     implantado nesse ambiente; não é documento apagado.
+#   • produção → o ADN está no ar (raiz e swagger respondem), mas o prefixo
+#     /danfse volta 503 do balanceador, sem servidor no pool.
 _ADN = {
     'producao': 'https://adn.nfse.gov.br',
     'producao_restrita': 'https://adn.producaorestrita.nfse.gov.br',
+}
+
+# Consulta pública — funciona sem certificado e serve o PDF pelo navegador.
+# É a saída manual quando o serviço de DANFSE do ADN está indisponível.
+_CONSULTA_PUBLICA = {
+    'producao': 'https://www.nfse.gov.br/consultapublica/?chave={chave}',
+    'producao_restrita': 'https://www.producaorestrita.nfse.gov.br/consultapublica/?chave={chave}',
 }
 
 _SCHEMA_DIR = Path(__file__).parent / 'schemas' / 'nfse_nacional'
@@ -601,7 +618,9 @@ def _aplicar_nfse(nota: NfseNota, xml_nfse: str, corpo: dict) -> None:
                 pass
     nota.chave_acesso = chave
     if chave:
-        nota.link_visualizacao = f'https://www.nfse.gov.br/consultapublica/?chave={chave}'
+        # Estava fixo no portal de produção: nota emitida em teste virava link
+        # quebrado, porque a consulta pública de cada ambiente é separada.
+        nota.link_visualizacao = url_consulta_publica(chave)
     nota.status = 'emitida'
     nota.erro_codigo = None
     nota.erro_mensagem = None
@@ -638,8 +657,11 @@ def consultar_por_chave(chave_acesso: str) -> str:
 def baixar_danfse(chave_acesso: str) -> bytes:
     """
     Baixa o DANFSE (PDF visual da NFS-e) do ADN, via mTLS. É a versão
-    "modelada"/imprimível da nota — o que se envia ao tomador. COMPROVADO:
-    GET {adn}/danfse/{chave} → application/pdf.
+    "modelada"/imprimível da nota — o que se envia ao tomador.
+
+    GET {adn}/danfse/{chave} → application/pdf. O endereço vem da própria
+    mensagem de 501 do serviço antigo em {sefin}/DANFSe (ver nota em _ADN);
+    a disponibilidade, porém, é instável do lado do governo.
     """
     base = _ADN.get(settings.nfse_nac_ambiente)
     if not base:
@@ -661,27 +683,43 @@ def baixar_danfse(chave_acesso: str) -> bytes:
     return resp.content
 
 
+def url_consulta_publica(chave_acesso: str) -> str | None:
+    """Endereço da consulta pública da nota — abre no navegador, sem certificado."""
+    modelo = _CONSULTA_PUBLICA.get(settings.nfse_nac_ambiente)
+    return modelo.format(chave=chave_acesso) if modelo else None
+
+
 def _erro_danfse(resp, chave_acesso: str) -> str:
     """
     Traduz a falha do ADN em algo acionável.
 
     O ADN devolve página HTML nos erros de infraestrutura; jogar esse HTML na
-    tela (era o que acontecia) não diz nada ao operador.
+    tela (era o que acontecia) não diz nada ao operador. Em toda falha a nota
+    em si continua íntegra: o que faltou foi só a representação em PDF.
     """
-    ambiente = 'produção restrita (teste)' if settings.nfse_nac_ambiente == 'producao_restrita' else 'produção'
+    restrita = settings.nfse_nac_ambiente == 'producao_restrita'
+    ambiente = 'produção restrita (teste)' if restrita else 'produção'
+    consulta = url_consulta_publica(chave_acesso)
+    saida = (
+        f' A nota está emitida e o XML continua disponível; o PDF também pode ser '
+        f'baixado na consulta pública: {consulta}'
+    ) if consulta else ''
 
     if resp.status_code == 404:
+        if restrita:
+            return (
+                'O governo não disponibiliza o serviço de DANFSE na produção '
+                'restrita — só em produção. Nada de errado com a nota: ela foi '
+                'emitida e o XML está disponível.'
+            )
         return (
-            f'O DANFSE desta nota não está disponível no ambiente de {ambiente}. '
-            'A nota existe e o XML continua disponível — no ambiente de teste o '
-            'governo apaga os documentos periodicamente, então notas antigas '
-            'perdem o PDF. Em produção isso não ocorre.'
+            f'O ADN não encontrou o DANFSE desta nota (HTTP 404).{saida}'
         )
     if resp.status_code in (502, 503, 504):
         return (
-            f'O servidor do governo (ADN de {ambiente}) está fora do ar no momento '
-            f'(HTTP {resp.status_code}). Isso é indisponibilidade do lado deles — '
-            'tente novamente em alguns minutos. O XML da nota continua disponível.'
+            f'O serviço de DANFSE do governo (ADN de {ambiente}) está sem servidor '
+            f'disponível no momento (HTTP {resp.status_code}) — o resto do ADN está '
+            f'no ar, é só esse serviço que caiu. Tente de novo mais tarde.{saida}'
         )
     if resp.status_code in (401, 403):
         return (
@@ -691,4 +729,4 @@ def _erro_danfse(resp, chave_acesso: str) -> str:
     # Outros casos: mostra o corpo, mas sem HTML.
     corpo = re.sub(r'<[^>]+>', ' ', resp.text or '')
     corpo = ' '.join(corpo.split())[:200]
-    return f'DANFSE indisponível (HTTP {resp.status_code}). {corpo}'.strip()
+    return f'DANFSE indisponível (HTTP {resp.status_code}). {corpo}{saida}'.strip()
