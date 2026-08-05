@@ -469,6 +469,85 @@ class TestFormatoSimulacao:
     def test_sem_itens_nao_quebra(self):
         assert 'Nenhum contrato' in self._texto([])
 
+    # ── Resumo ──────────────────────────────────────────────────────────────
+
+    def _texto_completo(self, simulation):
+        from app.services.billing_closure import montar_linhas_simulacao
+        return '\n'.join(montar_linhas_simulacao(simulation))
+
+    def test_bloco_do_interveniente_conta_equipamentos_alem_de_veiculos(self):
+        """1 veículo com 2 rastreadores: 1 veículo, 2 equipamentos."""
+        txt = self._texto([
+            self._item(contract_id=1, tracker_imei='7352113'),
+            self._item(contract_id=2, tracker_imei='7352114'),
+        ])
+        assert 'QUANTIDADE VEÍCULOS: 1' in txt
+        assert 'QUANTIDADE EQUIPAMENTOS: 2' in txt
+
+    def test_instalacoes_contam_so_as_do_mes_de_referencia(self):
+        from datetime import date as _date
+        txt = self._texto([
+            self._item(contract_id=1, tracker_imei='A', tracker_install_date=_date(2026, 8, 3)),
+            self._item(contract_id=2, tracker_imei='B', tracker_install_date=_date(2026, 8, 29)),
+            self._item(contract_id=3, tracker_imei='C', tracker_install_date=_date(2026, 7, 30)),
+            self._item(contract_id=4, tracker_imei='D', tracker_install_date=None),
+        ], ref='08/2026')
+        assert 'INSTALAÇÕES NO MÊS: 2' in txt
+
+    def test_desinstalacoes_caem_no_bloco_do_interveniente_do_cliente(self):
+        """O evento é do cliente; o relatório agrupa por interveniente."""
+        txt = self._texto_completo({
+            'reference_month': '08/2026',
+            'items': [self._item(client_id=7, interveniente_nome='ABR EXPRESS')],
+            'uninstall_events': [{'client_id': 7, 'client_name': 'CLIENTE X', 'fee_amount': 50.0}],
+            'total_uninstall_fees': 50.0,
+        })
+        assert 'DESINSTALAÇÕES NO MÊS: 1' in txt
+
+    def test_resumo_consolida_o_periodo_inteiro(self):
+        txt = self._texto_completo({
+            'reference_month': '08/2026',
+            'items': [
+                self._item(contract_id=1, client_id=1, interveniente_nome='A',
+                           vehicle_id=1, tracker_imei='A1'),
+                self._item(contract_id=2, client_id=1, interveniente_nome='A',
+                           vehicle_id=1, tracker_imei='A2'),
+                self._item(contract_id=3, client_id=2, interveniente_nome='B',
+                           vehicle_id=2, tracker_imei='B1'),
+            ],
+            'uninstall_events': [{'client_id': 2, 'client_name': 'B', 'fee_amount': 50.0}],
+            'total_uninstall_fees': 50.0,
+            'total_services': 120.0,
+        })
+        resumo = txt.split('RESUMO DO FECHAMENTO')[1]
+        assert 'INTERVENIENTES: 2' in resumo
+        assert 'VEÍCULOS: 2' in resumo
+        assert 'EQUIPAMENTOS: 3' in resumo
+        assert 'DESINSTALAÇÕES NO MÊS: 1' in resumo
+        assert 'CONTRATOS: 3' in resumo
+        assert 'TOTAL TAXAS DE DESINSTALAÇÃO:' in resumo and '50,00' in resumo
+        assert 'TOTAL SERVIÇOS AVULSOS:' in resumo and '120,00' in resumo
+        # 3 × 64,99 + 50 + 120 = 364,97
+        assert 'TOTAL GERAL:' in resumo and '364,97' in resumo
+
+    def test_resumo_omite_linhas_zeradas(self):
+        """Sem desinstalação nem serviço avulso, essas linhas não aparecem."""
+        resumo = self._texto([self._item()]).split('RESUMO DO FECHAMENTO')[1]
+        assert 'TOTAL TAXAS DE DESINSTALAÇÃO' not in resumo
+        assert 'TOTAL SERVIÇOS AVULSOS' not in resumo
+        assert 'TOTAL GERAL:' in resumo
+
+    def test_resumo_avisa_quando_ha_cobranca_ja_gerada(self):
+        """Sem o aviso, o total do resumo pareceria não bater com o que o
+        fechamento vai gerar — o detalhamento lista as duas situações."""
+        txt = self._texto_completo({
+            'reference_month': '08/2026', 'items': [self._item()], 'already_generated': 1,
+        })
+        assert 'JÁ FATURADOS NO PERÍODO' in txt
+
+    def test_resumo_nao_aparece_quando_nao_ha_nada_a_faturar(self):
+        assert 'RESUMO DO FECHAMENTO' not in self._texto([])
+
     def test_pdf_gera(self):
         from app.services.billing_closure import generate_closure_pdf
         buf = generate_closure_pdf({'reference_month': '08/2026', 'items': [self._item()]})
