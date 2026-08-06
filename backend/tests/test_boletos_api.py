@@ -99,3 +99,46 @@ def test_listagem_marca_quem_tem_boleto_na_ailos(http, db, cobranca):
     assert _flag() is False
     _registrar(db, cobranca.id)
     assert _flag() is True
+
+
+# ---------------------------------------------------------------------------
+# Recibo de pagamento — só existe depois de pago
+# ---------------------------------------------------------------------------
+
+def test_recibo_recusado_enquanto_a_cobranca_nao_esta_paga(http, cobranca):
+    resp = http.get(f'/api/v1/billings/{cobranca.id}/receipt')
+    assert resp.status_code == 400
+    assert 'pagas' in resp.json()['detail']
+
+
+def test_recibo_recusado_para_cobranca_vencida(http, db, cobranca):
+    cobranca.status = BillingStatus.OVERDUE
+    db.commit()
+    assert http.get(f'/api/v1/billings/{cobranca.id}/receipt').status_code == 400
+
+
+def test_recibo_recusado_para_cobranca_cancelada(http, db, cobranca):
+    """Cancelada depois de paga não vale recibo — o dinheiro não ficou."""
+    cobranca.status = BillingStatus.CANCELED
+    db.commit()
+    assert http.get(f'/api/v1/billings/{cobranca.id}/receipt').status_code == 400
+
+
+def test_recibo_sai_depois_de_paga(http, db, cobranca):
+    cobranca.status = BillingStatus.PAID
+    cobranca.payment_date = date.today()
+    cobranca.paid_amount = cobranca.amount
+    db.commit()
+    resp = http.get(f'/api/v1/billings/{cobranca.id}/receipt')
+    assert resp.status_code == 200
+    assert resp.content[:4] == b'%PDF'
+
+
+def test_recibo_sai_mesmo_sem_numero_de_recibo_gravado(http, db, cobranca):
+    """Cobranças antigas foram pagas antes de existir receipt_number; o recibo
+    não pode depender dele (o nome do arquivo cai no id)."""
+    cobranca.status = BillingStatus.PAID
+    cobranca.payment_date = date.today()
+    cobranca.receipt_number = None
+    db.commit()
+    assert http.get(f'/api/v1/billings/{cobranca.id}/receipt').status_code == 200

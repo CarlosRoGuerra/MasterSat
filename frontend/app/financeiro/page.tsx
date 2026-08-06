@@ -1737,8 +1737,10 @@ export default function FinanceiroPage() {
                   {boletoLoading ? 'Verificando…' : '🔄 Verificar pagamento'}
                 </Button>
               )}
-              {selectedBilling.status === 'paga' && selectedBilling.receipt_number && (
-                <Button variant="secondary" onClick={() => { if (!token) return; downloadProtectedFile(`/billings/${selectedBilling.id}/receipt`, token, `recibo-${selectedBilling.receipt_number}.pdf`).catch(e => setError(parseError(e))); }}>Baixar recibo</Button>
+              {/* Pago é a única condição: exigir receipt_number escondia o
+                  recibo de cobranças pagas antes de o campo existir. */}
+              {selectedBilling.status === 'paga' && (
+                <Button variant="secondary" onClick={() => { if (!token) return; downloadProtectedFile(`/billings/${selectedBilling.id}/receipt`, token, `recibo-${selectedBilling.receipt_number ?? selectedBilling.id}.pdf`).catch(e => setError(parseError(e))); }}>Baixar recibo</Button>
               )}
             </div>
 
