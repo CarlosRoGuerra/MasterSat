@@ -152,7 +152,21 @@ def get_boleto(
 # GET /boletos/{billing_id}/pdf  — PDF do boleto
 # ---------------------------------------------------------------------------
 
-def _montar_pdf_boleto(b: Billing, c: Client, db: Session) -> tuple[bytes, str]:
+def boleto_registrado(billing_id: int, db: Session) -> AilosBoleto | None:
+    """
+    O boleto registrado na Ailos, ou None.
+
+    Só conta como registrado quando a Ailos devolveu linha digitável E código de
+    barras — mesmo critério de ``aplicar_dados_oficiais_ailos``. Sem isso, o que
+    existe é apenas o cálculo local: um papel com aparência de boleto que o
+    banco não conhece, não aceita pagamento e não concilia.
+    """
+    ab = db.query(AilosBoleto).filter_by(billing_id=billing_id).first()
+    return ab if (ab and ab.linha_digitavel and ab.codigo_barras) else None
+
+
+def _montar_pdf_boleto(b: Billing, c: Client, db: Session,
+                       ailos_boleto: AilosBoleto) -> tuple[bytes, str]:
     """Gera o PDF do boleto e o nome do arquivo (compartilhado entre a rota
     autenticada e o link público)."""
     item = _billing_to_boleto_item(b, c)
@@ -176,7 +190,6 @@ def _montar_pdf_boleto(b: Billing, c: Client, db: Session) -> tuple[bytes, str]:
             f"Referente ao contrato de rastreamento. Cobrança #{b.id}.",
         ],
     )
-    ailos_boleto = db.query(AilosBoleto).filter_by(billing_id=b.id).first()
     dados = aplicar_dados_oficiais_ailos(dados, ailos_boleto)
 
     pdf_bytes = gerar_boleto_pdf(dados)
@@ -203,10 +216,23 @@ def get_boleto_pdf(
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*ALLOWED_ROLES)),
 ):
-    """Gera e retorna o PDF do boleto para download/impressão."""
+    """
+    PDF do boleto — só para título registrado na Ailos.
+
+    Antes o PDF saía para qualquer cobrança, com nosso número e código de
+    barras calculados aqui. Parecia um boleto pronto, mas o banco não tinha
+    registro dele: não era pagável e não conciliava.
+    """
     b = _get_billing_or_404(billing_id, db)
+    ailos_boleto = boleto_registrado(billing_id, db)
+    if ailos_boleto is None:
+        raise HTTPException(
+            status_code=409,
+            detail='Esta cobrança ainda não tem boleto emitido na Ailos, então não há '
+                   'PDF para baixar. Gere o boleto na aba Ailos do Financeiro.',
+        )
     c = _get_client_or_404(b.client_id, db)
-    pdf_bytes, filename = _montar_pdf_boleto(b, c, db)
+    pdf_bytes, filename = _montar_pdf_boleto(b, c, db, ailos_boleto)
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
@@ -229,8 +255,14 @@ def get_boleto_publico(
     if not hmac.compare_digest(token, _public_token(billing_id)):
         raise HTTPException(status_code=404, detail="Boleto não encontrado")
     b = _get_billing_or_404(billing_id, db)
+    # Link já enviado ao cliente + boleto ainda não registrado = cliente com um
+    # papel impagável na mão. 404 (e não 409) para não expor a cobrança a quem
+    # tenha o link de um título que não existe no banco.
+    ailos_boleto = boleto_registrado(billing_id, db)
+    if ailos_boleto is None:
+        raise HTTPException(status_code=404, detail="Boleto não encontrado")
     c = _get_client_or_404(b.client_id, db)
-    pdf_bytes, filename = _montar_pdf_boleto(b, c, db)
+    pdf_bytes, filename = _montar_pdf_boleto(b, c, db, ailos_boleto)
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",

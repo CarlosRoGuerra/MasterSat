@@ -102,6 +102,9 @@ class BillingOut(BillingBase):
     # Valor atualizado (multa 2% + juros 1% a.m.) — calculado no backend,
     # fonte única para tela/mensagens/integrações. None se não vencida.
     valor_com_juros: float | None = None
+    # Há boleto REGISTRADO na Ailos? Só então existe PDF para baixar/enviar —
+    # sem registro o título não é pagável no banco.
+    boleto_ailos: bool = False
 
     model_config = {'from_attributes': True}
 

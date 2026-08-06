@@ -10,11 +10,12 @@ from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
-from sqlalchemy import func, or_
+from sqlalchemy import and_, case, func, or_
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_roles
 from app.db.session import get_db
+from app.models.ailos_boleto import AilosBoleto
 from app.models.billing import Billing
 from app.models.billing_change_log import BillingChangeLog
 from app.models.client import Client
@@ -53,13 +54,22 @@ router = APIRouter()
 
 def base_query(db: Session):
     refresh_overdue_statuses(db)
+    # boleto_ailos: título registrado na Ailos (linha digitável + código de
+    # barras devolvidos por ela). Vem no JOIN para a tela não precisar de uma
+    # consulta por linha só para decidir se mostra o botão de download.
+    boleto_ailos = case(
+        (and_(AilosBoleto.linha_digitavel.isnot(None),
+              AilosBoleto.codigo_barras.isnot(None)), True),
+        else_=False,
+    ).label('boleto_ailos')
     return (
-        db.query(Billing, Client.name.label('client_name'), Plan.name.label('plan_name'), Contract.status.label('contract_status'), Vehicle.plate.label('vehicle_plate'), Tracker.imei.label('tracker_identifier'))
+        db.query(Billing, Client.name.label('client_name'), Plan.name.label('plan_name'), Contract.status.label('contract_status'), Vehicle.plate.label('vehicle_plate'), Tracker.imei.label('tracker_identifier'), boleto_ailos)
         .join(Client, Client.id == Billing.client_id)
         .outerjoin(Contract, Contract.id == Billing.contract_id)
         .outerjoin(Plan, Plan.id == Contract.plan_id)
         .outerjoin(Vehicle, Vehicle.id == Billing.vehicle_id)
         .outerjoin(Tracker, Tracker.id == Billing.tracker_id)
+        .outerjoin(AilosBoleto, AilosBoleto.billing_id == Billing.id)
         .filter(
             Billing.is_deleted.is_(False),
             Client.is_deleted.is_(False),
@@ -72,7 +82,7 @@ def base_query(db: Session):
 
 
 def serialize_billing(row) -> BillingOut:
-    billing, client_name, plan_name, contract_status, vehicle_plate, tracker_identifier = row
+    billing, client_name, plan_name, contract_status, vehicle_plate, tracker_identifier, boleto_ailos = row
     overdue_days = 0
     if billing.status == BillingStatus.OVERDUE:
         overdue_days = max((date.today() - billing.due_date).days, 0)
@@ -105,6 +115,7 @@ def serialize_billing(row) -> BillingOut:
             valor_com_juros(billing.amount, billing.due_date)
             if billing.status == BillingStatus.OVERDUE else None
         ),
+        boleto_ailos=bool(boleto_ailos),
     )
 
 

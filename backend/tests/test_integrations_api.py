@@ -186,7 +186,7 @@ def test_cobranca_inexistente_404(http_unauth, api_key):
 
 # ── Link público do boleto (token HMAC, sem login) ───────────────────────────
 
-def test_boleto_link_publico(http_unauth, cobranca):
+def test_boleto_link_publico(http_unauth, cobranca, boleto_registrado):
     from app.api.v1.endpoints.boletos import _public_token
 
     ok = http_unauth.get(f'/api/v1/public/boleto/{cobranca.id}/{_public_token(cobranca.id)}')
@@ -196,6 +196,16 @@ def test_boleto_link_publico(http_unauth, cobranca):
 
     errado = http_unauth.get(f'/api/v1/public/boleto/{cobranca.id}/token-invalido')
     assert errado.status_code == 404
+
+
+def test_link_publico_sem_registro_na_ailos_nao_entrega_pdf(http_unauth, cobranca):
+    """Sem registro na Ailos o título não existe no banco: não é pagável e não
+    concilia. Entregar o PDF ao cliente por esse link seria mandar um papel
+    impagável — 404, e não o boleto calculado localmente."""
+    from app.api.v1.endpoints.boletos import _public_token
+
+    resp = http_unauth.get(f'/api/v1/public/boleto/{cobranca.id}/{_public_token(cobranca.id)}')
+    assert resp.status_code == 404
 
 
 def test_listagem_inclui_link_publico(http_unauth, api_key, cobranca, boleto_registrado):

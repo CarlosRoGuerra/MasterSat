@@ -105,6 +105,8 @@ type BillingItem = {
   payment_date?: string | null;
   created_at?: string | null;
   vehicle_plate?: string | null;
+  /** Há boleto registrado na Ailos? Sem isso não existe PDF para baixar. */
+  boleto_ailos?: boolean;
 };
 
 type IntervContract = { id: number; client_name?: string | null; vehicle_plate?: string | null; plan_name?: string | null; status: string; monthly_value?: number | null };
@@ -1916,7 +1918,9 @@ export default function ClientesPage() {
                           <>
                             <ActionBtn color="blue" icon={Mail} title="Enviar boleto por e-mail" onClick={() => sendBoletoEmail(b)} />
                             <ActionBtn color="green" icon={MessageCircle} title="Enviar boleto via Whats" onClick={() => sendBoletoWhats(b)} />
-                            <ActionBtn color="teal" icon={Download} title="Baixar boleto PDF" onClick={() => baixarBoletoPdf(b)} />
+                            {b.boleto_ailos && (
+                              <ActionBtn color="teal" icon={Download} title="Baixar boleto PDF" onClick={() => baixarBoletoPdf(b)} />
+                            )}
                           </>
                         )}
                         {b.status === 'paga' && (
