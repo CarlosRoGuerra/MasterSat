@@ -31,7 +31,7 @@ type VehicleOption = { id: number; client_id: number; plate: string; model?: str
 type TrackerOption = { id: number; client_id?: number | null; vehicle_id?: number | null; imei: string; model?: string | null; brand?: string | null };
 type Plan = { id: number; name: string; price: number; description?: string | null; active: boolean; billing_interval_months: BillingInterval; active_contracts: number };
 type ServiceProduct = { id: number; name: string; category: string; default_price: number; description?: string | null; active: boolean; allow_installments: boolean; remove_after_payment: boolean; auto_add_on_uninstall: boolean };
-type Contract = { id: number; client_id: number; plan_id: number; vehicle_id?: number | null; tracker_id?: number | null; start_date: string; end_date?: string | null; status: string; billing_day?: number | null; payment_method?: string | null; notes?: string | null; installation_fee?: number | null; uninstall_fee?: number | null; client_name?: string | null; plan_name?: string | null; vehicle_plate?: string | null; tracker_identifier?: string | null; monthly_value?: number | null; open_billings: number; next_due_date?: string | null };
+type Contract = { id: number; client_id: number; plan_id: number; vehicle_id?: number | null; tracker_id?: number | null; start_date: string; end_date?: string | null; status: string; billing_day?: number | null; payment_method?: string | null; notes?: string | null; installation_fee?: number | null; uninstall_fee?: number | null; signed?: boolean | null; signed_at?: string | null; client_name?: string | null; plan_name?: string | null; vehicle_plate?: string | null; tracker_identifier?: string | null; monthly_value?: number | null; open_billings: number; next_due_date?: string | null };
 type ChargeItem = { id: number; client_id: number; contract_id?: number | null; vehicle_id?: number | null; tracker_id?: number | null; service_product_id?: number | null; title: string; description?: string | null; quantity: number; unit_price: number; total_amount: number; installment_count: number; start_date: string; active: boolean; remove_after_payment: boolean; completed_at?: string | null; status: string; client_name?: string | null; vehicle_plate?: string | null; tracker_identifier?: string | null; service_product_name?: string | null; open_installments: number };
 type Billing = { id: number; contract_id?: number | null; client_id: number; item_id?: number | null; vehicle_id?: number | null; tracker_id?: number | null; title?: string | null; billing_type: string; installment_number?: number | null; installment_total?: number | null; amount: number; due_date: string; status: BillingStatus; payment_date?: string | null; payment_method?: string | null; notes?: string | null; paid_amount?: number | null; receipt_number?: string | null; period_label?: string | null; client_name?: string | null; vehicle_plate?: string | null; tracker_identifier?: string | null; plan_name?: string | null; contract_status?: string | null; overdue_days: number };
 type Summary = { active_plans: number; active_contracts: number; pending_billings: number; overdue_billings: number; pending_amount: number; overdue_amount: number; paid_this_month: number };
@@ -41,7 +41,7 @@ type Nfse = { billing_id: number; status: string; numero_nfse?: string | null; s
 
 type PlanFormState = { name: string; price: string; description: string; active: boolean; billing_interval_months: string };
 type ServiceProductFormState = { name: string; category: string; default_price: string; description: string; active: boolean; allow_installments: boolean; remove_after_payment: boolean; auto_add_on_uninstall: boolean };
-type ContractFormState = { client_id: string; vehicle_id: string; tracker_id: string; plan_id: string; start_date: string; end_date: string; billing_day: string; payment_method: string; notes: string; installation_fee: string; uninstall_fee: string };
+type ContractFormState = { client_id: string; vehicle_id: string; tracker_id: string; plan_id: string; start_date: string; end_date: string; billing_day: string; payment_method: string; notes: string; installation_fee: string; uninstall_fee: string; signed: boolean; signed_at: string };
 type ChargeItemFormState = { client_id: string; contract_id: string; vehicle_id: string; tracker_id: string; service_product_id: string; title: string; description: string; quantity: string; unit_price: string; installment_count: string; start_date: string; remove_after_payment: boolean };
 type ReceiveFormState = { paid_amount: string; payment_date: string; payment_method: string; notes: string };
 type AdjustFormState = { amount: string; due_date: string; justification: string };
@@ -51,7 +51,7 @@ const fieldClass = 'w-full rounded-xl border border-slate-200 bg-white px-3.5 py
 const areaClass = `${fieldClass} min-h-[88px] resize-y`;
 const initialPlanForm: PlanFormState = { name: '', price: '', description: '', active: true, billing_interval_months: '1' };
 const initialProductForm: ServiceProductFormState = { name: '', category: 'servico', default_price: '', description: '', active: true, allow_installments: true, remove_after_payment: false, auto_add_on_uninstall: false };
-const initialContractForm: ContractFormState = { client_id: '', vehicle_id: '', tracker_id: '', plan_id: '', start_date: new Date().toISOString().slice(0, 10), end_date: '', billing_day: '', payment_method: 'boleto', notes: '', installation_fee: '', uninstall_fee: '' };
+const initialContractForm: ContractFormState = { client_id: '', vehicle_id: '', tracker_id: '', plan_id: '', start_date: new Date().toISOString().slice(0, 10), end_date: '', billing_day: '', payment_method: 'boleto', notes: '', installation_fee: '', uninstall_fee: '', signed: false, signed_at: '' };
 const initialChargeItemForm: ChargeItemFormState = { client_id: '', contract_id: '', vehicle_id: '', tracker_id: '', service_product_id: '', title: '', description: '', quantity: '1', unit_price: '', installment_count: '1', start_date: new Date().toISOString().slice(0, 10), remove_after_payment: false };
 const initialReceiveForm: ReceiveFormState = { paid_amount: '', payment_date: new Date().toISOString().slice(0, 10), payment_method: 'pix', notes: '' };
 const initialAdjustForm: AdjustFormState = { amount: '', due_date: '', justification: '' };
@@ -625,7 +625,7 @@ export default function FinanceiroPage() {
   function openEditContract(contract: Contract) {
     setEditingContractId(contract.id);
     setModalError('');
-    setContractForm({ client_id: String(contract.client_id), vehicle_id: contract.vehicle_id ? String(contract.vehicle_id) : '', tracker_id: contract.tracker_id ? String(contract.tracker_id) : '', plan_id: String(contract.plan_id), start_date: contract.start_date, end_date: contract.end_date || '', billing_day: contract.billing_day ? String(contract.billing_day) : '', payment_method: contract.payment_method || 'boleto', notes: contract.notes || '', installation_fee: contract.installation_fee != null ? String(contract.installation_fee) : '', uninstall_fee: contract.uninstall_fee != null ? String(contract.uninstall_fee) : '' });
+    setContractForm({ client_id: String(contract.client_id), vehicle_id: contract.vehicle_id ? String(contract.vehicle_id) : '', tracker_id: contract.tracker_id ? String(contract.tracker_id) : '', plan_id: String(contract.plan_id), start_date: contract.start_date, end_date: contract.end_date || '', billing_day: contract.billing_day ? String(contract.billing_day) : '', payment_method: contract.payment_method || 'boleto', notes: contract.notes || '', installation_fee: contract.installation_fee != null ? String(contract.installation_fee) : '', uninstall_fee: contract.uninstall_fee != null ? String(contract.uninstall_fee) : '', signed: Boolean(contract.signed), signed_at: contract.signed_at || '' });
     setContractModal(true);
   }
 
@@ -841,7 +841,7 @@ export default function FinanceiroPage() {
     if (!token || !canEdit) return;
     setProcessing(true);
     try {
-      const payload = { client_id: Number(contractForm.client_id), vehicle_id: contractForm.vehicle_id ? Number(contractForm.vehicle_id) : null, tracker_id: contractForm.tracker_id ? Number(contractForm.tracker_id) : null, plan_id: Number(contractForm.plan_id), start_date: contractForm.start_date, end_date: contractForm.end_date || null, billing_day: contractForm.billing_day ? Number(contractForm.billing_day) : null, payment_method: contractForm.payment_method || null, notes: contractForm.notes.trim() || null, installation_fee: contractForm.installation_fee ? Number(contractForm.installation_fee.replace(',', '.')) : null, uninstall_fee: contractForm.uninstall_fee ? Number(contractForm.uninstall_fee.replace(',', '.')) : null };
+      const payload = { client_id: Number(contractForm.client_id), vehicle_id: contractForm.vehicle_id ? Number(contractForm.vehicle_id) : null, tracker_id: contractForm.tracker_id ? Number(contractForm.tracker_id) : null, plan_id: Number(contractForm.plan_id), start_date: contractForm.start_date, end_date: contractForm.end_date || null, billing_day: contractForm.billing_day ? Number(contractForm.billing_day) : null, payment_method: contractForm.payment_method || null, notes: contractForm.notes.trim() || null, installation_fee: contractForm.installation_fee ? Number(contractForm.installation_fee.replace(',', '.')) : null, uninstall_fee: contractForm.uninstall_fee ? Number(contractForm.uninstall_fee.replace(',', '.')) : null, signed: contractForm.signed, signed_at: contractForm.signed_at || null };
       if (editingContractId) {
         await apiFetch(`/contracts/${editingContractId}`, { method: 'PUT', body: JSON.stringify(payload) }, token);
         setFeedback('Contrato atualizado com sucesso.');
@@ -1839,6 +1839,35 @@ export default function FinanceiroPage() {
             <select className={fieldClass} value={contractForm.payment_method} onChange={e => setContractForm(p => ({ ...p, payment_method: e.target.value }))}><option value="boleto">Boleto</option><option value="pix">Pix</option><option value="cartao">Cartão</option></select>
             <input className={fieldClass} placeholder="Taxa de instalação por veículo (R$)" value={contractForm.installation_fee} onChange={e => setContractForm(p => ({ ...p, installation_fee: e.target.value }))} />
             <input className={fieldClass} placeholder="Taxa de desinstalação por veículo (R$)" value={contractForm.uninstall_fee} onChange={e => setContractForm(p => ({ ...p, uninstall_fee: e.target.value }))} />
+
+            {/* Assinatura em papel: a empresa colhe a assinatura física e
+                anexa o digitalizado nos documentos do cliente. */}
+            <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-slate-200 px-4 py-3 dark:border-slate-700 md:col-span-2">
+              <label className="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 rounded accent-brand-700"
+                  checked={contractForm.signed}
+                  onChange={e => setContractForm(p => ({
+                    ...p,
+                    signed: e.target.checked,
+                    signed_at: e.target.checked ? (p.signed_at || new Date().toISOString().slice(0, 10)) : '',
+                  }))}
+                />
+                Contrato assinado pelo cliente
+              </label>
+              {contractForm.signed && (
+                <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+                  Assinado em
+                  <input
+                    type="date"
+                    className="rounded-xl border border-slate-200 px-3 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-900"
+                    value={contractForm.signed_at}
+                    onChange={e => setContractForm(p => ({ ...p, signed_at: e.target.value }))}
+                  />
+                </label>
+              )}
+            </div>
 
             <div className="rounded-2xl border border-slate-200 px-4 py-3 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400 md:col-span-2">Este contrato pode ser geral do cliente ou ficar amarrado a um veículo e rastreador específicos para facilitar a operação e a cobrança.</div>
             <textarea className={`${areaClass} md:col-span-2`} placeholder="Observações" value={contractForm.notes} onChange={e => setContractForm(p => ({ ...p, notes: e.target.value }))} />

@@ -89,6 +89,8 @@ def ensure_schema_updates():
                 'uninstall_fee': 'ALTER TABLE contracts ADD COLUMN uninstall_fee NUMERIC(10,2)',
                 'interveniente_client_id': 'ALTER TABLE contracts ADD COLUMN interveniente_client_id INTEGER REFERENCES clients(id)',
                 'bank': "ALTER TABLE contracts ADD COLUMN bank VARCHAR(40) DEFAULT 'ailos'",
+                'signed': 'ALTER TABLE contracts ADD COLUMN signed BOOLEAN DEFAULT FALSE',
+                'signed_at': 'ALTER TABLE contracts ADD COLUMN signed_at DATE',
             }
             for column_name, sql in contract_alter_statements.items():
                 if column_name not in contract_columns:

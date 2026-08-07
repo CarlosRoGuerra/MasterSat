@@ -20,6 +20,10 @@ class ContractBase(BaseModel):
     notes: str | None = None
     installation_fee: float | None = None
     uninstall_fee: float | None = None
+    # Contrato físico assinado pelo cliente. A empresa segue colhendo
+    # assinatura em papel; o sistema registra o retorno e a data.
+    signed: bool = False
+    signed_at: date | None = None
 
 
 class ContractCreate(ContractBase):
@@ -42,6 +46,8 @@ class ContractUpdate(BaseModel):
     notes: str | None = None
     installation_fee: float | None = None
     uninstall_fee: float | None = None
+    signed: bool | None = None
+    signed_at: date | None = None
 
 
 class ContractOut(ContractBase):

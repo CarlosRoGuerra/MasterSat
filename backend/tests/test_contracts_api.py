@@ -426,3 +426,38 @@ class TestContratoAuthorization:
     def test_financial_role_can_delete(self, http_fin, contrato):
         r = http_fin.delete(f"{PREFIX}/{contrato.id}")
         assert r.status_code == 200
+
+
+class TestContratoAssinado:
+    """Reunião de 07/08/2026: a empresa segue colhendo assinatura em papel, e
+    o sistema precisa registrar se o contrato voltou assinado."""
+
+    def test_contrato_nasce_nao_assinado(self, http, contrato):
+        assert http.get(f'/api/v1/contracts/{contrato.id}').json()['signed'] is False
+
+    def test_marcar_assinado_carimba_a_data_de_hoje(self, http, contrato):
+        from datetime import date
+
+        r = http.put(f'/api/v1/contracts/{contrato.id}', json={'signed': True})
+        assert r.status_code == 200
+        assert r.json()['signed'] is True
+        assert r.json()['signed_at'] == date.today().isoformat()
+
+    def test_data_informada_prevalece_sobre_hoje(self, http, contrato):
+        r = http.put(f'/api/v1/contracts/{contrato.id}',
+                     json={'signed': True, 'signed_at': '2026-07-15'})
+        assert r.json()['signed_at'] == '2026-07-15'
+
+    def test_desmarcar_limpa_a_data(self, http, contrato):
+        """Senão sobra um contrato "não assinado" com data de assinatura."""
+        http.put(f'/api/v1/contracts/{contrato.id}', json={'signed': True})
+        r = http.put(f'/api/v1/contracts/{contrato.id}', json={'signed': False})
+        assert r.json()['signed'] is False
+        assert r.json()['signed_at'] is None
+
+    def test_editar_outro_campo_nao_mexe_na_assinatura(self, http, contrato):
+        http.put(f'/api/v1/contracts/{contrato.id}',
+                 json={'signed': True, 'signed_at': '2026-07-15'})
+        r = http.put(f'/api/v1/contracts/{contrato.id}', json={'notes': 'observação'})
+        assert r.json()['signed'] is True
+        assert r.json()['signed_at'] == '2026-07-15'

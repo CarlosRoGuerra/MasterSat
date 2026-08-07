@@ -1,6 +1,6 @@
 from datetime import date
 from decimal import Decimal
-from sqlalchemy import Date, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, Date, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import SoftDeleteMixin, TimestampMixin
@@ -30,3 +30,9 @@ class Contract(Base, TimestampMixin, SoftDeleteMixin):
     # Taxas do TERMO DE ADESÃO (por veículo)
     installation_fee: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     uninstall_fee: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    # Assinatura do contrato físico (reunião de 07/08/2026): a empresa continua
+    # colhendo assinatura em papel, então o sistema registra se já voltou
+    # assinado. O PDF digitalizado vai nos documentos do cliente, categoria
+    # "contrato".
+    signed: Mapped[bool] = mapped_column(Boolean, default=False, server_default='false')
+    signed_at: Mapped[date | None] = mapped_column(Date, nullable=True)

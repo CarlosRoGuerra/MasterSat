@@ -60,6 +60,8 @@ def serialize_contract(db: Session, contract: Contract) -> ContractOut:
         notes=contract.notes,
         installation_fee=float(contract.installation_fee) if contract.installation_fee is not None else None,
         uninstall_fee=float(contract.uninstall_fee) if contract.uninstall_fee is not None else None,
+        signed=bool(getattr(contract, 'signed', False)),
+        signed_at=getattr(contract, 'signed_at', None),
         client_name=client.name if (client and not client.is_deleted) else None,
         plan_name=plan.name if (plan and not plan.is_deleted) else None,
         vehicle_plate=vehicle.plate if (vehicle and not vehicle.is_deleted) else None,
@@ -177,6 +179,12 @@ def update_item(item_id: int, payload: ContractUpdate, db: Session = Depends(get
         if not plan or plan.is_deleted:
             raise HTTPException(status_code=404, detail='Plano não encontrado')
     validate_links(db, client_id, data.get('vehicle_id', getattr(obj, 'vehicle_id', None)), data.get('tracker_id', getattr(obj, 'tracker_id', None)))
+    # Marcar como assinado sem informar a data carimba hoje; desmarcar limpa a
+    # data, senão fica um contrato "não assinado" com data de assinatura.
+    if data.get('signed') and not data.get('signed_at') and not obj.signed_at:
+        data['signed_at'] = date.today()
+    if data.get('signed') is False:
+        data['signed_at'] = None
     for key, value in data.items():
         setattr(obj, key, value)
     db.commit()
