@@ -688,6 +688,10 @@ def _chave_veiculo(item: dict) -> object:
     return item.get('vehicle_id') or f'c{item["contract_id"]}'
 
 
+def _plural(n: int, singular: str, plural: str) -> str:
+    return f'{n} {singular if n == 1 else plural}'
+
+
 def _no_mes(valor: date | None, mes_ref: str) -> bool:
     """A data cai no mês de referência ('MM/AAAA')?"""
     if not valor or '/' not in (mes_ref or ''):
@@ -817,7 +821,72 @@ def montar_linhas_simulacao(simulation: dict) -> list[str]:
         linhas.append(_total('TOTAL BOLETO C/ IMPOSTOS:', total_grupo))
         linhas.append(_SEP)
 
+    linhas += _movimentacao_do_mes(itens, simulation, por_interveniente, mes_ref)
     linhas += _resumo_geral(simulation, itens, por_interveniente, mes_ref, totais)
+    return linhas
+
+
+def _movimentacao_do_mes(itens: list[dict], simulation: dict,
+                         por_interveniente: dict[str, list[dict]],
+                         mes_ref: str) -> list[str]:
+    """
+    Instalações e desinstalações do período, uma a uma.
+
+    Pedido da reunião de 07/08/2026: o resumo diz quantas foram; aqui se vê
+    quais — por interveniente e por cliente, com data, placa e equipamento.
+    """
+    interveniente_do_cliente = {
+        i.get('client_id'): (i.get('interveniente_nome') or i['client_name']) for i in itens
+    }
+
+    instalacoes: dict[str, list[dict]] = defaultdict(list)
+    for item in itens:
+        if _no_mes(item.get('tracker_install_date'), mes_ref):
+            instalacoes[item.get('interveniente_nome') or item['client_name']].append(item)
+
+    desinstalacoes: dict[str, list[dict]] = defaultdict(list)
+    for ev in simulation.get('uninstall_events') or []:
+        grupo = interveniente_do_cliente.get(ev.get('client_id')) or ev.get('client_name') or ''
+        desinstalacoes[grupo].append(ev)
+
+    if not instalacoes and not desinstalacoes:
+        return []
+
+    linhas = ['', f'MOVIMENTAÇÃO DO PERÍODO — {mes_ref}'.center(_LARGURA), _SEP]
+
+    for grupo in sorted(set(instalacoes) | set(desinstalacoes)):
+        linhas.append(f'INTERVENIENTE: {grupo}')
+
+        for item in sorted(instalacoes.get(grupo, []),
+                           key=lambda i: (i.get('tracker_install_date') or date.min,
+                                          i.get('vehicle_plate') or '')):
+            linhas.append(_par(
+                f'    INSTALAÇÃO  {_d(item.get("tracker_install_date"))}  '
+                f'{(item.get("vehicle_plate") or "SEM PLACA"):<10} '
+                f'RASTREADOR {item.get("tracker_imei") or "—"}',
+                item['client_name'][:34],
+            ))
+
+        for ev in sorted(desinstalacoes.get(grupo, []),
+                         key=lambda e: (e.get('uninstall_date') or date.min,
+                                        e.get('vehicle_plate') or '')):
+            taxa = float(ev.get('fee_amount') or 0)
+            # Taxa abaixo do mínimo não vira cobrança, mas a desinstalação
+            # aconteceu — sumir com ela do relatório esconderia o serviço.
+            sufixo = 'SEM COBRANÇA' if ev.get('skipped') else f'TAXA {_v(taxa)}'
+            linhas.append(_par(
+                f'    DESINSTALAÇÃO  {_d(ev.get("uninstall_date"))}  '
+                f'{(ev.get("vehicle_plate") or "SEM PLACA"):<10} {sufixo}',
+                (ev.get('client_name') or '')[:34],
+            ))
+
+        linhas.append('    Subtotal: ' + ' · '.join((
+            _plural(len(instalacoes.get(grupo, [])), 'instalação', 'instalações'),
+            _plural(len(desinstalacoes.get(grupo, [])), 'desinstalação', 'desinstalações'),
+        )))
+        linhas.append('')
+
+    linhas.append(_SEP)
     return linhas
 
 

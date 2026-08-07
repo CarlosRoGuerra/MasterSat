@@ -66,6 +66,44 @@ def _get_client_or_404(client_id: int, db: Session) -> Client:
     return c
 
 
+_TIPO_SERVICO = {
+    'recorrente': 'MENSALIDADE DE MONITORAMENTO VEICULAR',
+    'prorata': 'MENSALIDADE PROPORCIONAL (PRÓ-RATA)',
+    'instalacao': 'INSTALAÇÃO DE EQUIPAMENTO DE RASTREAMENTO',
+    'desinstalacao': 'DESINSTALAÇÃO DE EQUIPAMENTO DE RASTREAMENTO',
+    'manutencao': 'MANUTENÇÃO DE EQUIPAMENTO DE RASTREAMENTO',
+    'adesao': 'TAXA DE ADESÃO',
+    'avulsa': 'SERVIÇO AVULSO',
+}
+
+
+def descricao_servico(b: Billing, placa: str | None = None) -> str:
+    """
+    Descreve o que está sendo cobrado, para o boleto.
+
+    Pedido do cliente (reunião de 07/08/2026): o pagador precisa entender o
+    motivo da cobrança olhando o boleto. Antes saía só ``billing.title``, que
+    em cobrança gerada pelo fechamento é apenas "Mensalidade".
+
+    Monta: serviço · competência · parcela · placa — sem repetir o que o
+    título já diz.
+    """
+    titulo = (b.title or '').strip()
+    base = _TIPO_SERVICO.get(b.billing_type or '', '') or titulo or 'SERVIÇO DE RASTREAMENTO'
+    partes = [base.upper()]
+
+    # O título só entra quando acrescenta algo (ex.: "Instalação 2º veículo").
+    if titulo and titulo.upper() not in base.upper():
+        partes.append(titulo.upper())
+    if b.period_label:
+        partes.append(f'REF. {b.period_label}')
+    if b.installment_total and b.installment_total > 1:
+        partes.append(f'PARCELA {b.installment_number or 1}/{b.installment_total}')
+    if placa:
+        partes.append(f'PLACA {placa}')
+    return ' · '.join(partes)
+
+
 def _billing_to_boleto_item(b: Billing, c: Client) -> dict:
     """Converte Billing + Client para o dict usado pelos geradores CNAB."""
     endereco = " ".join(filter(None, [
@@ -171,6 +209,13 @@ def _montar_pdf_boleto(b: Billing, c: Client, db: Session,
     autenticada e o link público)."""
     item = _billing_to_boleto_item(b, c)
 
+    placa = ""
+    if b.vehicle_id:
+        veiculo = db.get(Vehicle, b.vehicle_id)
+        if veiculo and not veiculo.is_deleted:
+            placa = veiculo.plate
+
+    servico = descricao_servico(b, placa or None)
     dados = gerar_dados_boleto(
         billing_id=b.id,
         valor=b.amount,
@@ -183,11 +228,11 @@ def _montar_pdf_boleto(b: Billing, c: Client, db: Session,
         sacado_cep=c.zip_code or "",
         sacado_uf=c.state or "",
         sacado_ie=c.rg_ie or "",
-        itens=[(b.title or "SERVIÇO DE RASTREAMENTO", float(b.amount))],
+        itens=[(servico, float(b.amount))],
         instrucoes=[
+            f"Referente a: {servico}.",
             "Não receber após o vencimento.",
             "Após vencimento entrar em contato: contato@mastersat.com.br",
-            f"Referente ao contrato de rastreamento. Cobrança #{b.id}.",
         ],
     )
     dados = aplicar_dados_oficiais_ailos(dados, ailos_boleto)
@@ -196,11 +241,6 @@ def _montar_pdf_boleto(b: Billing, c: Client, db: Session,
 
     # Nome do arquivo: placa_do_veiculo + data_emissao
     # Ex: boleto_PQPP666_04-06-2026.pdf
-    placa = ""
-    if b.vehicle_id:
-        veiculo = db.get(Vehicle, b.vehicle_id)
-        if veiculo and not veiculo.is_deleted:
-            placa = veiculo.plate
     data_emissao_str = item["data_emissao"].strftime("%d-%m-%Y") if item.get("data_emissao") else date.today().strftime("%d-%m-%Y")
 
     if placa:

@@ -280,12 +280,42 @@ def _data_recibo(dt: date) -> str:
 
 
 def _draw_recibo(c, d: DadosBoleto, y_top: float) -> float:
+    """Recibo de pagamento: quita a cobrança, com data por extenso e assinatura.
+    Só sai depois de o pagamento ser compensado e baixado."""
+    return _draw_bloco_cobranca(
+        c, d, y_top,
+        titulo="RECIBO DE PAGAMENTO",
+        rotulo_total="Valor Total da Fatura:",
+        com_assinatura=True,
+    )
+
+
+def _draw_demonstrativo(c, d: DadosBoleto, y_top: float) -> float:
+    """
+    Demonstrativo que acompanha o boleto: os mesmos dados do cliente e a
+    descrição do que está sendo cobrado, SEM o título de recibo, a data por
+    extenso e a assinatura.
+
+    Motivo (reunião de 07/08/2026): o boleto saía com "RECIBO DE PAGAMENTO"
+    assinado no topo antes de o cliente pagar. Quitação é o recibo, emitido
+    depois da compensação — o boleto mostra o que se está cobrando.
+    """
+    return _draw_bloco_cobranca(
+        c, d, y_top,
+        titulo="DEMONSTRATIVO DA COBRANÇA",
+        rotulo_total="Total da cobrança:",
+        com_assinatura=False,
+    )
+
+
+def _draw_bloco_cobranca(c, d: DadosBoleto, y_top: float, *, titulo: str,
+                         rotulo_total: str, com_assinatura: bool) -> float:
     y = y_top
 
     # ── Cabeçalho: logo + endereço (esq) · CNPJ (centro) · título (dir) ─────
     _draw_mastersat(c, LM, y, h_mm=11.0, max_w_mm=38.0)
     c.setFont("Helvetica-Bold", 10); c.setFillColorRGB(0, 0, 0)
-    c.drawRightString(RM, y - _mm(5), "RECIBO DE PAGAMENTO")
+    c.drawRightString(RM, y - _mm(5), titulo)
     ty = y - _mm(13.5)
     c.setFont("Helvetica-Bold", 7)
     c.drawString(LM, ty, _EMPRESA_RAZAO); ty -= _mm(3.2)
@@ -355,10 +385,13 @@ def _draw_recibo(c, d: DadosBoleto, y_top: float) -> float:
 
     total = sum(float(v) for _, v in itens[:3])
     c.setFont("Helvetica-Bold", 8)
-    c.drawRightString(LM + cQ + cDESC + cVU - _mm(1.5), y - H_TR + _mm(2), "Valor Total da Fatura:")
+    c.drawRightString(LM + cQ + cDESC + cVU - _mm(1.5), y - H_TR + _mm(2), rotulo_total)
     _box(c, LM + cQ + cDESC + cVU, y, cVT, H_TR, lw=0.3)
     c.drawRightString(LM + cQ + cDESC + cVU + cVT - _mm(1.5), y - H_TR + _mm(2), f"R$ {_fv(total)}")
     y -= H_TR + _mm(2.5)
+
+    if not com_assinatura:
+        return y
 
     # ── Data por extenso + assinatura automática ────────────────────────────
     c.setFont("Helvetica", 7.5)
@@ -566,7 +599,7 @@ def gerar_boleto_pdf(dados: DadosBoleto) -> bytes:
     c.drawString(LM, y, dados.linha_digitavel)
     y -= _mm(5)
 
-    y = _draw_recibo(c, dados, y)
+    y = _draw_demonstrativo(c, dados, y)
     y -= _mm(4)
 
     _hline(c, LM, y, RM, lw=0.5, dash=(2, 4))

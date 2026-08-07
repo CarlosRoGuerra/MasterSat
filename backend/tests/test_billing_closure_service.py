@@ -552,3 +552,59 @@ class TestFormatoSimulacao:
         from app.services.billing_closure import generate_closure_pdf
         buf = generate_closure_pdf({'reference_month': '08/2026', 'items': [self._item()]})
         assert buf.getvalue()[:5] == b'%PDF-'
+
+    # ── Movimentação do período (instalações e desinstalações detalhadas) ────
+
+    def test_movimentacao_lista_cada_instalacao_do_mes(self):
+        from datetime import date as _date
+        txt = self._texto([
+            self._item(contract_id=1, tracker_imei='AAA', vehicle_plate='ABC1D23',
+                       tracker_install_date=_date(2026, 8, 4)),
+            self._item(contract_id=2, tracker_imei='BBB', vehicle_plate='DEF4G56',
+                       tracker_install_date=_date(2025, 3, 1)),   # fora do mês
+        ], ref='08/2026')
+        mov = txt.split('MOVIMENTAÇÃO DO PERÍODO')[1].split('RESUMO DO FECHAMENTO')[0]
+        assert 'INSTALAÇÃO  04/08/2026  ABC1D23' in mov
+        assert 'RASTREADOR AAA' in mov
+        assert 'DEF4G56' not in mov          # instalada em 2025, não é do período
+
+    def test_movimentacao_mostra_a_desinstalacao_com_a_taxa(self):
+        from datetime import date as _date
+        txt = self._texto_completo({
+            'reference_month': '08/2026',
+            'items': [self._item(client_id=7, interveniente_nome='ABR EXPRESS')],
+            'uninstall_events': [{
+                'client_id': 7, 'client_name': 'CLIENTE X', 'vehicle_plate': 'XYZ9K88',
+                'uninstall_date': _date(2026, 8, 20), 'fee_amount': 70.0, 'skipped': False,
+            }],
+            'total_uninstall_fees': 70.0,
+        })
+        mov = txt.split('MOVIMENTAÇÃO DO PERÍODO')[1]
+        assert 'DESINSTALAÇÃO  20/08/2026  XYZ9K88' in mov
+        assert 'TAXA 70,00' in mov
+        assert 'INTERVENIENTE: ABR EXPRESS' in mov
+
+    def test_desinstalacao_sem_cobranca_continua_aparecendo(self):
+        """Taxa abaixo do mínimo não vira cobrança, mas o serviço foi feito —
+        sumir com ela do relatório esconderia trabalho da equipe."""
+        from datetime import date as _date
+        txt = self._texto_completo({
+            'reference_month': '08/2026',
+            'items': [self._item(client_id=7)],
+            'uninstall_events': [{
+                'client_id': 7, 'client_name': 'CLIENTE X', 'vehicle_plate': 'AAA1B22',
+                'uninstall_date': _date(2026, 8, 3), 'fee_amount': 3.0, 'skipped': True,
+            }],
+        })
+        assert 'SEM COBRANÇA' in txt.split('MOVIMENTAÇÃO DO PERÍODO')[1]
+
+    def test_subtotal_por_interveniente_concorda_no_singular(self):
+        from datetime import date as _date
+        txt = self._texto([self._item(tracker_install_date=_date(2026, 8, 4))], ref='08/2026')
+        mov = txt.split('MOVIMENTAÇÃO DO PERÍODO')[1]
+        assert 'Subtotal: 1 instalação · 0 desinstalações' in mov
+
+    def test_mes_sem_movimentacao_nao_cria_a_secao(self):
+        from datetime import date as _date
+        txt = self._texto([self._item(tracker_install_date=_date(2024, 1, 4))], ref='08/2026')
+        assert 'MOVIMENTAÇÃO DO PERÍODO' not in txt
