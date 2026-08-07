@@ -20,6 +20,7 @@ import { Table, TableHead, Th, TableBody, Tr, Td } from '@/components/ui/table';
 import { usePagination, Pagination } from '@/components/ui/pagination';
 import { ExportButton } from '@/components/ui/export-button';
 import { apiFetch, API_URL } from '@/lib/api';
+import { entregarArquivo } from '@/lib/arquivo';
 import { enviarBoletoEmail, enviarBoletoWhats } from '@/lib/boleto-mensagem';
 import { fetchAddressByCep } from '@/lib/cep';
 import { formatCpfCnpj, formatPhone, formatZipCode, onlyDigits } from '@/lib/format';
@@ -652,6 +653,25 @@ export default function ClientesPage() {
       await enviarBoletoWhats(b, billingsModalClient, token);
     } catch (err) {
       alert(parseError(err));
+    }
+  }
+
+  /** Abre o PDF da nota fiscal no navegador (montado a partir do XML). */
+  async function abrirNotaPdf(billingId: number) {
+    if (!token) return;
+    try {
+      const resp = await fetch(
+        `${API_URL.replace(/\/+$/, '')}/nfse/${billingId}/danfse-local`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      if (!resp.ok) {
+        let detalhe = `Erro ${resp.status}`;
+        try { detalhe = (await resp.json())?.detail || detalhe; } catch { /* noop */ }
+        throw new Error(detalhe);
+      }
+      entregarArquivo(await resp.blob(), `nfse-${billingId}.pdf`, { emNovaAba: true });
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Erro ao abrir a nota fiscal');
     }
   }
 
@@ -1749,16 +1769,30 @@ export default function ClientesPage() {
                     </Badge>
                   </Td>
                   <Td>
-                    {n.link_visualizacao && (
-                      <a
-                        href={n.link_visualizacao}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="rounded-lg border border-brand-200 bg-brand-50 px-2.5 py-1 text-[11px] font-semibold text-brand-700 transition hover:bg-brand-100 dark:border-brand-900/40 dark:bg-brand-950/30 dark:text-brand-400"
-                      >
-                        Ver nota
-                      </a>
-                    )}
+                    {/* O PDF vem primeiro: mandar o operador para a consulta do
+                        governo para depois baixar de la era um desvio inutil. */}
+                    <div className="flex items-center gap-1.5">
+                      {n.status === 'emitida' && (
+                        <button
+                          type="button"
+                          onClick={() => abrirNotaPdf(n.billing_id)}
+                          className="rounded-lg border border-brand-200 bg-brand-50 px-2.5 py-1 text-[11px] font-semibold text-brand-700 transition hover:bg-brand-100 dark:border-brand-900/40 dark:bg-brand-950/30 dark:text-brand-400"
+                        >
+                          Ver PDF
+                        </button>
+                      )}
+                      {n.link_visualizacao && (
+                        <a
+                          href={n.link_visualizacao}
+                          target="_blank"
+                          rel="noreferrer"
+                          title="Consulta publica no portal da NFS-e"
+                          className="rounded-lg border border-slate-200 px-2 py-1 text-[11px] font-medium text-slate-500 transition hover:bg-slate-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
+                        >
+                          Consulta
+                        </a>
+                      )}
+                    </div>
                   </Td>
                 </Tr>
               ))}
