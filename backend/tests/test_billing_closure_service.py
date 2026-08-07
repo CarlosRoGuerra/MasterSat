@@ -608,3 +608,59 @@ class TestFormatoSimulacao:
         from datetime import date as _date
         txt = self._texto([self._item(tracker_install_date=_date(2024, 1, 4))], ref='08/2026')
         assert 'MOVIMENTAÇÃO DO PERÍODO' not in txt
+
+    # ── Painel de totais no topo (pedido de 08/08/2026) ─────────────────────
+
+    def test_painel_de_totais_vem_antes_do_primeiro_cliente(self):
+        txt = self._texto_completo({
+            'reference_month': '08/2026',
+            'items': [
+                self._item(contract_id=1, client_id=1, vehicle_id=1, tracker_imei='A1'),
+                self._item(contract_id=2, client_id=1, vehicle_id=1, tracker_imei='A2'),
+                self._item(contract_id=3, client_id=2, vehicle_id=2, tracker_imei='B1',
+                           client_name='OUTRO'),
+            ],
+        })
+        pos_painel = txt.index('Total Geral')
+        pos_cliente = txt.index('CLIENTE:')
+        assert pos_painel < pos_cliente          # totais no topo
+        # cabeçalho do painel com as 5 colunas do pedido
+        for col in ('Veículos', 'Rastreadores', 'Instalações', 'Desinstalações', 'Total Geral'):
+            assert col in txt
+
+    def test_painel_conta_veiculos_e_rastreadores_separadamente(self):
+        """1 veículo com 2 rastreadores → 1 veículo, 2 rastreadores no topo."""
+        txt = self._texto_completo({
+            'reference_month': '08/2026',
+            'items': [
+                self._item(contract_id=1, vehicle_id=1, tracker_imei='A1'),
+                self._item(contract_id=2, vehicle_id=1, tracker_imei='A2'),
+            ],
+        })
+        painel = txt.split('Total Geral')[0]
+        # a linha de valores do painel: 1 veículo, 2 rastreadores
+        linha_valores = [l for l in txt.splitlines() if l.strip().startswith('|') and '|' in l][1]
+        celulas = [c.strip() for c in linha_valores.strip('|').split('|')]
+        assert celulas[0] == '1'                 # veículos
+        assert celulas[1] == '2'                 # rastreadores
+
+    def test_total_geral_do_topo_bate_com_o_rodape(self):
+        sim = {
+            'reference_month': '08/2026',
+            'items': [self._item(billing_amount=64.99,
+                                 first_month_charges=[{'title': 'X', 'amount': 150.0}])],
+            'uninstall_events': [{'client_id': 1, 'client_name': 'CLIENTE X', 'fee_amount': 70.0}],
+            'total_uninstall_fees': 70.0, 'total_services': 30.0,
+        }
+        txt = self._texto_completo(sim)
+        # 64,99 + 150 + 70 + 30 = 314,99 — no painel do topo e no TOTAL GERAL do rodapé
+        assert txt.count('314,99') == 2
+
+    def test_titulo_traz_o_mes_por_extenso(self):
+        txt = self._texto([self._item()], ref='08/2026')
+        assert 'PRÉVIA DE FECHAMENTO — AGOSTO/2026' in txt
+
+    def test_sem_itens_nao_desenha_painel(self):
+        txt = self._texto([])
+        assert 'Total Geral' not in txt
+        assert 'PRÉVIA DE FECHAMENTO' in txt     # o título continua

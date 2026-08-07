@@ -712,6 +712,62 @@ def _contagens(itens: list[dict], desinstalacoes: list[dict], mes_ref: str) -> d
     }
 
 
+_MESES_EXT = ['', 'JANEIRO', 'FEVEREIRO', 'MARÇO', 'ABRIL', 'MAIO', 'JUNHO',
+              'JULHO', 'AGOSTO', 'SETEMBRO', 'OUTUBRO', 'NOVEMBRO', 'DEZEMBRO']
+
+
+def _mes_extenso(mes_ref: str) -> str:
+    """'08/2026' → 'AGOSTO/2026'; devolve o original se não bater o formato."""
+    mm, _, aaaa = (mes_ref or '').partition('/')
+    if aaaa and mm.isdigit() and 1 <= int(mm) <= 12:
+        return f'{_MESES_EXT[int(mm)]}/{aaaa}'
+    return mes_ref or ''
+
+
+def _totais_financeiros(itens: list[dict], simulation: dict) -> dict[str, float]:
+    """Somatórios do fechamento, por natureza — a mesma conta no topo e no rodapé."""
+    mensalidades = sum(float(i.get('billing_amount') or 0) for i in itens)
+    produtos = sum(
+        float(p.get('amount') or 0)
+        for i in itens for p in (i.get('first_month_charges') or [])
+    )
+    taxas = float(simulation.get('total_uninstall_fees') or 0)
+    servicos = float(simulation.get('total_services') or 0)
+    return {
+        'mensalidades': mensalidades, 'produtos': produtos,
+        'taxas': taxas, 'servicos': servicos,
+        'geral': mensalidades + produtos + taxas + servicos,
+    }
+
+
+def _painel_totais(contagem: dict[str, int], fin: dict[str, float]) -> list[str]:
+    """
+    Painel de totais no topo do relatório — a quantidade de tudo antes do
+    detalhamento por cliente (pedido de 08/08/2026). Tabela de 5 colunas em
+    caixa, no monoespaçado do relatório.
+    """
+    colunas = [
+        ('Veículos', str(contagem['veiculos'])),
+        ('Rastreadores', str(contagem['equipamentos'])),
+        ('Instalações', str(contagem['instalacoes'])),
+        ('Desinstalações', str(contagem['desinstalacoes'])),
+        ('Total Geral', f'R$ {_v(fin["geral"])}'),
+    ]
+    w = 18  # 5 células de 18 + 6 bordas = 96 = _LARGURA
+    borda = '+' + '+'.join('-' * w for _ in colunas) + '+'
+
+    def _linha(celulas: list[str]) -> str:
+        return '|' + '|'.join(c.center(w) for c in celulas) + '|'
+
+    return [
+        borda,
+        _linha([rot for rot, _ in colunas]),
+        borda,
+        _linha([val for _, val in colunas]),
+        borda,
+    ]
+
+
 def montar_linhas_simulacao(simulation: dict) -> list[str]:
     """
     Monta o relatório como lista de linhas de texto.
@@ -719,19 +775,19 @@ def montar_linhas_simulacao(simulation: dict) -> list[str]:
     Separado da geração do PDF para poder ser testado sem abrir o arquivo.
     """
     agora = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
-    linhas: list[str] = [_SEP, f'Simulação Fechamento: {agora}'.center(_LARGURA), _SEP, '']
+    mes_ref = simulation.get('reference_month', '')
+    titulo = f'PRÉVIA DE FECHAMENTO — {_mes_extenso(mes_ref)}'.strip(' —')
+    linhas: list[str] = [_SEP, titulo.center(_LARGURA), _SEP]
 
     itens = simulation.get('items') or []
     if not itens:
-        linhas.append('Nenhum contrato a faturar no período.')
+        linhas += ['', 'Nenhum contrato a faturar no período.']
         return linhas
 
     # 1) agrupa por interveniente  2) dentro dele, por veículo
     por_interveniente: dict[str, list[dict]] = defaultdict(list)
     for item in itens:
         por_interveniente[item.get('interveniente_nome') or item['client_name']].append(item)
-
-    mes_ref = simulation.get('reference_month', '')
 
     # As desinstalações vêm por cliente; o relatório agrupa por interveniente.
     # Este mapa leva uma à outra para a contagem cair no bloco certo.
@@ -743,7 +799,14 @@ def montar_linhas_simulacao(simulation: dict) -> list[str]:
         grupo = interveniente_do_cliente.get(ev.get('client_id')) or ev.get('client_name') or ''
         desinst_por_grupo[grupo].append(ev)
 
-    totais = {'mensalidades': 0.0, 'produtos': 0.0}
+    fin = _totais_financeiros(itens, simulation)
+
+    # ── Painel de totais no topo (a quantidade de tudo antes dos clientes) ──
+    linhas.append(_par(f'Mês de referência: {mes_ref}', f'Gerado em {agora}'))
+    linhas.append('')
+    linhas += _painel_totais(
+        _contagens(itens, simulation.get('uninstall_events') or [], mes_ref), fin)
+    linhas.append('')
 
     for interveniente, do_grupo in sorted(por_interveniente.items()):
         por_veiculo: dict[object, list[dict]] = defaultdict(list)
@@ -808,8 +871,6 @@ def montar_linhas_simulacao(simulation: dict) -> list[str]:
                 linhas.append(_total('TOTAL RASTREADOR:', mensalidade))
                 linhas.append('')
                 total_veiculo += mensalidade + soma_produtos
-                totais['mensalidades'] += mensalidade
-                totais['produtos'] += soma_produtos
 
             linhas.append(_total('TOTAL VEÍCULO:', total_veiculo))
             linhas.append('')
@@ -822,7 +883,7 @@ def montar_linhas_simulacao(simulation: dict) -> list[str]:
         linhas.append(_SEP)
 
     linhas += _movimentacao_do_mes(itens, simulation, por_interveniente, mes_ref)
-    linhas += _resumo_geral(simulation, itens, por_interveniente, mes_ref, totais)
+    linhas += _resumo_geral(simulation, itens, por_interveniente, mes_ref, fin)
     return linhas
 
 
@@ -892,14 +953,10 @@ def _movimentacao_do_mes(itens: list[dict], simulation: dict,
 
 def _resumo_geral(simulation: dict, itens: list[dict],
                   por_interveniente: dict[str, list[dict]], mes_ref: str,
-                  totais: dict[str, float]) -> list[str]:
-    """Fecha o relatório com o consolidado do período."""
+                  fin: dict[str, float]) -> list[str]:
+    """Fecha o relatório com o consolidado do período (mesma conta do topo)."""
     desinstalacoes = simulation.get('uninstall_events') or []
     qtd = _contagens(itens, desinstalacoes, mes_ref)
-
-    taxas = float(simulation.get('total_uninstall_fees') or 0)
-    servicos = float(simulation.get('total_services') or 0)
-    geral = totais['mensalidades'] + totais['produtos'] + taxas + servicos
 
     linhas = ['', f'RESUMO DO FECHAMENTO — {mes_ref}'.center(_LARGURA), _SEP]
     linhas.append(_par(
@@ -920,14 +977,14 @@ def _resumo_geral(simulation: dict, itens: list[dict],
         linhas.append(f'CONTRATOS JÁ FATURADOS NO PERÍODO (inclusos acima): {ja_geradas}')
 
     linhas.append('')
-    linhas.append(_total('TOTAL MENSALIDADES:', totais['mensalidades']))
-    if totais['produtos']:
-        linhas.append(_total('TOTAL PRODUTOS/SERVIÇOS NA 1ª COBRANÇA:', totais['produtos']))
-    if taxas:
-        linhas.append(_total('TOTAL TAXAS DE DESINSTALAÇÃO:', taxas))
-    if servicos:
-        linhas.append(_total('TOTAL SERVIÇOS AVULSOS:', servicos))
-    linhas.append(_total('TOTAL GERAL:', geral))
+    linhas.append(_total('TOTAL MENSALIDADES:', fin['mensalidades']))
+    if fin['produtos']:
+        linhas.append(_total('TOTAL PRODUTOS/SERVIÇOS NA 1ª COBRANÇA:', fin['produtos']))
+    if fin['taxas']:
+        linhas.append(_total('TOTAL TAXAS DE DESINSTALAÇÃO:', fin['taxas']))
+    if fin['servicos']:
+        linhas.append(_total('TOTAL SERVIÇOS AVULSOS:', fin['servicos']))
+    linhas.append(_total('TOTAL GERAL:', fin['geral']))
     linhas.append(_SEP)
     return linhas
 
