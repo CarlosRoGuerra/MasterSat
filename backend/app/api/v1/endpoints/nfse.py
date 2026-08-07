@@ -60,6 +60,12 @@ ALLOWED_ROLES = (UserRole.ADMIN, UserRole.FINANCIAL)
 _ERROS_CONFIG = nfse_provider.ErrosConfig
 _ERROS_API = nfse_provider.ErrosApi
 
+# Status HTTP em que o ADN do governo está instável e a reprodução local é a
+# contingência correta. 401/403 (certificado) e 404 (nota inexistente no ADN)
+# ficam DE FORA de propósito: o PDF local não resolve credencial nem emissão
+# incompleta, então esses erros têm de chegar ao operador.
+_STATUS_ADN_INSTAVEL = {502, 503, 504}
+
 
 def _provedor():
     return nfse_provider.modulo()
@@ -259,16 +265,39 @@ def danfse(
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*ALLOWED_ROLES)),
 ):
-    """DANFSE — o PDF visual/imprimível da NFS-e (o que se envia ao tomador)."""
+    """
+    DANFSE — o PDF visual/imprimível da NFS-e (o que se envia ao tomador).
+
+    Tenta o DANFSE OFICIAL do ADN primeiro, para o documento sair com o design
+    idêntico ao do governo. Se o serviço do governo estiver instável (502/503/
+    504, ou sem resposta), cai automaticamente na representação montada a partir
+    do XML — assim o operador nunca fica sem o PDF, e o oficial volta a sair
+    sozinho quando o serviço deles se restabelece. Erros que a contingência não
+    resolve (certificado 401/403, nota inexistente no ADN 404) seguem para a
+    tela.
+    """
     nota = db.query(NfseNota).filter_by(billing_id=billing_id).first()
     if nota is None or nota.status != 'emitida' or not nota.chave_acesso:
         raise HTTPException(status_code=404, detail='NFS-e emitida não encontrada para esta cobrança')
     if _provedor() is not nfse_nacional:
         raise HTTPException(status_code=400, detail='DANFSE disponível apenas no Emissor Nacional')
+
     try:
         pdf = nfse_nacional.baixar_danfse(nota.chave_acesso)
-    except (*_ERROS_CONFIG, *_ERROS_API) as exc:
+    except _ERROS_CONFIG as exc:
+        # Erro de configuração nosso (ambiente/certificado ausente) — não é caso
+        # de contingência; precisa ser corrigido, então estoura.
         _raise_nfse_error(exc)
+    except _ERROS_API as exc:
+        status = getattr(exc, 'status_code', None)
+        # status None = falha de transporte (não alcançou o ADN), tratada como
+        # instabilidade. Só cai para a reprodução se, além disso, houver XML —
+        # sem XML não há o que montar, então o erro do governo é o que importa.
+        instavel = status in _STATUS_ADN_INSTAVEL or status is None
+        if not (instavel and nota.xml_retorno):
+            _raise_nfse_error(exc)
+        pdf = _danfse_local_bytes(nota, db, billing_id)
+
     return Response(
         content=pdf,
         media_type='application/pdf',
@@ -295,6 +324,25 @@ def _municipio_do_tomador(db: Session, billing_id: int) -> dict[str, str]:
     return {linha.zip_code: f'{linha.city}/{linha.state}' if linha.state else linha.city}
 
 
+def _danfse_local_bytes(nota: NfseNota, db: Session, billing_id: int) -> bytes:
+    """
+    PDF montado a partir do XML guardado — a representação local.
+
+    Usada pela rota /danfse-local e como contingência da rota /danfse quando o
+    ADN está fora. Exige o XML; sem ele, 404.
+    """
+    if not nota.xml_retorno:
+        raise HTTPException(status_code=404, detail='XML da NFS-e não disponível para esta cobrança')
+    try:
+        return nfse_danfse.gerar_danfse_pdf(
+            nota.xml_retorno,
+            nfse_nacional.url_consulta_publica(nota.chave_acesso) if nota.chave_acesso else None,
+            municipio_por_cep=_municipio_do_tomador(db, billing_id),
+        )
+    except nfse_danfse.DanfseError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.get('/{billing_id}/danfse-local')
 def danfse_local(
     billing_id: int,
@@ -309,19 +357,10 @@ def danfse_local(
     o XML — e ele está sempre no banco.
     """
     nota = db.query(NfseNota).filter_by(billing_id=billing_id).first()
-    if nota is None or not nota.xml_retorno:
-        raise HTTPException(status_code=404, detail='XML da NFS-e não disponível para esta cobrança')
-    try:
-        pdf = nfse_danfse.gerar_danfse_pdf(
-            nota.xml_retorno,
-            nfse_nacional.url_consulta_publica(nota.chave_acesso)
-            if nota.chave_acesso else None,
-            municipio_por_cep=_municipio_do_tomador(db, billing_id),
-        )
-    except nfse_danfse.DanfseError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if nota is None:
+        raise HTTPException(status_code=404, detail='NFS-e não encontrada para esta cobrança')
     return Response(
-        content=pdf,
+        content=_danfse_local_bytes(nota, db, billing_id),
         media_type='application/pdf',
         headers={'Content-Disposition':
                  f'inline; filename=nfse-{nota.numero_nfse or billing_id}.pdf'},
