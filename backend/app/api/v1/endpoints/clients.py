@@ -82,6 +82,37 @@ def _sync_client_user(client: Client, db: Session) -> None:
     return None
 
 
+CATEGORIA_CONTRATO = 'contrato'
+
+
+def _clientes_com_contrato(db: Session, client_ids: list[int]) -> set[int]:
+    """IDs dos clientes que têm um documento de contrato ativo guardado.
+
+    Uma consulta só para a lista inteira — evita um SELECT por linha."""
+    if not client_ids:
+        return set()
+    rows = db.execute(
+        select(Document.reference_id).where(
+            Document.reference_type == 'client',
+            Document.reference_id.in_(client_ids),
+            Document.category == CATEGORIA_CONTRATO,
+            Document.active.is_(True),
+        )
+    ).all()
+    return {r[0] for r in rows}
+
+
+def _marcar_contrato(client: Client, ids_com_contrato: set[int]) -> Client:
+    """Anexa a flag transitória lida pelo ClientOut (não é coluna do banco)."""
+    client.contrato_armazenado = client.id in ids_com_contrato
+    return client
+
+
+def _marcar_um(db: Session, client: Client) -> Client:
+    """Mesma flag, para retornos de um cliente só (get/create/update)."""
+    return _marcar_contrato(client, _clientes_com_contrato(db, [client.id]))
+
+
 @router.get('/', response_model=list[ClientOut])
 def list_items(
     search: str | None = None,
@@ -115,7 +146,9 @@ def list_items(
         stmt = stmt.where(Client.type == type)
 
     stmt = stmt.order_by(Client.id.desc()).offset(skip).limit(limit)
-    return db.scalars(stmt).all()
+    clientes = list(db.scalars(stmt).all())
+    com_contrato = _clientes_com_contrato(db, [c.id for c in clientes])
+    return [_marcar_contrato(c, com_contrato) for c in clientes]
 
 
 @router.post('/', response_model=ClientOut)
@@ -141,7 +174,7 @@ def create_item(
     _sync_client_user(obj, db)
     db.commit()
     db.refresh(obj)
-    return obj
+    return _marcar_um(db, obj)
 
 
 @router.get('/{item_id}', response_model=ClientOut)
@@ -150,7 +183,7 @@ def get_item(
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*VIEW_ROLES)),
 ):
-    return _get_client_or_404(item_id, db)
+    return _marcar_um(db, _get_client_or_404(item_id, db))
 
 
 @router.put('/{item_id}', response_model=ClientOut)
@@ -196,7 +229,7 @@ def update_item(
     _sync_client_user(obj, db)
     db.commit()
     db.refresh(obj)
-    return obj
+    return _marcar_um(db, obj)
 
 
 @router.delete('/{item_id}')

@@ -215,5 +215,9 @@ class ClientUpdate(BaseModel):
 
 class ClientOut(ClientBase):
     id: int
+    # Existe um documento de contrato assinado guardado para este cliente?
+    # A empresa colhe a assinatura no papel e anexa o scan (categoria 'contrato');
+    # a lista e o detalhe mostram isso para saber quem ainda falta.
+    contrato_armazenado: bool = False
 
     model_config = {'from_attributes': True}

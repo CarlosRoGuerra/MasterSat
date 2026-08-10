@@ -63,6 +63,8 @@ type Client = {
   delivery_method?: string | null;
   send_boleto_whatsapp?: boolean | null;
   trade_name?: string | null;
+  /** Há um contrato assinado (categoria 'contrato') guardado nos documentos? */
+  contrato_armazenado?: boolean | null;
 };
 
 type ClientDocument = {
@@ -1144,6 +1146,7 @@ export default function ClientesPage() {
                   <SortTh field="trade_name" label="Nome fantasia" sort={clientSort} onSort={toggleClientSort} />
                   <SortTh field="cpf_cnpj" label="CPF/CNPJ" sort={clientSort} onSort={toggleClientSort} />
                   <SortTh field="status" label="Situação" sort={clientSort} onSort={toggleClientSort} />
+                  <Th className="w-28">Contrato</Th>
                   <Th className="w-40">Ações</Th>
                 </TableHead>
                 <TableBody>
@@ -1163,6 +1166,11 @@ export default function ClientesPage() {
                         </Td>
                         <Td>
                           <Badge variant={statusVariant(client.status)}>{statusLabel(client.status)}</Badge>
+                        </Td>
+                        <Td>
+                          {client.contrato_armazenado
+                            ? <Badge variant="success">Armazenado</Badge>
+                            : <Badge variant="warning">Pendente</Badge>}
                         </Td>
                         <Td>
                           <div className="flex justify-end gap-1">
@@ -1229,6 +1237,14 @@ export default function ClientesPage() {
       >
         {selectedClient && (
           <div className="space-y-4">
+            {/* Situação do cadastro + do contrato assinado, logo no topo */}
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant={statusVariant(selectedClient.status)}>{statusLabel(selectedClient.status)}</Badge>
+              {selectedClient.contrato_armazenado
+                ? <Badge variant="success">Contrato armazenado</Badge>
+                : <Badge variant="warning">Contrato pendente</Badge>}
+            </div>
+
             {/* Abas */}
             <div className="flex gap-1 border-b border-slate-100 dark:border-slate-800">
               {(['cadastro', 'historico', 'documentos'] as const).map((tab) => (
