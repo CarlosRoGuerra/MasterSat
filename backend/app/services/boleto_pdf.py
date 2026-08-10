@@ -290,24 +290,6 @@ def _draw_recibo(c, d: DadosBoleto, y_top: float) -> float:
     )
 
 
-def _draw_demonstrativo(c, d: DadosBoleto, y_top: float) -> float:
-    """
-    Demonstrativo que acompanha o boleto: os mesmos dados do cliente e a
-    descrição do que está sendo cobrado, SEM o título de recibo, a data por
-    extenso e a assinatura.
-
-    Motivo (reunião de 07/08/2026): o boleto saía com "RECIBO DE PAGAMENTO"
-    assinado no topo antes de o cliente pagar. Quitação é o recibo, emitido
-    depois da compensação — o boleto mostra o que se está cobrando.
-    """
-    return _draw_bloco_cobranca(
-        c, d, y_top,
-        titulo="DEMONSTRATIVO DA COBRANÇA",
-        rotulo_total="Total da cobrança:",
-        com_assinatura=False,
-    )
-
-
 def _draw_bloco_cobranca(c, d: DadosBoleto, y_top: float, *, titulo: str,
                          rotulo_total: str, com_assinatura: bool) -> float:
     y = y_top
@@ -589,27 +571,12 @@ def gerar_boleto_pdf(dados: DadosBoleto) -> bytes:
     c = pdfcanvas.Canvas(buf, pagesize=A4)
     c.setTitle(f"Boleto MASTERSAT - {dados.billing_id}")
 
-    y = _ft(6)
-
-    # Linha digitável (topo)
-    c.setFont("Helvetica", 5.5); c.setFillColorRGB(0.2, 0.4, 0.7)
-    c.drawString(LM, y, "Linha digitável para ser utilizada em seu Internet Banking")
-    y -= _mm(5)
-    c.setFont("Helvetica-Bold", 9); c.setFillColorRGB(0, 0, 0)
-    c.drawString(LM, y, dados.linha_digitavel)
-    y -= _mm(5)
-
-    y = _draw_demonstrativo(c, dados, y)
-    y -= _mm(4)
-
-    _hline(c, LM, y, RM, lw=0.5, dash=(2, 4))
-    y -= _mm(1.5)
-    c.setFont("Helvetica", 5.5); c.setFillColorRGB(0.5, 0.5, 0.5)
-    c.drawString(LM, y, "✂  Corte aqui")
-    y -= _mm(4)
-
+    # Só a ficha de compensação. A parte de cima (demonstrativo/recibo) foi
+    # removida a pedido do cliente (08/08/2026); a ficha já traz o serviço
+    # (Instruções) e o valor (Valor do Documento).
+    y = _ft(10)
     y = _draw_ficha(c, dados, y)
-    y -= _mm(6)
+    y -= _mm(8)
 
     # Pix (BolePix): prefere o EMV (QR vetorial nítido); se só houver a imagem
     # da Ailos, desenha a imagem. Se nenhum, não desenha (pix não habilitado).

@@ -91,28 +91,37 @@ def test_cada_tipo_de_cobranca_tem_nome_proprio(tipo, trecho):
 
 
 # ---------------------------------------------------------------------------
-# O recibo saiu do boleto
+# O topo saiu do boleto (pedido de 08/08/2026)
 # ---------------------------------------------------------------------------
 
-def test_boleto_desenha_demonstrativo_e_nao_recibo(monkeypatch):
+def test_boleto_nao_desenha_bloco_no_topo(monkeypatch):
+    """O boleto é só a ficha de compensação; a parte de cima (o antigo
+    recibo/demonstrativo) foi removida por inteiro."""
     chamadas: list[str] = []
+    monkeypatch.setattr(
+        boleto_pdf, '_draw_recibo',
+        lambda c, d, y: (chamadas.append('recibo'), boleto_pdf._draw_ficha(c, d, y))[1],
+    )
+    assert boleto_pdf.gerar_boleto_pdf(_dados())[:4] == b'%PDF'
+    assert chamadas == []          # nada de bloco de cobrança no topo
 
-    def _spy(nome, original):
-        def _fn(c, d, y_top):
-            chamadas.append(nome)
-            return original(c, d, y_top)
-        return _fn
 
-    monkeypatch.setattr(boleto_pdf, '_draw_recibo', _spy('recibo', boleto_pdf._draw_recibo))
-    monkeypatch.setattr(boleto_pdf, '_draw_demonstrativo',
-                        _spy('demonstrativo', boleto_pdf._draw_demonstrativo))
-
-    boleto_pdf.gerar_boleto_pdf(_dados())
-    assert chamadas == ['demonstrativo']
+def test_boleto_mostra_servico_e_valor(monkeypatch):
+    """O que sobra tem de trazer o plano/produto (Instruções) e o valor."""
+    desenhados: list[str] = []
+    original = boleto_pdf._draw_ficha
+    monkeypatch.setattr(
+        boleto_pdf, '_draw_ficha',
+        lambda c, d, y: (desenhados.extend(d.instrucoes or []), original(c, d, y))[1],
+    )
+    dados = _dados(itens=[('MENSALIDADE MONITORAMENTO', Decimal('99.90'))],
+                   instrucoes=['Referente a: MENSALIDADE MONITORAMENTO.'])
+    assert boleto_pdf.gerar_boleto_pdf(dados)[:4] == b'%PDF'
+    assert any('MENSALIDADE MONITORAMENTO' in i for i in desenhados)
 
 
 def test_recibo_avulso_continua_sendo_recibo(monkeypatch):
-    """O recibo em si não mudou — só deixou de vir junto do boleto."""
+    """O recibo em si não mudou — continua saindo pelo botão de cobrança paga."""
     chamadas: list[str] = []
     original = boleto_pdf._draw_recibo
     monkeypatch.setattr(
@@ -123,11 +132,12 @@ def test_recibo_avulso_continua_sendo_recibo(monkeypatch):
     assert chamadas == ['recibo']
 
 
-def test_demonstrativo_nao_tem_assinatura_e_recibo_tem():
-    """A assinatura é o que dá ao papel cara de quitação; o demonstrativo
-    ocupa menos altura justamente por não tê-la."""
+def test_recibo_tem_assinatura():
+    """A assinatura é o que dá ao papel cara de quitação — o recibo a mantém."""
     topo = A4[1] - 30
     c = pdfcanvas.Canvas(io.BytesIO(), pagesize=A4)
-    fim_recibo = boleto_pdf._draw_recibo(c, _dados(), topo)
-    fim_demo = boleto_pdf._draw_demonstrativo(c, _dados(), topo)
-    assert fim_demo > fim_recibo
+    # com assinatura, o recibo desce mais na página do que um bloco sem ela
+    fim_com = boleto_pdf._draw_recibo(c, _dados(), topo)
+    fim_sem = boleto_pdf._draw_bloco_cobranca(
+        c, _dados(), topo, titulo='X', rotulo_total='X:', com_assinatura=False)
+    assert fim_sem > fim_com
