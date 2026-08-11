@@ -7,6 +7,11 @@ class PlanBase(BaseModel):
     description: str | None = None
     active: bool = True
     billing_interval_months: int = Field(default=1, ge=1, le=12)
+    # Padrões usados para pré-preencher o contrato (todos opcionais).
+    default_installation_fee: float | None = Field(default=None, ge=0)
+    default_uninstall_fee: float | None = Field(default=None, ge=0)
+    default_billing_day: int | None = Field(default=None, ge=1, le=31)
+    default_duration_months: int | None = Field(default=None, ge=1, le=120)
 
 
 class PlanCreate(PlanBase):
@@ -19,6 +24,10 @@ class PlanUpdate(BaseModel):
     description: str | None = None
     active: bool | None = None
     billing_interval_months: int | None = Field(default=None, ge=1, le=12)
+    default_installation_fee: float | None = Field(default=None, ge=0)
+    default_uninstall_fee: float | None = Field(default=None, ge=0)
+    default_billing_day: int | None = Field(default=None, ge=1, le=31)
+    default_duration_months: int | None = Field(default=None, ge=1, le=120)
 
 
 class PlanOut(PlanBase):

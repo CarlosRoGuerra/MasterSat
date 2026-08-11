@@ -19,6 +19,9 @@ def serialize_plan(db: Session, plan: Plan) -> PlanOut:
         .scalar()
         or 0
     )
+    def _num(v):
+        return float(v) if v is not None else None
+
     return PlanOut(
         id=plan.id,
         name=plan.name,
@@ -26,6 +29,10 @@ def serialize_plan(db: Session, plan: Plan) -> PlanOut:
         description=plan.description,
         active=plan.active,
         billing_interval_months=getattr(plan, 'billing_interval_months', 1) or 1,
+        default_installation_fee=_num(getattr(plan, 'default_installation_fee', None)),
+        default_uninstall_fee=_num(getattr(plan, 'default_uninstall_fee', None)),
+        default_billing_day=getattr(plan, 'default_billing_day', None),
+        default_duration_months=getattr(plan, 'default_duration_months', None),
         active_contracts=active_contracts,
     )
 

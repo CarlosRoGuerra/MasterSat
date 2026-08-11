@@ -196,3 +196,37 @@ class TestDeletePlan:
     def test_operational_cannot_delete(self, http_op, plan):
         r = http_op.delete(f"{PREFIX}/{plan.id}")
         assert r.status_code == 403
+
+
+class TestPlanoPadroesContrato:
+    """3.1 — o plano carrega padrões (taxas, dia de vencimento, vigência) que
+    pré-preenchem o contrato."""
+
+    def _criar(self, http, **extra):
+        base = dict(name='PLANO PADRAO', price=99.90)
+        base.update(extra)
+        return http.post('/api/v1/plans/', json=base)
+
+    def test_criar_com_padroes(self, http):
+        r = self._criar(http, default_installation_fee=499.99, default_uninstall_fee=70,
+                        default_billing_day=10, default_duration_months=12)
+        assert r.status_code == 200
+        d = r.json()
+        assert d['default_installation_fee'] == 499.99
+        assert d['default_uninstall_fee'] == 70
+        assert d['default_billing_day'] == 10
+        assert d['default_duration_months'] == 12
+
+    def test_padroes_sao_opcionais(self, http):
+        d = self._criar(http, name='PLANO SEM PADRAO').json()
+        assert d['default_installation_fee'] is None
+        assert d['default_billing_day'] is None
+
+    def test_editar_padroes(self, http):
+        pid = self._criar(http, name='PLANO EDIT').json()['id']
+        r = http.put(f'/api/v1/plans/{pid}', json={'default_billing_day': 20})
+        assert r.status_code == 200
+        assert r.json()['default_billing_day'] == 20
+
+    def test_dia_de_vencimento_fora_da_faixa_rejeitado(self, http):
+        assert self._criar(http, name='PLANO 32', default_billing_day=32).status_code == 422

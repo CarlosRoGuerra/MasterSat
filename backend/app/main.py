@@ -208,8 +208,16 @@ def ensure_schema_updates():
 
         if inspector.has_table('plans'):
             plan_columns = {column['name'] for column in inspector.get_columns('plans')}
-            if 'billing_interval_months' not in plan_columns:
-                conn.execute(text('ALTER TABLE plans ADD COLUMN billing_interval_months INTEGER DEFAULT 1'))
+            plan_alter_statements = {
+                'billing_interval_months': 'ALTER TABLE plans ADD COLUMN billing_interval_months INTEGER DEFAULT 1',
+                'default_installation_fee': 'ALTER TABLE plans ADD COLUMN default_installation_fee NUMERIC(10,2)',
+                'default_uninstall_fee': 'ALTER TABLE plans ADD COLUMN default_uninstall_fee NUMERIC(10,2)',
+                'default_billing_day': 'ALTER TABLE plans ADD COLUMN default_billing_day INTEGER',
+                'default_duration_months': 'ALTER TABLE plans ADD COLUMN default_duration_months INTEGER',
+            }
+            for column_name, sql in plan_alter_statements.items():
+                if column_name not in plan_columns:
+                    conn.execute(text(sql))
 
         if inspector.has_table('billings'):
             billing_columns = {column['name'] for column in inspector.get_columns('billings')}
