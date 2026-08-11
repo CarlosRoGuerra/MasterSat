@@ -374,6 +374,7 @@ export default function ClientesPage() {
 
   // Seleção múltipla de boletos (soma para pagamento em lote)
   const [selectedBillingIds, setSelectedBillingIds] = useState<number[]>([]);
+  const [gerandoCarne, setGerandoCarne] = useState(false);
 
   // Unificação de boletos (negociação: N boletos abertos → 1 avulso)
   const [unifyOpen, setUnifyOpen] = useState(false);
@@ -574,6 +575,57 @@ export default function ClientesPage() {
     const soma = sel.reduce((s, b) => s + b.amount, 0);
     setUnifyForm({ due_date: '', amount: soma.toFixed(2), notes: '' });
     setUnifyOpen(true);
+  }
+
+  /**
+   * Gera o carnê das cobranças selecionadas: registra o lote na Ailos,
+   * aguarda o processamento (assíncrono) e baixa o PDF. As parcelas são as
+   * cobranças em aberto do mesmo cliente, na ordem selecionada.
+   */
+  async function gerarCarne() {
+    if (!token || selectedBillingIds.length < 2) return;
+    const qtd = selectedBillingIds.length;
+    if (!confirm(`Gerar o carnê registra ${qtd} boletos reais na Ailos (um por parcela). Continuar?`)) return;
+    setGerandoCarne(true);
+    try {
+      // 1. registra o carnê (assíncrono — devolve o lote com ticket)
+      const lote = await apiFetch<{ id: number; ticket: string; status: string }>(
+        '/ailos/carne/lote',
+        { method: 'POST', body: JSON.stringify({ billing_ids: selectedBillingIds }) },
+        token,
+      );
+      // 2. aguarda o lote sair de "processing" (cada consulta atualiza os boletos)
+      let status = lote.status;
+      for (let i = 0; i < 15 && status === 'processing'; i++) {
+        await new Promise((r) => setTimeout(r, 3000));
+        const st = await apiFetch<{ status: string }>(`/ailos/lotes/${lote.ticket}`, {}, token).catch(() => ({ status } as { status: string }));
+        status = st.status;
+      }
+      // O carnê já foi REGISTRADO no passo 1. Se ainda processa, não insistir no
+      // download (evita re-registro, que duplicaria boletos).
+      if (status === 'processing') {
+        setSelectedBillingIds([]);
+        setFeedback(`Carnê registrado (lote #${lote.id}). As parcelas ainda estão sendo processadas na Ailos — o registro NÃO precisa ser refeito; baixe o PDF em instantes.`);
+        return;
+      }
+      // 3. baixa o PDF do carnê (só as parcelas já registradas entram)
+      const resp = await fetch(`${API_URL.replace(/\/+$/, '')}/boletos/carne/${lote.id}/pdf`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!resp.ok) {
+        let detalhe = `Erro ${resp.status}`;
+        try { detalhe = (await resp.json())?.detail || detalhe; } catch { /* noop */ }
+        throw new Error(`Carnê registrado (lote #${lote.id}), mas o PDF ainda não saiu: ${detalhe}`);
+      }
+      entregarArquivo(await resp.blob(), `carne-${lote.id}.pdf`, { emNovaAba: true });
+      setSelectedBillingIds([]);
+      setFeedback(`Carnê gerado com ${qtd} parcela(s).`);
+      await reloadClientBillings();
+    } catch (err) {
+      alert(parseError(err));
+    } finally {
+      setGerandoCarne(false);
+    }
   }
 
   async function saveUnify() {
@@ -1877,6 +1929,11 @@ export default function ClientesPage() {
               {sel.length >= 2 && (
                 <Button onClick={openUnifyModal} className="!py-1.5 text-xs">
                   Unificar em 1 boleto
+                </Button>
+              )}
+              {sel.length >= 2 && (
+                <Button variant="secondary" onClick={gerarCarne} disabled={gerandoCarne} className="!py-1.5 text-xs">
+                  {gerandoCarne ? 'Gerando carnê…' : 'Gerar carnê'}
                 </Button>
               )}
               <button
