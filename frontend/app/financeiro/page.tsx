@@ -563,9 +563,6 @@ export default function FinanceiroPage() {
   // Tab navigation with URL sync
   const [activeTab, setActiveTab] = useState<'menu' | 'overview' | 'management' | 'payables'>('menu');
 
-  // Contract table filters
-  const [contractStatusFilter, setContractStatusFilter] = useState('');
-
   // Plans table sort
   const [planSort, setPlanSort] = useState<{ field: 'name' | 'price' | 'active_contracts'; dir: 'asc' | 'desc' }>({ field: 'name', dir: 'asc' });
 
@@ -630,13 +627,6 @@ export default function FinanceiroPage() {
     setProductModal(true);
   }
 
-  function openEditContract(contract: Contract) {
-    setEditingContractId(contract.id);
-    setModalError('');
-    setContractForm({ client_id: String(contract.client_id), vehicle_id: contract.vehicle_id ? String(contract.vehicle_id) : '', tracker_id: contract.tracker_id ? String(contract.tracker_id) : '', plan_id: String(contract.plan_id), start_date: contract.start_date, end_date: contract.end_date || '', billing_day: contract.billing_day ? String(contract.billing_day) : '', payment_method: contract.payment_method || 'boleto', notes: contract.notes || '', installation_fee: contract.installation_fee != null ? String(contract.installation_fee) : '', uninstall_fee: contract.uninstall_fee != null ? String(contract.uninstall_fee) : '', signed: Boolean(contract.signed), signed_at: contract.signed_at || '' });
-    setContractModal(true);
-  }
-
   async function handleDeletePlan(plan: Plan) {
     if (!token || !canEdit) return;
     if (!window.confirm(`Deseja remover o plano "${plan.name}"? Esta ação não pode ser desfeita.`)) return;
@@ -657,18 +647,6 @@ export default function FinanceiroPage() {
       await apiFetch(`/service-products/${product.id}`, { method: 'DELETE' }, token);
       setFeedback('Serviço/produto removido com sucesso.');
       if (editingProductId === product.id) { setEditingProductId(null); setServiceProductForm(initialProductForm); setProductModal(false); }
-      await loadData(token);
-    } catch (err) { setError(parseError(err)); } finally { setProcessing(false); }
-  }
-
-  async function handleDeleteContract(contract: Contract) {
-    if (!token || !canEdit) return;
-    if (!window.confirm(`Deseja excluir o contrato de "${contract.client_name || 'cliente'}"? Esta ação não pode ser desfeita.`)) return;
-    setProcessing(true);
-    try {
-      await apiFetch(`/contracts/${contract.id}`, { method: 'DELETE' }, token);
-      setFeedback('Contrato removido com sucesso.');
-      if (editingContractId === contract.id) { setEditingContractId(null); setContractForm(initialContractForm); setContractModal(false); }
       await loadData(token);
     } catch (err) { setError(parseError(err)); } finally { setProcessing(false); }
   }
@@ -773,8 +751,6 @@ export default function FinanceiroPage() {
 
   /* ── Derived data ── */
   const visibleContracts = useMemo(() => chargeItemForm.client_id ? contracts.filter(c => c.client_id === Number(chargeItemForm.client_id)) : contracts, [contracts, chargeItemForm.client_id]);
-  const contractVehicles = useMemo(() => contractForm.client_id ? vehicles.filter(v => v.client_id === Number(contractForm.client_id)) : vehicles, [vehicles, contractForm.client_id]);
-  const contractTrackers = useMemo(() => trackers.filter(t => (!contractForm.client_id || t.client_id === Number(contractForm.client_id)) && (!contractForm.vehicle_id || t.vehicle_id === Number(contractForm.vehicle_id) || t.vehicle_id == null)), [trackers, contractForm.client_id, contractForm.vehicle_id]);
   const chargeVehicles = useMemo(() => chargeItemForm.client_id ? vehicles.filter(v => v.client_id === Number(chargeItemForm.client_id)) : vehicles, [vehicles, chargeItemForm.client_id]);
   const chargeTrackers = useMemo(() => trackers.filter(t => (!chargeItemForm.client_id || t.client_id === Number(chargeItemForm.client_id)) && (!chargeItemForm.vehicle_id || t.vehicle_id === Number(chargeItemForm.vehicle_id) || t.vehicle_id == null)), [trackers, chargeItemForm.client_id, chargeItemForm.vehicle_id]);
 
@@ -850,16 +826,22 @@ export default function FinanceiroPage() {
     if (!token || !canEdit) return;
     setProcessing(true);
     try {
-      const payload = { client_id: Number(contractForm.client_id), vehicle_id: contractForm.vehicle_id ? Number(contractForm.vehicle_id) : null, tracker_id: contractForm.tracker_id ? Number(contractForm.tracker_id) : null, plan_id: Number(contractForm.plan_id), start_date: contractForm.start_date, end_date: contractForm.end_date || null, billing_day: contractForm.billing_day ? Number(contractForm.billing_day) : null, payment_method: contractForm.payment_method || null, notes: contractForm.notes.trim() || null, installation_fee: contractForm.installation_fee ? Number(contractForm.installation_fee.replace(',', '.')) : null, uninstall_fee: contractForm.uninstall_fee ? Number(contractForm.uninstall_fee.replace(',', '.')) : null, signed: contractForm.signed, signed_at: contractForm.signed_at || null };
-      if (editingContractId) {
-        await apiFetch(`/contracts/${editingContractId}`, { method: 'PUT', body: JSON.stringify(payload) }, token);
-        setFeedback('Contrato atualizado com sucesso.');
-      } else {
-        await apiFetch('/contracts', { method: 'POST', body: JSON.stringify(payload) }, token);
-        setFeedback('Contrato criado com sucesso.');
-      }
+      // Só os dados essenciais: o cliente preenche o resto e assina no papel.
+      const payload = {
+        client_id: Number(contractForm.client_id),
+        plan_id: Number(contractForm.plan_id),
+        start_date: contractForm.start_date,
+        end_date: contractForm.end_date || null,
+        billing_day: contractForm.billing_day ? Number(contractForm.billing_day) : null,
+        installation_fee: contractForm.installation_fee ? Number(contractForm.installation_fee.replace(',', '.')) : null,
+        payment_method: 'boleto',
+      };
+      const criado = await apiFetch<{ id: number }>('/contracts', { method: 'POST', body: JSON.stringify(payload) }, token);
       setContractForm(initialContractForm); setEditingContractId(null); setContractModal(false);
+      setFeedback('Contrato gerado — baixando o PDF para enviar ao cliente.');
       await loadData(token);
+      // Baixa o termo já preenchido para encaminhar ao cliente assinar.
+      await downloadProtectedFile(`/contracts/${criado.id}/pdf`, token, `contrato-${criado.id}.pdf`).catch(e => setError(parseError(e)));
     } catch (err) { setModalError(parseError(err)); } finally { setProcessing(false); }
   }
 
@@ -1405,7 +1387,6 @@ export default function FinanceiroPage() {
                 <div className="flex flex-wrap gap-2">
                   <Button onClick={openCreatePlan} variant="secondary">Novo plano</Button>
                   <Button onClick={openCreateProduct} variant="secondary">Novo serviço</Button>
-                  <Button onClick={openCreateContract} variant="secondary">Novo contrato</Button>
                   <Button onClick={() => setChargeModal(true)}>Novo lançamento</Button>
                 </div>
               }
@@ -1527,49 +1508,22 @@ export default function FinanceiroPage() {
             )}
           </Card>
 
-          {/* ── 3. Contracts table: grouped by client, collapsible, filter ── */}
+          {/* ── 3. Contratos: gerar o termo de adesão para o cliente assinar ── */}
           <Card>
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-              <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">
-                Contratos ({contracts.length})
-              </p>
-              <div className="flex items-center gap-2">
-                {/* ── 7. Quick status filter ── */}
-                <div className="flex gap-1">
-                  {(['', 'ativo', 'encerrado'] as const).map(s => (
-                    <button
-                      key={s}
-                      type="button"
-                      onClick={() => setContractStatusFilter(s)}
-                      className={[
-                        'rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors',
-                        contractStatusFilter === s
-                          ? 'bg-brand-700 text-white'
-                          : 'border border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800',
-                      ].join(' ')}
-                    >
-                      {s === '' ? 'Todos' : s === 'ativo' ? 'Ativos' : 'Encerrados'}
-                    </button>
-                  ))}
-                </div>
-                <Button variant="secondary" onClick={openCreateContract} className="text-xs px-3 py-1.5">
-                  Adicionar contrato
-                </Button>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Contratos</p>
+                <p className="mt-1 max-w-xl text-sm text-slate-500 dark:text-slate-400">
+                  Gere o termo de adesão já preenchido com o <strong>plano</strong>, a <strong>vigência</strong>, o
+                  <strong> dia de vencimento</strong> e a <strong>taxa de instalação</strong>. Baixe o PDF, envie ao
+                  cliente para preencher os dados dele e assinar, e depois guarde o contrato assinado nos documentos
+                  do cliente (em <strong>Clientes → contrato</strong>).
+                </p>
               </div>
+              <Button variant="secondary" onClick={openCreateContract} className="shrink-0">
+                Gerar contrato
+              </Button>
             </div>
-            {contracts.length === 0 ? (
-              <EmptyState title="Nenhum contrato" description="Crie o primeiro contrato." />
-            ) : (
-              <GroupedContractsTable
-                contracts={contracts}
-                delinquents={delinquents}
-                canEdit={canEdit}
-                statusFilter={contractStatusFilter}
-                onEdit={openEditContract}
-                onDelete={handleDeleteContract}
-                onPdf={(c) => { if (!token) return; downloadProtectedFile(`/contracts/${c.id}/pdf`, token, `contrato-${c.id}.pdf`).catch(e => setError(parseError(e))); }}
-              />
-            )}
           </Card>
         </section>
       )}
@@ -1837,77 +1791,62 @@ export default function FinanceiroPage() {
         </form>
       </Modal>
 
-      <Modal open={contractModal} onClose={() => { setContractModal(false); setEditingContractId(null); setContractForm(initialContractForm); setModalError(''); }} title={editingContractId ? 'Editar contrato' : 'Novo contrato'} description="Vincule o plano ao cliente e, se necessário, a um veículo e rastreador específicos." size="xl">
+      <Modal open={contractModal} onClose={() => { setContractModal(false); setEditingContractId(null); setContractForm(initialContractForm); setModalError(''); }} title="Gerar contrato" description="Escolha o cliente e o plano — a vigência, o dia de vencimento e a taxa de instalação vêm do plano. Baixe o PDF e envie ao cliente para preencher e assinar." size="lg">
         <form className="space-y-5" onSubmit={submitContract}>
           {modalError && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>}
           <div className="grid gap-4 md:grid-cols-2">
-            <ClientAutocomplete
-              clients={clients}
-              value={contractForm.client_id}
-              onChange={(id) => setContractForm(p => ({ ...p, client_id: id, vehicle_id: '', tracker_id: '' }))}
-              placeholder="Selecione o cliente"
-              required
-            />
-            <select className={fieldClass} value={contractForm.plan_id} onChange={e => {
-              const id = e.target.value;
-              const plano = plans.find(pl => String(pl.id) === id);
-              setContractForm(p => {
-                // Ao escolher o plano, puxa os padrões dele (taxas, vencimento,
-                // vigência). Editável depois, caso a negociação fuja do padrão.
-                const next = { ...p, plan_id: id };
-                if (plano) {
-                  if (plano.default_installation_fee != null) next.installation_fee = String(plano.default_installation_fee);
-                  if (plano.default_uninstall_fee != null) next.uninstall_fee = String(plano.default_uninstall_fee);
-                  if (plano.default_billing_day != null) next.billing_day = String(plano.default_billing_day);
-                  if (plano.default_duration_months != null && p.start_date) next.end_date = addMonthsISO(p.start_date, plano.default_duration_months);
-                }
-                return next;
-              });
-            }} required><option value="">Selecione o plano</option>{plans.filter(p => p.active || String(p.id) === contractForm.plan_id).map(p => <option key={p.id} value={p.id}>{p.name} • {intervalLabel(p.billing_interval_months)}</option>)}</select>
-            <select className={fieldClass} value={contractForm.vehicle_id} onChange={e => setContractForm(p => ({ ...p, vehicle_id: e.target.value, tracker_id: '' }))}><option value="">Sem veículo específico</option>{contractVehicles.map(v => <option key={v.id} value={v.id}>{v.plate}{v.model ? ` • ${v.model}` : ''}</option>)}</select>
-            <select className={fieldClass} value={contractForm.tracker_id} onChange={e => setContractForm(p => ({ ...p, tracker_id: e.target.value }))}><option value="">Sem rastreador específico</option>{contractTrackers.map(t => <option key={t.id} value={t.id}>{t.imei}{t.model ? ` • ${t.model}` : ''}</option>)}</select>
-            <input type="date" className={fieldClass} value={contractForm.start_date} onChange={e => setContractForm(p => ({ ...p, start_date: e.target.value }))} required />
-            <input type="date" className={fieldClass} value={contractForm.end_date} onChange={e => setContractForm(p => ({ ...p, end_date: e.target.value }))} />
-            <input className={fieldClass} placeholder="Dia de vencimento" value={contractForm.billing_day} onChange={e => setContractForm(p => ({ ...p, billing_day: e.target.value.replace(/\D/g, '').slice(0, 2) }))} />
-            <select className={fieldClass} value={contractForm.payment_method} onChange={e => setContractForm(p => ({ ...p, payment_method: e.target.value }))}><option value="boleto">Boleto</option><option value="pix">Pix</option><option value="cartao">Cartão</option></select>
-            <input className={fieldClass} placeholder="Taxa de instalação por veículo (R$)" value={contractForm.installation_fee} onChange={e => setContractForm(p => ({ ...p, installation_fee: e.target.value }))} />
-            <input className={fieldClass} placeholder="Taxa de desinstalação por veículo (R$)" value={contractForm.uninstall_fee} onChange={e => setContractForm(p => ({ ...p, uninstall_fee: e.target.value }))} />
-
-            {/* Assinatura em papel: a empresa colhe a assinatura física e
-                anexa o digitalizado nos documentos do cliente. */}
-            <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-slate-200 px-4 py-3 dark:border-slate-700 md:col-span-2">
-              <label className="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 rounded accent-brand-700"
-                  checked={contractForm.signed}
-                  onChange={e => setContractForm(p => ({
-                    ...p,
-                    signed: e.target.checked,
-                    signed_at: e.target.checked ? (p.signed_at || new Date().toISOString().slice(0, 10)) : '',
-                  }))}
-                />
-                Contrato assinado pelo cliente
-              </label>
-              {contractForm.signed && (
-                <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
-                  Assinado em
-                  <input
-                    type="date"
-                    className="rounded-xl border border-slate-200 px-3 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-900"
-                    value={contractForm.signed_at}
-                    onChange={e => setContractForm(p => ({ ...p, signed_at: e.target.value }))}
-                  />
-                </label>
-              )}
+            <div className="md:col-span-2">
+              <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Cliente</span>
+              <ClientAutocomplete
+                clients={clients}
+                value={contractForm.client_id}
+                onChange={(id) => setContractForm(p => ({ ...p, client_id: id }))}
+                placeholder="Selecione o cliente"
+                required
+              />
             </div>
+            <label className="md:col-span-2 text-sm">
+              <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Plano contratado</span>
+              <select className={fieldClass} value={contractForm.plan_id} onChange={e => {
+                const id = e.target.value;
+                const plano = plans.find(pl => String(pl.id) === id);
+                setContractForm(p => {
+                  // Ao escolher o plano, puxa os padrões: vigência, vencimento e
+                  // taxa de instalação. Tudo editável, caso a negociação fuja do padrão.
+                  const next = { ...p, plan_id: id };
+                  if (plano) {
+                    if (plano.default_installation_fee != null) next.installation_fee = String(plano.default_installation_fee);
+                    if (plano.default_billing_day != null) next.billing_day = String(plano.default_billing_day);
+                    if (plano.default_duration_months != null && p.start_date) next.end_date = addMonthsISO(p.start_date, plano.default_duration_months);
+                  }
+                  return next;
+                });
+              }} required><option value="">Selecione o plano</option>{plans.filter(p => p.active || String(p.id) === contractForm.plan_id).map(p => <option key={p.id} value={p.id}>{p.name} • {intervalLabel(p.billing_interval_months)}</option>)}</select>
+            </label>
+            <label className="text-sm">
+              <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Início da vigência</span>
+              <input type="date" className={fieldClass} value={contractForm.start_date} onChange={e => setContractForm(p => ({ ...p, start_date: e.target.value }))} required />
+            </label>
+            <label className="text-sm">
+              <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Fim da vigência</span>
+              <input type="date" className={fieldClass} value={contractForm.end_date} onChange={e => setContractForm(p => ({ ...p, end_date: e.target.value }))} />
+            </label>
+            <label className="text-sm">
+              <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Dia de vencimento</span>
+              <input className={fieldClass} placeholder="1 a 31" value={contractForm.billing_day} onChange={e => setContractForm(p => ({ ...p, billing_day: e.target.value.replace(/\D/g, '').slice(0, 2) }))} />
+            </label>
+            <label className="text-sm">
+              <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Taxa de instalação (R$)</span>
+              <input className={fieldClass} placeholder="0,00" value={contractForm.installation_fee} onChange={e => setContractForm(p => ({ ...p, installation_fee: e.target.value }))} />
+            </label>
 
-            <div className="rounded-2xl border border-slate-200 px-4 py-3 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400 md:col-span-2">Este contrato pode ser geral do cliente ou ficar amarrado a um veículo e rastreador específicos para facilitar a operação e a cobrança.</div>
-            <textarea className={`${areaClass} md:col-span-2`} placeholder="Observações" value={contractForm.notes} onChange={e => setContractForm(p => ({ ...p, notes: e.target.value }))} />
+            <div className="rounded-2xl border border-slate-200 px-4 py-3 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400 md:col-span-2">
+              O cliente preenche os dados dele e assina no PDF. Depois, guarde o contrato assinado em <strong>Clientes → documentos (categoria “contrato”)</strong> — o cadastro passa a marcar “contrato armazenado”.
+            </div>
           </div>
           <div className="flex justify-end gap-3">
             <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200" onClick={() => setContractModal(false)}>Cancelar</button>
-            <Button type="submit" disabled={!canEdit || processing}>{processing ? 'Salvando...' : editingContractId ? 'Salvar alterações' : 'Criar contrato'}</Button>
+            <Button type="submit" disabled={!canEdit || processing}>{processing ? 'Gerando...' : 'Gerar e baixar contrato'}</Button>
           </div>
         </form>
       </Modal>

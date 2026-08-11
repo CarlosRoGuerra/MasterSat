@@ -123,6 +123,27 @@ type CarneItem = {
 
 type IntervContract = { id: number; client_name?: string | null; vehicle_plate?: string | null; plan_name?: string | null; status: string; monthly_value?: number | null };
 
+/** Contrato do cliente para a modal "ficha de adesão / contrato". */
+type ContractSheetItem = {
+  id: number;
+  plan_name?: string | null;
+  vehicle_plate?: string | null;
+  tracker_identifier?: string | null;
+  start_date: string;
+  end_date?: string | null;
+  status: string;
+  signed?: boolean | null;
+  monthly_value?: number | null;
+};
+
+/** Situação da vigência do contrato: em vigor, vencido ou encerrado/cancelado. */
+function contractSituacao(c: ContractSheetItem): { label: string; variant: 'success' | 'warning' | 'danger' } {
+  if (c.status === 'cancelado' || c.status === 'encerrado') return { label: 'Encerrado', variant: 'warning' };
+  const hoje = new Date().toISOString().slice(0, 10);
+  if (c.end_date && c.end_date < hoje) return { label: 'Vencido', variant: 'danger' };
+  return { label: 'Em vigor', variant: 'success' };
+}
+
 type BillingChange = {
   id: number;
   field_name: string;
@@ -405,7 +426,12 @@ export default function ClientesPage() {
   const [intervModalClient, setIntervModalClient] = useState<Client | null>(null);
   const [intervContracts, setIntervContracts] = useState<IntervContract[]>([]);
   const [intervLoading, setIntervLoading] = useState(false);
-  const [printingContract, setPrintingContract] = useState(false);
+
+  // Modal "Ficha de adesão / contrato" (botão teal da impressora)
+  const [contractSheetOpen, setContractSheetOpen] = useState(false);
+  const [contractSheetClient, setContractSheetClient] = useState<Client | null>(null);
+  const [contractSheetItems, setContractSheetItems] = useState<ContractSheetItem[]>([]);
+  const [contractSheetLoading, setContractSheetLoading] = useState(false);
 
   // Modal "Notas fiscais do cliente" (botão da patinha)
   const [nfseModalOpen, setNfseModalOpen] = useState(false);
@@ -831,29 +857,43 @@ export default function ClientesPage() {
     }
   }
 
-  async function printContractSheet(client: Client) {
-    if (!token || printingContract) return;
-    setPrintingContract(true);
+  // Abre a modal com todos os contratos do cliente (vigência, situação,
+  // ver/imprimir e excluir). Substitui a impressão direta do mais recente.
+  async function openContractSheet(client: Client) {
+    setContractSheetClient(client);
+    setContractSheetOpen(true);
+    setContractSheetLoading(true);
     try {
-      // Ficha de adesão do contrato mais recente do cliente (preferindo ativo)
-      const contracts = await apiFetch<IntervContract[]>(`/contracts?client_id=${client.id}&limit=50`, {}, token);
-      const target = contracts.find((c) => c.status === 'ativo') ?? contracts[0];
-      if (!target) {
-        alert('Este cliente ainda não possui contrato para imprimir a ficha de adesão.');
-        return;
-      }
-      const resp = await fetch(`${API_URL.replace(/\/+$/, '')}/contracts/${target.id}/pdf`, {
+      const data = await apiFetch<ContractSheetItem[]>(
+        `/contracts?client_id=${client.id}&limit=100`, {}, token!,
+      ).catch(() => []);
+      setContractSheetItems(data);
+    } finally {
+      setContractSheetLoading(false);
+    }
+  }
+
+  async function baixarContrato(id: number) {
+    if (!token) return;
+    try {
+      const resp = await fetch(`${API_URL.replace(/\/+$/, '')}/contracts/${id}/pdf`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (!resp.ok) throw new Error(`Erro ${resp.status} ao gerar a ficha`);
-      const blob = await resp.blob();
-      const url = URL.createObjectURL(blob);
-      window.open(url, '_blank');
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      if (!resp.ok) throw new Error(`Erro ${resp.status} ao gerar o contrato`);
+      entregarArquivo(await resp.blob(), `contrato-${id}.pdf`, { emNovaAba: true });
     } catch (e) {
-      alert(e instanceof Error ? e.message : 'Erro ao imprimir a ficha de adesão');
-    } finally {
-      setPrintingContract(false);
+      alert(e instanceof Error ? e.message : 'Erro ao abrir o contrato');
+    }
+  }
+
+  async function excluirContrato(id: number) {
+    if (!token) return;
+    if (!window.confirm('Excluir este contrato? Ele será cancelado e some da lista.')) return;
+    try {
+      await apiFetch(`/contracts/${id}`, { method: 'DELETE' }, token);
+      setContractSheetItems((prev) => prev.filter((c) => c.id !== id));
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Erro ao excluir o contrato');
     }
   }
 
@@ -1273,8 +1313,8 @@ export default function ClientesPage() {
                                 <ActionBtn color="green" icon={DollarSign} title="Central financeira / boletos do cliente" onClick={() => openBillingsModal(client)} />
                                 {/* 4. Branco (patinha) — notas fiscais do cliente */}
                                 <ActionBtn color="white" icon={PawPrint} title="Notas fiscais do cliente" onClick={() => openNfseModal(client)} />
-                                {/* 5. Teal — imprimir ficha de adesão / contrato */}
-                                <ActionBtn color="teal" icon={Printer} title="Imprimir ficha de adesão / contrato" onClick={() => printContractSheet(client)} />
+                                {/* 5. Teal — ficha de adesão / contrato (abre a lista) */}
+                                <ActionBtn color="teal" icon={Printer} title="Ficha de adesão / contrato" onClick={() => openContractSheet(client)} />
                               </>
                             )}
                             {canEdit && (
@@ -1906,6 +1946,86 @@ export default function ClientesPage() {
         )}
         <p className="mt-3 text-xs text-slate-400">
           Mostrando {clientNotas.length} registro(s)
+        </p>
+      </Modal>
+
+      {/* ══ Modal: Ficha de adesão / contratos do cliente ══════════════════ */}
+      <Modal
+        open={contractSheetOpen}
+        onClose={() => { setContractSheetOpen(false); setContractSheetClient(null); setContractSheetItems([]); }}
+        title={contractSheetClient ? `Contratos — ${contractSheetClient.name}` : 'Contratos'}
+        size="2xl"
+      >
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            Contratos gerados para o cliente. Gere novos em <strong>Financeiro → Gerar contrato</strong>;
+            o contrato assinado é guardado nos documentos (categoria “contrato”).
+          </p>
+          {contractSheetClient && (
+            contractSheetClient.contrato_armazenado
+              ? <Badge variant="success">Contrato armazenado</Badge>
+              : <Badge variant="warning">Assinado pendente</Badge>
+          )}
+        </div>
+        {contractSheetLoading ? (
+          <TableSkeleton rows={4} cols={5} />
+        ) : contractSheetItems.length === 0 ? (
+          <EmptyState
+            icon={FileText}
+            title="Nenhum contrato"
+            description="Este cliente ainda não possui contrato. Gere um em Financeiro → Gerar contrato."
+          />
+        ) : (
+          <Table>
+            <TableHead>
+              <Th>Plano</Th>
+              <Th>Vínculo</Th>
+              <Th>Vigência</Th>
+              <Th>Situação</Th>
+              <Th className="w-40" />
+            </TableHead>
+            <TableBody>
+              {contractSheetItems.map((c) => {
+                const sit = contractSituacao(c);
+                return (
+                  <Tr key={c.id}>
+                    <Td className="text-sm font-medium">{c.plan_name ?? '—'}</Td>
+                    <Td className="text-xs text-slate-500">{c.vehicle_plate || c.tracker_identifier || 'Contrato geral'}</Td>
+                    <Td className="text-xs">
+                      {c.start_date ? new Date(c.start_date + 'T12:00:00').toLocaleDateString('pt-BR') : '—'}
+                      {' → '}
+                      {c.end_date ? new Date(c.end_date + 'T12:00:00').toLocaleDateString('pt-BR') : 'Indeterminada'}
+                    </Td>
+                    <Td><Badge variant={sit.variant}>{sit.label}</Badge></Td>
+                    <Td>
+                      <div className="flex items-center justify-end gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => baixarContrato(c.id)}
+                          className="rounded-lg border border-brand-200 bg-brand-50 px-2.5 py-1 text-[11px] font-semibold text-brand-700 transition hover:bg-brand-100 dark:border-brand-900/40 dark:bg-brand-950/30 dark:text-brand-400"
+                        >
+                          Ver / imprimir
+                        </button>
+                        {canEdit && (
+                          <button
+                            type="button"
+                            onClick={() => excluirContrato(c.id)}
+                            title="Excluir contrato"
+                            className="rounded-lg border border-rose-200 px-2 py-1 text-[11px] font-medium text-rose-600 transition hover:bg-rose-50 dark:border-rose-900/40 dark:text-rose-400 dark:hover:bg-rose-950/30"
+                          >
+                            Excluir
+                          </button>
+                        )}
+                      </div>
+                    </Td>
+                  </Tr>
+                );
+              })}
+            </TableBody>
+          </Table>
+        )}
+        <p className="mt-3 text-xs text-slate-400">
+          Mostrando {contractSheetItems.length} contrato(s)
         </p>
       </Modal>
 
