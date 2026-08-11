@@ -26,6 +26,7 @@ from app.models.billing import Billing
 from app.models.client import Client
 from app.models.enums import BillingStatus, UserRole
 from app.models.vehicle import Vehicle
+from app.services import ailos_boletos
 from app.services.ailos_boletos import aplicar_dados_oficiais_ailos
 from app.services.boleto_ailos import gerar_dados_boleto, DadosBoleto
 from app.services.boleto_pdf import gerar_boleto_pdf, gerar_carne_pdf
@@ -125,6 +126,52 @@ def _billing_to_boleto_item(b: Billing, c: Client) -> dict:
         "sacado_cidade": c.city or "",
         "sacado_estado": c.state or "",
     }
+
+
+# ---------------------------------------------------------------------------
+# GET /boletos/carne  — carnês gerados de um cliente
+# Declarado ANTES de /{billing_id}, senão "carne" seria lido como billing_id.
+# ---------------------------------------------------------------------------
+
+@router.get("/carne")
+def listar_carnes(
+    client_id: int,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    """
+    Carnês gerados de um cliente (para reabrir/baixar depois da geração).
+
+    Encontra os lotes tipo 'carne' cujas parcelas pertencem ao cliente, via os
+    boletos vinculados ao lote.
+    """
+    lote_ids = (
+        select(AilosBoleto.lote_id)
+        .join(Billing, Billing.id == AilosBoleto.billing_id)
+        .where(Billing.client_id == client_id, AilosBoleto.lote_id.isnot(None))
+        .distinct()
+    )
+    lotes = (
+        db.query(AilosLote)
+        .filter(AilosLote.tipo == 'carne', AilosLote.id.in_(lote_ids))
+        .order_by(AilosLote.id.desc())
+        .all()
+    )
+
+    resultado = []
+    for lote in lotes:
+        ids = lote.billing_ids or []
+        cobrancas = db.query(Billing).filter(Billing.id.in_(ids)).all() if ids else []
+        registradas = sum(1 for bid in ids if boleto_registrado(bid, db) is not None)
+        resultado.append({
+            'lote_id': lote.id,
+            'criado_em': lote.created_at.isoformat() if lote.created_at else None,
+            'parcelas': len(ids),
+            'parcelas_registradas': registradas,
+            'total': float(sum((b.amount or 0) for b in cobrancas)),
+            'status': lote.status,
+        })
+    return resultado
 
 
 # ---------------------------------------------------------------------------
@@ -287,10 +334,6 @@ def get_boleto_pdf(
     )
 
 
-# ---------------------------------------------------------------------------
-# GET /boletos/carne/{lote_id}/pdf  — carnê (todas as parcelas do lote)
-# ---------------------------------------------------------------------------
-
 @router.get("/carne/{lote_id}/pdf")
 def get_carne_pdf(
     lote_id: int,
@@ -299,15 +342,26 @@ def get_carne_pdf(
 ):
     """
     PDF do carnê: todas as parcelas registradas de um lote tipo 'carne', uma
-    por bloco pagável (3 por página).
+    por bloco pagável (2 por página).
 
-    Cada parcela precisa estar registrada na Ailos (linha digitável + código de
-    barras). Parcelas ainda não registradas ficam de fora — sem isso não são
-    pagáveis. Se nenhuma estiver pronta, 409.
+    Se alguma parcela ainda não tem os dados oficiais (linha digitável), tenta
+    recuperá-la na Ailos antes de montar — o registro pode ter sido feito, mas
+    a consulta de status ter falhado na geração. Parcela que segue sem registro
+    fica de fora; se nenhuma estiver pronta, 409.
     """
     lote = db.get(AilosLote, lote_id)
     if lote is None or lote.tipo != 'carne':
         raise HTTPException(status_code=404, detail='Carnê não encontrado')
+
+    # Auto-recuperação: se falta linha digitável em alguma parcela, consulta a
+    # Ailos (parcela por parcela). Best-effort — se a Ailos estiver fora, segue
+    # com o que já houver salvo.
+    faltando = any(boleto_registrado(bid, db) is None for bid in (lote.billing_ids or []))
+    if faltando:
+        try:
+            ailos_boletos.consultar_lote(db, lote)
+        except Exception:  # noqa: BLE001 — download não pode depender da Ailos
+            pass
 
     parcelas: list[DadosBoleto] = []
     # A ordem das parcelas é a ordem em que os billing_ids foram enviados.
@@ -327,7 +381,7 @@ def get_carne_pdf(
         raise HTTPException(
             status_code=409,
             detail='Nenhuma parcela deste carnê está registrada na Ailos ainda. '
-                   'Acompanhe o processamento do lote antes de baixar o carnê.',
+                   'Aguarde o processamento e tente novamente em instantes.',
         )
 
     return Response(

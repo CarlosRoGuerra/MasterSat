@@ -112,6 +112,15 @@ type BillingItem = {
   boleto_ailos?: boolean;
 };
 
+type CarneItem = {
+  lote_id: number;
+  criado_em?: string | null;
+  parcelas: number;
+  parcelas_registradas: number;
+  total: number;
+  status: string;
+};
+
 type IntervContract = { id: number; client_name?: string | null; vehicle_plate?: string | null; plan_name?: string | null; status: string; monthly_value?: number | null };
 
 type BillingChange = {
@@ -375,6 +384,8 @@ export default function ClientesPage() {
   // Seleção múltipla de boletos (soma para pagamento em lote)
   const [selectedBillingIds, setSelectedBillingIds] = useState<number[]>([]);
   const [gerandoCarne, setGerandoCarne] = useState(false);
+  // Carnês já gerados do cliente (reabrir/baixar)
+  const [carnes, setCarnes] = useState<CarneItem[]>([]);
 
   // Unificação de boletos (negociação: N boletos abertos → 1 avulso)
   const [unifyOpen, setUnifyOpen] = useState(false);
@@ -547,12 +558,37 @@ export default function ClientesPage() {
     setSelectedBillingIds([]);
     setBillingsLoading(true);
     try {
-      const data = await apiFetch<BillingItem[]>(
-        `/billings?client_id=${client.id}&limit=100`, {}, token!
-      ).catch(() => []);
+      const [data, cs] = await Promise.all([
+        apiFetch<BillingItem[]>(`/billings?client_id=${client.id}&limit=100`, {}, token!).catch(() => []),
+        apiFetch<CarneItem[]>(`/boletos/carne?client_id=${client.id}`, {}, token!).catch(() => []),
+      ]);
       setClientBillings(data);
+      setCarnes(cs);
     } finally {
       setBillingsLoading(false);
+    }
+  }
+
+  async function reloadCarnes() {
+    if (!token || !billingsModalClient) return;
+    const cs = await apiFetch<CarneItem[]>(`/boletos/carne?client_id=${billingsModalClient.id}`, {}, token).catch(() => []);
+    setCarnes(cs);
+  }
+
+  async function baixarCarne(loteId: number) {
+    if (!token) return;
+    try {
+      const resp = await fetch(`${API_URL.replace(/\/+$/, '')}/boletos/carne/${loteId}/pdf`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!resp.ok) {
+        let detalhe = `Erro ${resp.status}`;
+        try { detalhe = (await resp.json())?.detail || detalhe; } catch { /* noop */ }
+        throw new Error(detalhe);
+      }
+      entregarArquivo(await resp.blob(), `carne-${loteId}.pdf`, { emNovaAba: true });
+    } catch (err) {
+      alert(parseError(err));
     }
   }
 
@@ -605,7 +641,8 @@ export default function ClientesPage() {
       // download (evita re-registro, que duplicaria boletos).
       if (status === 'processing') {
         setSelectedBillingIds([]);
-        setFeedback(`Carnê registrado (lote #${lote.id}). As parcelas ainda estão sendo processadas na Ailos — o registro NÃO precisa ser refeito; baixe o PDF em instantes.`);
+        await reloadCarnes();
+        setFeedback(`Carnê registrado (lote #${lote.id}). As parcelas ainda estão sendo processadas na Ailos — ele já aparece em "Carnês gerados"; baixe o PDF em instantes.`);
         return;
       }
       // 3. baixa o PDF do carnê (só as parcelas já registradas entram)
@@ -620,7 +657,7 @@ export default function ClientesPage() {
       entregarArquivo(await resp.blob(), `carne-${lote.id}.pdf`, { emNovaAba: true });
       setSelectedBillingIds([]);
       setFeedback(`Carnê gerado com ${qtd} parcela(s).`);
-      await reloadClientBillings();
+      await Promise.all([reloadClientBillings(), reloadCarnes()]);
     } catch (err) {
       alert(parseError(err));
     } finally {
@@ -1875,7 +1912,7 @@ export default function ClientesPage() {
       {/* ══ Modal: Boletos do cliente ══════════════════════════════════════ */}
       <Modal
         open={billingsModalOpen}
-        onClose={() => { setBillingsModalOpen(false); setBillingsModalClient(null); setClientBillings([]); setBillingSummaryExpanded(false); setSelectedBillingIds([]); }}
+        onClose={() => { setBillingsModalOpen(false); setBillingsModalClient(null); setClientBillings([]); setCarnes([]); setBillingSummaryExpanded(false); setSelectedBillingIds([]); }}
         title={billingsModalClient ? `Boletos do cliente — ${billingsModalClient.name}` : 'Boletos do cliente'}
         size="2xl"
       >
@@ -1946,6 +1983,34 @@ export default function ClientesPage() {
             </div>
           );
         })()}
+
+        {/* Carnês já gerados deste cliente — reabrir/baixar */}
+        {carnes.length > 0 && (
+          <div className="mb-4 rounded-xl border border-slate-200 dark:border-slate-700">
+            <p className="border-b border-slate-100 px-4 py-2 text-xs font-semibold text-slate-500 dark:border-slate-800 dark:text-slate-400">
+              Carnês gerados
+            </p>
+            <div className="divide-y divide-slate-100 dark:divide-slate-800">
+              {carnes.map((c) => {
+                const fmt = (v: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v);
+                const prontas = c.parcelas_registradas >= c.parcelas;
+                return (
+                  <div key={c.lote_id} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2.5 text-sm">
+                    <span className="font-semibold text-slate-700 dark:text-slate-200">Carnê #{c.lote_id}</span>
+                    <span className="text-slate-500 dark:text-slate-400">{c.parcelas} parcela(s) · {fmt(c.total)}</span>
+                    {c.criado_em && <span className="text-xs text-slate-400">{new Date(c.criado_em).toLocaleDateString('pt-BR')}</span>}
+                    {!prontas && (
+                      <Badge variant="warning">{c.parcelas_registradas}/{c.parcelas} prontas</Badge>
+                    )}
+                    <Button variant="secondary" onClick={() => baixarCarne(c.lote_id)} className="ml-auto !py-1.5 text-xs">
+                      Baixar carnê
+                    </Button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {billingsLoading ? (
           <TableSkeleton rows={5} cols={8} />

@@ -211,3 +211,63 @@ def test_lote_de_boleto_nao_e_carne(http, db, cliente):
                      billing_ids=[b.id], status='concluido')
     db.add(lote); db.commit()
     assert http.get(f'/api/v1/boletos/carne/{lote.id}/pdf').status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Carnê — listar por cliente + auto-recuperação no download
+# ---------------------------------------------------------------------------
+
+def test_lista_carnes_do_cliente(http, db, cliente):
+    b1 = _cobranca(db, cliente); _registrar(db, b1.id)
+    b2 = _cobranca(db, cliente); _registrar(db, b2.id)
+    lote = _lote_carne(db, [b1.id, b2.id])
+    # vincula os boletos ao lote (é assim que a lista encontra o carnê do cliente)
+    for bid in (b1.id, b2.id):
+        ab = db.query(AilosBoleto).filter_by(billing_id=bid).first()
+        ab.lote_id = lote.id
+    db.commit()
+
+    r = http.get(f'/api/v1/boletos/carne?client_id={cliente.id}')
+    assert r.status_code == 200
+    carnes = r.json()
+    assert len(carnes) == 1
+    assert carnes[0]['lote_id'] == lote.id
+    assert carnes[0]['parcelas'] == 2
+    assert carnes[0]['parcelas_registradas'] == 2
+
+
+def test_lista_carne_nao_vaza_de_outro_cliente(http, db, cliente, outro_cliente):
+    b = _cobranca(db, cliente); _registrar(db, b.id)
+    lote = _lote_carne(db, [b.id])
+    ab = db.query(AilosBoleto).filter_by(billing_id=b.id).first()
+    ab.lote_id = lote.id; db.commit()
+
+    assert http.get(f'/api/v1/boletos/carne?client_id={outro_cliente.id}').json() == []
+
+
+def test_download_recupera_parcela_sem_linha_digitavel(http, db, cliente, monkeypatch):
+    """Carnê registrado mas sem linha digitável salva (a consulta falhou na
+    geração): o download recupera via Ailos antes de montar o PDF."""
+    from app.services import ailos_boletos
+
+    b1 = _cobranca(db, cliente)
+    b2 = _cobranca(db, cliente)
+    # parcelas SEM linha digitável (como após uma geração cuja consulta falhou)
+    for bid in (b1.id, b2.id):
+        db.add(AilosBoleto(billing_id=bid, numero_convenio='102004'))
+    db.commit()
+    lote = _lote_carne(db, [b1.id, b2.id])
+
+    # a "recuperação" preenche a linha digitável das parcelas
+    def _fake_consultar(db_, lt):
+        for bid in lt.billing_ids:
+            ab = db_.query(AilosBoleto).filter_by(billing_id=bid).first()
+            ab.linha_digitavel = '08591.02006 40045.470206 00000.003012 5 1489'
+            ab.codigo_barras = '0859514890000009990102004004547020000000030'
+        db_.commit()
+        return {'status': 'completed', 'lote': lt}
+
+    monkeypatch.setattr(ailos_boletos, 'consultar_lote', _fake_consultar)
+    r = http.get(f'/api/v1/boletos/carne/{lote.id}/pdf')
+    assert r.status_code == 200
+    assert r.content[:4] == b'%PDF'
