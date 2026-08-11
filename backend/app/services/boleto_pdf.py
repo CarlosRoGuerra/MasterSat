@@ -600,24 +600,19 @@ def gerar_boleto_pdf(dados: DadosBoleto) -> bytes:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CARNÊ — várias parcelas pagáveis empacotadas na mesma folha (3 por página A4)
+# CARNÊ — parcelas pagáveis na mesma folha (2 por página A4). Cada parcela é
+# uma ficha de compensação COMPLETA (todos os campos exigidos pela FEBRABAN),
+# só que compacta, com a faixa da MasterSat por cima e o logo do banco (Ailos)
+# na parte pagável.
 # ─────────────────────────────────────────────────────────────────────────────
-_CARNE_ALTURA = _mm(85)   # espaço reservado por parcela (bloco + corte)
+_CARNE_ALTURA = _mm(112)   # espaço reservado por parcela (bloco + corte)
 
 
 def _draw_carne_parcela(c, d: DadosBoleto, y_top: float, num: int, total: int) -> float:
-    """
-    Uma parcela pagável do carnê, compacta. Cada parcela é um boleto completo
-    (cabeçalho do banco + linha digitável + código de barras), só que enxuto,
-    para caber 3 por página. Reaproveita os componentes da ficha.
-    """
-    H_HDR = _mm(12); H_R = _mm(10)
     y = y_top
     servico = str(d.itens[0][0]) if d.itens else "SERVIÇO DE RASTREAMENTO"
 
-    # Faixa da parcela: logo da MasterSat + título + nº da parcela. (O logo do
-    # banco, Ailos, fica na ficha de compensação logo abaixo — exigência
-    # FEBRABAN de exibir o logo do banco na parte pagável.)
+    # ── Faixa da parcela: logo da MasterSat + título + nº da parcela ──
     H_FAIXA = _mm(11)
     c.setFillColorRGB(0.96, 0.96, 0.96); c.rect(LM, y - H_FAIXA, CW, H_FAIXA, stroke=0, fill=1)
     _box(c, LM, y, CW, H_FAIXA, lw=0.4)
@@ -631,32 +626,81 @@ def _draw_carne_parcela(c, d: DadosBoleto, y_top: float, num: int, total: int) -
     c.drawRightString(RM - _mm(2), y - _mm(6.5), f"Parcela {num}/{total}")
     y -= H_FAIXA
 
+    # ── Ficha de compensação (FEBRABAN) — compacta, mas com todos os campos ──
+    H_HDR = _mm(12); H_R = _mm(7.5); H_FIN = _mm(4.4); H_PAG = _mm(10)
+
     # Cabeçalho do banco (logo Ailos + 085-0 + linha digitável)
     _draw_header(c, y, True, d.linha_digitavel, H_HDR); y -= H_HDR
 
+    cLP = CW * 0.72
+    _cell(c, LM,       y, cLP,     H_R, "Local de Pagamento",
+          "Pagar preferencialmente nas cooperativas do Sistema AILOS.")
+    _cell(c, LM + cLP, y, CW - cLP, H_R, "Vencimento", _fd(d.data_vencimento),
+          align="right", vsize=8)
+    y -= H_R
+
     cBN = CW * .46; cCP = CW * .24
-    _cell(c, LM,           y, cBN,          H_R, "Beneficiário", d.cedente_nome)
-    _cell(c, LM + cBN,     y, cCP,          H_R, "CPF/CNPJ", _fmt_cnpj(d.cedente_cnpj))
+    _cell(c, LM,             y, cBN,            H_R, "Beneficiário", d.cedente_nome)
+    _cell(c, LM + cBN,       y, cCP,            H_R, "CPF/CNPJ", _fmt_cnpj(d.cedente_cnpj))
     _cell(c, LM + cBN + cCP, y, CW - cBN - cCP, H_R, "Agência / Código do Beneficiário",
           f"{d.cedente_agencia} / {d.cedente_codigo}")
     y -= H_R
 
-    cPG = CW * .70
-    _cell(c, LM,       y, cPG,      H_R, "Pagador",
-          f"{d.sacado_nome}  -  {_fmt_cnpj(d.sacado_cpf_cnpj)}")
-    _cell(c, LM + cPG, y, CW - cPG, H_R, "Nosso Número / Cód. do Documento",
-          d.nosso_numero_display)
+    cDD = CW*.12; cND = CW*.18; cES = CW*.07; cAC = CW*.05; cDP = CW*.12
+    cNN = CW - cDD - cND - cES - cAC - cDP
+    _cell(c, LM,                       y, cDD, H_R, "Data do Documento", _fd(d.data_emissao))
+    _cell(c, LM+cDD,                   y, cND, H_R, "Nº do Documento", f"BOLETO-{d.billing_id}")
+    _cell(c, LM+cDD+cND,               y, cES, H_R, "Espécie", "DS")
+    _cell(c, LM+cDD+cND+cES,           y, cAC, H_R, "Aceite", d.aceite)
+    _cell(c, LM+cDD+cND+cES+cAC,       y, cDP, H_R, "Data Proces.", _fd(d.data_emissao))
+    _cell(c, LM+cDD+cND+cES+cAC+cDP,   y, cNN, H_R, "Nosso Número", d.nosso_numero_display)
     y -= H_R
 
-    cVC = CW * .35; cDOC = CW * .30
-    _cell(c, LM,             y, cVC,             H_R, "Vencimento",
-          _fd(d.data_vencimento), align="right", vsize=8.5)
-    _cell(c, LM + cVC,       y, cDOC,            H_R, "Nº do Documento", f"BOLETO-{d.billing_id}")
-    _cell(c, LM + cVC + cDOC, y, CW - cVC - cDOC, H_R, "(=) Valor do Documento",
+    cUB = CW*.10; cCA = CW*.10; cEM = CW*.12; cQM = CW*.10; cVM = CW*.12
+    cVD = CW - cUB - cCA - cEM - cQM - cVM
+    _cell(c, LM,                     y, cUB, H_R, "Uso do Banco", "")
+    _cell(c, LM+cUB,                 y, cCA, H_R, "Carteira", d.carteira.split("/")[0].strip())
+    _cell(c, LM+cUB+cCA,             y, cEM, H_R, "Espécie Moeda", "")
+    _cell(c, LM+cUB+cCA+cEM,         y, cQM, H_R, "Quantidade", "")
+    _cell(c, LM+cUB+cCA+cEM+cQM,     y, cVM, H_R, "Valor", "")
+    _cell(c, LM+cUB+cCA+cEM+cQM+cVM, y, cVD, H_R, "(=) Valor do Documento",
           _fv(d.valor), align="right", vsize=9)
     y -= H_R
 
-    y -= _mm(1)
+    C_INSTR = CW * 0.62; C_FIN = CW - C_INSTR; H_BLOCK = H_FIN * 5
+    _box(c, LM, y, C_INSTR, H_BLOCK)
+    c.setFont("Helvetica", 5.5); c.setFillColorRGB(0.5, 0.5, 0.5)
+    c.drawString(LM + _mm(1), y - _mm(3), "Instruções")
+    c.setFont("Helvetica", 6.5); c.setFillColorRGB(0, 0, 0)
+    ty = y - _mm(6)
+    for line in (d.instrucoes or [])[:3]:
+        if ty > y - H_BLOCK + _mm(1.5):
+            c.drawString(LM + _mm(1.5), ty, f"• {line}"); ty -= _mm(4)
+    fx = LM + C_INSTR
+    for i, lbl in enumerate([
+        "(-) Desconto / Abatimento", "(-) Outras Deduções",
+        "(+) Mora / Multa", "(+) Outros Acréscimos", "(=) Valor Cobrado",
+    ]):
+        _cell(c, fx, y - i * H_FIN, C_FIN, H_FIN, lbl, "", align="right")
+    y -= H_BLOCK
+
+    cPAG = CW * .75
+    _box(c, LM, y, cPAG, H_PAG)
+    c.setFont("Helvetica", 5.5); c.setFillColorRGB(0.5, 0.5, 0.5)
+    c.drawString(LM + _mm(1), y - _mm(3), "Pagador")
+    c.setFont("Helvetica", 6.5); c.setFillColorRGB(0, 0, 0)
+    c.drawString(LM + _mm(1), y - _mm(6), f"{d.sacado_nome}  -  {_fmt_cnpj(d.sacado_cpf_cnpj)}")
+    c.setFont("Helvetica", 6)
+    c.drawString(LM + _mm(1), y - _mm(9), (d.sacado_endereco or "")[:80])
+    _box(c, LM + cPAG, y, CW - cPAG, H_PAG)
+    c.setFont("Helvetica-Bold", 7); c.setFillColorRGB(0, 0, 0)
+    c.drawRightString(RM - _mm(1), y - H_PAG + _mm(2.5), "FICHA DE COMPENSAÇÃO")
+    c.setFont("Helvetica", 5.5); c.setFillColorRGB(0.5, 0.5, 0.5)
+    c.drawRightString(RM - _mm(1), y - _mm(3), "Autenticação Mecânica")
+    y -= H_PAG
+
+    # ── Código de barras (I2of5, padrão FEBRABAN) ──
+    y -= _mm(1.5)
     _draw_barcode(c, d.codigo_barras, LM, y, height_mm=12)
     y -= _mm(13)
 
@@ -669,7 +713,8 @@ def _draw_carne_parcela(c, d: DadosBoleto, y_top: float, num: int, total: int) -
 
 def gerar_carne_pdf(parcelas: list[DadosBoleto]) -> bytes:
     """
-    PDF do carnê: cada parcela é um boleto pagável, três por página A4.
+    PDF do carnê: cada parcela é uma ficha de compensação completa e pagável,
+    duas por página A4.
 
     ``parcelas`` já vêm com os dados oficiais da Ailos aplicados (linha
     digitável e código de barras reais) — sem isso a parcela não é pagável.
