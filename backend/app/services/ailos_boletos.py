@@ -12,9 +12,10 @@ Conformidade com a documentação (Manual v2, Postman oficial jan/26):
   - ``gerar_carne_lote`` usa ``tipoVencimento`` como objeto
     (``{tipoVencimento, quantidadeXDias, diaXDeCadaMes}``), com
     ``tipoVencimento=1`` (Mensal) — único modo suportado nesta entrega.
-  - v2 não possui consulta de lote; usam-se os endpoints v1
-    (``/v1/.../consultar/boleto/lote`` e ``/v1/.../consultar/carne/lote``),
-    escolhidos conforme ``lote.tipo``.
+  - v2 não possui consulta de lote; o lote de BOLETO usa o v1
+    (``/v1/.../consultar/boleto/lote``). O lote de CARNÊ NÃO usa o
+    ``/consultar/carne/lote`` (404 no gateway do APIm) — recupera parcela por
+    parcela pela consulta de boleto individual (``_consultar_carne_por_boleto``).
   - ``consultar_lote`` aceita tanto uma lista de itens quanto um dict com
     ``boletos``/``itens`` na resposta, casando cada item ao ``billing_id``
     via ``documento.numeroDocumento`` (enviado como ``billing.id``).
@@ -54,7 +55,6 @@ _PATH_CONSULTAR_BOLETO = '/v2/boletos/consultar/boleto/convenios/{convenio}/{num
 # v2 não possui consulta de lote — usa-se os endpoints v1 (Cartilha jan/26, p.9).
 # Há paths distintos para boleto e carnê.
 _PATH_CONSULTAR_LOTE = '/v1/boletos/consultar/boleto/lote/convenios/{convenio}/{ticket}'
-_PATH_CONSULTAR_CARNE_LOTE = '/v1/boletos/consultar/carne/lote/convenios/{convenio}/{ticket}'
 
 
 # ---------------------------------------------------------------------------
@@ -399,6 +399,46 @@ def consultar_boleto(db: Session, numero_boleto: str) -> dict | list | None:
     return resp.json
 
 
+def _consultar_carne_por_boleto(db: Session, lote: AilosLote) -> dict:
+    """
+    Recupera as parcelas de um carnê consultando cada boleto individualmente
+    pelo numeroDocumento (= billing.id).
+
+    Motivo: o endpoint de consulta de LOTE de carnê da Ailos devolve 404 no
+    gateway do APIM ("No matching resource found") — o recurso não está
+    publicado, apesar de constar no Postman. Já a consulta de boleto individual
+    (/v2/.../consultar/boleto/...) funciona; é a mesma usada na recuperação do
+    boleto avulso. Marca o lote 'completed' quando ao menos uma parcela já tem
+    os dados oficiais (linha digitável).
+    """
+    algum_registrado = False
+    for billing_id in (lote.billing_ids or []):
+        boleto = db.query(AilosBoleto).filter_by(billing_id=billing_id).first()
+        if boleto is not None and boleto.linha_digitavel:
+            algum_registrado = True
+            continue
+        try:
+            dados = consultar_boleto(db, str(billing_id))
+        except (ailos_client.AilosError, ailos_client.AilosApiError):
+            continue
+        if isinstance(dados, list):
+            dados = dados[0] if dados else None
+        if not isinstance(dados, dict):
+            continue
+        payload_request = boleto.payload_request if (boleto and boleto.payload_request) else {}
+        atualizado = _upsert_ailos_boleto(db, billing_id, payload_request, dados, lote_id=lote.id)
+        if atualizado.linha_digitavel:
+            algum_registrado = True
+
+    if not algum_registrado:
+        return {'status': 'processing'}
+
+    lote.status = 'completed'
+    db.commit()
+    db.refresh(lote)
+    return {'status': 'completed', 'lote': lote}
+
+
 def consultar_lote(db: Session, lote: AilosLote) -> dict:
     """
     Consulta o status de um lote/carnê pelo ``ticket``.
@@ -407,11 +447,17 @@ def consultar_lote(db: Session, lote: AilosLote) -> dict:
     ``{'status': 'processing'}`` sem alterar ``lote.status``. Quando
     concluído, atualiza ``lote.status='completed'``, ``payload_response`` e
     faz upsert em ``ailos_boletos`` para cada item retornado.
+
+    Carnê é tratado à parte: a consulta de lote de carnê da Ailos devolve 404
+    no gateway, então recupera parcela por parcela (ver
+    ``_consultar_carne_por_boleto``).
     """
-    path = _PATH_CONSULTAR_CARNE_LOTE if lote.tipo == 'carne' else _PATH_CONSULTAR_LOTE
+    if lote.tipo == 'carne':
+        return _consultar_carne_por_boleto(db, lote)
+
     resp = ailos_client.request(
         db, 'GET',
-        path.format(convenio=settings.ailos_numero_convenio, ticket=lote.ticket),
+        _PATH_CONSULTAR_LOTE.format(convenio=settings.ailos_numero_convenio, ticket=lote.ticket),
     )
 
     if resp.processing:

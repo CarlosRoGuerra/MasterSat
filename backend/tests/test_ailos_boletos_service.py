@@ -379,3 +379,72 @@ class TestVerificarPagamento:
         assert res['pago'] is False
         db.refresh(billing_pendente)
         assert billing_pendente.status != BillingStatus.PAID
+
+
+class TestConsultarCarne:
+    """A consulta de LOTE de carnê da Ailos devolve 404 no gateway; o status do
+    carnê é obtido recuperando cada parcela pela consulta de boleto individual
+    (numeroDocumento = billing.id)."""
+
+    def _lote_carne(self, db, ids):
+        lote = AilosLote(tipo='carne', ticket='TICKET-CARNE-X', numero_convenio='102004',
+                         billing_ids=list(ids), status='processing')
+        db.add(lote)
+        db.commit()
+        db.refresh(lote)
+        for bid in ids:
+            db.add(AilosBoleto(billing_id=bid, numero_convenio='102004', lote_id=lote.id,
+                               payload_request={'documento': {'numeroDocumento': bid}}))
+        db.commit()
+        return lote
+
+    def test_recupera_parcelas_por_boleto_individual(self, db, billing_pendente, contrato, cliente):
+        billing2 = _criar_billing_futuro(db, contrato)
+        lote = self._lote_carne(db, [billing_pendente.id, billing2.id])
+        respostas = {
+            str(billing_pendente.id): _resp(200, json_data=_boleto_response(billing_pendente.id, linha='LD-1', codigo='CB-1')),
+            str(billing2.id): _resp(200, json_data=_boleto_response(billing2.id, linha='LD-2', codigo='CB-2')),
+        }
+
+        def _fake(method, url, **kw):
+            ultimo = url.rstrip('/').split('/')[-1]
+            return respostas.get(ultimo, _resp(404, text='nao'))
+
+        with patch('app.services.ailos_client.requests') as mock_requests:
+            mock_requests.request.side_effect = _fake
+            result = consultar_lote(db, lote)
+
+        assert result['status'] == 'completed'
+        assert result['lote'].status == 'completed'
+        ab1 = db.query(AilosBoleto).filter_by(billing_id=billing_pendente.id).first()
+        ab2 = db.query(AilosBoleto).filter_by(billing_id=billing2.id).first()
+        assert ab1.linha_digitavel == 'LD-1'
+        assert ab2.linha_digitavel == 'LD-2'
+
+    def test_carne_ainda_processando_fica_processing(self, db, billing_pendente, contrato, cliente):
+        """Nenhuma parcela registrada ainda → segue 'processing', não estoura."""
+        billing2 = _criar_billing_futuro(db, contrato)
+        lote = self._lote_carne(db, [billing_pendente.id, billing2.id])
+        with patch('app.services.ailos_client.requests') as mock_requests:
+            mock_requests.request.return_value = _resp(404, text='not found')
+            result = consultar_lote(db, lote)
+        assert result == {'status': 'processing'}
+        assert lote.status == 'processing'
+
+    def test_nao_reconsulta_parcela_ja_registrada(self, db, billing_pendente, contrato, cliente):
+        """Parcela que já tem linha digitável não é consultada de novo."""
+        billing2 = _criar_billing_futuro(db, contrato)
+        lote = self._lote_carne(db, [billing_pendente.id, billing2.id])
+        ab1 = db.query(AilosBoleto).filter_by(billing_id=billing_pendente.id).first()
+        ab1.linha_digitavel = 'JA-TENHO'; ab1.codigo_barras = 'CB'; db.commit()
+        respostas = {str(billing2.id): _resp(200, json_data=_boleto_response(billing2.id, linha='LD-2', codigo='CB-2'))}
+
+        def _fake(method, url, **kw):
+            ultimo = url.rstrip('/').split('/')[-1]
+            assert ultimo != str(billing_pendente.id), 'não deveria reconsultar a parcela já registrada'
+            return respostas.get(ultimo, _resp(404, text='nao'))
+
+        with patch('app.services.ailos_client.requests') as mock_requests:
+            mock_requests.request.side_effect = _fake
+            result = consultar_lote(db, lote)
+        assert result['status'] == 'completed'
