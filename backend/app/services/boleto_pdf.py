@@ -602,7 +602,7 @@ def gerar_boleto_pdf(dados: DadosBoleto) -> bytes:
 # ─────────────────────────────────────────────────────────────────────────────
 # CARNÊ — várias parcelas pagáveis empacotadas na mesma folha (3 por página A4)
 # ─────────────────────────────────────────────────────────────────────────────
-_CARNE_ALTURA = _mm(80)   # espaço reservado por parcela (bloco + corte)
+_CARNE_ALTURA = _mm(85)   # espaço reservado por parcela (bloco + corte)
 
 
 def _draw_carne_parcela(c, d: DadosBoleto, y_top: float, num: int, total: int) -> float:
@@ -615,14 +615,21 @@ def _draw_carne_parcela(c, d: DadosBoleto, y_top: float, num: int, total: int) -
     y = y_top
     servico = str(d.itens[0][0]) if d.itens else "SERVIÇO DE RASTREAMENTO"
 
-    # Faixa da parcela: nº da parcela + serviço
-    _box(c, LM, y, CW, _mm(6), lw=0.4)
-    c.setFillColorRGB(0.93, 0.93, 0.93); c.rect(LM, y - _mm(6), CW, _mm(6), stroke=0, fill=1)
-    c.setFillColorRGB(0, 0, 0); c.setFont("Helvetica-Bold", 8.5)
-    c.drawString(LM + _mm(1.5), y - _mm(4.2), f"CARNÊ — PARCELA {num}/{total}")
-    c.setFont("Helvetica", 7)
-    c.drawRightString(RM - _mm(1.5), y - _mm(4.2), servico[:72])
-    y -= _mm(6)
+    # Faixa da parcela: logo da MasterSat + título + nº da parcela. (O logo do
+    # banco, Ailos, fica na ficha de compensação logo abaixo — exigência
+    # FEBRABAN de exibir o logo do banco na parte pagável.)
+    H_FAIXA = _mm(11)
+    c.setFillColorRGB(0.96, 0.96, 0.96); c.rect(LM, y - H_FAIXA, CW, H_FAIXA, stroke=0, fill=1)
+    _box(c, LM, y, CW, H_FAIXA, lw=0.4)
+    _draw_mastersat(c, LM + _mm(2), y - _mm(1), h_mm=8.5, max_w_mm=34.0)
+    tx = LM + _mm(40)
+    c.setFillColorRGB(0, 0, 0); c.setFont("Helvetica-Bold", 9)
+    c.drawString(tx, y - _mm(4.5), "CARNÊ DE PAGAMENTO")
+    c.setFont("Helvetica", 7); c.setFillColorRGB(0.25, 0.25, 0.25)
+    c.drawString(tx, y - _mm(8.5), servico[:64])
+    c.setFillColorRGB(0, 0, 0); c.setFont("Helvetica-Bold", 9)
+    c.drawRightString(RM - _mm(2), y - _mm(6.5), f"Parcela {num}/{total}")
+    y -= H_FAIXA
 
     # Cabeçalho do banco (logo Ailos + 085-0 + linha digitável)
     _draw_header(c, y, True, d.linha_digitavel, H_HDR); y -= H_HDR
