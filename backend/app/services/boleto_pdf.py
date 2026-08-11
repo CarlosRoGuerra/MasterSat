@@ -597,3 +597,90 @@ def gerar_boleto_pdf(dados: DadosBoleto) -> bytes:
     c.save()
     buf.seek(0)
     return buf.read()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CARNÊ — várias parcelas pagáveis empacotadas na mesma folha (3 por página A4)
+# ─────────────────────────────────────────────────────────────────────────────
+_CARNE_ALTURA = _mm(80)   # espaço reservado por parcela (bloco + corte)
+
+
+def _draw_carne_parcela(c, d: DadosBoleto, y_top: float, num: int, total: int) -> float:
+    """
+    Uma parcela pagável do carnê, compacta. Cada parcela é um boleto completo
+    (cabeçalho do banco + linha digitável + código de barras), só que enxuto,
+    para caber 3 por página. Reaproveita os componentes da ficha.
+    """
+    H_HDR = _mm(12); H_R = _mm(10)
+    y = y_top
+    servico = str(d.itens[0][0]) if d.itens else "SERVIÇO DE RASTREAMENTO"
+
+    # Faixa da parcela: nº da parcela + serviço
+    _box(c, LM, y, CW, _mm(6), lw=0.4)
+    c.setFillColorRGB(0.93, 0.93, 0.93); c.rect(LM, y - _mm(6), CW, _mm(6), stroke=0, fill=1)
+    c.setFillColorRGB(0, 0, 0); c.setFont("Helvetica-Bold", 8.5)
+    c.drawString(LM + _mm(1.5), y - _mm(4.2), f"CARNÊ — PARCELA {num}/{total}")
+    c.setFont("Helvetica", 7)
+    c.drawRightString(RM - _mm(1.5), y - _mm(4.2), servico[:72])
+    y -= _mm(6)
+
+    # Cabeçalho do banco (logo Ailos + 085-0 + linha digitável)
+    _draw_header(c, y, True, d.linha_digitavel, H_HDR); y -= H_HDR
+
+    cBN = CW * .46; cCP = CW * .24
+    _cell(c, LM,           y, cBN,          H_R, "Beneficiário", d.cedente_nome)
+    _cell(c, LM + cBN,     y, cCP,          H_R, "CPF/CNPJ", _fmt_cnpj(d.cedente_cnpj))
+    _cell(c, LM + cBN + cCP, y, CW - cBN - cCP, H_R, "Agência / Código do Beneficiário",
+          f"{d.cedente_agencia} / {d.cedente_codigo}")
+    y -= H_R
+
+    cPG = CW * .70
+    _cell(c, LM,       y, cPG,      H_R, "Pagador",
+          f"{d.sacado_nome}  -  {_fmt_cnpj(d.sacado_cpf_cnpj)}")
+    _cell(c, LM + cPG, y, CW - cPG, H_R, "Nosso Número / Cód. do Documento",
+          d.nosso_numero_display)
+    y -= H_R
+
+    cVC = CW * .35; cDOC = CW * .30
+    _cell(c, LM,             y, cVC,             H_R, "Vencimento",
+          _fd(d.data_vencimento), align="right", vsize=8.5)
+    _cell(c, LM + cVC,       y, cDOC,            H_R, "Nº do Documento", f"BOLETO-{d.billing_id}")
+    _cell(c, LM + cVC + cDOC, y, CW - cVC - cDOC, H_R, "(=) Valor do Documento",
+          _fv(d.valor), align="right", vsize=9)
+    y -= H_R
+
+    y -= _mm(1)
+    _draw_barcode(c, d.codigo_barras, LM, y, height_mm=12)
+    y -= _mm(13)
+
+    _hline(c, LM, y, RM, lw=0.5, dash=(2, 4))
+    c.setFont("Helvetica", 5.5); c.setFillColorRGB(0.5, 0.5, 0.5)
+    c.drawString(LM, y - _mm(3), "✂  Corte aqui")
+    y -= _mm(5)
+    return y
+
+
+def gerar_carne_pdf(parcelas: list[DadosBoleto]) -> bytes:
+    """
+    PDF do carnê: cada parcela é um boleto pagável, três por página A4.
+
+    ``parcelas`` já vêm com os dados oficiais da Ailos aplicados (linha
+    digitável e código de barras reais) — sem isso a parcela não é pagável.
+    """
+    buf = io.BytesIO()
+    c = pdfcanvas.Canvas(buf, pagesize=A4)
+    ref = parcelas[0].billing_id if parcelas else ""
+    c.setTitle(f"Carnê MASTERSAT - {ref}")
+
+    total = len(parcelas)
+    y = _ft(12)
+    for i, d in enumerate(parcelas, start=1):
+        if y - _CARNE_ALTURA < _mm(12):
+            c.showPage()
+            y = _ft(12)
+        y = _draw_carne_parcela(c, d, y, i, total)
+        y -= _mm(3)
+
+    c.save()
+    buf.seek(0)
+    return buf.read()

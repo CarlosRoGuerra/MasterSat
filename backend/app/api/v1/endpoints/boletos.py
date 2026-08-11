@@ -21,13 +21,14 @@ from app.api.deps import require_roles
 from app.core.config import settings
 from app.db.session import get_db
 from app.models.ailos_boleto import AilosBoleto
+from app.models.ailos_lote import AilosLote
 from app.models.billing import Billing
 from app.models.client import Client
 from app.models.enums import BillingStatus, UserRole
 from app.models.vehicle import Vehicle
 from app.services.ailos_boletos import aplicar_dados_oficiais_ailos
 from app.services.boleto_ailos import gerar_dados_boleto, DadosBoleto
-from app.services.boleto_pdf import gerar_boleto_pdf
+from app.services.boleto_pdf import gerar_boleto_pdf, gerar_carne_pdf
 from app.services.cnab400 import gerar_arquivo_cnab400
 from app.services.cnab240 import gerar_arquivo_cnab240
 
@@ -203,19 +204,21 @@ def boleto_registrado(billing_id: int, db: Session) -> AilosBoleto | None:
     return ab if (ab and ab.linha_digitavel and ab.codigo_barras) else None
 
 
-def _montar_pdf_boleto(b: Billing, c: Client, db: Session,
-                       ailos_boleto: AilosBoleto) -> tuple[bytes, str]:
-    """Gera o PDF do boleto e o nome do arquivo (compartilhado entre a rota
-    autenticada e o link público)."""
-    item = _billing_to_boleto_item(b, c)
-
-    placa = ""
+def _placa_do_billing(b: Billing, db: Session) -> str:
     if b.vehicle_id:
         veiculo = db.get(Vehicle, b.vehicle_id)
         if veiculo and not veiculo.is_deleted:
-            placa = veiculo.plate
+            return veiculo.plate or ""
+    return ""
 
-    servico = descricao_servico(b, placa or None)
+
+def dados_boleto(b: Billing, c: Client, db: Session, ailos_boleto: AilosBoleto) -> DadosBoleto:
+    """
+    Monta o DadosBoleto de uma cobrança, com os dados oficiais da Ailos
+    aplicados. Compartilhado pelo boleto avulso e por cada parcela do carnê.
+    """
+    item = _billing_to_boleto_item(b, c)
+    servico = descricao_servico(b, _placa_do_billing(b, db) or None)
     dados = gerar_dados_boleto(
         billing_id=b.id,
         valor=b.amount,
@@ -235,18 +238,22 @@ def _montar_pdf_boleto(b: Billing, c: Client, db: Session,
             "Após vencimento entrar em contato: contato@mastersat.com.br",
         ],
     )
-    dados = aplicar_dados_oficiais_ailos(dados, ailos_boleto)
+    return aplicar_dados_oficiais_ailos(dados, ailos_boleto)
 
-    pdf_bytes = gerar_boleto_pdf(dados)
 
-    # Nome do arquivo: placa_do_veiculo + data_emissao
-    # Ex: boleto_PQPP666_04-06-2026.pdf
-    data_emissao_str = item["data_emissao"].strftime("%d-%m-%Y") if item.get("data_emissao") else date.today().strftime("%d-%m-%Y")
+def _montar_pdf_boleto(b: Billing, c: Client, db: Session,
+                       ailos_boleto: AilosBoleto) -> tuple[bytes, str]:
+    """Gera o PDF do boleto e o nome do arquivo (compartilhado entre a rota
+    autenticada e o link público)."""
+    item = _billing_to_boleto_item(b, c)
+    pdf_bytes = gerar_boleto_pdf(dados_boleto(b, c, db, ailos_boleto))
 
-    if placa:
-        filename = f"boleto_{placa}_{data_emissao_str}.pdf"
-    else:
-        filename = f"boleto_{b.id:06d}_{data_emissao_str}.pdf"
+    # Nome do arquivo: placa_do_veiculo + data_emissao (ex: boleto_PQPP666_04-06-2026.pdf)
+    placa = _placa_do_billing(b, db)
+    data_emissao_str = (item["data_emissao"].strftime("%d-%m-%Y")
+                        if item.get("data_emissao") else date.today().strftime("%d-%m-%Y"))
+    filename = (f"boleto_{placa}_{data_emissao_str}.pdf" if placa
+                else f"boleto_{b.id:06d}_{data_emissao_str}.pdf")
     return pdf_bytes, filename
 
 
@@ -277,6 +284,56 @@ def get_boleto_pdf(
         content=pdf_bytes,
         media_type="application/pdf",
         headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /boletos/carne/{lote_id}/pdf  — carnê (todas as parcelas do lote)
+# ---------------------------------------------------------------------------
+
+@router.get("/carne/{lote_id}/pdf")
+def get_carne_pdf(
+    lote_id: int,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    """
+    PDF do carnê: todas as parcelas registradas de um lote tipo 'carne', uma
+    por bloco pagável (3 por página).
+
+    Cada parcela precisa estar registrada na Ailos (linha digitável + código de
+    barras). Parcelas ainda não registradas ficam de fora — sem isso não são
+    pagáveis. Se nenhuma estiver pronta, 409.
+    """
+    lote = db.get(AilosLote, lote_id)
+    if lote is None or lote.tipo != 'carne':
+        raise HTTPException(status_code=404, detail='Carnê não encontrado')
+
+    parcelas: list[DadosBoleto] = []
+    # A ordem das parcelas é a ordem em que os billing_ids foram enviados.
+    for billing_id in (lote.billing_ids or []):
+        ab = boleto_registrado(billing_id, db)
+        if ab is None:
+            continue
+        b = db.get(Billing, billing_id)
+        if not b or b.is_deleted:
+            continue
+        c = db.get(Client, b.client_id)
+        if not c:
+            continue
+        parcelas.append(dados_boleto(b, c, db, ab))
+
+    if not parcelas:
+        raise HTTPException(
+            status_code=409,
+            detail='Nenhuma parcela deste carnê está registrada na Ailos ainda. '
+                   'Acompanhe o processamento do lote antes de baixar o carnê.',
+        )
+
+    return Response(
+        content=gerar_carne_pdf(parcelas),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="carne-{lote_id}.pdf"'},
     )
 
 

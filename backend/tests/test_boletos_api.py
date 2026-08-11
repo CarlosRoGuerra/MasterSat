@@ -142,3 +142,72 @@ def test_recibo_sai_mesmo_sem_numero_de_recibo_gravado(http, db, cobranca):
     cobranca.receipt_number = None
     db.commit()
     assert http.get(f'/api/v1/billings/{cobranca.id}/receipt').status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Carnê — PDF de várias parcelas registradas (backlog 1.2)
+# ---------------------------------------------------------------------------
+
+def _lote_carne(db, billing_ids: list[int]):
+    from app.models.ailos_lote import AilosLote
+    lote = AilosLote(tipo='carne', ticket=f'tkt-{billing_ids[0]}',
+                     numero_convenio='102004', billing_ids=billing_ids, status='concluido')
+    db.add(lote)
+    db.commit()
+    return lote
+
+
+def _cobranca(db, cliente, valor='189.90'):
+    from datetime import date, timedelta
+    from decimal import Decimal
+    b = Billing(client_id=cliente.id, amount=Decimal(valor),
+                due_date=date.today() + timedelta(days=30), status=BillingStatus.PENDING,
+                billing_type='recorrente', title='Mensalidade')
+    db.add(b)
+    db.commit()
+    return b
+
+
+def test_carne_gera_pdf_com_as_parcelas_registradas(http, db, cliente):
+    ids = []
+    for _ in range(3):
+        b = _cobranca(db, cliente)
+        _registrar(db, b.id)
+        ids.append(b.id)
+    lote = _lote_carne(db, ids)
+
+    r = http.get(f'/api/v1/boletos/carne/{lote.id}/pdf')
+    assert r.status_code == 200
+    assert r.content[:4] == b'%PDF'
+
+
+def test_carne_ignora_parcela_nao_registrada(http, db, cliente):
+    """Parcela sem registro na Ailos não é pagável — fica de fora, mas o carnê
+    sai com as que estão prontas."""
+    b1 = _cobranca(db, cliente); _registrar(db, b1.id)
+    b2 = _cobranca(db, cliente)  # sem registro
+    lote = _lote_carne(db, [b1.id, b2.id])
+    r = http.get(f'/api/v1/boletos/carne/{lote.id}/pdf')
+    assert r.status_code == 200
+    assert r.content[:4] == b'%PDF'
+
+
+def test_carne_sem_nenhuma_parcela_registrada_recusa(http, db, cliente):
+    b = _cobranca(db, cliente)  # sem registro
+    lote = _lote_carne(db, [b.id])
+    r = http.get(f'/api/v1/boletos/carne/{lote.id}/pdf')
+    assert r.status_code == 409
+
+
+def test_carne_inexistente_404(http, db):
+    assert http.get('/api/v1/boletos/carne/999999/pdf').status_code == 404
+
+
+def test_lote_de_boleto_nao_e_carne(http, db, cliente):
+    """Um lote comum (tipo 'boleto') não é servido pela rota de carnê."""
+    from app.models.ailos_lote import AilosLote
+    b = _cobranca(db, cliente); _registrar(db, b.id)
+    lote = AilosLote(tipo='boleto', ticket='tkt-boleto', numero_convenio='102004',
+                     billing_ids=[b.id], status='concluido')
+    db.add(lote); db.commit()
+    assert http.get(f'/api/v1/boletos/carne/{lote.id}/pdf').status_code == 404
