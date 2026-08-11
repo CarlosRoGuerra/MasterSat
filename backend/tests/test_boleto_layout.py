@@ -107,17 +107,21 @@ def test_boleto_nao_desenha_bloco_no_topo(monkeypatch):
 
 
 def test_boleto_mostra_servico_e_valor(monkeypatch):
-    """O que sobra tem de trazer o plano/produto (Instruções) e o valor."""
-    desenhados: list[str] = []
-    original = boleto_pdf._draw_ficha
+    """O boleto (layout padrão) tem de trazer o plano/produto e o valor."""
+    visto: dict = {}
+    original = boleto_pdf._draw_boleto_itau_style
     monkeypatch.setattr(
-        boleto_pdf, '_draw_ficha',
-        lambda c, d, y: (desenhados.extend(d.instrucoes or []), original(c, d, y))[1],
+        boleto_pdf, '_draw_boleto_itau_style',
+        lambda c, d, y, parcela=None: (
+            visto.update(instrucoes=d.instrucoes or [], itens=d.itens or []),
+            original(c, d, y, parcela),
+        )[1],
     )
     dados = _dados(itens=[('MENSALIDADE MONITORAMENTO', Decimal('99.90'))],
                    instrucoes=['Referente a: MENSALIDADE MONITORAMENTO.'])
     assert boleto_pdf.gerar_boleto_pdf(dados)[:4] == b'%PDF'
-    assert any('MENSALIDADE MONITORAMENTO' in i for i in desenhados)
+    assert any('MENSALIDADE MONITORAMENTO' in i for i in visto['instrucoes'])
+    assert visto['itens'][0][0] == 'MENSALIDADE MONITORAMENTO'
 
 
 def test_recibo_avulso_continua_sendo_recibo(monkeypatch):
