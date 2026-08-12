@@ -1,6 +1,8 @@
 from datetime import date
+from types import SimpleNamespace
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
+from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -153,6 +155,44 @@ def create_item(payload: ContractCreate, db: Session = Depends(get_db), _: objec
     db.refresh(obj)
     return serialize_contract(db, obj)
 
+
+
+class ContractGeneratePayload(BaseModel):
+    plan_id: int
+    start_date: date | None = None
+    end_date: date | None = None
+    installation_fee: float | None = None
+    uninstall_fee: float | None = None
+
+
+@router.post('/generate-pdf')
+def generate_contract_pdf(
+    payload: ContractGeneratePayload,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL)),
+):
+    """Gera o TERMO/CONTRATO em branco (só plano, vigência e taxas) para o
+    cliente preencher e assinar. NÃO salva contrato nem preenche dados do cliente."""
+    plan = db.get(Plan, payload.plan_id)
+    if not plan or plan.is_deleted:
+        raise HTTPException(status_code=404, detail='Plano não encontrado')
+    contrato = SimpleNamespace(
+        id='', start_date=payload.start_date, end_date=payload.end_date,
+        billing_day=None, installation_fee=payload.installation_fee,
+        uninstall_fee=payload.uninstall_fee,
+    )
+    cliente_branco = SimpleNamespace(
+        name='', cpf_cnpj='', address_line='', address_number='', neighborhood='',
+        zip_code='', city='', state='', phone='', email='', rg_ie='', birth_date=None,
+        emergency_contacts=[],
+    )
+    from app.services.contract_pdf import gerar_contrato_pdf
+    pdf = gerar_contrato_pdf(contrato, cliente_branco, plan, None)
+    return Response(
+        content=pdf,
+        media_type='application/pdf',
+        headers={'Content-Disposition': 'inline; filename="contrato-modelo.pdf"'},
+    )
 
 
 @router.post('/validate-signed')

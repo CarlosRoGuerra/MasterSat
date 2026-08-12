@@ -826,22 +826,32 @@ export default function FinanceiroPage() {
     if (!token || !canEdit) return;
     setProcessing(true);
     try {
-      // Só os dados essenciais: o cliente preenche o resto e assina no papel.
+      // Só gera o PDF em branco (plano, vigência e taxas). Não salva contrato
+      // nem preenche dados do cliente — quem preenche e assina é o cliente.
       const payload = {
-        client_id: Number(contractForm.client_id),
         plan_id: Number(contractForm.plan_id),
-        start_date: contractForm.start_date,
+        start_date: contractForm.start_date || null,
         end_date: contractForm.end_date || null,
-        billing_day: contractForm.billing_day ? Number(contractForm.billing_day) : null,
         installation_fee: contractForm.installation_fee ? Number(contractForm.installation_fee.replace(',', '.')) : null,
-        payment_method: 'boleto',
+        uninstall_fee: contractForm.uninstall_fee ? Number(contractForm.uninstall_fee.replace(',', '.')) : null,
       };
-      const criado = await apiFetch<{ id: number }>('/contracts', { method: 'POST', body: JSON.stringify(payload) }, token);
-      setContractForm(initialContractForm); setEditingContractId(null); setContractModal(false);
-      setFeedback('Contrato gerado — baixando o PDF para enviar ao cliente.');
-      await loadData(token);
-      // Baixa o termo já preenchido para encaminhar ao cliente assinar.
-      await downloadProtectedFile(`/contracts/${criado.id}/pdf`, token, `contrato-${criado.id}.pdf`).catch(e => setError(parseError(e)));
+      const resp = await fetch(`${API_URL.replace(/\/+$/, '')}/contracts/generate-pdf`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!resp.ok) {
+        let detalhe = `Erro ${resp.status}`;
+        try { detalhe = (await resp.json())?.detail || detalhe; } catch { /* noop */ }
+        throw new Error(detalhe);
+      }
+      const url = URL.createObjectURL(await resp.blob());
+      const a = document.createElement('a');
+      a.href = url; a.download = 'contrato-modelo.pdf';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      setContractForm(initialContractForm); setContractModal(false);
+      setFeedback('Contrato gerado — baixe o PDF e envie ao cliente para preencher e assinar.');
     } catch (err) { setModalError(parseError(err)); } finally { setProcessing(false); }
   }
 
@@ -1514,10 +1524,9 @@ export default function FinanceiroPage() {
               <div>
                 <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Contratos</p>
                 <p className="mt-1 max-w-xl text-sm text-slate-500 dark:text-slate-400">
-                  Gere o termo de adesão já preenchido com o <strong>plano</strong>, a <strong>vigência</strong>, o
-                  <strong> dia de vencimento</strong> e a <strong>taxa de instalação</strong>. Baixe o PDF, envie ao
-                  cliente para preencher os dados dele e assinar, e depois guarde o contrato assinado nos documentos
-                  do cliente (em <strong>Clientes → contrato</strong>).
+                  Gere o termo de adesão em branco com o <strong>plano</strong>, a <strong>vigência</strong> e as
+                  <strong> taxas</strong>. Nada é salvo: baixe o PDF, envie ao cliente para preencher os dados dele e
+                  assinar, e depois guarde o assinado em <strong>Clientes → contrato</strong>.
                 </p>
               </div>
               <Button variant="secondary" onClick={openCreateContract} className="shrink-0">
@@ -1791,32 +1800,21 @@ export default function FinanceiroPage() {
         </form>
       </Modal>
 
-      <Modal open={contractModal} onClose={() => { setContractModal(false); setEditingContractId(null); setContractForm(initialContractForm); setModalError(''); }} title="Gerar contrato" description="Escolha o cliente e o plano — a vigência, o dia de vencimento e a taxa de instalação vêm do plano. Baixe o PDF e envie ao cliente para preencher e assinar." size="lg">
+      <Modal open={contractModal} onClose={() => { setContractModal(false); setEditingContractId(null); setContractForm(initialContractForm); setModalError(''); }} title="Gerar contrato" description="Modelo em branco para o cliente preencher e assinar. Escolha o plano e a vigência — nada é salvo e os dados do cliente saem em branco." size="lg">
         <form className="space-y-5" onSubmit={submitContract}>
           {modalError && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>}
           <div className="grid gap-4 md:grid-cols-2">
-            <div className="md:col-span-2">
-              <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Cliente</span>
-              <ClientAutocomplete
-                clients={clients}
-                value={contractForm.client_id}
-                onChange={(id) => setContractForm(p => ({ ...p, client_id: id }))}
-                placeholder="Selecione o cliente"
-                required
-              />
-            </div>
             <label className="md:col-span-2 text-sm">
               <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Plano contratado</span>
               <select className={fieldClass} value={contractForm.plan_id} onChange={e => {
                 const id = e.target.value;
                 const plano = plans.find(pl => String(pl.id) === id);
                 setContractForm(p => {
-                  // Ao escolher o plano, puxa os padrões: vigência, vencimento e
-                  // taxa de instalação. Tudo editável, caso a negociação fuja do padrão.
+                  // Ao escolher o plano, puxa os padrões: taxas e vigência (fim).
                   const next = { ...p, plan_id: id };
                   if (plano) {
                     if (plano.default_installation_fee != null) next.installation_fee = String(plano.default_installation_fee);
-                    if (plano.default_billing_day != null) next.billing_day = String(plano.default_billing_day);
+                    if (plano.default_uninstall_fee != null) next.uninstall_fee = String(plano.default_uninstall_fee);
                     if (plano.default_duration_months != null && p.start_date) next.end_date = addMonthsISO(p.start_date, plano.default_duration_months);
                   }
                   return next;
@@ -1825,23 +1823,23 @@ export default function FinanceiroPage() {
             </label>
             <label className="text-sm">
               <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Início da vigência</span>
-              <input type="date" className={fieldClass} value={contractForm.start_date} onChange={e => setContractForm(p => ({ ...p, start_date: e.target.value }))} required />
+              <input type="date" className={fieldClass} value={contractForm.start_date} onChange={e => setContractForm(p => ({ ...p, start_date: e.target.value }))} />
             </label>
             <label className="text-sm">
-              <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Fim da vigência</span>
+              <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Fim da vigência <span className="font-normal text-slate-400">(se necessário)</span></span>
               <input type="date" className={fieldClass} value={contractForm.end_date} onChange={e => setContractForm(p => ({ ...p, end_date: e.target.value }))} />
             </label>
             <label className="text-sm">
-              <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Dia de vencimento</span>
-              <input className={fieldClass} placeholder="1 a 31" value={contractForm.billing_day} onChange={e => setContractForm(p => ({ ...p, billing_day: e.target.value.replace(/\D/g, '').slice(0, 2) }))} />
+              <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Taxa de instalação por veículo (R$)</span>
+              <input className={fieldClass} placeholder="0,00" value={contractForm.installation_fee} onChange={e => setContractForm(p => ({ ...p, installation_fee: e.target.value }))} />
             </label>
             <label className="text-sm">
-              <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Taxa de instalação (R$)</span>
-              <input className={fieldClass} placeholder="0,00" value={contractForm.installation_fee} onChange={e => setContractForm(p => ({ ...p, installation_fee: e.target.value }))} />
+              <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Taxa de desinstalação por veículo (R$)</span>
+              <input className={fieldClass} placeholder="0,00" value={contractForm.uninstall_fee} onChange={e => setContractForm(p => ({ ...p, uninstall_fee: e.target.value }))} />
             </label>
 
             <div className="rounded-2xl border border-slate-200 px-4 py-3 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400 md:col-span-2">
-              O cliente preenche os dados dele e assina no PDF. Quando devolver, guarde o assinado em <strong>Clientes → botão de contrato → “Enviar contrato assinado”</strong> — o cadastro passa a marcar “contrato armazenado”.
+              Baixe o PDF e envie ao cliente para preencher os dados dele e assinar. Quando devolver, guarde o assinado em <strong>Clientes → botão de contrato → “Enviar contrato assinado”</strong> — é lá que ele fica listado e o cadastro marca “contrato armazenado”.
             </div>
           </div>
           <div className="flex justify-end gap-3">

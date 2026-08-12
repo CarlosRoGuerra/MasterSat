@@ -238,6 +238,17 @@ def gerar_contrato_pdf(contract, client, plan=None, vehicle=None) -> bytes:
     taxa_inst = _fmt_moeda(getattr(contract, 'installation_fee', None))
     taxa_desinst = _fmt_moeda(getattr(contract, 'uninstall_fee', None))
 
+    # Vigência: preenche o início quando informado; senão deixa em branco para
+    # o cliente completar à mão. O prazo em meses sai da diferença início→fim.
+    _ini = getattr(contract, 'start_date', None)
+    _fim = getattr(contract, 'end_date', None)
+    inicio_vig = _ini.strftime('%d / %m / %Y') if _ini else '____ / ____ / ________'
+    if _ini and _fim:
+        _meses = (_fim.year - _ini.year) * 12 + (_fim.month - _ini.month)
+        prazo_vig = str(_meses) if _meses > 0 else '12'
+    else:
+        prazo_vig = '12'
+
     elems: list = []
 
     # ═══ TERMO DE ADESÃO ═══
@@ -294,8 +305,8 @@ def gerar_contrato_pdf(contract, client, plan=None, vehicle=None) -> bytes:
     # Data manual no MESMO campo do rótulo; prazo padrão 12 meses; renovação e
     # "sem fidelidade" como caixinhas para marcar à caneta (campo de meses saiu)
     elems.append(_grade([
-        [Paragraph('<b>INÍCIO VIGÊNCIA CONTRATO:</b> ____ / ____ / ________', st['valor']),
-         Paragraph('<b>PRAZO (MESES):</b> 12', st['valor']),
+        [Paragraph(f'<b>INÍCIO VIGÊNCIA CONTRATO:</b> {inicio_vig}', st['valor']),
+         Paragraph(f'<b>PRAZO (MESES):</b> {prazo_vig}', st['valor']),
          Paragraph('[  ] RENOVAÇÃO ANUAL AUTOMÁTICA', st['label']),
          Paragraph('[  ] SEM FIDELIDADE', st['label'])],
     ], st, [W * 0.34, W * 0.15, W * 0.29, W * 0.22]))
