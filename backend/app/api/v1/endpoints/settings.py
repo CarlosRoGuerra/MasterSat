@@ -9,8 +9,10 @@ Variáveis disponíveis nos templates: {NOME}, {VALOR}, {VENCIMENTO},
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+import smtplib
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_roles
@@ -78,3 +80,84 @@ def put_mensagens(
             db.add(SystemSetting(key=key, value=value))
     db.commit()
     return _load(db)
+
+
+# ── E-mail (SMTP) ────────────────────────────────────────────────────────────
+class EmailConfigPayload(BaseModel):
+    host: str = ''
+    port: int = 587
+    username: str = ''
+    # None/'' = mantém a senha atual; string preenchida = troca a senha.
+    password: str | None = None
+    from_email: str = ''
+    from_name: str = ''
+    security: str = 'tls'  # none | tls | ssl
+    enabled: bool = False
+
+
+class EmailTestPayload(BaseModel):
+    to: EmailStr
+
+
+def _email_out(cfg: dict) -> dict:
+    """Config para a tela — nunca devolve a senha, só se existe uma salva."""
+    return {
+        'host': cfg['host'],
+        'port': cfg['port'],
+        'username': cfg['username'],
+        'from_email': cfg['from_email'],
+        'from_name': cfg['from_name'],
+        'security': cfg['security'],
+        'enabled': cfg['enabled'],
+        'password_set': cfg['password_set'],
+    }
+
+
+@router.get('/email')
+def get_email_config(
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(UserRole.ADMIN)),
+):
+    from app.services.email_smtp import load_config
+    return _email_out(load_config(db))
+
+
+@router.put('/email')
+def put_email_config(
+    payload: EmailConfigPayload,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(UserRole.ADMIN)),
+):
+    if payload.security not in ('none', 'tls', 'ssl'):
+        raise HTTPException(status_code=422, detail='Segurança deve ser none, tls ou ssl.')
+    from app.services.email_smtp import save_config
+    return _email_out(save_config(db, payload.model_dump()))
+
+
+@router.post('/email/test')
+def test_email_config(
+    payload: EmailTestPayload,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(UserRole.ADMIN)),
+):
+    """Envia um e-mail de teste com a configuração SALVA para conferir o SMTP."""
+    from app.services.email_smtp import EmailConfigError, enviar_email
+    try:
+        enviar_email(
+            db,
+            destinatario=str(payload.to),
+            assunto='Teste de e-mail — MasterSat',
+            corpo=(
+                'Este é um e-mail de teste enviado pelo painel MasterSat.\n\n'
+                'Se você recebeu esta mensagem, a configuração de SMTP está funcionando.'
+            ),
+        )
+    except EmailConfigError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except smtplib.SMTPAuthenticationError as exc:
+        raise HTTPException(status_code=400, detail=f'Falha de autenticação no servidor de e-mail: {exc.smtp_error.decode(errors="ignore") if hasattr(exc, "smtp_error") else exc}') from exc
+    except smtplib.SMTPException as exc:
+        raise HTTPException(status_code=400, detail=f'Erro do servidor de e-mail: {exc}') from exc
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f'Não foi possível conectar ao servidor de e-mail: {exc}') from exc
+    return {'message': f'E-mail de teste enviado para {payload.to}.'}
