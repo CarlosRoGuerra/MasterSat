@@ -436,6 +436,7 @@ export default function ClientesPage() {
   const [contractDocs, setContractDocs] = useState<ClientDocument[]>([]);
   const [contractFile, setContractFile] = useState<File | null>(null);
   const [uploadingContract, setUploadingContract] = useState(false);
+  const [contractCheck, setContractCheck] = useState<{ level: string; message: string } | null>(null);
 
   // Modal "Notas fiscais do cliente" (botão da patinha)
   const [nfseModalOpen, setNfseModalOpen] = useState(false);
@@ -886,6 +887,26 @@ export default function ClientesPage() {
     if (!token || !contractSheetClient || !contractFile) return;
     setUploadingContract(true);
     try {
+      // 1. Confere o arquivo (não bloqueante). Se cair, segue o upload assim mesmo.
+      let verdict: { level: string; message: string } | null = null;
+      try {
+        const vbody = new FormData();
+        vbody.append('file', contractFile);
+        verdict = await apiFetch<{ level: string; message: string }>(
+          `/contracts/validate-signed?client_id=${contractSheetClient.id}`,
+          { method: 'POST', body: vbody }, token,
+        );
+      } catch { verdict = null; }
+      setContractCheck(verdict && verdict.message ? verdict : null);
+      // Só o "mismatch" (parece arquivo errado) pede confirmação; escaneamento
+      // ilegível apenas avisa, sem travar o operador em toda subida.
+      if (verdict && verdict.level === 'mismatch') {
+        if (!window.confirm(`${verdict.message}\n\nDeseja salvar mesmo assim?`)) {
+          setUploadingContract(false);
+          return;
+        }
+      }
+      // 2. Sobe o arquivo já na categoria certa.
       const body = new FormData();
       body.append('category', 'contrato');
       body.append('files', contractFile);
@@ -1996,7 +2017,7 @@ export default function ClientesPage() {
       {/* ══ Modal: Ficha de adesão / contratos do cliente ══════════════════ */}
       <Modal
         open={contractSheetOpen}
-        onClose={() => { setContractSheetOpen(false); setContractSheetClient(null); setContractSheetItems([]); setContractDocs([]); setContractFile(null); }}
+        onClose={() => { setContractSheetOpen(false); setContractSheetClient(null); setContractSheetItems([]); setContractDocs([]); setContractFile(null); setContractCheck(null); }}
         title={contractSheetClient ? `Contratos — ${contractSheetClient.name}` : 'Contratos'}
         size="2xl"
       >
@@ -2025,12 +2046,23 @@ export default function ClientesPage() {
                 type="file"
                 accept="application/pdf,image/*"
                 className={fileInputClass}
-                onChange={(e) => setContractFile(e.target.files?.[0] ?? null)}
+                onChange={(e) => { setContractFile(e.target.files?.[0] ?? null); setContractCheck(null); }}
               />
               <Button type="button" disabled={uploadingContract || !contractFile} onClick={uploadSignedContract}>
-                {uploadingContract ? 'Enviando…' : 'Enviar contrato assinado'}
+                {uploadingContract ? 'Conferindo…' : 'Enviar contrato assinado'}
               </Button>
             </div>
+          )}
+
+          {contractCheck && (
+            <p className={[
+              'mt-3 rounded-xl border px-3 py-2 text-xs',
+              contractCheck.level === 'ok'
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-950/30 dark:text-emerald-400'
+                : 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-400',
+            ].join(' ')}>
+              {contractCheck.message}
+            </p>
           )}
 
           {contractDocs.length > 0 && (

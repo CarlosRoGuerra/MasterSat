@@ -1,6 +1,6 @@
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -153,6 +153,25 @@ def create_item(payload: ContractCreate, db: Session = Depends(get_db), _: objec
     db.refresh(obj)
     return serialize_contract(db, obj)
 
+
+
+@router.post('/validate-signed')
+async def validate_signed_contract(
+    client_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL)),
+):
+    """Confere, quando dá, se o PDF assinado enviado parece o contrato do cliente.
+
+    Não bloqueia nada — só devolve um parecer para a tela avisar o operador.
+    """
+    client = db.get(Client, client_id)
+    if not client or client.is_deleted:
+        raise HTTPException(status_code=404, detail='Cliente não encontrado')
+    data = await file.read()
+    from app.services.contract_check import verificar_contrato_assinado
+    return verificar_contrato_assinado(data, file.content_type or '', client)
 
 
 @router.get('/{item_id}', response_model=ContractOut)
