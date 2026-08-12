@@ -432,6 +432,10 @@ export default function ClientesPage() {
   const [contractSheetClient, setContractSheetClient] = useState<Client | null>(null);
   const [contractSheetItems, setContractSheetItems] = useState<ContractSheetItem[]>([]);
   const [contractSheetLoading, setContractSheetLoading] = useState(false);
+  // Contrato assinado guardado nos documentos (categoria 'contrato')
+  const [contractDocs, setContractDocs] = useState<ClientDocument[]>([]);
+  const [contractFile, setContractFile] = useState<File | null>(null);
+  const [uploadingContract, setUploadingContract] = useState(false);
 
   // Modal "Notas fiscais do cliente" (botão da patinha)
   const [nfseModalOpen, setNfseModalOpen] = useState(false);
@@ -863,13 +867,53 @@ export default function ClientesPage() {
     setContractSheetClient(client);
     setContractSheetOpen(true);
     setContractSheetLoading(true);
+    setContractFile(null);
     try {
-      const data = await apiFetch<ContractSheetItem[]>(
-        `/contracts?client_id=${client.id}&limit=100`, {}, token!,
-      ).catch(() => []);
-      setContractSheetItems(data);
+      const [contratos, docs] = await Promise.all([
+        apiFetch<ContractSheetItem[]>(`/contracts?client_id=${client.id}&limit=100`, {}, token!).catch(() => []),
+        apiFetch<ClientDocument[]>(`/clients/${client.id}/documents`, {}, token!).catch(() => []),
+      ]);
+      setContractSheetItems(contratos);
+      setContractDocs(docs.filter((d) => d.category === 'contrato'));
     } finally {
       setContractSheetLoading(false);
+    }
+  }
+
+  // Envia o contrato assinado já na categoria certa ('contrato'), direto da
+  // modal — sem depender de o operador lembrar de trocar a categoria na edição.
+  async function uploadSignedContract() {
+    if (!token || !contractSheetClient || !contractFile) return;
+    setUploadingContract(true);
+    try {
+      const body = new FormData();
+      body.append('category', 'contrato');
+      body.append('files', contractFile);
+      await apiFetch(`/clients/${contractSheetClient.id}/documents`, { method: 'POST', body }, token);
+      setContractFile(null);
+      const docs = await apiFetch<ClientDocument[]>(`/clients/${contractSheetClient.id}/documents`, {}, token).catch(() => []);
+      setContractDocs(docs.filter((d) => d.category === 'contrato'));
+      setContractSheetClient((prev) => (prev ? { ...prev, contrato_armazenado: true } : prev));
+      await loadClients(token); // atualiza o selo "armazenado" na listagem
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Erro ao enviar o contrato assinado');
+    } finally {
+      setUploadingContract(false);
+    }
+  }
+
+  async function removeContractDoc(id: number) {
+    if (!token || !contractSheetClient) return;
+    if (!window.confirm('Remover este contrato assinado?')) return;
+    try {
+      await apiFetch(`/clients/${contractSheetClient.id}/documents/${id}`, { method: 'DELETE' }, token);
+      const docs = await apiFetch<ClientDocument[]>(`/clients/${contractSheetClient.id}/documents`, {}, token).catch(() => []);
+      const contratoDocs = docs.filter((d) => d.category === 'contrato');
+      setContractDocs(contratoDocs);
+      setContractSheetClient((prev) => (prev ? { ...prev, contrato_armazenado: contratoDocs.length > 0 } : prev));
+      await loadClients(token);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Erro ao remover o contrato assinado');
     }
   }
 
@@ -1952,19 +1996,61 @@ export default function ClientesPage() {
       {/* ══ Modal: Ficha de adesão / contratos do cliente ══════════════════ */}
       <Modal
         open={contractSheetOpen}
-        onClose={() => { setContractSheetOpen(false); setContractSheetClient(null); setContractSheetItems([]); }}
+        onClose={() => { setContractSheetOpen(false); setContractSheetClient(null); setContractSheetItems([]); setContractDocs([]); setContractFile(null); }}
         title={contractSheetClient ? `Contratos — ${contractSheetClient.name}` : 'Contratos'}
         size="2xl"
       >
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <p className="text-sm text-slate-500 dark:text-slate-400">
-            Contratos gerados para o cliente. Gere novos em <strong>Financeiro → Gerar contrato</strong>;
-            o contrato assinado é guardado nos documentos (categoria “contrato”).
+            Contratos gerados para o cliente. Gere novos em <strong>Financeiro → Gerar contrato</strong>.
           </p>
           {contractSheetClient && (
             contractSheetClient.contrato_armazenado
               ? <Badge variant="success">Contrato armazenado</Badge>
               : <Badge variant="warning">Assinado pendente</Badge>
+          )}
+        </div>
+
+        {/* Contrato assinado: sobe aqui mesmo, já na categoria certa. */}
+        <div className="mb-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/50">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Contrato assinado</p>
+            <span className="text-xs text-slate-400">{contractDocs.length} arquivo(s)</span>
+          </div>
+          <p className="mt-0.5 text-xs text-slate-400">Depois que o cliente devolver o contrato assinado, anexe o arquivo (PDF ou imagem) aqui.</p>
+
+          {canEdit && (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <input
+                type="file"
+                accept="application/pdf,image/*"
+                className={fileInputClass}
+                onChange={(e) => setContractFile(e.target.files?.[0] ?? null)}
+              />
+              <Button type="button" disabled={uploadingContract || !contractFile} onClick={uploadSignedContract}>
+                {uploadingContract ? 'Enviando…' : 'Enviar contrato assinado'}
+              </Button>
+            </div>
+          )}
+
+          {contractDocs.length > 0 && (
+            <ul className="mt-3 space-y-2">
+              {contractDocs.map((doc) => (
+                <li key={doc.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-800 dark:bg-slate-900">
+                  <span className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
+                    <FileText className="h-4 w-4 shrink-0 text-slate-400" />
+                    {doc.file_name}
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <a href={doc.url} target="_blank" rel="noreferrer" className="rounded-lg border border-slate-200 px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Visualizar</a>
+                    <a href={doc.download_url} target="_blank" rel="noreferrer" className="rounded-lg border border-slate-200 px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Baixar</a>
+                    {canEdit && (
+                      <button type="button" onClick={() => removeContractDoc(doc.id)} className="rounded-lg border border-rose-200 px-2 py-1 text-[11px] font-medium text-rose-600 hover:bg-rose-50 dark:border-rose-900/40 dark:text-rose-400 dark:hover:bg-rose-950/30">Excluir</button>
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ul>
           )}
         </div>
         {contractSheetLoading ? (

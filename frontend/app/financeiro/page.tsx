@@ -1841,7 +1841,7 @@ export default function FinanceiroPage() {
             </label>
 
             <div className="rounded-2xl border border-slate-200 px-4 py-3 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400 md:col-span-2">
-              O cliente preenche os dados dele e assina no PDF. Depois, guarde o contrato assinado em <strong>Clientes → documentos (categoria “contrato”)</strong> — o cadastro passa a marcar “contrato armazenado”.
+              O cliente preenche os dados dele e assina no PDF. Quando devolver, guarde o assinado em <strong>Clientes → botão de contrato → “Enviar contrato assinado”</strong> — o cadastro passa a marcar “contrato armazenado”.
             </div>
           </div>
           <div className="flex justify-end gap-3">
