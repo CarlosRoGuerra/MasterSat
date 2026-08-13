@@ -7,7 +7,12 @@ from sqlalchemy.orm import Session
 from app.api.deps import require_roles
 from app.db.session import get_db
 from app.models.enums import UserRole
-from app.services.billing_closure import execute_closure, generate_closure_pdf, simulate_closure
+from app.services.billing_closure import (
+    execute_closure,
+    generate_closure_pdf,
+    generate_closure_xlsx,
+    simulate_closure,
+)
 
 router = APIRouter()
 
@@ -53,6 +58,25 @@ def simulate_pdf(
         pdf_buffer,
         media_type='application/pdf',
         headers={'Content-Disposition': f'inline; filename={filename}'},
+    )
+
+
+@router.get('/simulate/xlsx')
+def simulate_xlsx(
+    reference_month: str = Query(..., description='Mês de referência no formato YYYY-MM'),
+    filter_type: str = Query(default='all', pattern='^(all|pf|pj|client)$'),
+    client_id: int | None = None,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    ref = _parse_reference_month(reference_month)
+    simulation = simulate_closure(db, ref, filter_type, client_id)
+    xlsx_buffer = generate_closure_xlsx(simulation)
+    filename = f'fechamento-{reference_month}.xlsx'
+    return StreamingResponse(
+        xlsx_buffer,
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': f'attachment; filename={filename}'},
     )
 
 

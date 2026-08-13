@@ -989,6 +989,165 @@ def _resumo_geral(simulation: dict, itens: list[dict],
     return linhas
 
 
+def generate_closure_xlsx(simulation: dict) -> BytesIO:
+    """
+    Simulação de fechamento em Excel (.xlsx), com 3 abas:
+      Resumo        — período, painel de totais e os somatórios financeiros
+      Contratos     — uma linha por contrato (interveniente, cliente, veículo…)
+      Movimentação  — instalações e desinstalações do período, uma por linha
+
+    Ao contrário do PDF (texto monoespaçado), aqui os dados vão em colunas para
+    a operação filtrar, ordenar e somar na planilha.
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    mes_ref = simulation.get('reference_month', '')
+    itens = simulation.get('items') or []
+    desinst = simulation.get('uninstall_events') or []
+    fin = _totais_financeiros(itens, simulation)
+    cont = _contagens(itens, desinst, mes_ref)
+    agora = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
+
+    interveniente_do_cliente = {
+        i.get('client_id'): (i.get('interveniente_nome') or i['client_name']) for i in itens
+    }
+
+    MONEY = '"R$" #,##0.00'
+    DATA = 'DD/MM/YYYY'
+    header_font = Font(bold=True, color='FFFFFF')
+    header_fill = PatternFill('solid', fgColor='1F2A44')
+    bold = Font(bold=True)
+
+    def _cabecalho(ws, colunas: list[str]) -> None:
+        for ci, nome in enumerate(colunas, 1):
+            cell = ws.cell(1, ci, nome)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal='center')
+        ws.freeze_panes = 'A2'
+
+    wb = Workbook()
+
+    # ── Aba Resumo ──────────────────────────────────────────────────────────
+    ws = wb.active
+    ws.title = 'Resumo'
+    ws['A1'] = 'PRÉVIA DE FECHAMENTO'
+    ws['A1'].font = Font(bold=True, size=14)
+    ws['A2'] = f'Mês de referência: {mes_ref}'
+    ws['A3'] = f'Gerado em: {agora}'
+
+    ws['A5'] = 'Totais do período'
+    ws['A5'].font = bold
+    linha = 6
+    for rotulo, valor in (
+        ('Veículos', cont['veiculos']),
+        ('Rastreadores', cont['equipamentos']),
+        ('Instalações', cont['instalacoes']),
+        ('Desinstalações', cont['desinstalacoes']),
+    ):
+        ws.cell(linha, 1, rotulo).font = bold
+        ws.cell(linha, 2, valor)
+        linha += 1
+
+    linha += 1
+    ws.cell(linha, 1, 'Totais financeiros').font = bold
+    linha += 1
+    for rotulo, valor in (
+        ('Total mensalidades', fin['mensalidades']),
+        ('Total produtos/serviços (1ª cobrança)', fin['produtos']),
+        ('Total taxas de desinstalação', fin['taxas']),
+        ('Total serviços avulsos', fin['servicos']),
+        ('TOTAL GERAL', fin['geral']),
+    ):
+        c1 = ws.cell(linha, 1, rotulo)
+        c2 = ws.cell(linha, 2, float(valor))
+        c2.number_format = MONEY
+        if rotulo.startswith('TOTAL GERAL'):
+            c1.font = bold
+            c2.font = bold
+        linha += 1
+    ws.column_dimensions['A'].width = 40
+    ws.column_dimensions['B'].width = 20
+
+    # ── Aba Contratos ───────────────────────────────────────────────────────
+    ws2 = wb.create_sheet('Contratos')
+    colunas = [
+        'Interveniente', 'Cliente', 'Placa', 'Tipo veículo', 'Rastreador (IMEI)',
+        'Data instalação', 'Data contrato', 'Plano', 'Mensalidade',
+        'Produtos 1ª cobrança', 'Total', 'Vencimento', 'Período', 'Já faturado',
+    ]
+    _cabecalho(ws2, colunas)
+    rr = 2
+    for it in itens:
+        produtos = sum(float(p.get('amount') or 0) for p in (it.get('first_month_charges') or []))
+        valores = [
+            it.get('interveniente_nome') or it.get('client_name'),
+            it.get('client_name'),
+            it.get('vehicle_plate') or '',
+            (it.get('vehicle_type') or '').upper(),
+            it.get('tracker_imei') or '',
+            it.get('tracker_install_date'),
+            it.get('contract_start_date'),
+            it.get('plan_name'),
+            float(it.get('billing_amount') or 0),
+            produtos,
+            float(it.get('total_first_billing') or 0),
+            it.get('due_date'),
+            it.get('period_label') or '',
+            'Sim' if it.get('already_generated') else 'Não',
+        ]
+        for ci, val in enumerate(valores, 1):
+            cell = ws2.cell(rr, ci, val)
+            if ci in (6, 7, 12):
+                cell.number_format = DATA
+            elif ci in (9, 10, 11):
+                cell.number_format = MONEY
+        rr += 1
+    for ci, largura in enumerate([28, 28, 10, 14, 20, 15, 15, 20, 14, 18, 14, 13, 10, 12], 1):
+        ws2.column_dimensions[get_column_letter(ci)].width = largura
+
+    # ── Aba Movimentação ────────────────────────────────────────────────────
+    ws3 = wb.create_sheet('Movimentação')
+    _cabecalho(ws3, ['Tipo', 'Data', 'Interveniente', 'Cliente', 'Placa', 'Rastreador', 'Taxa'])
+    rr = 2
+    for it in itens:
+        if _no_mes(it.get('tracker_install_date'), mes_ref):
+            valores = [
+                'Instalação', it.get('tracker_install_date'),
+                it.get('interveniente_nome') or it.get('client_name'),
+                it.get('client_name'), it.get('vehicle_plate') or '',
+                it.get('tracker_imei') or '', None,
+            ]
+            for ci, val in enumerate(valores, 1):
+                cell = ws3.cell(rr, ci, val)
+                if ci == 2:
+                    cell.number_format = DATA
+            rr += 1
+    for ev in desinst:
+        taxa = None if ev.get('skipped') else float(ev.get('fee_amount') or 0)
+        grupo = interveniente_do_cliente.get(ev.get('client_id')) or ev.get('client_name') or ''
+        valores = [
+            'Desinstalação', ev.get('uninstall_date'), grupo,
+            ev.get('client_name') or '', ev.get('vehicle_plate') or '', '', taxa,
+        ]
+        for ci, val in enumerate(valores, 1):
+            cell = ws3.cell(rr, ci, val)
+            if ci == 2:
+                cell.number_format = DATA
+            elif ci == 7 and val is not None:
+                cell.number_format = MONEY
+        rr += 1
+    for ci, largura in enumerate([14, 12, 28, 28, 10, 20, 12], 1):
+        ws3.column_dimensions[get_column_letter(ci)].width = largura
+
+    buffer = BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+    return buffer
+
+
 def generate_closure_pdf(simulation: dict) -> BytesIO:
     """Simulação de fechamento em PDF, no formato monoespaçado do SGR."""
     from reportlab.lib.pagesizes import A4

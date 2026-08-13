@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import {
   CalendarCheck, RefreshCw, Download, CheckCircle2, AlertTriangle,
-  FileText, DollarSign, ChevronRight, Loader2, Wrench, ClipboardList, Package, Trash2,
+  FileText, DollarSign, ChevronRight, Loader2, Wrench, ClipboardList, Package, Trash2, FileSpreadsheet,
 } from 'lucide-react';
 
 import { PageShell } from '@/components/page-shell';
@@ -272,6 +272,27 @@ export default function FechamentoPage() {
       URL.revokeObjectURL(url);
     } catch {
       setError('Não foi possível gerar o PDF. Tente novamente.');
+    }
+  }
+
+  async function downloadXlsx() {
+    if (!token) return;
+    const params = new URLSearchParams({ reference_month: referenceMonth, filter_type: filterType });
+    if (filterType === 'client' && selectedClientId) params.set('client_id', selectedClientId);
+    try {
+      const resp = await fetch(`${API_URL}/billing-closure/simulate/xlsx?${params}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!resp.ok) throw new Error('Erro ao gerar Excel');
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `fechamento-${referenceMonth}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      setError('Não foi possível gerar o Excel. Tente novamente.');
     }
   }
 
@@ -809,6 +830,10 @@ export default function FechamentoPage() {
               <Button variant="secondary" onClick={downloadPdf} className="gap-2">
                 <Download className="h-4 w-4" />
                 PDF de conferência
+              </Button>
+              <Button variant="secondary" onClick={downloadXlsx} className="gap-2">
+                <FileSpreadsheet className="h-4 w-4" />
+                Excel
               </Button>
               <Button
                 onClick={confirmGenerate}
