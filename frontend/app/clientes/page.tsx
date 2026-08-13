@@ -75,6 +75,8 @@ type ClientDocument = {
   review_notes?: string | null;
   url: string;
   download_url: string;
+  created_at?: string | null;
+  uploaded_by?: string | null;
 };
 
 type VehicleSummary = { id: number; client_id: number; plate: string; status: string };
@@ -241,6 +243,14 @@ const initialForm: ClientFormState = {
 };
 
 const documentCategoryOptions = ['cnh', 'rg', 'cpf', 'contrato', 'comprovante_endereco', 'cartao_cnpj', 'contrato_social', 'outro'];
+
+/** "enviado por Fulano em 12/08/2026" — metadados do anexo, quando houver. */
+function envioMeta(doc: { uploaded_by?: string | null; created_at?: string | null }): string | null {
+  if (!doc.uploaded_by && !doc.created_at) return null;
+  const quem = doc.uploaded_by ? `enviado por ${doc.uploaded_by}` : 'enviado';
+  const quando = doc.created_at ? ` em ${new Date(doc.created_at).toLocaleDateString('pt-BR')}` : '';
+  return `${quem}${quando}`;
+}
 const fileInputClass = 'w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white file:mr-4 file:rounded-lg file:border-0 file:bg-brand-700 file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-white dark:file:bg-brand-500';
 
 function parseError(error: unknown) {
@@ -1531,6 +1541,7 @@ export default function ClientesPage() {
                           <div>
                             <p className="font-medium text-slate-900 dark:text-white">{doc.file_name}</p>
                             <p className="mt-0.5 text-xs text-slate-400">Categoria: {doc.category}</p>
+                            {envioMeta(doc) && <p className="mt-0.5 text-xs text-slate-400">{envioMeta(doc)}</p>}
                             {doc.review_notes && <p className="mt-0.5 text-xs text-slate-400">Obs.: {doc.review_notes}</p>}
                           </div>
                           <Badge variant={statusVariant(doc.review_status)}>{statusLabel(doc.review_status)}</Badge>
@@ -2024,9 +2035,12 @@ export default function ClientesPage() {
             <ul className="mt-3 space-y-2">
               {contractDocs.map((doc) => (
                 <li key={doc.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-800 dark:bg-slate-900">
-                  <span className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
-                    <FileText className="h-4 w-4 shrink-0 text-slate-400" />
-                    {doc.file_name}
+                  <span className="flex items-start gap-2 text-sm text-slate-700 dark:text-slate-200">
+                    <FileText className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
+                    <span className="flex flex-col">
+                      <span>{doc.file_name}</span>
+                      {envioMeta(doc) && <span className="text-[11px] text-slate-400">{envioMeta(doc)}</span>}
+                    </span>
                   </span>
                   <span className="flex items-center gap-1.5">
                     <a href={doc.url} target="_blank" rel="noreferrer" className="rounded-lg border border-slate-200 px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Visualizar</a>

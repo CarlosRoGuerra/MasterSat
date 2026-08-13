@@ -20,3 +20,5 @@ class Document(Base, TimestampMixin):
     review_status: Mapped[DocumentReviewStatus] = mapped_column(Enum(DocumentReviewStatus), default=DocumentReviewStatus.SUBMITTED)
     review_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Quem enviou o documento (data de envio vem do created_at do TimestampMixin).
+    uploaded_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)

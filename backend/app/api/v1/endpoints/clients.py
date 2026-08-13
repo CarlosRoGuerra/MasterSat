@@ -56,7 +56,7 @@ def _build_document_urls(document_id: int) -> tuple[str, str]:
     )
 
 
-def _document_to_out(document: Document) -> DocumentOut:
+def _document_to_out(document: Document, uploaded_by: str | None = None) -> DocumentOut:
     view_url, download_url = _build_document_urls(document.id)
     return DocumentOut(
         id=document.id,
@@ -68,7 +68,17 @@ def _document_to_out(document: Document) -> DocumentOut:
         review_notes=document.review_notes,
         url=view_url,
         download_url=download_url,
+        created_at=getattr(document, 'created_at', None),
+        uploaded_by=uploaded_by,
     )
+
+
+def _uploader_names(db: Session, documents: list[Document]) -> dict[int, str]:
+    """Resolve os nomes de quem enviou os documentos, em uma consulta só."""
+    ids = {d.uploaded_by_user_id for d in documents if d.uploaded_by_user_id}
+    if not ids:
+        return {}
+    return {u.id: u.name for u in db.query(User).filter(User.id.in_(ids)).all()}
 
 
 def _get_client_or_404(item_id: int, db: Session) -> Client:
@@ -260,7 +270,8 @@ def list_client_documents(
         )
         .order_by(Document.id.desc())
     ).all()
-    return [_document_to_out(document) for document in documents]
+    nomes = _uploader_names(db, documents)
+    return [_document_to_out(d, nomes.get(d.uploaded_by_user_id)) for d in documents]
 
 
 @router.post('/{item_id}/documents', response_model=list[DocumentOut])
@@ -269,7 +280,7 @@ async def upload_client_document(
     category: str = Form(...),
     files: list[UploadFile] = File(...),
     db: Session = Depends(get_db),
-    _: object = Depends(require_roles(*EDIT_ROLES)),
+    current_user: User = Depends(require_roles(*EDIT_ROLES)),
 ):
     _get_client_or_404(item_id, db)
     created_documents: list[DocumentOut] = []
@@ -293,10 +304,11 @@ async def upload_client_document(
             review_status=DocumentReviewStatus.SUBMITTED,
             review_notes=None,
             active=True,
+            uploaded_by_user_id=current_user.id,
         )
         db.add(document)
         db.flush()
-        created_documents.append(_document_to_out(document))
+        created_documents.append(_document_to_out(document, current_user.name))
 
     if not created_documents:
         raise HTTPException(status_code=400, detail='Nenhum arquivo válido foi enviado')
@@ -326,9 +338,10 @@ def review_client_document(
         raise HTTPException(status_code=404, detail='Documento não encontrado')
     document.review_status = payload.review_status
     document.review_notes = payload.review_notes
+    _uploader = db.get(User, document.uploaded_by_user_id) if document.uploaded_by_user_id else None
     db.commit()
     db.refresh(document)
-    return _document_to_out(document)
+    return _document_to_out(document, _uploader.name if _uploader else None)
 
 
 @router.delete('/{item_id}/documents/{document_id}', response_model=DocumentDeleteOut)

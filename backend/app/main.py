@@ -119,6 +119,7 @@ def ensure_schema_updates():
                 'review_status': "ALTER TABLE documents ADD COLUMN review_status VARCHAR(30) DEFAULT 'enviado'",
                 'review_notes': 'ALTER TABLE documents ADD COLUMN review_notes TEXT',
                 'active': 'ALTER TABLE documents ADD COLUMN active BOOLEAN DEFAULT TRUE',
+                'uploaded_by_user_id': 'ALTER TABLE documents ADD COLUMN uploaded_by_user_id INTEGER',
             }
             for column_name, sql in document_alter_statements.items():
                 if column_name not in document_columns:
