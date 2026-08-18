@@ -279,9 +279,24 @@ def test_nota_antiga_nao_ganha_link_de_conferencia(monkeypatch):
     assert _url_no_rodape(monkeypatch, XML_JOINVILLE, 'https://sistema-morto.exemplo/nota') == ''
 
 
-def test_nota_nacional_mantem_o_link_de_conferencia(monkeypatch):
-    url = 'https://www.nfse.gov.br/consultapublica/?chave=X'
-    assert _url_no_rodape(monkeypatch, XML_NACIONAL, url) == url
+def test_danfse_nacional_usa_qr_oficial_sem_rodape_de_erp(monkeypatch):
+    """No modelo oficial da NT 008 a consulta pública vai no QR Code, com a URL
+    fixa do portal nacional + a chave — e não num rodapé/marca de ERP (esse só
+    sai nas notas municipais legadas)."""
+    from app.services import nfse_danfse as mod
+
+    conteudos: list[str] = []
+    orig = mod.qr.QrCodeWidget
+    monkeypatch.setattr(mod.qr, 'QrCodeWidget',
+                        lambda c, **kw: (conteudos.append(c), orig(c, **kw))[1])
+    rodape: list[bool] = []
+    monkeypatch.setattr(mod, '_rodape', lambda d: rodape.append(True))
+
+    mod.gerar_danfse_pdf(XML_NACIONAL, 'https://ignorada.exemplo')
+
+    assert rodape == []                                  # sem rodapé de ERP no modelo nacional
+    chave = ler_xml(XML_NACIONAL).chave
+    assert any(f'nfse.gov.br/ConsultaPublica/?tpc=1&chave={chave}' in c for c in conteudos)
 
 
 # --------------------------------------------------------------------------

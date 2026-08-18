@@ -676,7 +676,7 @@ _P_TOTAL = ParagraphStyle('total', fontName='Helvetica-Bold', fontSize=15,
 _P_TOTAL_ROTULO = ParagraphStyle('totalrot', fontName='Helvetica-Bold', fontSize=6.5,
                                  textColor=_TINTA, leading=8)
 
-_MARGEM = 4 * mm            # margem enxuta (NT 008 2.2.2 pede 1,5–2mm; 4mm é seguro p/ impressora)
+_MARGEM = 5 * mm            # margem enxuta (NT 008 2.2.2 pede 1,5–2mm; 5mm é seguro p/ impressora)
 _LARGURA = A4[0] - 2 * _MARGEM
 _RAIO = 3  # eco do rounded-2xl dos cards do app, na escala do papel
 
@@ -853,7 +853,7 @@ def _pagina(marca_dagua: str | None):
     return _desenhar
 
 
-def gerar_danfse_pdf(xml: str, consulta_url: str | None = None,
+def _gerar_danfse_pdf_legado(xml: str, consulta_url: str | None = None,
                      municipio_por_cep: dict[str, str] | None = None,
                      marca_dagua: str | None = None) -> bytes:
     """Monta o PDF da nota a partir do XML. Levanta DanfseError se não der.
@@ -873,7 +873,7 @@ def gerar_danfse_pdf(xml: str, consulta_url: str | None = None,
         topMargin=_MARGEM, bottomMargin=_MARGEM,
         title=f'NFS-e {d.numero}'.strip(), author='MasterSat',
     )
-    hist: list = [_cabecalho(d), Spacer(1, 0.4 * mm)]
+    hist: list = [_cabecalho(d), Spacer(1, 0.8 * mm)]
     hist += [_secao('Dados da NFS-e'), _identificacao(d)]
     if d.chave:
         hist.append(_grade([[_celula([Paragraph('CHAVE DE ACESSO DA NFS-E', _P_ROTULO),
@@ -1085,3 +1085,690 @@ def _rodape(d: Danfse) -> Table:
         ('TOPPADDING', (0, 0), (-1, -1), 5),
     ]))
     return t
+
+
+# ===========================================================================
+# RENDERIZADOR OFICIAL DANFSe v2.0 - NT SE/CGNFS-e 008 v1.02 (14/07/2026)
+# ===========================================================================
+#
+# Este renderizador substitui SOMENTE o desenho do formato nacional. A leitura
+# do XML permanece acima. Para notas municipais legadas, o gerador antigo e
+# mantido em _gerar_danfse_pdf_legado().
+#
+# Objetivos:
+#   - reproduzir a disposicao do Anexo I da NT 008 v1.02;
+#   - usar a logomarca oficial da NFS-e;
+#   - usar Arial nos labels e Microsoft Sans Serif nos conteudos quando as
+#     fontes existirem no sistema;
+#   - usar o QR Code exatamente com a URL de Consulta Publica + chave;
+#   - nao inserir rodape/marca do ERP, pois o DANFSe so deve representar dados
+#     previstos no XML/modelo oficial;
+#   - manter uma unica pagina A4 em modo retrato.
+#
+# IMPORTANTE: a validade fiscal decorre da NFS-e/XML autorizado no Sistema
+# Nacional. Este PDF e o DANFSe (documento auxiliar/representacao impressa).
+
+from reportlab.pdfgen import canvas as _canvas
+from reportlab.pdfbase import pdfmetrics as _pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont as _TTFont
+from reportlab.graphics import renderPDF as _renderPDF
+
+_NFSE_LOGO_OFICIAL = Path(__file__).with_name('nfse_logo_horizontal.png')
+_PT_PER_CM = 72.0 / 2.54
+_PAGE_W, _PAGE_H = A4
+
+# Geometria medida no modelo oficial/Anexo I (A4 595x842 pt).
+_X0, _X1, _X2, _X3, _X4 = 8.50, 153.07, 297.64, 442.20, 586.77
+_TX = (_X0 + 3.41, _X1 + 3.40, _X2 + 3.40, _X3 + 3.41)
+_GRAY_5 = colors.Color(0.949, 0.949, 0.949)
+_BLACK = colors.black
+_RED = colors.Color(1, 0, 0)
+
+
+def _registrar_fontes_oficiais() -> tuple[str, str, str]:
+    """Retorna (Arial normal, Arial bold, Microsoft Sans Serif).
+
+    No Windows usa as fontes nativas. Em Linux tenta equivalentes metricos.
+    Nao embute/distribui arquivos de fonte no projeto.
+    """
+    candidatos = {
+        'DANFSE_ARIAL': [
+            r'C:\\Windows\\Fonts\\arial.ttf',
+            '/usr/share/fonts/truetype/msttcorefonts/Arial.ttf',
+            '/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf',
+            '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+            '/usr/share/fonts/truetype/arimo/Arimo-Regular.ttf',
+        ],
+        'DANFSE_ARIAL_BOLD': [
+            r'C:\\Windows\\Fonts\\arialbd.ttf',
+            '/usr/share/fonts/truetype/msttcorefonts/Arial_Bold.ttf',
+            '/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf',
+            '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf',
+            '/usr/share/fonts/truetype/arimo/Arimo-Bold.ttf',
+        ],
+        'DANFSE_MS_SANS': [
+            r'C:\\Windows\\Fonts\\micross.ttf',
+            '/usr/share/fonts/truetype/msttcorefonts/Microsoft_Sans_Serif.ttf',
+            '/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf',
+            '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+            '/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf',
+        ],
+    }
+    fallback = {
+        'DANFSE_ARIAL': 'Helvetica',
+        'DANFSE_ARIAL_BOLD': 'Helvetica-Bold',
+        'DANFSE_MS_SANS': 'Helvetica',
+    }
+    result = {}
+    for nome, paths in candidatos.items():
+        if nome in _pdfmetrics.getRegisteredFontNames():
+            result[nome] = nome
+            continue
+        achou = False
+        for p in paths:
+            if Path(p).exists():
+                try:
+                    _pdfmetrics.registerFont(_TTFont(nome, p))
+                    result[nome] = nome
+                    achou = True
+                    break
+                except Exception:
+                    pass
+        if not achou:
+            result[nome] = fallback[nome]
+    return result['DANFSE_ARIAL'], result['DANFSE_ARIAL_BOLD'], result['DANFSE_MS_SANS']
+
+
+_F_ARIAL, _F_ARIAL_B, _F_MS = _registrar_fontes_oficiais()
+
+
+def _y(top: float) -> float:
+    """Converte coordenada medida a partir do topo para coordenada ReportLab."""
+    return _PAGE_H - top
+
+
+def _baseline(top: float, size: float, font: str) -> float:
+    # Ajuste visual calibrado com o PDF oficial (Arial/MS Sans).
+    fator = 0.91 if font == _F_ARIAL_B else 0.88
+    return _PAGE_H - top - size * fator
+
+
+def _txt_canvas(c, x: float, top: float, texto: str, *, font: str, size: float,
+                max_width: float | None = None, ellipsis: bool = True,
+                align: str = 'left') -> None:
+    texto = str(texto if texto not in (None, '') else '-')
+    if max_width is not None and ellipsis:
+        sufixo = '...'
+        if _pdfmetrics.stringWidth(texto, font, size) > max_width:
+            base = texto
+            while base and _pdfmetrics.stringWidth(base + sufixo, font, size) > max_width:
+                base = base[:-1]
+            texto = base.rstrip() + sufixo
+    c.setFillColor(_BLACK)
+    c.setFont(font, size)
+    yy = _baseline(top, size, font)
+    if align == 'center':
+        c.drawCentredString(x, yy, texto)
+    elif align == 'right':
+        c.drawRightString(x, yy, texto)
+    else:
+        c.drawString(x, yy, texto)
+
+
+def _label_value(c, col: int, top: float, label: str, value: str,
+                 width: float | None = None, label_upper: bool = False) -> None:
+    x = _TX[col]
+    if width is None:
+        width = (_X1 - _X0 if col == 0 else _X2 - _X1 if col == 1 else _X3 - _X2 if col == 2 else _X4 - _X3) - 7
+    lab = label.upper() if label_upper else label
+    _txt_canvas(c, x, top, lab, font=_F_ARIAL_B, size=6 if not label_upper else 7,
+                max_width=width)
+    _txt_canvas(c, x, top + 6.70, value or '-', font=_F_MS, size=7, max_width=width)
+
+
+def _hline(c, top: float, x0: float = _X0, x1: float = _X4, width: float = 0.5) -> None:
+    c.setStrokeColor(_BLACK)
+    c.setLineWidth(width)
+    c.line(x0, _y(top), x1, _y(top))
+
+
+def _fill_rect_top(c, x0: float, top: float, x1: float, bottom: float, fill=_GRAY_5) -> None:
+    c.setFillColor(fill)
+    c.rect(x0, _y(bottom), x1 - x0, bottom - top, stroke=0, fill=1)
+
+
+def _fmt_ibge(v: str) -> str:
+    d = _so_digitos(v)
+    return f'{d[:2]}.{d[2:]}' if len(d) == 7 else (v or '-')
+
+
+def _fmt_cep_danfse(v: str) -> str:
+    d = _so_digitos(v)
+    return f'{d[:2]}.{d[2:5]}-{d[5:]}' if len(d) == 8 else (v or '-')
+
+
+def _mun_uf(municipio: str, uf: str, sep: str = ' / ') -> str:
+    municipio = (municipio or '').strip()
+    uf = (uf or '').strip()
+    if not municipio and not uf:
+        return '-'
+    if uf and municipio.endswith('/' + uf):
+        municipio = municipio[:-(len(uf) + 1)].strip()
+    if uf and municipio.endswith(' - ' + uf):
+        municipio = municipio[:-(len(uf) + 3)].strip()
+    return sep.join(x for x in (municipio, uf) if x) or '-'
+
+
+def _xml_nacional_raiz(xml: str):
+    texto = (xml or '').strip()
+    if 'ConsultarLoteRpsResponse' in texto or '&lt;' in texto[:400]:
+        m = re.search(r'<return>(.*?)</return>', texto, re.S)
+        if m:
+            texto = html.unescape(m.group(1)).strip()
+    try:
+        return etree.fromstring(texto.encode('utf-8'))
+    except etree.XMLSyntaxError as exc:
+        raise DanfseError(f'XML da nota ilegivel: {exc}') from exc
+
+
+def _layout_raw_nacional(xml: str, d: Danfse, municipio_por_cep: dict[str, str] | None = None) -> dict:
+    raiz = _xml_nacional_raiz(xml)
+    inf = _filho(raiz, NS_NFSE, 'infNFSe')
+    dps = _filho(inf, NS_NFSE, 'DPS', 'infDPS') if inf is not None else None
+    if inf is None or dps is None:
+        raise DanfseError('XML nacional sem infNFSe/DPS/infDPS')
+
+    # Mapa de municipios semelhante ao parser principal.
+    por_cep = {_so_digitos(k): v for k, v in (municipio_por_cep or {}).items()}
+    municipios = {}
+    for cod, nome in [
+        (_txt(inf, NS_NFSE, 'cLocIncid'), _txt(inf, NS_NFSE, 'xLocIncid')),
+        (_txt(dps, NS_NFSE, 'cLocEmi'), _txt(inf, NS_NFSE, 'xLocEmi')),
+        (_txt(dps, NS_NFSE, 'serv', 'locPrest', 'cLocPrestacao'), _txt(inf, NS_NFSE, 'xLocPrestacao')),
+    ]:
+        if cod and nome:
+            municipios[cod] = nome
+
+    def pessoa(bloco):
+        if bloco is None:
+            return dict(nome='', doc='', im='', fone='', end='', mun='', uf='', ibge='', cep='', email='')
+        end = _filho(bloco, NS_NFSE, 'end')
+        if end is None:
+            end = _filho(bloco, NS_NFSE, 'enderNac')
+        e_txt, m_txt, cep = _endereco_nacional(end, municipios, por_cep)
+        endn = _filho(end, NS_NFSE, 'endNac') if end is not None else None
+        ibge = _txt(endn, NS_NFSE, 'cMun') if endn is not None else _txt(end, NS_NFSE, 'cMun')
+        uf = _txt(end, NS_NFSE, 'UF') if end is not None else ''
+        if not uf and m_txt and '/' in m_txt:
+            uf = m_txt.rsplit('/', 1)[-1].strip()
+        mun = m_txt.rsplit('/', 1)[0].strip() if m_txt and '/' in m_txt else m_txt
+        return dict(
+            nome=_txt(bloco, NS_NFSE, 'xNome'),
+            doc=_doc_formatado(_txt(bloco, NS_NFSE, 'CNPJ') or _txt(bloco, NS_NFSE, 'CPF') or _txt(bloco, NS_NFSE, 'NIF')),
+            im=_txt(bloco, NS_NFSE, 'IM'), fone=_fone_formatado(_txt(bloco, NS_NFSE, 'fone')),
+            end=e_txt, mun=mun, uf=uf, ibge=ibge, cep=cep, email=_txt(bloco, NS_NFSE, 'email'),
+        )
+
+    prest = pessoa(_filho(dps, NS_NFSE, 'prest'))
+    # Em algumas respostas nacionais os dados completos do emitente ficam em infNFSe/emit.
+    emit = _filho(inf, NS_NFSE, 'emit')
+    if emit is not None:
+        pe = pessoa(emit)
+        for k in prest:
+            if not prest[k] and pe.get(k):
+                prest[k] = pe[k]
+    toma = pessoa(_filho(dps, NS_NFSE, 'toma'))
+    dest = pessoa(_filho(dps, NS_NFSE, 'IBSCBS', 'dest'))
+    interm = pessoa(_filho(dps, NS_NFSE, 'interm'))
+
+    val_inf = _filho(inf, NS_NFSE, 'valores')
+    dps_val = _filho(dps, NS_NFSE, 'valores')
+    trib_mun = _filho(dps_val, NS_NFSE, 'trib', 'tribMun') if dps_val is not None else None
+    trib_fed = _filho(dps_val, NS_NFSE, 'trib', 'tribFed') if dps_val is not None else None
+    piscof = _filho(trib_fed, NS_NFSE, 'piscofins') if trib_fed is not None else None
+    ibs_dps = _filho(dps, NS_NFSE, 'IBSCBS')
+    ibs_inf = _filho(inf, NS_NFSE, 'IBSCBS')
+    ibs_vals = _filho(ibs_inf, NS_NFSE, 'valores') if ibs_inf is not None else None
+    ibs_dps_vals = _filho(ibs_dps, NS_NFSE, 'valores') if ibs_dps is not None else None
+    gtrib = _filho(ibs_dps_vals, NS_NFSE, 'trib', 'gIBSCBS') if ibs_dps_vals is not None else None
+    totcibs = _filho(ibs_inf, NS_NFSE, 'totCIBS') if ibs_inf is not None else None
+
+    uf_emit = prest.get('uf', '')
+    if not uf_emit and d.prestador.municipio and '/' in d.prestador.municipio:
+        uf_emit = d.prestador.municipio.rsplit('/', 1)[-1].strip()
+
+    ctribn = _txt(dps, NS_NFSE, 'serv', 'cServ', 'cTribNac')
+    ctribm = _txt(dps, NS_NFSE, 'serv', 'cServ', 'cTribMun')
+    xn = _txt(inf, NS_NFSE, 'xTribNac')
+    xm = _txt(inf, NS_NFSE, 'xTribMun')
+    nbs = _txt(dps, NS_NFSE, 'serv', 'cServ', 'cNBS')
+    pais_prest = _txt(dps, NS_NFSE, 'serv', 'locPrest', 'cPaisPrestacao')
+
+    def v(node, *tags):
+        return _txt(node, NS_NFSE, *tags) if node is not None else ''
+
+    def dinheiro(s, zero=False):
+        if s not in ('', None):
+            return _brl(s)
+        return 'R$ 0,00' if zero else '-'
+
+    def perc(s):
+        return _pct(s) if s not in ('', None) else '-'
+
+    # Contribuicoes sociais: regra da NT 008 v1.02.
+    tp_pc = v(piscof, 'tpRetPisCofins')
+    csll = v(trib_fed, 'vRetCSLL')
+    pis = v(piscof, 'vPis')
+    cof = v(piscof, 'vCofins')
+    if tp_pc == '1':
+        try:
+            contrib_soc = _brl(str(float(csll or 0) + float(pis or 0) + float(cof or 0)))
+            pis_deb, cof_deb = 'R$ 0,00', 'R$ 0,00'
+        except ValueError:
+            contrib_soc, pis_deb, cof_deb = dinheiro(csll), dinheiro(pis), dinheiro(cof)
+    else:
+        contrib_soc, pis_deb, cof_deb = dinheiro(csll), dinheiro(pis), dinheiro(cof)
+
+    # Exclusoes/reducoes IBS/CBS: somatorio dos campos que existirem.
+    exclusoes_paths = [
+        (dps_val, ('vDescCondIncond', 'vDescIncond')),
+        (ibs_vals, ('vDR',)), (ibs_vals, ('vCalcDR',)), (ibs_vals, ('vCalcReeRepRes',)),
+        (val_inf, ('vISSQN',)), (piscof, ('vPis',)), (piscof, ('vCofins',)),
+    ]
+    soma = 0.0; achou = False
+    for node, tags in exclusoes_paths:
+        s = v(node, *tags)
+        if s:
+            try:
+                soma += float(s); achou = True
+            except ValueError:
+                pass
+    exclusoes = _brl(str(soma)) if achou else 'R$ 0,00'
+
+    uf_vals = _filho(ibs_vals, NS_NFSE, 'uf') if ibs_vals is not None else None
+    mun_vals = _filho(ibs_vals, NS_NFSE, 'mun') if ibs_vals is not None else None
+    fed_vals = _filho(ibs_vals, NS_NFSE, 'fed') if ibs_vals is not None else None
+    gibs = _filho(totcibs, NS_NFSE, 'gIBS') if totcibs is not None else None
+    gibsm = _filho(gibs, NS_NFSE, 'gIBSMunTot') if gibs is not None else None
+    gibsu = _filho(gibs, NS_NFSE, 'gIBSUFTot') if gibs is not None else None
+    gcbs = _filho(totcibs, NS_NFSE, 'gCBS') if totcibs is not None else None
+
+    vibs = v(gibs, 'vIBSTot')
+    vcbs = v(gcbs, 'vCBS')
+    total_ibscbs = '-'
+    if vibs or vcbs:
+        try:
+            total_ibscbs = _brl(str(float(vibs or 0) + float(vcbs or 0)))
+        except ValueError:
+            pass
+
+    # Totais aproximados, sempre no formato do modelo.
+    tottrib = _filho(dps_val, NS_NFSE, 'trib', 'totTrib') if dps_val is not None else None
+    bruto = v(dps_val, 'vServPrest', 'vServ')
+    def esfera(vtag, ptag):
+        vv = v(tottrib, vtag)
+        if vv:
+            return _brl(vv)
+        pp = v(tottrib, ptag)
+        if pp:
+            try:
+                return _brl(str(float(bruto or 0) * float(pp) / 100))
+            except ValueError:
+                return _pct(pp)
+        return '-'
+    trib_line = ('Totais aproximados dos Tributos cfe. Lei n° 12.741/2012: '
+                 f'Federais: {esfera("vTotTribFed","pTotTribFed")}; '
+                 f'Estaduais: {esfera("vTotTribEst","pTotTribEst")}; '
+                 f'Municipais: {esfera("vTotTribMu","pTotTribMu")};')
+
+    return dict(
+        raiz=raiz, inf=inf, dps=dps, prest=prest, toma=toma, dest=dest, interm=interm,
+        ambGer=v(inf, 'ambGer'), tpAmb=v(dps, 'tpAmb'), uf_emit=uf_emit,
+        ctrib=(ctribn or '-') + ' / ' + (ctribm or '-'), nbs=nbs or '-',
+        desc_trib=(xm or xn or '-'), desc_serv=v(dps, 'serv', 'cServ', 'xDescServ') or '-',
+        local_prest=f'{d.municipio_prestacao or "-"} / {uf_emit or "-"} / {pais_prest or "-"}',
+        iss_tipo=d.tributacao_issqn or '-',
+        iss_local=f'{d.municipio_incidencia or "-"} / {uf_emit or "-"} / {v(trib_mun, "cPaisResult") or "-"}',
+        iss_regesp=d.regime_especial or '',
+        iss_imun=v(trib_mun, 'tpImunidade'), iss_susp=v(trib_mun, 'exigSusp', 'tpSusp'),
+        iss_proc=v(trib_mun, 'exigSusp', 'nProcesso'),
+        beneficio=v(val_inf, 'tpBM'), calculo_bm=v(trib_mun, 'BM', 'vCalcBM') or v(trib_mun, 'BM', 'vRedBCBM'),
+        ded_red=v(dps_val, 'vDedRed'), desc_incond=v(dps_val, 'vDescCondIncond', 'vDescIncond'),
+        bc_iss=dinheiro(v(val_inf, 'vBC')), aliq_iss=perc(v(val_inf, 'pAliqAplic')),
+        ret_iss=d.retencao_issqn or '-', iss_apurado=dinheiro(v(val_inf, 'vISSQN')),
+        irrf=dinheiro(v(trib_fed, 'vRetIRRF')), cp=dinheiro(v(trib_fed, 'vRetCP')),
+        contrib_soc=contrib_soc, pis=pis_deb, cofins=cof_deb,
+        desc_contrib=_RET_PISCOFINS.get(tp_pc, '-') if tp_pc else '-',
+        cst_class=((v(gtrib, 'CST') or '-') + ' / ' + (v(gtrib, 'cClassTrib') or '-')),
+        indop=((v(ibs_inf, 'cIndOp') or '-') + ' / ' + (v(ibs_inf, 'cLocalidadeIncid') or '-') +
+               ' / ' + (v(ibs_inf, 'xLocalidadeIncid') or '-') + ' / ' + (uf_emit or '-')),
+        exclusoes=exclusoes, bc_ibscbs=dinheiro(v(ibs_vals, 'vBC')),
+        red_aliq=' / '.join([perc(v(uf_vals,'pRedAliqUF')), perc(v(mun_vals,'pRedAliqMun')), perc(v(fed_vals,'pRedAliqCBS'))]),
+        aliq_ibs=' / '.join([perc(v(uf_vals,'pIBSUF')), perc(v(mun_vals,'pIBSMun'))]),
+        ef_mun=perc(v(mun_vals,'pAliqEfetMun')), v_mun=dinheiro(v(gibsm,'vIBSMun')),
+        ef_uf=perc(v(uf_vals,'pAliqEfetUF')), v_uf=dinheiro(v(gibsu,'vIBSUF')),
+        v_ibs=dinheiro(vibs), aliq_cbs=perc(v(fed_vals,'pCBS')), ef_cbs=perc(v(fed_vals,'pAliqEfetCBS')),
+        v_cbs=dinheiro(vcbs),
+        bruto=dinheiro(bruto), desc_cond=dinheiro(v(dps_val, 'vDescCondIncond','vDescCond')),
+        ret_total=dinheiro(v(val_inf, 'vTotalRet')), liquido=d.valor_liquido or '-', total_ibscbs=total_ibscbs,
+        total_nf=dinheiro(v(totcibs, 'vTotNF')),
+        info=(d.outras_informacoes or '').strip(), trib_line=trib_line,
+    )
+
+
+def _draw_qr_oficial(c, chave: str) -> None:
+    url = f'https://www.nfse.gov.br/ConsultaPublica/?tpc=1&chave={chave}'
+    widget = qr.QrCodeWidget(url, barLevel='M')
+    x1, y1, x2, y2 = widget.getBounds()
+    lado = 45.0  # exatamente o tamanho observado no PDF oficial (>= 1,52 cm)
+    dsg = Drawing(lado, lado, transform=[lado/(x2-x1),0,0,lado/(y2-y1),0,0])
+    dsg.add(widget)
+    _renderPDF.draw(dsg, c, 491.988, _PAGE_H - 89.764)
+
+
+def _draw_pessoa_bloco(c, top: float, titulo: str, p: dict, *, simples: str = '', apuracao: str = '',
+                       tomador: bool = False) -> float:
+    """Desenha Prestador/Tomador no estilo exato do modelo. Retorna o bottom."""
+    row = 19.07
+    rows = 3 if tomador else 4
+    bottom = top + row * rows
+    _hline(c, top - 0.25)
+    _fill_rect_top(c, _X0, top, _X1, top + row)
+    _txt_canvas(c, _TX[0], top + 0.23, titulo, font=_F_ARIAL_B, size=7, max_width=_X1-_X0-7)
+
+    _label_value(c, 1, top + 0.20, 'CNPJ / CPF / NIF', p.get('doc','-'))
+    _label_value(c, 2, top + 0.20, 'Indicador Municipal (Inscrição)', p.get('im','-'))
+    _label_value(c, 3, top + 0.20, 'Telefone', p.get('fone','-'))
+
+    _label_value(c, 0, top + row + 0.20, 'Nome / Nome Empresarial', p.get('nome','-'), width=282)
+    _label_value(c, 2, top + row + 0.20, 'Município / Sigla UF', _mun_uf(p.get('mun',''),p.get('uf','')))
+    codcep = f'{_fmt_ibge(p.get("ibge",""))} / {_fmt_cep_danfse(p.get("cep",""))}'
+    _label_value(c, 3, top + row + 0.20, 'Código IBGE / CEP', codcep)
+
+    _label_value(c, 0, top + row*2 + 0.20, 'Endereço', p.get('end','-'), width=282)
+    _label_value(c, 2, top + row*2 + 0.20, 'E-mail', p.get('email','-'), width=282)
+
+    if not tomador:
+        _label_value(c, 0, top + row*3 + 0.20, 'Simples Nacional na Data de Competência', simples or '-', width=137)
+        _label_value(c, 1, top + row*3 + 0.20, 'Regime de Apuração Tributária pelo SN', apuracao or '-', width=424)
+
+    _hline(c, bottom - 0.25)
+    return bottom
+
+
+def _draw_reduzido(c, top: float, texto: str) -> float:
+    h = 8.43
+    _hline(c, top - 0.25)
+    _txt_canvas(c, (_X0+_X4)/2, top + 0.25, texto, font=_F_MS, size=7, align='center', ellipsis=False)
+    _hline(c, top + h - 0.25)
+    return top + h
+
+
+def _draw_servico(c, top: float, r: dict) -> float:
+    row = 19.07
+    _hline(c, top - 0.25)
+    _fill_rect_top(c, _X0, top, _X1, top + row)
+    _txt_canvas(c, _TX[0], top + 0.23, 'SERVIÇO PRESTADO', font=_F_ARIAL_B, size=7)
+    _label_value(c, 1, top + 0.20, 'Código de Tributação Nacional/Municipal', r['ctrib'])
+    _label_value(c, 2, top + 0.20, 'Código da NBS', r['nbs'])
+    _label_value(c, 3, top + 0.20, 'Local da Prestação / Sigla UF / País', r['local_prest'])
+    _txt_canvas(c, _TX[0], top + row + 0.20, r['desc_trib'], font=_F_MS, size=7, max_width=_X4-_X0-7)
+    _txt_canvas(c, _TX[0], top + row + 12.58, 'Descrição do Serviço', font=_F_ARIAL_B, size=6)
+    _txt_canvas(c, _TX[0], top + row + 19.28, r['desc_serv'], font=_F_MS, size=7, max_width=_X4-_X0-7)
+    bottom = top + 50.82
+    _hline(c, bottom - 0.25)
+    return bottom
+
+
+def _draw_municipal_compacto(c, top: float, r: dict) -> float:
+    row = 19.32
+    _hline(c, top - 0.25)
+    _fill_rect_top(c, _X0, top, _X1, top + row)
+    _txt_canvas(c, _TX[0], top + 0.23, 'TRIBUTAÇÃO MUNICIPAL (ISSQN)', font=_F_ARIAL_B, size=7)
+    _label_value(c, 1, top + 0.20, 'Tipo de Tributação do ISSQN', r['iss_tipo'])
+    # No modelo oficial este campo ocupa as colunas 3 e 4.
+    _txt_canvas(c, _TX[2], top + 0.20, 'Município / Sigla UF / País de Incidência do ISSQN',
+                font=_F_ARIAL_B, size=6, max_width=_X4-_X2-7)
+    _txt_canvas(c, _TX[2], top + 6.90, r['iss_local'], font=_F_MS, size=7, max_width=_X4-_X2-7)
+    _label_value(c, 0, top + row + 0.20, 'BC ISSQN', r['bc_iss'])
+    _label_value(c, 1, top + row + 0.20, 'Alíquota Aplicada', r['aliq_iss'])
+    _label_value(c, 2, top + row + 0.20, 'Retenção do ISSQN', r['ret_iss'])
+    _label_value(c, 3, top + row + 0.20, 'ISSQN Apurado', r['iss_apurado'])
+    bottom = top + row*2
+    _hline(c, bottom - 0.25)
+    return bottom
+
+
+def _draw_section_2rows(c, top: float, titulo: str, row1: list[tuple[int,str,str]], row2: list[tuple[int,str,str]]) -> float:
+    row = 19.32
+    _hline(c, top - 0.25)
+    _fill_rect_top(c, _X0, top, _X1, top + row)
+    _txt_canvas(c, _TX[0], top + 0.23, titulo, font=_F_ARIAL_B, size=7, max_width=_X1-_X0-7)
+    for col, lab, val in row1:
+        _label_value(c, col, top + 0.20, lab, val, width=(_X4-_X3-7 if col==3 else _X3-_X2-7 if col==2 else _X2-_X1-7 if col==1 else _X1-_X0-7))
+    for col, lab, val in row2:
+        _label_value(c, col, top + row + 0.20, lab, val)
+    bottom = top + row*2
+    _hline(c, bottom - 0.25)
+    return bottom
+
+
+def _draw_ibscbs(c, top: float, r: dict) -> float:
+    row = 19.20
+    _hline(c, top - 0.25)
+    _fill_rect_top(c, _X0, top, _X1, top + row)
+    _txt_canvas(c, _TX[0], top + 0.23, 'TRIBUTAÇÃO IBS/CBS', font=_F_ARIAL_B, size=7)
+    _label_value(c, 1, top + 0.20, 'CST / cClassTrib', r['cst_class'])
+    # campo largo das colunas 2+3
+    _txt_canvas(c, _TX[2], top + 0.20, 'Indicador de Operação / Código IBGE Incidência / Município Incidência / Sigla UF',
+                font=_F_ARIAL_B, size=6, max_width=_X4-_X2-7)
+    _txt_canvas(c, _TX[2], top + 6.90, r['indop'], font=_F_MS, size=7, max_width=_X4-_X2-7)
+
+    rows = [
+        [('Exclusões e Reduções da Base de Cálculo', r['exclusoes']), ('Base de Cálculo Após Exclusões e Reduções', r['bc_ibscbs']),
+         ('Red. Alíquota IBS / Red. Alíquota CBS', r['red_aliq']), ('Alíquota - IBS UF / IBS Mun', r['aliq_ibs'])],
+        [('Alíq. Efetiva Municipal - IBS', r['ef_mun']), ('Valor Apurado Municipal - IBS', r['v_mun']),
+         ('Alíq. Efetiva Estadual - IBS', r['ef_uf']), ('Valor Apurado Estadual - IBS', r['v_uf'])],
+        [('Valor Total Apurado - IBS', r['v_ibs']), ('Alíquota - CBS', r['aliq_cbs']),
+         ('Alíquota Efetiva - CBS', r['ef_cbs']), ('Valor Total Apurado - CBS', r['v_cbs'])],
+    ]
+    for ri, campos in enumerate(rows, start=1):
+        for col,(lab,val) in enumerate(campos):
+            _label_value(c, col, top + row*ri + 0.20, lab, val)
+    bottom = top + row*4
+    _hline(c, bottom - 0.25)
+    return bottom
+
+
+def _draw_valores(c, top: float, r: dict) -> float:
+    row = 19.32
+    _hline(c, top - 0.25)
+    _fill_rect_top(c, _X0, top, _X1, top + row)
+    _txt_canvas(c, _TX[0], top + 0.23, 'VALOR TOTAL DA NFS-e', font=_F_ARIAL_B, size=7)
+    _label_value(c, 1, top + 0.20, 'VALOR DA OPERAÇÃO / SERVIÇO', r['bruto'])
+    _label_value(c, 2, top + 0.20, 'Desconto Incondicionado', r['desc_incond'] and _brl(r['desc_incond']) if r['desc_incond'] else '-')
+    _label_value(c, 3, top + 0.20, 'Desconto Condicionado', r['desc_cond'])
+    _label_value(c, 0, top + row + 0.20, 'Total das Retenções (ISSQN / Federais)', r['ret_total'])
+    _label_value(c, 1, top + row + 0.20, 'VALOR LÍQUIDO DA NFS-e', r['liquido'])
+    _label_value(c, 2, top + row + 0.20, 'Total do IBS/CBS', r['total_ibscbs'])
+    _fill_rect_top(c, _X3, top + row, _X4, top + row*2)
+    _label_value(c, 3, top + row + 0.20, 'VALOR LÍQUIDO DA NFS-e + IBS/CBS', r['total_nf'])
+    bottom = top + row*2
+    _hline(c, bottom - 0.25)
+    return bottom
+
+
+def _wrap_lines(text: str, font: str, size: float, max_width: float, max_lines: int) -> list[str]:
+    words = (text or '').split()
+    if not words:
+        return []
+    lines=[]; cur=''
+    for w in words:
+        cand = (cur + ' ' + w).strip()
+        if _pdfmetrics.stringWidth(cand, font, size) <= max_width:
+            cur=cand
+        else:
+            if cur: lines.append(cur)
+            cur=w
+            if len(lines) >= max_lines: break
+    if cur and len(lines)<max_lines: lines.append(cur)
+    if len(lines)==max_lines and words:
+        # garante reticencias se houve corte
+        joined=' '.join(lines)
+        if len(joined)<len(text):
+            while lines[-1] and _pdfmetrics.stringWidth(lines[-1]+'...',font,size)>max_width:
+                lines[-1]=lines[-1][:-1]
+            lines[-1]=lines[-1].rstrip()+'...'
+    return lines
+
+
+def _render_nacional_oficial(xml: str, d: Danfse, municipio_por_cep: dict[str,str] | None = None,
+                             marca_dagua: str | None = None) -> bytes:
+    r = _layout_raw_nacional(xml, d, municipio_por_cep)
+    out = io.BytesIO()
+    c = _canvas.Canvas(out, pagesize=A4, pageCompression=1)
+    c.setTitle(f'NFS-e {d.numero}'.strip())
+
+    # Borda externa: 1 pt, praticamente igual ao PDF oficial fornecido.
+    c.setStrokeColor(_BLACK); c.setLineWidth(1.0)
+    c.rect(5, 5, 585, 832, stroke=1, fill=0)
+
+    # Cabeçalho sombreado - 5%.
+    _fill_rect_top(c, _X0, 5.67, _X1, 39.68)
+    _fill_rect_top(c, _X1, 5.67, _X3, 39.68)
+    _fill_rect_top(c, _X3, 5.67, _X4, 39.68)
+    _hline(c, 39.93)
+
+    # Logo oficial.
+    if _NFSE_LOGO_OFICIAL.exists():
+        c.drawImage(str(_NFSE_LOGO_OFICIAL), 11.9055, _PAGE_H-33.2394,
+                    width=115.6536, height=22.9165, preserveAspectRatio=True, mask='auto')
+    else:
+        _txt_canvas(c, 11.91, 10.5, 'NFS-e', font=_F_ARIAL_B, size=18)
+
+    _txt_canvas(c, (153.07+442.20)/2, 12.62, 'DANFSe v2.0', font=_F_ARIAL_B, size=9, align='center')
+    _txt_canvas(c, (153.07+442.20)/2, 22.97, 'Documento Auxiliar da NFS-e', font=_F_ARIAL_B, size=9, align='center')
+    if r['tpAmb'] == '2':
+        c.setFillColor(_RED); c.setFont(_F_ARIAL_B, 9)
+        c.drawCentredString((153.07+442.20)/2, _baseline(32.5,9,_F_ARIAL_B), 'NFS-e SEM VALIDADE JURÍDICA')
+
+    mun_head = _mun_uf(d.municipio_emissao, r['uf_emit'], sep=' - ')
+    _txt_canvas(c, 445.61, 11.36, f'Município: {mun_head}', font=_F_MS, size=8, max_width=136)
+    _txt_canvas(c, 445.61, 20.41, f'Ambiente Gerador: {r["ambGer"] or "-"}', font=_F_MS, size=6, max_width=136)
+    _txt_canvas(c, 445.61, 27.20, f'Tipo de Ambiente: {r["tpAmb"] or "-"}', font=_F_MS, size=6, max_width=136)
+
+    # Identificacao.
+    _txt_canvas(c, 11.91, 44.67, 'CHAVE DE ACESSO DA NFS-e', font=_F_ARIAL_B, size=7)
+    _txt_canvas(c, 11.91, 52.49, d.chave or '-', font=_F_MS, size=7, max_width=425)
+    _draw_qr_oficial(c, d.chave)
+    for i,linha in enumerate([
+        'A autenticidade desta NFS-e pode ser verificada',
+        'pela leitura deste código QR ou pela consulta da',
+        'chave de acesso no portal nacional da NFS-e',
+    ]):
+        _txt_canvas(c, 445.61, 91.88 + i*6.79, linha, font=_F_MS, size=6, max_width=138, ellipsis=False)
+
+    _label_value(c,0,64.89,'NÚMERO DA NFS-e',d.numero,label_upper=True)
+    _label_value(c,1,64.89,'COMPETÊNCIA DA NFS-e',d.competencia,label_upper=True)
+    _label_value(c,2,64.89,'DATA E HORA DA EMISSÃO DA NFS-e',d.data_emissao,label_upper=True)
+    _label_value(c,0,85.12,'NÚMERO DA DPS',d.numero_dps,label_upper=True)
+    _label_value(c,1,85.12,'SÉRIE DA DPS',d.serie,label_upper=True)
+    _label_value(c,2,85.12,'DATA E HORA DA EMISSÃO DA DPS',d.data_emissao_dps,label_upper=True)
+    _fill_rect_top(c,_X0,105.11,_X1,125.33)
+    _label_value(c,0,105.34,'EMITENTE DA NFS-e',d.emitente_tipo or '-',label_upper=True)
+    _label_value(c,1,105.34,'SITUAÇÃO DA NFS-e',d.situacao or '-',label_upper=True)
+    _label_value(c,2,105.34,'FINALIDADE',d.finalidade or '-',label_upper=True)
+
+    # Fluxo vertical a partir do prestador.
+    top = 125.83
+    simples_txt = d.regime_simples.replace('Optante — Microempresa ou EPP (ME/EPP)', 'Optante - Microempresa ou Empresa de Pequeno Porte (ME/EPP)').replace(' — ', ' - ')
+    apur_txt = d.regime_apuracao
+    if apur_txt == 'Tributos federais e municipal pelo Simples Nacional':
+        apur_txt = 'Regime de apuração dos tributos federais e municipal pelo Simples Nacional'
+    top = _draw_pessoa_bloco(c, top, 'PRESTADOR / FORNECEDOR', r['prest'], simples=simples_txt, apuracao=apur_txt)
+    top = _draw_pessoa_bloco(c, top+0.25, 'TOMADOR / ADQUIRENTE', r['toma'], tomador=True)
+
+    if any(r['dest'].get(k) for k in ('nome','doc','end','email')):
+        # Layout completo permitido; 3 linhas de 19.07 pt.
+        top = _draw_pessoa_bloco(c, top+0.25, 'DESTINATÁRIO DA OPERAÇÃO', r['dest'], tomador=True)
+    else:
+        top = _draw_reduzido(c, top+0.25, 'DESTINATÁRIO DA OPERAÇÃO NÃO IDENTIFICADO NA NFS-e')
+
+    if any(r['interm'].get(k) for k in ('nome','doc','end','email')):
+        top = _draw_pessoa_bloco(c, top+0.25, 'INTERMEDIÁRIO DA OPERAÇÃO', r['interm'], tomador=True)
+    else:
+        top = _draw_reduzido(c, top+0.25, 'INTERMEDIÁRIO DA OPERAÇÃO NÃO IDENTIFICADO NA NFS-e')
+
+    top = _draw_servico(c, top+0.25, r)
+
+    # Municipal: reproduz o modelo compacto quando os opcionais nao existem.
+    opcionais_iss = any([r['iss_regesp'], r['iss_imun'], r['iss_susp'], r['iss_proc'], r['beneficio'], r['calculo_bm'], r['ded_red'], r['desc_incond']])
+    if not opcionais_iss:
+        top = _draw_municipal_compacto(c, top+0.25, r)
+    else:
+        # Versao expandida conforme campos opcionais da NT. Usa 4 linhas e reduz
+        # automaticamente a area de Informacoes Complementares.
+        row=19.07; start=top+0.25
+        _hline(c,start-0.25); _fill_rect_top(c,_X0,start,_X1,start+row)
+        _txt_canvas(c,_TX[0],start+0.23,'TRIBUTAÇÃO MUNICIPAL (ISSQN)',font=_F_ARIAL_B,size=7)
+        _label_value(c,1,start+0.20,'Tipo de Tributação do ISSQN',r['iss_tipo'])
+        _txt_canvas(c,_TX[2],start+0.20,'Município / Sigla UF / País de Incidência do ISSQN',font=_F_ARIAL_B,size=6,max_width=_X4-_X2-7)
+        _txt_canvas(c,_TX[2],start+6.90,r['iss_local'],font=_F_MS,size=7,max_width=_X4-_X2-7)
+        vals1=[('Regime Especial de Tributação do ISSQN',r['iss_regesp'] or '-'),('Tipo de Imunidade do ISSQN',r['iss_imun'] or '-'),('Suspensão da Exigibilidade do ISSQN',r['iss_susp'] or '-'),('Número Processo Suspensão',r['iss_proc'] or '-')]
+        vals2=[('Benefício Municipal',r['beneficio'] or '-'),('Cálculo do BM',_brl(r['calculo_bm']) if r['calculo_bm'] else '-'),('Total Deduções/Reduções',_brl(r['ded_red']) if r['ded_red'] else '-'),('Desconto Incondicionado',_brl(r['desc_incond']) if r['desc_incond'] else '-')]
+        vals3=[('BC ISSQN',r['bc_iss']),('Alíquota Aplicada',r['aliq_iss']),('Retenção do ISSQN',r['ret_iss']),('ISSQN Apurado',r['iss_apurado'])]
+        for ri,vals in enumerate((vals1,vals2,vals3),1):
+            for col,(lab,valx) in enumerate(vals): _label_value(c,col,start+row*ri+0.20,lab,valx)
+        top=start+row*4; _hline(c,top-0.25)
+
+    top = _draw_section_2rows(c, top+0.25, 'TRIBUTAÇÃO FEDERAL (EXCETO CBS)',
+        [(1,'IRRF',r['irrf']), (2,'Contribuição Previdenciária - Retida',r['cp']), (3,'Contribuições Sociais - Retidas',r['contrib_soc'])],
+        [(0,'PIS - Débito Apuração Própria',r['pis']), (1,'COFINS - Débito Apuração Própria',r['cofins']), (2,'Descrição Contrib. Sociais - Retidas',r['desc_contrib'])])
+
+    top = _draw_ibscbs(c, top+0.25, r)
+    top = _draw_valores(c, top+0.25, r)
+
+    # Informacoes complementares ocupam todo o espaco restante ate o canhoto.
+    _hline(c, top+0.25)
+    _txt_canvas(c, _TX[0], top+0.75, 'INFORMAÇÕES COMPLEMENTARES', font=_F_ARIAL_B, size=7)
+    info_top = top + 20.74
+    canhoto_top = 795.80
+    max_lines = max(1, int((canhoto_top - info_top - 8) / 8.0))
+    info = ' | '.join(x for x in [r['info'], r['trib_line']] if x)
+    for i,ln in enumerate(_wrap_lines(info, _F_MS, 7, _X4-_X0-7, max_lines)):
+        _txt_canvas(c, _TX[0], info_top + i*8.0, ln, font=_F_MS, size=7, ellipsis=False)
+
+    # Canhoto opcional, posicionado no rodape igual ao modelo fornecido.
+    ct, cb = 795.80, 815.88
+    c.setStrokeColor(_BLACK); c.setLineWidth(1)
+    for xa,xb in [(_X0,_X1),(_X1,_X2),(_X2,_X4)]:
+        c.rect(xa, _y(cb), xb-xa, cb-ct, stroke=1, fill=0)
+    _txt_canvas(c, _TX[0], 796.50, 'DATA CIENTIFICAÇÃO:', font=_F_ARIAL_B, size=6)
+    _txt_canvas(c, _TX[1], 796.50, 'IDENTIFICAÇÃO E ASSINATURA', font=_F_ARIAL_B, size=6)
+    _txt_canvas(c, _TX[2], 796.50, 'N° NFS-e / CHAVE NFS-e', font=_F_ARIAL_B, size=6)
+    _txt_canvas(c, _TX[2], 803.20, f'{d.numero} / {d.chave}', font=_F_MS, size=7, max_width=_X4-_X2-7)
+
+    if marca_dagua:
+        c.saveState(); c.setFillColor(colors.Color(.65,.65,.65)); c.setFont(_F_ARIAL,60)
+        c.translate(_PAGE_W/2,_PAGE_H/2); c.rotate(45); c.drawCentredString(0,0,marca_dagua.upper()); c.restoreState()
+
+    c.showPage(); c.save()
+    return out.getvalue()
+
+
+def gerar_danfse_pdf(xml: str, consulta_url: str | None = None,
+                     municipio_por_cep: dict[str, str] | None = None,
+                     marca_dagua: str | None = None) -> bytes:
+    """Drop-in replacement.
+
+    - NFS-e nacional: gera o DANFSe no modelo oficial NT 008 v1.02.
+    - XML municipal legado de Joinville: preserva o gerador antigo.
+
+    O parametro ``consulta_url`` e mantido por compatibilidade, mas no modelo
+    nacional o QR Code e montado obrigatoriamente com a URL oficial definida na
+    NT 008 + a chave de acesso da NFS-e.
+    """
+    d = ler_xml(xml, municipio_por_cep)
+    if d.formato != 'nacional':
+        return _gerar_danfse_pdf_legado(xml, consulta_url, municipio_por_cep, marca_dagua)
+    return _render_nacional_oficial(xml, d, municipio_por_cep, marca_dagua)
