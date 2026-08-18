@@ -94,40 +94,35 @@ def test_cada_tipo_de_cobranca_tem_nome_proprio(tipo, trecho):
 # O topo saiu do boleto (pedido de 08/08/2026)
 # ---------------------------------------------------------------------------
 
-def test_boleto_tem_fatura_no_topo_sem_assinatura(monkeypatch):
-    """O topo do boleto traz a FATURA (descritivo dos itens), como o Edson pediu —
-    um bloco de cobrança SEM assinatura. Não é o recibo de quitação (esse continua
-    saindo só pelo botão de cobrança paga)."""
-    faturas: list[dict] = []
-    original = boleto_pdf._draw_bloco_cobranca
+def test_boleto_tem_recibo_do_pagador_sem_quitacao(monkeypatch):
+    """O topo do boleto é o Recibo do Pagador / fatura (QR Pix, itens por placa,
+    faixa-recibo), no modelo Hinova aprovado — e não o recibo de quitação
+    assinado (esse continua saindo só pelo botão de cobrança paga)."""
+    topo: list[bool] = []
+    original = boleto_pdf._draw_recibo_pagador
     monkeypatch.setattr(
-        boleto_pdf, '_draw_bloco_cobranca',
-        lambda c, d, y, **kw: (faturas.append(kw), original(c, d, y, **kw))[1],
+        boleto_pdf, '_draw_recibo_pagador',
+        lambda c, d, y: (topo.append(True), original(c, d, y))[1],
     )
     recibos: list[str] = []
     monkeypatch.setattr(boleto_pdf, '_draw_recibo', lambda c, d, y: recibos.append('recibo'))
     assert boleto_pdf.gerar_boleto_pdf(_dados())[:4] == b'%PDF'
-    assert recibos == []                                  # nada de quitação/assinatura no topo
-    assert faturas and faturas[0]['com_assinatura'] is False
-    assert faturas[0]['titulo'] == 'FATURA'
+    assert topo == [True]                                 # recibo do pagador desenhado no topo
+    assert recibos == []                                  # sem quitação/assinatura
 
 
-def test_boleto_mostra_servico_e_valor(monkeypatch):
-    """O boleto (layout padrão) tem de trazer o plano/produto e o valor."""
+def test_boleto_mostra_os_itens_cobrados(monkeypatch):
+    """O boleto tem de listar os itens/placas cobrados na fatura do topo."""
     visto: dict = {}
-    original = boleto_pdf._draw_boleto_itau_style
+    original = boleto_pdf._draw_itens_recibo
     monkeypatch.setattr(
-        boleto_pdf, '_draw_boleto_itau_style',
-        lambda c, d, y, parcela=None: (
-            visto.update(instrucoes=d.instrucoes or [], itens=d.itens or []),
-            original(c, d, y, parcela),
-        )[1],
+        boleto_pdf, '_draw_itens_recibo',
+        lambda c, itens, y: (visto.update(itens=itens), original(c, itens, y))[1],
     )
-    dados = _dados(itens=[('MENSALIDADE MONITORAMENTO', Decimal('99.90'))],
+    dados = _dados(itens=[('ABC1D23 - MENSALIDADE', Decimal('99.90'))],
                    instrucoes=['Referente a: MENSALIDADE MONITORAMENTO.'])
     assert boleto_pdf.gerar_boleto_pdf(dados)[:4] == b'%PDF'
-    assert any('MENSALIDADE MONITORAMENTO' in i for i in visto['instrucoes'])
-    assert visto['itens'][0][0] == 'MENSALIDADE MONITORAMENTO'
+    assert visto['itens'][0][0] == 'ABC1D23 - MENSALIDADE'
 
 
 def test_recibo_avulso_continua_sendo_recibo(monkeypatch):

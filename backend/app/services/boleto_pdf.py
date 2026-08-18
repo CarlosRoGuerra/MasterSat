@@ -728,17 +728,116 @@ def _draw_boleto_itau_style(c, d: DadosBoleto, y_top: float, parcela: tuple[int,
     return ybar
 
 
-def _draw_fatura(c, d: DadosBoleto, y_top: float) -> float:
-    """FATURA/DEMONSTRATIVO no topo do boleto: cabeçalho da empresa, dados do
-    pagador e a tabela dos itens cobrados — o descritivo que o cliente confere
-    antes da ficha de compensação (pedido do Edson: "boleto fatura", com o
-    descritivo do serviço em cima). Sem assinatura — não é quitação."""
-    return _draw_bloco_cobranca(
-        c, d, y_top,
-        titulo="FATURA",
-        rotulo_total="Valor Total da Fatura:",
-        com_assinatura=False,
-    )
+# ─────────────────────────────────────────────────────────────────────────────
+# RECIBO DO PAGADOR / FATURA (topo do boleto, no modelo Hinova aprovado):
+# cabeçalho da empresa, QR Pix + instruções, "Referente a", lista de itens por
+# placa em colunas e a faixa-recibo. Abaixo, a ficha de compensação full-width.
+# ─────────────────────────────────────────────────────────────────────────────
+_ENDERECO_RECIBO = ["RUA MARITIMA, 424 - COMASA", "89228-450 - JOINVILLE - SC"]
+
+_PIX_TEXTO = [
+    "Efetue o pagamento deste boleto através do Pix pelo aplicativo do seu banco.",
+    "Selecione a opção de pagamento através do QrCode e aponte a câmera do seu",
+    "celular para a imagem ao lado.",
+]
+
+
+def _referente(d: DadosBoleto) -> str:
+    """Linha "Referente a:" — vem das instruções, senão do primeiro item."""
+    for ln in (d.instrucoes or []):
+        if ln.strip().lower().startswith("referente a"):
+            return ln.strip().rstrip(".")
+    base = str(d.itens[0][0]) if d.itens else "Serviço de rastreamento"
+    return f"Referente a: {base}"
+
+
+def _draw_itens_recibo(c, itens: list[tuple[str, float]], y_top: float) -> float:
+    """Itens cobrados, em até 3 colunas (placa/descrição - valor), como no modelo."""
+    n_col = 3
+    col_w = CW / n_col
+    row_h = _mm(3.8)
+    c.setFillColorRGB(0, 0, 0); c.setFont("Helvetica", 6.3)
+    y = y_top
+    linhas = (len(itens) + n_col - 1) // n_col
+    for r in range(linhas):
+        yy = y - _mm(2.9)
+        for col in range(n_col):
+            idx = r * n_col + col
+            if idx >= len(itens):
+                break
+            desc, val = itens[idx]
+            texto = f"{str(desc)[:36]} - R$ {_fv(val)}"
+            c.drawString(LM + col * col_w + _mm(0.5), yy, texto[:54])
+        y -= row_h
+    return y
+
+
+def _draw_recibo_pagador(c, d: DadosBoleto, y_top: float) -> float:
+    y = y_top
+
+    # ── Cabeçalho: logo + empresa (esq) · "Recibo do pagador" (dir) ──────────
+    _draw_mastersat(c, LM, y, h_mm=11.0, max_w_mm=40.0)
+    ex = LM + _mm(44)
+    c.setFillColorRGB(0, 0, 0); c.setFont("Helvetica-Bold", 8)
+    c.drawString(ex, y - _mm(3.2), "MASTERSAT")
+    c.setFont("Helvetica", 7)
+    ty = y - _mm(6.6)
+    for ln in _ENDERECO_RECIBO:
+        c.drawString(ex, ty, ln); ty -= _mm(3.1)
+    c.drawString(ex, ty, f"CNPJ: {_fmt_cnpj(d.cedente_cnpj)}")
+    c.setFont("Helvetica-Oblique", 7); c.setFillColorRGB(0.4, 0.4, 0.4)
+    c.drawRightString(RM, y - _mm(2.5), "Recibo do pagador")
+    _hline(c, LM, y - _mm(15.5), RM, lw=0.4)
+    y -= _mm(18)
+
+    # ── Pix (só quando habilitado na conta): QR + instruções ─────────────────
+    if d.pix_emv or d.pix_qr_base64:
+        lado = 24
+        _draw_pix_no_quadro(c, d, LM, y, lado)
+        tx = LM + _mm(lado) + _mm(4)
+        c.setFillColorRGB(0, 0, 0)
+        c.setFont("Helvetica-Bold", 8); c.drawString(tx, y - _mm(4), _PIX_TEXTO[0])
+        c.setFont("Helvetica", 8)
+        c.drawString(tx, y - _mm(8.5), _PIX_TEXTO[1])
+        c.drawString(tx, y - _mm(12.5), _PIX_TEXTO[2])
+        y -= _mm(lado) + _mm(3)
+
+    # ── Referente a ──────────────────────────────────────────────────────────
+    c.setFillColorRGB(0, 0, 0); c.setFont("Helvetica", 8)
+    c.drawString(LM, y - _mm(3.5), _referente(d)[:120])
+    y -= _mm(7)
+
+    # ── Itens cobrados ───────────────────────────────────────────────────────
+    itens = d.itens or [("SERVIÇO DE RASTREAMENTO", float(d.valor))]
+    y = _draw_itens_recibo(c, itens, y) - _mm(2)
+
+    # ── Faixa-recibo: nº doc · nosso número · datas · agência · carteira · valor
+    H = _mm(9)
+    cols = [
+        ("Nº documento", str(d.billing_id), 0.12, "left"),
+        ("Nosso número", d.nosso_numero_display, 0.20, "left"),
+        ("Data emissão", _fd(d.data_emissao), 0.14, "left"),
+        ("Vencimento", _fd(d.data_vencimento), 0.14, "left"),
+        ("Agência/Código", f"{d.cedente_agencia} / {d.cedente_codigo}", 0.18, "left"),
+        ("Carteira", d.carteira.split("/")[0].strip(), 0.10, "left"),
+        ("Valor", _fv(d.valor), 0.12, "right"),
+    ]
+    x = LM
+    for label, value, frac, al in cols:
+        cw = CW * frac
+        _cell(c, x, y, cw, H, label, value, align=al, vsize=8.5 if label == "Valor" else 7)
+        x += cw
+    y -= H
+
+    # ── Pagador · Beneficiário Final · Nº nota fiscal ────────────────────────
+    cPag = CW * 0.45; cBenef = CW * 0.40; cNota = CW - cPag - cBenef
+    _cell(c, LM, y, cPag, H, "Pagador",
+          f"{d.sacado_nome} - {_fmt_cnpj(d.sacado_cpf_cnpj)}"[:58], vsize=7)
+    _cell(c, LM + cPag, y, cBenef, H, "Beneficiário Final",
+          f"{d.cedente_nome} - {_fmt_cnpj(d.cedente_cnpj)}"[:56], vsize=7)
+    _cell(c, LM + cPag + cBenef, y, cNota, H, "Nº nota fiscal", "")
+    y -= H
+    return y
 
 
 def gerar_boleto_pdf(dados: DadosBoleto) -> bytes:
@@ -746,17 +845,18 @@ def gerar_boleto_pdf(dados: DadosBoleto) -> bytes:
     c = pdfcanvas.Canvas(buf, pagesize=A4)
     c.setTitle(f"Boleto MASTERSAT - {dados.billing_id}")
 
-    # 1. FATURA no topo — descritivo dos itens que estão sendo cobrados.
-    y = _draw_fatura(c, dados, _ft(8))
+    # 1. Recibo do pagador / fatura no topo (QR Pix, itens, faixa-recibo).
+    y = _draw_recibo_pagador(c, dados, _ft(10))
 
-    # 2. Corte entre a fatura e o boleto bancário.
+    # 2. Corte entre o recibo e a ficha de compensação.
     y -= _mm(2)
     _hline(c, LM, y, RM, lw=0.5, dash=(2, 4))
     c.setFont("Helvetica", 5.5); c.setFillColorRGB(0.5, 0.5, 0.5)
     c.drawString(RM - _mm(40), y - _mm(3), "Corte na linha pontilhada")
 
-    # 3. Ficha de compensação (boleto Ailos 085-0).
-    y = _draw_boleto_itau_style(c, dados, y - _mm(7))
+    # 3. Ficha de compensação full-width (Ailos 085-0) + código de barras.
+    y = _draw_ficha(c, dados, y - _mm(6))
+    _draw_barcode(c, dados.codigo_barras, LM, y - _mm(3), height_mm=13)
 
     c.save()
     buf.seek(0)
