@@ -20,7 +20,7 @@ import { Table, TableHead, Th, TableBody, Tr, Td } from '@/components/ui/table';
 import { usePagination, Pagination } from '@/components/ui/pagination';
 import { ExportButton } from '@/components/ui/export-button';
 import { apiFetch, API_URL } from '@/lib/api';
-import { entregarArquivo } from '@/lib/arquivo';
+import { entregarArquivo, nomeArquivoCliente } from '@/lib/arquivo';
 import { enviarBoletoEmail, enviarBoletoWhats } from '@/lib/boleto-mensagem';
 import { fetchAddressByCep } from '@/lib/cep';
 import { formatCpfCnpj, formatPhone, formatZipCode, onlyDigits } from '@/lib/format';
@@ -812,9 +812,8 @@ export default function ClientesPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      const cd = resp.headers.get('Content-Disposition') ?? '';
-      const match = cd.match(/filename="?([^"]+)"?/);
-      a.download = match?.[1] ?? `boleto-${b.id}.pdf`;
+      // Nome do arquivo: cliente + vencimento (ex.: "EUNICE SOUSA SIMAS 28-08-2026.pdf").
+      a.download = `${nomeArquivoCliente(billingsModalClient?.name, b.due_date)}.pdf`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {

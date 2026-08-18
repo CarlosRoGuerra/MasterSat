@@ -17,6 +17,7 @@ import { usePagination, Pagination } from '@/components/ui/pagination';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { ClientAutocomplete } from '@/components/ui/client-autocomplete';
 import { API_URL, apiFetch } from '@/lib/api';
+import { nomeArquivoCliente } from '@/lib/arquivo';
 import { enviarBoletoEmail, enviarBoletoWhats } from '@/lib/boleto-mensagem';
 import { useAuthGuard } from '@/lib/use-auth-guard';
 import { useDebouncedValue, useEffectSkipFirst } from '@/lib/use-debounced-value';
@@ -1103,7 +1104,7 @@ export default function FinanceiroPage() {
         { method: 'POST', body: JSON.stringify({ billing_id: selectedBilling.id }) },
         token,
       );
-      await downloadProtectedFile(`/boletos/${selectedBilling.id}/pdf`, token, `boleto-${selectedBilling.id}.pdf`);
+      await downloadProtectedFile(`/boletos/${selectedBilling.id}/pdf`, token, `${nomeArquivoCliente(selectedBilling.client_name, selectedBilling.due_date)}.pdf`);
       setFeedback(
         boleto.linha_digitavel
           ? `Boleto registrado na Ailos. Linha digitável: ${boleto.linha_digitavel}`

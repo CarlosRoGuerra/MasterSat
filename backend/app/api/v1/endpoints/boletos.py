@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import re
+import unicodedata
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -288,19 +290,24 @@ def dados_boleto(b: Billing, c: Client, db: Session, ailos_boleto: AilosBoleto) 
     return aplicar_dados_oficiais_ailos(dados, ailos_boleto)
 
 
+def _slug_arquivo(texto: str) -> str:
+    """Nome de arquivo seguro para o header HTTP: sem acentos nem caracteres proibidos."""
+    t = unicodedata.normalize('NFKD', texto or '')
+    t = ''.join(ch for ch in t if not unicodedata.combining(ch))
+    t = re.sub(r'[\\/:*?"<>|]+', '', t)
+    t = re.sub(r'\s+', ' ', t).strip()
+    return t or 'documento'
+
+
 def _montar_pdf_boleto(b: Billing, c: Client, db: Session,
                        ailos_boleto: AilosBoleto) -> tuple[bytes, str]:
     """Gera o PDF do boleto e o nome do arquivo (compartilhado entre a rota
     autenticada e o link público)."""
-    item = _billing_to_boleto_item(b, c)
     pdf_bytes = gerar_boleto_pdf(dados_boleto(b, c, db, ailos_boleto))
 
-    # Nome do arquivo: placa_do_veiculo + data_emissao (ex: boleto_PQPP666_04-06-2026.pdf)
-    placa = _placa_do_billing(b, db)
-    data_emissao_str = (item["data_emissao"].strftime("%d-%m-%Y")
-                        if item.get("data_emissao") else date.today().strftime("%d-%m-%Y"))
-    filename = (f"boleto_{placa}_{data_emissao_str}.pdf" if placa
-                else f"boleto_{b.id:06d}_{data_emissao_str}.pdf")
+    # Nome do arquivo: nome do cliente + data de vencimento (ex.: "EUNICE SOUSA SIMAS 28-08-2026.pdf")
+    data_ref = (b.due_date or date.today()).strftime("%d-%m-%Y")
+    filename = f"{_slug_arquivo(c.name)} {data_ref}.pdf"
     return pdf_bytes, filename
 
 

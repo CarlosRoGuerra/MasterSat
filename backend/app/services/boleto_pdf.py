@@ -728,14 +728,36 @@ def _draw_boleto_itau_style(c, d: DadosBoleto, y_top: float, parcela: tuple[int,
     return ybar
 
 
+def _draw_fatura(c, d: DadosBoleto, y_top: float) -> float:
+    """FATURA/DEMONSTRATIVO no topo do boleto: cabeçalho da empresa, dados do
+    pagador e a tabela dos itens cobrados — o descritivo que o cliente confere
+    antes da ficha de compensação (pedido do Edson: "boleto fatura", com o
+    descritivo do serviço em cima). Sem assinatura — não é quitação."""
+    return _draw_bloco_cobranca(
+        c, d, y_top,
+        titulo="FATURA",
+        rotulo_total="Valor Total da Fatura:",
+        com_assinatura=False,
+    )
+
+
 def gerar_boleto_pdf(dados: DadosBoleto) -> bytes:
     buf = io.BytesIO()
     c = pdfcanvas.Canvas(buf, pagesize=A4)
     c.setTitle(f"Boleto MASTERSAT - {dados.billing_id}")
-    y = _draw_boleto_itau_style(c, dados, _ft(10))
+
+    # 1. FATURA no topo — descritivo dos itens que estão sendo cobrados.
+    y = _draw_fatura(c, dados, _ft(8))
+
+    # 2. Corte entre a fatura e o boleto bancário.
+    y -= _mm(2)
     _hline(c, LM, y, RM, lw=0.5, dash=(2, 4))
     c.setFont("Helvetica", 5.5); c.setFillColorRGB(0.5, 0.5, 0.5)
     c.drawString(RM - _mm(40), y - _mm(3), "Corte na linha pontilhada")
+
+    # 3. Ficha de compensação (boleto Ailos 085-0).
+    y = _draw_boleto_itau_style(c, dados, y - _mm(7))
+
     c.save()
     buf.seek(0)
     return buf.read()

@@ -6,6 +6,25 @@
  * acusa "Verifique a conexão com a Internet" com o arquivo nomeado pelo UUID
  * do blob. Revogar precisa esperar — daí o timeout.
  */
+/**
+ * Nome de arquivo no padrão pedido pelo cliente: nome do cliente + data referente
+ * (ex.: "EUNICE SOUSA SIMAS 28-08-2026"). Sem extensão — o chamador adiciona.
+ * Remove os caracteres proibidos em nome de arquivo para não quebrar o download.
+ */
+export function nomeArquivoCliente(cliente?: string | null, dataISO?: string | null): string {
+  const nome = (cliente || 'cliente')
+    .replace(/[\\/:*?"<>|]+/g, '')       // remove caracteres proibidos em nome de arquivo
+    .replace(/\s+/g, ' ').trim() || 'cliente';
+  let data = '';
+  if (dataISO) {
+    const d = new Date(dataISO.slice(0, 10) + 'T12:00:00');
+    if (!Number.isNaN(d.getTime())) {
+      data = ` ${String(d.getDate()).padStart(2, '0')}-${String(d.getMonth() + 1).padStart(2, '0')}-${d.getFullYear()}`;
+    }
+  }
+  return `${nome}${data}`;
+}
+
 export function entregarArquivo(
   blob: Blob,
   nomeArquivo: string,

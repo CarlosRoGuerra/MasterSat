@@ -94,16 +94,22 @@ def test_cada_tipo_de_cobranca_tem_nome_proprio(tipo, trecho):
 # O topo saiu do boleto (pedido de 08/08/2026)
 # ---------------------------------------------------------------------------
 
-def test_boleto_nao_desenha_bloco_no_topo(monkeypatch):
-    """O boleto é só a ficha de compensação; a parte de cima (o antigo
-    recibo/demonstrativo) foi removida por inteiro."""
-    chamadas: list[str] = []
+def test_boleto_tem_fatura_no_topo_sem_assinatura(monkeypatch):
+    """O topo do boleto traz a FATURA (descritivo dos itens), como o Edson pediu —
+    um bloco de cobrança SEM assinatura. Não é o recibo de quitação (esse continua
+    saindo só pelo botão de cobrança paga)."""
+    faturas: list[dict] = []
+    original = boleto_pdf._draw_bloco_cobranca
     monkeypatch.setattr(
-        boleto_pdf, '_draw_recibo',
-        lambda c, d, y: (chamadas.append('recibo'), boleto_pdf._draw_ficha(c, d, y))[1],
+        boleto_pdf, '_draw_bloco_cobranca',
+        lambda c, d, y, **kw: (faturas.append(kw), original(c, d, y, **kw))[1],
     )
+    recibos: list[str] = []
+    monkeypatch.setattr(boleto_pdf, '_draw_recibo', lambda c, d, y: recibos.append('recibo'))
     assert boleto_pdf.gerar_boleto_pdf(_dados())[:4] == b'%PDF'
-    assert chamadas == []          # nada de bloco de cobrança no topo
+    assert recibos == []                                  # nada de quitação/assinatura no topo
+    assert faturas and faturas[0]['com_assinatura'] is False
+    assert faturas[0]['titulo'] == 'FATURA'
 
 
 def test_boleto_mostra_servico_e_valor(monkeypatch):
