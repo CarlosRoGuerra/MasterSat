@@ -1,7 +1,7 @@
 'use client';
 
 import { FormEvent, Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { TrendingUp, AlertTriangle, FileText, CheckCircle2, Clock, MoreHorizontal, ChevronDown, ChevronRight, Lock, PenSquare, ListChecks, Banknote, Layers, Mail, PieChart, Barcode, Wallet, Coins, FilePlus, Tags } from 'lucide-react';
+import { TrendingUp, AlertTriangle, FileText, CheckCircle2, Clock, MoreHorizontal, ChevronDown, ChevronRight, Lock, PenSquare, ListChecks, Banknote, Layers, Mail, PieChart, Barcode, Wallet, Coins, FilePlus, Tags, BookText } from 'lucide-react';
 
 import { PageShell } from '@/components/page-shell';
 import { Card } from '@/components/ui/card';
@@ -325,8 +325,6 @@ function BillingTableSection({
   onBatchReceive,
   onBatchCancel,
   onBatchMaint,
-  onBatchCarne,
-  gerandoCarne,
   batchActions,
   rowActionLabel,
 }: {
@@ -347,12 +345,10 @@ function BillingTableSection({
   onBatchReceive?: () => void;
   onBatchCancel?: () => void;
   onBatchMaint?: () => void;
-  onBatchCarne?: () => void;
-  gerandoCarne?: boolean;
-  batchActions?: Array<'receive' | 'cancel' | 'maint' | 'carne'>;
+  batchActions?: Array<'receive' | 'cancel' | 'maint'>;
   rowActionLabel?: string;
 }) {
-  const acoesLote = batchActions ?? ['receive', 'cancel', 'maint', 'carne'];
+  const acoesLote = batchActions ?? ['receive', 'cancel', 'maint'];
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const in7 = new Date(today); in7.setDate(in7.getDate() + 7);
 
@@ -401,7 +397,6 @@ function BillingTableSection({
         <div className="mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-brand-300 bg-brand-50 px-4 py-2.5 text-sm dark:border-brand-700 dark:bg-brand-950/30">
           <span className="font-bold text-brand-800 dark:text-brand-200">{batchIds.length} selecionada(s)</span>
           {onBatchReceive && acoesLote.includes('receive') && <Button onClick={onBatchReceive} className="!py-1.5 text-xs">Receber em lote</Button>}
-          {onBatchCarne && acoesLote.includes('carne') && <Button variant="secondary" onClick={onBatchCarne} disabled={gerandoCarne || batchIds.length < 2} className="!py-1.5 text-xs">{gerandoCarne ? 'Gerando carnê…' : 'Gerar carnê'}</Button>}
           {onBatchMaint && acoesLote.includes('maint') && <Button variant="secondary" onClick={onBatchMaint} className="!py-1.5 text-xs">Alterar venc./valor</Button>}
           {onBatchCancel && acoesLote.includes('cancel') && <Button variant="secondary" onClick={onBatchCancel} className="!py-1.5 text-xs">Cancelar em lote</Button>}
           <button type="button" onClick={() => onBatchIdsChange?.([])} className="ml-auto text-xs text-slate-400 underline hover:text-slate-600 dark:hover:text-slate-200">
@@ -553,6 +548,12 @@ export default function FinanceiroPage() {
   // Operações em lote na carteira de cobranças
   const [selectedBillingIds, setSelectedBillingIds] = useState<number[]>([]);
   const [gerandoCarne, setGerandoCarne] = useState(false);
+  // Modal "Gerar carnê" (por cliente)
+  const [carneModal, setCarneModal] = useState(false);
+  const [carneClientId, setCarneClientId] = useState('');
+  const [carneBillings, setCarneBillings] = useState<Billing[]>([]);
+  const [carneSelected, setCarneSelected] = useState<number[]>([]);
+  const [carneLoading, setCarneLoading] = useState(false);
   const [batchReceiveModal, setBatchReceiveModal] = useState(false);
   const [batchReceiveForm, setBatchReceiveForm] = useState({ payment_date: new Date().toISOString().slice(0, 10), payment_method: 'pix' });
   const [batchMaintModal, setBatchMaintModal] = useState(false);
@@ -1010,41 +1011,60 @@ export default function FinanceiroPage() {
     } catch (err) { setError(parseError(err)); } finally { setProcessing(false); }
   }
 
+  function openCarneModal() {
+    setCarneClientId('');
+    setCarneBillings([]);
+    setCarneSelected([]);
+    setModalError('');
+    setCarneModal(true);
+  }
+
+  // Ao escolher o cliente, lista os boletos dele que cabem num carnê: pendentes
+  // e vencidos (os já pagos/cancelados ficam de fora). Pré-seleciona todos.
+  async function carregarBoletosCarne(clientId: string) {
+    setCarneClientId(clientId);
+    setCarneBillings([]);
+    setCarneSelected([]);
+    if (!token || !clientId) return;
+    setCarneLoading(true);
+    try {
+      const data = await apiFetch<Billing[]>(`/billings?client_id=${clientId}&limit=200`, {}, token);
+      const abertos = data.filter(b => b.status === 'pendente' || b.status === 'vencida');
+      setCarneBillings(abertos);
+      setCarneSelected(abertos.map(b => b.id));
+    } catch (err) { setModalError(parseError(err)); } finally { setCarneLoading(false); }
+  }
+
   /**
-   * Gera o carnê das cobranças selecionadas: registra o lote na Ailos (um
-   * boleto real por parcela), aguarda o processamento assíncrono e baixa o PDF.
+   * Gera o carnê a partir dos boletos de UM cliente: registra o lote na Ailos
+   * (um boleto real por parcela), aguarda o processamento assíncrono e baixa o
+   * PDF. O backend também recusa parcelas de clientes diferentes.
    */
-  async function gerarCarneLote() {
+  async function gerarCarne(ids: number[]) {
     if (!token) return;
-    if (selectedBillingIds.length < 2) {
-      alert('Selecione ao menos 2 cobranças (parcelas) para gerar o carnê.');
-      return;
-    }
-    const qtd = selectedBillingIds.length;
+    if (ids.length < 2) { alert('Selecione ao menos 2 boletos para gerar o carnê.'); return; }
+    const qtd = ids.length;
     if (!confirm(`Gerar o carnê registra ${qtd} boletos reais na Ailos (um por parcela). Continuar?`)) return;
     setGerandoCarne(true);
-    setError('');
+    setError(''); setModalError('');
     try {
-      // 1. registra o carnê (assíncrono — devolve o lote com ticket)
       const lote = await apiFetch<{ id: number; ticket: string; status: string }>(
         '/ailos/carne/lote',
-        { method: 'POST', body: JSON.stringify({ billing_ids: selectedBillingIds }) },
+        { method: 'POST', body: JSON.stringify({ billing_ids: ids }) },
         token,
       );
-      // 2. aguarda o lote sair de "processing" (cada consulta atualiza os boletos)
       let status = lote.status;
       for (let i = 0; i < 15 && status === 'processing'; i++) {
         await new Promise((r) => setTimeout(r, 3000));
         const st = await apiFetch<{ status: string }>(`/ailos/lotes/${lote.ticket}`, {}, token).catch(() => ({ status } as { status: string }));
         status = st.status;
       }
+      setCarneModal(false);
       if (status === 'processing') {
-        setSelectedBillingIds([]);
-        await loadData(token);
         setFeedback(`Carnê registrado (lote #${lote.id}). As parcelas ainda estão sendo processadas na Ailos — baixe o PDF em instantes.`);
+        await loadData(token);
         return;
       }
-      // 3. baixa o PDF do carnê
       const resp = await fetch(`${API_URL.replace(/\/+$/, '')}/boletos/carne/${lote.id}/pdf`, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -1054,7 +1074,6 @@ export default function FinanceiroPage() {
         throw new Error(`Carnê registrado (lote #${lote.id}), mas o PDF ainda não saiu: ${detalhe}`);
       }
       entregarArquivo(await resp.blob(), `carne-${lote.id}.pdf`, { emNovaAba: true });
-      setSelectedBillingIds([]);
       setFeedback(`Carnê gerado com ${qtd} parcela(s).`);
       await loadData(token);
     } catch (err) {
@@ -1317,6 +1336,7 @@ export default function FinanceiroPage() {
             { label: 'Enviar boletos via e-mail / WhatsApp', Icon: Mail, run: () => setEnvioModal(true) },
             { label: 'Módulo de Gestor Financeiro (MGF)', Icon: PieChart, run: () => switchTab('overview') },
             { label: 'Emitir boleto avulso', Icon: Barcode, run: () => { setModalError(''); setNewBillingModal(true); } },
+            { label: 'Gerar carnê', Icon: BookText, run: openCarneModal },
             { label: 'Planos e Serviços (tabela de preços)', Icon: Tags, run: () => switchTab('management') },
             { label: 'Contas a Pagar', Icon: Wallet, run: () => switchTab('payables') },
             { label: 'Contas a Receber', Icon: Coins, run: () => setCarteiraMode('full') },
@@ -1394,8 +1414,6 @@ export default function FinanceiroPage() {
               onBatchReceive={() => setBatchReceiveModal(true)}
               onBatchCancel={handleBatchCancel}
               onBatchMaint={() => { setModalError(''); setBatchMaintModal(true); }}
-              onBatchCarne={canEdit ? gerarCarneLote : undefined}
-              gerandoCarne={gerandoCarne}
             />
 
             {/* ── Indicadores + gráficos no rodapé ── */}
@@ -1744,8 +1762,6 @@ export default function FinanceiroPage() {
               onBatchReceive={() => setBatchReceiveModal(true)}
               onBatchCancel={handleBatchCancel}
               onBatchMaint={() => { setModalError(''); setBatchMaintModal(true); }}
-              onBatchCarne={canEdit ? gerarCarneLote : undefined}
-              gerandoCarne={gerandoCarne}
               batchActions={cfg?.lote}
               rowActionLabel={cfg?.rotulo}
             />
@@ -1941,6 +1957,50 @@ export default function FinanceiroPage() {
             <Button type="submit" disabled={!canEdit || processing}>{processing ? 'Gerando...' : 'Gerar e baixar contrato'}</Button>
           </div>
         </form>
+      </Modal>
+
+      <Modal open={carneModal} onClose={() => setCarneModal(false)} title="Gerar carnê" description="Escolha o cliente e as parcelas (boletos pendentes e vencidos) que vão compor o carnê. Um carnê é sempre de um único cliente." size="xl">
+        {modalError && <p className="mb-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>}
+        <div className="space-y-4">
+          <div>
+            <p className="mb-1 text-xs font-medium text-slate-500 dark:text-slate-400">Cliente</p>
+            <ClientAutocomplete clients={clients} value={carneClientId} onChange={carregarBoletosCarne} placeholder="Busque o cliente pelo nome ou CPF/CNPJ" />
+          </div>
+
+          {carneLoading ? (
+            <p className="text-sm text-slate-500">Carregando boletos do cliente…</p>
+          ) : carneClientId && carneBillings.length === 0 ? (
+            <p className="rounded-2xl border border-slate-200 px-4 py-3 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">Este cliente não tem boletos pendentes ou vencidos para gerar carnê.</p>
+          ) : carneBillings.length > 0 ? (
+            <>
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Boletos em aberto ({carneBillings.length})</p>
+                <div className="flex items-center gap-3 text-xs">
+                  <button type="button" onClick={() => setCarneSelected(carneBillings.map(b => b.id))} className="font-semibold text-brand-700 hover:underline dark:text-brand-400">Selecionar todos</button>
+                  <button type="button" onClick={() => setCarneSelected([])} className="text-slate-400 hover:underline">Limpar</button>
+                </div>
+              </div>
+              <div className="max-h-72 overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-700">
+                {carneBillings.map(b => (
+                  <label key={b.id} className="flex cursor-pointer items-center gap-3 border-b border-slate-100 px-3 py-2 text-sm last:border-0 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/50">
+                    <input type="checkbox" className="rounded border-slate-300" checked={carneSelected.includes(b.id)} onChange={() => setCarneSelected(prev => prev.includes(b.id) ? prev.filter(id => id !== b.id) : [...prev, b.id])} />
+                    <span className="flex-1 truncate">{b.title || 'Cobrança'}{b.vehicle_plate ? ` · ${b.vehicle_plate}` : ''}{b.period_label ? ` · ${b.period_label}` : ''}</span>
+                    <span className="whitespace-nowrap text-xs text-slate-500">venc. {formatDate(b.due_date)}</span>
+                    <Badge variant={statusVariant(b.status)}>{statusLabel(b.status)}</Badge>
+                    <span className="w-24 text-right font-mono font-semibold text-slate-900 dark:text-white">{formatCurrency(b.amount)}</span>
+                  </label>
+                ))}
+              </div>
+              <p className="text-xs text-slate-400">{carneSelected.length} de {carneBillings.length} selecionado(s). O carnê registra <strong>1 boleto real por parcela</strong> na Ailos.</p>
+            </>
+          ) : (
+            <p className="text-sm text-slate-400">Selecione um cliente para listar os boletos.</p>
+          )}
+        </div>
+        <div className="mt-5 flex justify-end gap-3">
+          <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200" onClick={() => setCarneModal(false)}>Cancelar</button>
+          <Button onClick={() => gerarCarne(carneSelected)} disabled={gerandoCarne || carneSelected.length < 2}>{gerandoCarne ? 'Gerando carnê…' : `Gerar carnê (${carneSelected.length})`}</Button>
+        </div>
       </Modal>
 
       <Modal open={chargeModal} onClose={() => { setChargeModal(false); setModalError(''); }} title="Novo lançamento financeiro" description="Lance serviços, produtos e taxas com opção de parcelamento e remoção após pagamento." size="xl">

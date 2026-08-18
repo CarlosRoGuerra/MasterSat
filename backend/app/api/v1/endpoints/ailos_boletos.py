@@ -141,6 +141,16 @@ def gerar_carne_lote_endpoint(
     ordem de ``billing_ids``. Use GET /ailos/lotes/{ticket} para acompanhar.
     """
     billings, clients_by_id = _resolve_billings_and_clients(payload.billing_ids, db)
+    # Um carnê é sempre de UM cliente — as parcelas são as prestações dele. Misturar
+    # clientes num mesmo carnê não faz sentido (e gera boletos cruzados na Ailos).
+    if len({b.client_id for b in billings}) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail='Um carnê deve ser de um único cliente. As parcelas selecionadas '
+                   'pertencem a clientes diferentes.',
+        )
+    if len(billings) < 2:
+        raise HTTPException(status_code=400, detail='Um carnê precisa de ao menos 2 parcelas.')
     billings_by_parcela = list(enumerate(billings, start=1))
 
     try:
