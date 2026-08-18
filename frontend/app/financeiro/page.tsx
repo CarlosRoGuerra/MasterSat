@@ -17,7 +17,7 @@ import { usePagination, Pagination } from '@/components/ui/pagination';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { ClientAutocomplete } from '@/components/ui/client-autocomplete';
 import { API_URL, apiFetch } from '@/lib/api';
-import { nomeArquivoCliente } from '@/lib/arquivo';
+import { entregarArquivo, nomeArquivoCliente } from '@/lib/arquivo';
 import { enviarBoletoEmail, enviarBoletoWhats } from '@/lib/boleto-mensagem';
 import { useAuthGuard } from '@/lib/use-auth-guard';
 import { useDebouncedValue, useEffectSkipFirst } from '@/lib/use-debounced-value';
@@ -1083,6 +1083,26 @@ export default function FinanceiroPage() {
     } catch (err) { setError(parseError(err)); } finally { setNfseLoading(false); }
   }
 
+  // Abre o PDF da nota (DANFSe gerado por nós a partir do XML) em nova aba, em
+  // vez de mandar o operador para a consulta pública do governo.
+  async function abrirNotaPdf(billingId: number) {
+    if (!token) return;
+    try {
+      const resp = await fetch(
+        `${API_URL.replace(/\/+$/, '')}/nfse/${billingId}/danfse-local`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      if (!resp.ok) {
+        let detalhe = `Erro ${resp.status}`;
+        try { detalhe = (await resp.json())?.detail || detalhe; } catch { /* noop */ }
+        throw new Error(detalhe);
+      }
+      entregarArquivo(await resp.blob(), `nfse-${billingId}.pdf`, { emNovaAba: true });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Erro ao abrir a nota fiscal');
+    }
+  }
+
   async function handleConsultarNfse() {
     if (!token || !selectedBilling) return;
     setNfseLoading(true);
@@ -1730,9 +1750,18 @@ export default function FinanceiroPage() {
                 <div className="mt-2 space-y-1 text-sm text-slate-700 dark:text-slate-200">
                   <p>Número <strong>{nfse.numero_nfse}</strong>{nfse.serie_nfse ? ` · Série ${nfse.serie_nfse}` : ''}</p>
                   {nfse.codigo_verificacao && <p className="text-xs text-slate-500">Cód. verificação: {nfse.codigo_verificacao}</p>}
-                  {nfse.link_visualizacao && (
-                    <a href={nfse.link_visualizacao} target="_blank" rel="noopener noreferrer" className="inline-block pt-1 text-sm font-semibold text-brand-700 hover:underline dark:text-brand-400">Visualizar NFS-e ↗</a>
-                  )}
+                  <div className="flex items-center gap-3 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => abrirNotaPdf(selectedBilling.id)}
+                      className="text-sm font-semibold text-brand-700 hover:underline dark:text-brand-400"
+                    >
+                      Visualizar NFS-e (PDF)
+                    </button>
+                    {nfse.link_visualizacao && (
+                      <a href={nfse.link_visualizacao} target="_blank" rel="noopener noreferrer" className="text-xs font-medium text-slate-500 hover:underline dark:text-slate-400">Consulta pública ↗</a>
+                    )}
+                  </div>
                 </div>
               ) : nfse?.status === 'erro' ? (
                 <div className="mt-2 space-y-2">
