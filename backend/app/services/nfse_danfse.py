@@ -46,6 +46,11 @@ _TINTA = colors.HexColor('#14181F')      # preto do logotipo
 _BORDA = colors.HexColor('#D6DDE5')
 _TEXTO = colors.HexColor('#1F2933')
 _ROTULO = colors.HexColor('#6B7A8A')
+# NT 008 (2.2.3): sombreamento cinza claro (5%) no cabeçalho, títulos de bloco e
+# nos campos "Emitente" e "Valor Líquido"; "SEM VALIDADE JURÍDICA" em vermelho.
+_CINZA = colors.HexColor('#E7E9EC')
+_VERMELHO = colors.HexColor('#D00000')
+_MARCA_DAGUA = colors.HexColor('#A6A6A6')   # cinza K35 do carimbo CANCELADA/SUBSTITUÍDA
 
 
 class DanfseError(Exception):
@@ -84,6 +89,8 @@ class Danfse:
     municipio_prestacao: str = ''
     municipio_incidencia: str = ''
     teste: bool = False
+    tipo_ambiente: str = ''
+    ambiente_gerador: str = ''
     prestador: Pessoa = field(default_factory=Pessoa)
     tomador: Pessoa = field(default_factory=Pessoa)
     descricao_servico: str = ''
@@ -128,6 +135,8 @@ _SITUACAO = {
     '100': 'NFS-e gerada', '102': 'NFS-e de decisão judicial',
     '103': 'NFS-e avulsa', '107': 'NFS-e MEI',
 }
+_AMB_GERADOR = {'1': 'Prefeitura', '2': 'Sistema Nacional NFS-e'}
+_TIPO_AMBIENTE = {'1': 'Produção', '2': 'Produção Restrita'}
 
 
 # ---------------------------------------------------------------------------
@@ -257,6 +266,7 @@ def _ler_nacional(raiz, por_cep: dict[str, str] | None = None) -> Danfse:
     d.municipio_incidencia = _txt(inf, NS_NFSE, 'xLocIncid')
     d.descricao_tributacao = _txt(inf, NS_NFSE, 'xTribNac')
     d.outras_informacoes = _txt(inf, NS_NFSE, 'xOutInf')
+    d.ambiente_gerador = _AMB_GERADOR.get(_txt(inf, NS_NFSE, 'ambGer'), '')
 
     # Os endereços só trazem o código IBGE. O XML nomeia alguns municípios
     # (xLocEmi/xLocPrestacao/xLocIncid); fora esses, o tomador de outra cidade
@@ -288,7 +298,9 @@ def _ler_nacional(raiz, por_cep: dict[str, str] | None = None) -> Danfse:
         d.serie = _txt(dps, NS_NFSE, 'serie')
         d.numero_dps = _txt(dps, NS_NFSE, 'nDPS')
         d.competencia = _data_hora(_txt(dps, NS_NFSE, 'dCompet'))
-        d.teste = _txt(dps, NS_NFSE, 'tpAmb') == '2'
+        _tpamb = _txt(dps, NS_NFSE, 'tpAmb')
+        d.teste = _tpamb == '2'
+        d.tipo_ambiente = _TIPO_AMBIENTE.get(_tpamb, '')
         d.origem = f'DPS nº {d.numero_dps} série {d.serie}'
         if not d.data_emissao:
             d.data_emissao = _data_hora(_txt(dps, NS_NFSE, 'dhEmi'))
@@ -493,7 +505,20 @@ _P_VALOR = ParagraphStyle('valor', fontName='Helvetica-Bold', fontSize=8.5,
 _P_TEXTO = ParagraphStyle('texto', fontName='Helvetica', fontSize=8.5,
                           textColor=_TEXTO, leading=12)
 _P_SECAO = ParagraphStyle('secao', fontName='Helvetica-Bold', fontSize=7.5,
-                          textColor=colors.white, leading=10)
+                          textColor=_TINTA, leading=10)
+# Cabeçalho oficial do DANFSe (NT 008, item 2.4.3)
+_P_DANFSE_TIT = ParagraphStyle('danfse_tit', fontName='Helvetica-Bold', fontSize=11,
+                               textColor=_TINTA, alignment=1, leading=13)
+_P_DANFSE_SUB = ParagraphStyle('danfse_sub', fontName='Helvetica-Bold', fontSize=9,
+                               textColor=_TINTA, alignment=1, leading=11)
+_P_SEM_VALIDADE = ParagraphStyle('sem_val', fontName='Helvetica-Bold', fontSize=9,
+                                 textColor=_VERMELHO, alignment=1, leading=11, spaceBefore=2)
+_P_AMB = ParagraphStyle('amb', fontName='Helvetica', fontSize=6.5,
+                        textColor=_TEXTO, alignment=2, leading=8.5)
+_P_AUTENT = ParagraphStyle('autent', fontName='Helvetica', fontSize=5.2,
+                           textColor=_ROTULO, alignment=2, leading=6.4)
+_P_NFSE_MARCA = ParagraphStyle('nfse_marca', fontName='Helvetica-Bold', fontSize=17,
+                               textColor=_TINTA, leading=19)
 _P_RODAPE = ParagraphStyle('rodape', fontName='Helvetica', fontSize=7,
                            textColor=_ROTULO, leading=9.5)
 _P_TITULO = ParagraphStyle('titulo', fontName='Helvetica-Bold', fontSize=13,
@@ -544,8 +569,8 @@ def _grade(linhas: list[list], larguras: list[float], fundo_titulo=False,
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
         ('LEFTPADDING', (0, 0), (-1, -1), 5),
         ('RIGHTPADDING', (0, 0), (-1, -1), 5),
-        ('TOPPADDING', (0, 0), (-1, -1), 3),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ('TOPPADDING', (0, 0), (-1, -1), 2),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2.5),
     ]
     if fundo_titulo:
         estilo.append(('BACKGROUND', (0, 0), (-1, 0), _OURO_CLARO))
@@ -554,18 +579,15 @@ def _grade(linhas: list[list], larguras: list[float], fundo_titulo=False,
 
 
 def _secao(titulo: str) -> Table:
-    """Barra de seção: tarja preta com uma marca dourada na ponta, como os
-    cabeçalhos de card do app."""
-    t = Table([['', Paragraph(titulo.upper(), _P_SECAO)]],
-              colWidths=[2.2 * mm, _LARGURA - 2.2 * mm], hAlign='LEFT')
+    """Título de bloco: 7pt bold em caixa alta, com sombreamento cinza claro e
+    borda fina de 0,5pt — o padrão neutro exigido pela NT 008 (itens 2.2.3/2.4.1)."""
+    t = Table([[Paragraph(titulo.upper(), _P_SECAO)]], colWidths=[_LARGURA], hAlign='LEFT')
     t.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (0, 0), _OURO),
-        ('BACKGROUND', (1, 0), (1, 0), _TINTA),
-        ('LEFTPADDING', (0, 0), (0, 0), 0), ('RIGHTPADDING', (0, 0), (0, 0), 0),
-        ('LEFTPADDING', (1, 0), (1, 0), 6),
-        ('TOPPADDING', (0, 0), (-1, -1), 3.5),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 3.5),
-        ('ROUNDEDCORNERS', [_RAIO, _RAIO, _RAIO, _RAIO]),
+        ('BACKGROUND', (0, 0), (-1, -1), _CINZA),
+        ('BOX', (0, 0), (-1, -1), 0.5, _BORDA),
+        ('LEFTPADDING', (0, 0), (-1, -1), 5),
+        ('TOPPADDING', (0, 0), (-1, -1), 3),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
     ]))
     return t
 
@@ -595,9 +617,27 @@ def _celula(par_rotulo_valor: list) -> Table:
     return t
 
 
+def _carimbo_marca_dagua(texto: str):
+    """Callback de página: carimba CANCELADA/SUBSTITUÍDA na diagonal, em cinza
+    K35 e ~60pt, conforme a NT 008 (itens 2.5.1 e 2.5.2)."""
+    def _desenhar(canvas, _doc):
+        canvas.saveState()
+        canvas.setFont('Helvetica', 60)
+        canvas.setFillColor(_MARCA_DAGUA)
+        canvas.translate(A4[0] / 2, A4[1] / 2)
+        canvas.rotate(45)
+        canvas.drawCentredString(0, 0, texto.upper())
+        canvas.restoreState()
+    return _desenhar
+
+
 def gerar_danfse_pdf(xml: str, consulta_url: str | None = None,
-                     municipio_por_cep: dict[str, str] | None = None) -> bytes:
-    """Monta o PDF da nota a partir do XML. Levanta DanfseError se não der."""
+                     municipio_por_cep: dict[str, str] | None = None,
+                     marca_dagua: str | None = None) -> bytes:
+    """Monta o PDF da nota a partir do XML. Levanta DanfseError se não der.
+
+    ``marca_dagua`` carimba a página ('CANCELADA' / 'SUBSTITUÍDA') quando a nota
+    já não vale — exigência da NT 008 (2.5.1/2.5.2)."""
     d = ler_xml(xml, municipio_por_cep)
     # Nota antiga não ganha link de conferência: o sistema municipal saiu do ar
     # em 20/07/2026 e levou junto as URLs de verificação dele. Nessas o que vale
@@ -611,19 +651,15 @@ def gerar_danfse_pdf(xml: str, consulta_url: str | None = None,
         topMargin=10 * mm, bottomMargin=10 * mm,
         title=f'NFS-e {d.numero}'.strip(), author='MasterSat',
     )
-    hist: list = [_cabecalho(d), Spacer(1, 3.5 * mm)]
-
-    if d.teste:
-        hist += [_faixa_teste(), Spacer(1, 3 * mm)]
-
+    hist: list = [_cabecalho(d), Spacer(1, 2.5 * mm)]
     hist += [_identificacao(d), Spacer(1, 1.5 * mm)]
     if d.chave:
         hist += [_grade([[_celula([Paragraph('CHAVE DE ACESSO', _P_ROTULO),
                                    Paragraph(_esc(d.chave), _P_CHAVE)])]], [_LARGURA]),
-                 Spacer(1, 3.5 * mm)]
+                 Spacer(1, 2.5 * mm)]
 
-    hist += [_secao('Prestador de serviços'), _bloco_pessoa(d.prestador), Spacer(1, 3 * mm)]
-    hist += [_secao('Tomador de serviços'), _bloco_pessoa(d.tomador), Spacer(1, 3 * mm)]
+    hist += [_secao('Prestador de serviços'), _bloco_pessoa(d.prestador), Spacer(1, 2 * mm)]
+    hist += [_secao('Tomador de serviços'), _bloco_pessoa(d.tomador), Spacer(1, 2 * mm)]
 
     # ── Serviço ──
     hist += [
@@ -632,48 +668,73 @@ def gerar_danfse_pdf(xml: str, consulta_url: str | None = None,
                  _celula(_campo('Descrição da tributação', d.descricao_tributacao))]],
                [_LARGURA * 0.28, _LARGURA * 0.72]),
         _grade([[Paragraph(_esc(d.descricao_servico) or '—', _P_TEXTO)]], [_LARGURA]),
-        Spacer(1, 3 * mm),
+        Spacer(1, 2 * mm),
     ]
 
     tributacao = _bloco_tributacao(d)
     if tributacao is not None:
-        hist += [_secao('Tributação'), tributacao, Spacer(1, 3 * mm)]
+        hist += [_secao('Tributação'), tributacao, Spacer(1, 2 * mm)]
 
-    hist += [_secao('Valores'), *_bloco_valores(d), Spacer(1, 3 * mm)]
+    hist += [_secao('Valores'), *_bloco_valores(d), Spacer(1, 2 * mm)]
 
     if d.outras_informacoes:
         hist += [_secao('Outras informações'),
                  _grade([[Paragraph(_esc(d.outras_informacoes), _P_TEXTO)]], [_LARGURA]),
-                 Spacer(1, 3 * mm)]
+                 Spacer(1, 2 * mm)]
 
     hist.append(_rodape(d))
-    doc.build(hist)
+    if marca_dagua:
+        cb = _carimbo_marca_dagua(marca_dagua)
+        doc.build(hist, onFirstPage=cb, onLaterPages=cb)
+    else:
+        doc.build(hist)
     return buf.getvalue()
 
 
 def _cabecalho(d: Danfse) -> Table:
-    """Logo à esquerda, identificação do documento no meio, QR à direita."""
-    titulo = [
-        Paragraph('NOTA FISCAL DE SERVIÇO ELETRÔNICA', _P_TITULO),
-        Paragraph('DANFS-e · Documento Auxiliar da NFS-e', _P_SUBTITULO),
-    ]
-    if d.codigo_verificacao:
-        titulo.append(Paragraph(
-            f'Código de verificação: <b>{_esc(d.codigo_verificacao)}</b>', _P_SUBTITULO))
+    """
+    Cabeçalho no padrão da NT 008 (item 2.4.3): à esquerda a marca "NFS-e";
+    ao centro "DANFSe v2.0" / "Documento Auxiliar da NFS-e"; à direita o
+    município do emitente, o ambiente e o QR Code de consulta pública.
 
-    logo = _logo_flowable(11 * mm)
-    largura_logo = 44 * mm if logo is not None else 0
-    linha = [[logo or '', titulo, _qr(d.consulta_url or d.chave)]]
-    t = Table(linha, colWidths=[largura_logo, _LARGURA - largura_logo - 30 * mm, 30 * mm],
-              hAlign='LEFT')
+    Em produção restrita (tpAmb=2), abaixo do título entra, em vermelho, a
+    expressão obrigatória "NFS-e SEM VALIDADE JURÍDICA".
+    """
+    centro = [Paragraph('DANFSe v2.0', _P_DANFSE_TIT),
+              Paragraph('Documento Auxiliar da NFS-e', _P_DANFSE_SUB)]
+    if d.teste:
+        centro.append(Paragraph('NFS-e SEM VALIDADE JURÍDICA', _P_SEM_VALIDADE))
+
+    amb = []
+    if d.municipio_emissao:
+        amb.append(f'Município: {_esc(d.municipio_emissao)}')
+    if d.ambiente_gerador:
+        amb.append(f'Ambiente Gerador: {_esc(d.ambiente_gerador)}')
+    if d.tipo_ambiente:
+        amb.append(f'Tipo de Ambiente: {_esc(d.tipo_ambiente)}')
+
+    direita = Table([
+        [Paragraph('<br/>'.join(amb) or ' ', _P_AMB)],
+        [_qr(d.consulta_url or d.chave, lado_mm=17)],
+        [Paragraph('A autenticidade desta NFS-e pode ser verificada pela leitura '
+                   'deste código QR ou pela consulta da chave de acesso no portal '
+                   'nacional da NFS-e', _P_AUTENT)],
+    ], colWidths=[52 * mm], hAlign='RIGHT')
+    direita.setStyle(TableStyle([
+        ('ALIGN', (0, 0), (0, -1), 'RIGHT'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 0), ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ('TOPPADDING', (0, 0), (-1, -1), 1), ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
+    ]))
+
+    t = Table([[Paragraph('NFS-e', _P_NFSE_MARCA), centro, direita]],
+              colWidths=[26 * mm, _LARGURA - 26 * mm - 54 * mm, 54 * mm], hAlign='LEFT')
     t.setStyle(TableStyle([
-        ('VALIGN', (0, 0), (-1, 0), 'MIDDLE'),
-        ('ALIGN', (2, 0), (2, 0), 'RIGHT'),
-        ('LEFTPADDING', (0, 0), (0, 0), 0),
-        ('LEFTPADDING', (1, 0), (1, 0), 6 if logo is not None else 0),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-        ('TOPPADDING', (0, 0), (-1, -1), 0), ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-        ('LINEBELOW', (0, 0), (-1, 0), 1.6, _OURO),
+        ('VALIGN', (0, 0), (-1, 0), 'TOP'),
+        ('ALIGN', (1, 0), (1, 0), 'CENTER'),
+        ('BACKGROUND', (0, 0), (-1, -1), _CINZA),   # cabeçalho sombreado (NT 008 2.2.3)
+        ('BOX', (0, 0), (-1, -1), 0.5, _BORDA),
+        ('LEFTPADDING', (0, 0), (-1, -1), 5), ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+        ('TOPPADDING', (0, 0), (-1, -1), 5), ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
     ]))
     return t
 
@@ -713,14 +774,14 @@ def _bloco_tributacao(d: Danfse) -> Table | None:
 def _bloco_valores(d: Danfse) -> list:
     """Faixa de valores + o líquido em destaque dourado."""
     total = Table(
-        [[[Paragraph('VALOR LÍQUIDO DA NFS-E', _P_TOTAL_ROTULO),
+        [[[Paragraph('VALOR LÍQUIDO DA NFS-E + IBS/CBS', _P_TOTAL_ROTULO),
            Paragraph(_esc(d.valor_liquido), _P_TOTAL)]]],
         colWidths=[_LARGURA], hAlign='LEFT')
     total.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, -1), _OURO),
+        ('BACKGROUND', (0, 0), (-1, -1), _CINZA),   # campo sombreado (NT 008 2.2.3)
+        ('BOX', (0, 0), (-1, -1), 0.5, _BORDA),
         ('LEFTPADDING', (0, 0), (-1, -1), 8), ('RIGHTPADDING', (0, 0), (-1, -1), 8),
         ('TOPPADDING', (0, 0), (-1, -1), 5), ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-        ('ROUNDEDCORNERS', [0, 0, _RAIO, _RAIO]),
     ]))
     if not d.valores:
         return [total]
@@ -732,8 +793,8 @@ def _bloco_valores(d: Danfse) -> list:
     return [faixa, total]
 
 
-def _qr(conteudo: str) -> Drawing:
-    lado = 28 * mm
+def _qr(conteudo: str, lado_mm: float = 28) -> Drawing:
+    lado = lado_mm * mm
     widget = qr.QrCodeWidget(conteudo or ' ', barLevel='M')
     x1, y1, x2, y2 = widget.getBounds()
     dsg = Drawing(lado, lado, transform=[lado / (x2 - x1), 0, 0, lado / (y2 - y1), 0, 0])

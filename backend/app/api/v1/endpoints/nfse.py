@@ -333,11 +333,15 @@ def _danfse_local_bytes(nota: NfseNota, db: Session, billing_id: int) -> bytes:
     """
     if not nota.xml_retorno:
         raise HTTPException(status_code=404, detail='XML da NFS-e não disponível para esta cobrança')
+    # NFS-e cancelada/substituída deve sair com marca d'água (NT 008 2.5.1/2.5.2).
+    _st = (nota.status or '').lower()
+    marca = 'CANCELADA' if 'cancel' in _st else ('SUBSTITUÍDA' if 'substitu' in _st else None)
     try:
         return nfse_danfse.gerar_danfse_pdf(
             nota.xml_retorno,
             nfse_nacional.url_consulta_publica(nota.chave_acesso) if nota.chave_acesso else None,
             municipio_por_cep=_municipio_do_tomador(db, billing_id),
+            marca_dagua=marca,
         )
     except nfse_danfse.DanfseError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
