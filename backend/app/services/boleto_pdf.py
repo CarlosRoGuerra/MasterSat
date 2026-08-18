@@ -785,8 +785,10 @@ def _draw_recibo_pagador(c, d: DadosBoleto, y_top: float) -> float:
     for ln in _ENDERECO_RECIBO:
         c.drawString(ex, ty, ln); ty -= _mm(3.1)
     c.drawString(ex, ty, f"CNPJ: {_fmt_cnpj(d.cedente_cnpj)}")
+    # Nunca "Recibo" na emissão: recibo/quitação só sai depois do boleto pago
+    # (regra da reunião). Aqui é a fatura/demonstrativo do que está sendo cobrado.
     c.setFont("Helvetica-Oblique", 7); c.setFillColorRGB(0.4, 0.4, 0.4)
-    c.drawRightString(RM, y - _mm(2.5), "Recibo do pagador")
+    c.drawRightString(RM, y - _mm(2.5), "Demonstrativo de Serviços")
     _hline(c, LM, y - _mm(15.5), RM, lw=0.4)
     y -= _mm(18)
 
