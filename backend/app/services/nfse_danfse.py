@@ -108,6 +108,21 @@ class Danfse:
     outras_informacoes: str = ''
     origem: str = ''
     consulta_url: str = ''
+    # ── Campos exigidos pela NT 008 (todos os blocos do Anexo I) ──
+    finalidade: str = ''
+    emitente_tipo: str = ''
+    data_emissao_dps: str = ''
+    codigo_nbs: str = ''
+    local_prestacao_completo: str = ''
+    destinatario: Pessoa = field(default_factory=Pessoa)
+    destinatario_proprio_tomador: bool = True
+    intermediario: Pessoa = field(default_factory=Pessoa)
+    issqn_campos: list[tuple[str, str]] = field(default_factory=list)
+    federal_campos: list[tuple[str, str]] = field(default_factory=list)
+    ibscbs_campos: list[tuple[str, str]] = field(default_factory=list)
+    valor_total_campos: list[tuple[str, str]] = field(default_factory=list)
+    valor_total_nf: str = ''
+    tributos_aprox_texto: str = ''
 
 
 # Tabelas do leiaute (tiposSimples_v1.01.xsd) — traduzem os códigos crus.
@@ -137,6 +152,15 @@ _SITUACAO = {
 }
 _AMB_GERADOR = {'1': 'Prefeitura', '2': 'Sistema Nacional NFS-e'}
 _TIPO_AMBIENTE = {'1': 'Produção', '2': 'Produção Restrita'}
+_FINALIDADE = {
+    '1': 'NFS-e regular', '2': 'NFS-e complementar',
+    '3': 'NFS-e extemporânea', '4': 'NFS-e de substituição',
+}
+_TP_EMIT = {'1': 'Prestador', '2': 'Tomador', '3': 'Intermediário'}
+_RET_PISCOFINS = {
+    '1': 'PIS/COFINS Retido', '2': 'PIS/COFINS Não Retido',
+    '3': 'PIS/COFINS/CSLL Não Retido', '4': 'PIS/COFINS Retido / CSLL Não Retido',
+}
 
 
 # ---------------------------------------------------------------------------
@@ -247,6 +271,54 @@ def _endereco_nacional(end, municipios: dict[str, str],
 
 def _so_digitos(valor: str) -> str:
     return ''.join(c for c in (valor or '') if c.isdigit())
+
+
+def _pessoa_nacional(bloco, municipios: dict[str, str], por_cep: dict[str, str]) -> Pessoa:
+    """Lê um bloco de pessoa (destinatário/intermediário) do XML nacional."""
+    if bloco is None:
+        return Pessoa()
+    end, mun, cep = _endereco_nacional(_filho(bloco, NS_NFSE, 'end'), municipios, por_cep)
+    return Pessoa(
+        nome=_txt(bloco, NS_NFSE, 'xNome'),
+        documento=_doc_formatado(_txt(bloco, NS_NFSE, 'CNPJ') or _txt(bloco, NS_NFSE, 'CPF')
+                                 or _txt(bloco, NS_NFSE, 'NIF')),
+        inscricao_municipal=_txt(bloco, NS_NFSE, 'IM'),
+        endereco=end, municipio=mun, cep=cep,
+        fone=_fone_formatado(_txt(bloco, NS_NFSE, 'fone')),
+        email=_txt(bloco, NS_NFSE, 'email'),
+    )
+
+
+def _totais_aprox_texto(tot, valor_servico: str, agregado: str) -> str:
+    """
+    Linha dos Totais Aproximados dos Tributos no formato exigido pela NT 008
+    (Nota 10): "Federais / Estaduais / Municipais". Quando o XML só traz a carga
+    agregada do Simples (pTotTribSN), mostra-a como total — é o que existe.
+    """
+    if tot is None:
+        return ''
+
+    def _esfera(v_tag: str, p_tag: str) -> str:
+        v = _txt(tot, NS_NFSE, v_tag)
+        if v:
+            return _brl(v)
+        p = _txt(tot, NS_NFSE, p_tag)
+        if p:
+            try:
+                return _brl(str(float(valor_servico) * float(p) / 100))
+            except (TypeError, ValueError):
+                return _pct(p)
+        return ''
+
+    fed, est, mun = _esfera('vTotTribFed', 'pTotTribFed'), _esfera('vTotTribEst', 'pTotTribEst'), _esfera('vTotTribMu', 'pTotTribMu')
+    if fed or est or mun:
+        return ('Totais Aproximados dos Tributos cfe. Lei nº 12.741/2012: '
+                f'Federais: {fed or "R$ 0,00"} ; Estaduais: {est or "R$ 0,00"} ; '
+                f'Municipais: {mun or "R$ 0,00"}')
+    if agregado:
+        return ('Totais Aproximados dos Tributos cfe. Lei nº 12.741/2012 '
+                f'(carga total do Simples Nacional): {agregado}')
+    return ''
 
 
 def _ler_nacional(raiz, por_cep: dict[str, str] | None = None) -> Danfse:
@@ -365,6 +437,76 @@ def _ler_nacional(raiz, por_cep: dict[str, str] | None = None) -> Danfse:
     d.valores = [(rotulo, valor) for rotulo, valor in linhas if valor]
 
     d.valor_liquido = _brl(_txt(val, NS_NFSE, 'vLiq')) if val is not None else _brl(bruto)
+
+    # ── Demais blocos exigidos pelo Anexo I (NT 008) ───────────────────────
+    def _vd(txt: str) -> str:          # valor monetário ou traço (Nota 12)
+        return _brl(txt) if txt else '-'
+
+    if dps is not None:
+        d.finalidade = _FINALIDADE.get(_txt(dps, NS_NFSE, 'IBSCBS', 'finNFSe'), '')
+        d.emitente_tipo = _TP_EMIT.get(_txt(dps, NS_NFSE, 'tpEmit'), '')
+        d.data_emissao_dps = _data_hora(_txt(dps, NS_NFSE, 'dhEmi'))
+        _serv = _filho(dps, NS_NFSE, 'serv')
+        if _serv is not None:
+            d.codigo_nbs = _txt(_serv, NS_NFSE, 'cServ', 'cNBS')
+        d.destinatario = _pessoa_nacional(_filho(dps, NS_NFSE, 'IBSCBS', 'dest'), municipios, por_cep)
+        d.destinatario_proprio_tomador = not (d.destinatario.nome or d.destinatario.documento)
+        d.intermediario = _pessoa_nacional(_filho(dps, NS_NFSE, 'interm'), municipios, por_cep)
+    d.local_prestacao_completo = f'{d.municipio_prestacao} / BR' if d.municipio_prestacao else ''
+
+    _al = _txt(val, NS_NFSE, 'pAliqAplic') if val is not None else ''
+    d.issqn_campos = [
+        ('Tipo de Tributação do ISSQN', d.tributacao_issqn or '-'),
+        ('Município de Incidência', d.municipio_incidencia or '-'),
+        ('Regime Especial de Tributação', d.regime_especial or '-'),
+        ('BC ISSQN', _vd(_txt(val, NS_NFSE, 'vBC')) if val is not None else '-'),
+        ('Alíquota Aplicada', _pct(_al) if _al else '-'),
+        ('Retenção do ISSQN', d.retencao_issqn or '-'),
+        ('ISSQN Apurado', _vd(_txt(val, NS_NFSE, 'vISSQN')) if val is not None else '-'),
+    ]
+
+    _fed = _filho(dps_val, NS_NFSE, 'trib', 'tribFed') if dps_val is not None else None
+    _pis = _filho(_fed, NS_NFSE, 'piscofins') if _fed is not None else None
+    d.federal_campos = [
+        ('IRRF', _vd(_txt(_fed, NS_NFSE, 'vRetIRRF')) if _fed is not None else '-'),
+        ('Contrib. Previdenciária Retida', _vd(_txt(_fed, NS_NFSE, 'vRetCP')) if _fed is not None else '-'),
+        ('Contrib. Sociais Retidas', _vd(_txt(_fed, NS_NFSE, 'vRetCSLL')) if _fed is not None else '-'),
+        ('PIS', _vd(_txt(_pis, NS_NFSE, 'vPis')) if _pis is not None else '-'),
+        ('COFINS', _vd(_txt(_pis, NS_NFSE, 'vCofins')) if _pis is not None else '-'),
+        ('Descrição Contrib. Sociais', _RET_PISCOFINS.get(_txt(_pis, NS_NFSE, 'tpRetPisCofins'), '-') if _pis is not None else '-'),
+    ]
+
+    _tot = _filho(inf, NS_NFSE, 'IBSCBS', 'totCIBS')
+    _gtrib = _filho(dps, NS_NFSE, 'IBSCBS', 'valores', 'trib', 'gIBSCBS') if dps is not None else None
+    _cst = _txt(_gtrib, NS_NFSE, 'CST') if _gtrib is not None else ''
+    d.ibscbs_campos = [
+        ('CST / cClassTrib', f'{_cst} / {_txt(_gtrib, NS_NFSE, "cClassTrib")}' if _cst else '-'),
+        ('Valor Total do IBS', _vd(_txt(_tot, NS_NFSE, 'gIBS', 'vIBSTot')) if _tot is not None else '-'),
+        ('Valor Total da CBS', _vd(_txt(_tot, NS_NFSE, 'gCBS', 'vCBS')) if _tot is not None else '-'),
+    ]
+
+    _ibstot, _cbstot = (_txt(_tot, NS_NFSE, 'gIBS', 'vIBSTot'), _txt(_tot, NS_NFSE, 'gCBS', 'vCBS')) if _tot is not None else ('', '')
+    _ibscbs_total = ''
+    if _ibstot or _cbstot:
+        try:
+            _ibscbs_total = _brl(str(float(_ibstot or 0) + float(_cbstot or 0)))
+        except ValueError:
+            _ibscbs_total = ''
+    _dci = _filho(dps_val, NS_NFSE, 'vDescCondIncond') if dps_val is not None else None
+    d.valor_total_campos = [
+        ('Valor da Operação / Serviço', _vd(bruto)),
+        ('Desconto Incondicionado', _vd(_txt(_dci, NS_NFSE, 'vDescIncond')) if _dci is not None else '-'),
+        ('Desconto Condicionado', _vd(_txt(_dci, NS_NFSE, 'vDescCond')) if _dci is not None else '-'),
+        ('Total das Retenções (ISSQN/Federais)', _vd(_txt(val, NS_NFSE, 'vTotalRet')) if val is not None else '-'),
+        ('Valor Líquido da NFS-e', d.valor_liquido or '-'),
+        ('Total do IBS/CBS', _ibscbs_total or '-'),
+    ]
+    d.valor_total_nf = (_vd(_txt(_tot, NS_NFSE, 'vTotNF'))
+                        if (_tot is not None and _txt(_tot, NS_NFSE, 'vTotNF')) else d.valor_liquido)
+
+    d.tributos_aprox_texto = _totais_aprox_texto(
+        _filho(dps_val, NS_NFSE, 'trib', 'totTrib') if dps_val is not None else None,
+        bruto, d.tributos_aprox)
     return d
 
 
@@ -498,14 +640,16 @@ def ler_xml(xml: str, municipio_por_cep: dict[str, str] | None = None) -> Danfse
 # Desenho
 # ---------------------------------------------------------------------------
 
-_P_ROTULO = ParagraphStyle('rotulo', fontName='Helvetica', fontSize=6.5,
-                           textColor=_ROTULO, leading=8, spaceAfter=1)
-_P_VALOR = ParagraphStyle('valor', fontName='Helvetica-Bold', fontSize=8.5,
-                          textColor=_TEXTO, leading=11)
-_P_TEXTO = ParagraphStyle('texto', fontName='Helvetica', fontSize=8.5,
-                          textColor=_TEXTO, leading=12)
-_P_SECAO = ParagraphStyle('secao', fontName='Helvetica-Bold', fontSize=7.5,
-                          textColor=_TINTA, leading=10)
+# Tamanhos no mínimo exigido pela NT 008 (item 2.4): rótulos 6pt, conteúdo 7pt,
+# títulos de bloco 7pt — para caber tudo na página única obrigatória.
+_P_ROTULO = ParagraphStyle('rotulo', fontName='Helvetica-Bold', fontSize=6,
+                           textColor=_ROTULO, leading=6.6, spaceAfter=0.4)
+_P_VALOR = ParagraphStyle('valor', fontName='Helvetica-Bold', fontSize=7.5,
+                          textColor=_TEXTO, leading=8.6)
+_P_TEXTO = ParagraphStyle('texto', fontName='Helvetica', fontSize=7.5,
+                          textColor=_TEXTO, leading=9)
+_P_SECAO = ParagraphStyle('secao', fontName='Helvetica-Bold', fontSize=7,
+                          textColor=_TINTA, leading=8.5)
 # Cabeçalho oficial do DANFSe (NT 008, item 2.4.3)
 _P_DANFSE_TIT = ParagraphStyle('danfse_tit', fontName='Helvetica-Bold', fontSize=11,
                                textColor=_TINTA, alignment=1, leading=13)
@@ -532,7 +676,8 @@ _P_TOTAL = ParagraphStyle('total', fontName='Helvetica-Bold', fontSize=15,
 _P_TOTAL_ROTULO = ParagraphStyle('totalrot', fontName='Helvetica-Bold', fontSize=6.5,
                                  textColor=_TINTA, leading=8)
 
-_LARGURA = A4[0] - 24 * mm
+_MARGEM = 4 * mm            # margem enxuta (NT 008 2.2.2 pede 1,5–2mm; 4mm é seguro p/ impressora)
+_LARGURA = A4[0] - 2 * _MARGEM
 _RAIO = 3  # eco do rounded-2xl dos cards do app, na escala do papel
 
 # Logo lido em memória: o repositório mora num caminho com acento e passar o
@@ -561,16 +706,23 @@ def _esc(texto: str) -> str:
     return html.escape(texto or '', quote=False)
 
 
+def _reticencias(texto: str, n: int) -> str:
+    """Trunca com reticências acima de N caracteres, como a NT 008 exige em
+    várias descrições (itens 2.1/2.4.5) e para garantir a página única."""
+    texto = texto or ''
+    return texto if len(texto) <= n else texto[:n - 1].rstrip() + '…'
+
+
 def _grade(linhas: list[list], larguras: list[float], fundo_titulo=False,
            extra: list | None = None) -> Table:
     t = Table(linhas, colWidths=larguras, hAlign='LEFT')
     estilo = [
         ('GRID', (0, 0), (-1, -1), 0.5, _BORDA),
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('LEFTPADDING', (0, 0), (-1, -1), 5),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 5),
-        ('TOPPADDING', (0, 0), (-1, -1), 2),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 2.5),
+        ('LEFTPADDING', (0, 0), (-1, -1), 4),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+        ('TOPPADDING', (0, 0), (-1, -1), 1.2),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 1.3),
     ]
     if fundo_titulo:
         estilo.append(('BACKGROUND', (0, 0), (-1, 0), _OURO_CLARO))
@@ -585,26 +737,91 @@ def _secao(titulo: str) -> Table:
     t.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, -1), _CINZA),
         ('BOX', (0, 0), (-1, -1), 0.5, _BORDA),
-        ('LEFTPADDING', (0, 0), (-1, -1), 5),
-        ('TOPPADDING', (0, 0), (-1, -1), 3),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ('LEFTPADDING', (0, 0), (-1, -1), 4),
+        ('TOPPADDING', (0, 0), (-1, -1), 1.8),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 1.8),
     ]))
     return t
 
 
-def _bloco_pessoa(p: Pessoa) -> Table:
-    meia = _LARGURA / 2
-    municipio_cep = ' — '.join(x for x in (p.municipio, p.cep) if x)
-    linhas = [
-        [_campo('Nome / Razão social', p.nome), _campo('CPF / CNPJ', p.documento)],
-        [_campo('Inscrição municipal', p.inscricao_municipal), _campo('Telefone', p.fone)],
-        [_campo('Endereço', p.endereco), _campo('Município / CEP', municipio_cep)],
+def _bloco_pessoa(p: Pessoa, extra_rows: list | None = None) -> Table:
+    """Bloco de pessoa compacto (vários campos por linha, como o Anexo I)."""
+    c = _LARGURA / 3
+    corpo = [
+        [_celula(_campo('Nome / Razão social', p.nome)), '', _celula(_campo('CPF / CNPJ / NIF', p.documento))],
+        [_celula(_campo('Inscrição municipal', p.inscricao_municipal)),
+         _celula(_campo('Telefone', p.fone)), _celula(_campo('Município / UF', p.municipio))],
+        [_celula(_campo('Endereço', p.endereco)), '', _celula(_campo('CEP', p.cep))],
+        [_celula(_campo('E-mail', p.email)), '', ''],
     ]
-    corpo = [[_celula(a), _celula(b)] for a, b in linhas]
-    # O e-mail ocupa a linha inteira: sem o span sobrava uma célula "—" à direita.
-    corpo.append([_celula(_campo('E-mail', p.email)), ''])
-    return _grade(corpo, [meia, meia],
-                  extra=[('SPAN', (0, len(corpo) - 1), (1, len(corpo) - 1))])
+    spans = [('SPAN', (0, 0), (1, 0)), ('SPAN', (0, 2), (1, 2)), ('SPAN', (0, 3), (2, 3))]
+    for r in (extra_rows or []):
+        corpo.append([_celula(_campo(r[0][0], r[0][1])), '', _celula(_campo(r[1][0], r[1][1]))])
+        spans.append(('SPAN', (0, len(corpo) - 1), (1, len(corpo) - 1)))
+    return _grade(corpo, [c, c, c], extra=spans)
+
+
+def _bloco_texto(texto: str) -> Table:
+    """Linha única em caixa — colapso dos blocos suprimíveis (NT 008 2.3)."""
+    return _grade([[Paragraph(_esc(texto), _P_VALOR)]], [_LARGURA])
+
+
+def _bloco_campos(campos: list[tuple[str, str]], cols: int) -> Table:
+    """Grade genérica rótulo/valor com ``cols`` campos por linha."""
+    largura = _LARGURA / cols
+    linhas = []
+    for i in range(0, len(campos), cols):
+        grupo = list(campos[i:i + cols])
+        while len(grupo) < cols:
+            grupo.append(('', ''))
+        linhas.append([_celula(_campo(r, v)) for r, v in grupo])
+    return _grade(linhas, [largura] * cols)
+
+
+def _bloco_servico(d: Danfse) -> list:
+    cabec = _grade([[
+        _celula(_campo('Cód. Tributação Nac./Mun.', d.codigo_servico)),
+        _celula(_campo('Código NBS', d.codigo_nbs)),
+        _celula(_campo('Local da Prestação / UF / País', d.local_prestacao_completo)),
+    ]], [_LARGURA * 0.28, _LARGURA * 0.22, _LARGURA * 0.50])
+    trib = _grade([[Paragraph('<b>Descrição da tributação:</b> '
+                              + (_esc(_reticencias(d.descricao_tributacao, 167)) or '-'), _P_TEXTO)]], [_LARGURA])
+    serv = _grade([[Paragraph('<b>Descrição do serviço:</b> '
+                              + (_esc(_reticencias(d.descricao_servico, 500)) or '-'), _P_TEXTO)]], [_LARGURA])
+    return [cabec, trib, serv]
+
+
+def _bloco_valor_total(d: Danfse) -> list:
+    campos = d.valor_total_campos or [(r, v) for r, v in d.valores]
+    grade = _bloco_campos(campos, 3)
+    total = Table(
+        [[[Paragraph('VALOR LÍQUIDO DA NFS-E + IBS/CBS', _P_TOTAL_ROTULO),
+           Paragraph(_esc(d.valor_total_nf or d.valor_liquido), _P_TOTAL)]]],
+        colWidths=[_LARGURA], hAlign='LEFT')
+    total.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), _CINZA),
+        ('BOX', (0, 0), (-1, -1), 0.5, _BORDA),
+        ('LEFTPADDING', (0, 0), (-1, -1), 8), ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+        ('TOPPADDING', (0, 0), (-1, -1), 4), ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+    ]))
+    return [grade, total]
+
+
+def _bloco_info_compl(d: Danfse) -> Table:
+    partes = []
+    if d.outras_informacoes:
+        partes.append(_esc(_reticencias(d.outras_informacoes, 500)))
+    if d.tributos_aprox_texto:  # a linha dos Totais é fixa (Nota 10), nunca truncada
+        partes.append(_esc(d.tributos_aprox_texto))
+    return _grade([[Paragraph(' | '.join(partes) or '-', _P_TEXTO)]], [_LARGURA])
+
+
+def _bloco_canhoto(d: Danfse) -> Table:
+    return _grade([[
+        _celula(_campo('Data de cientificação', '')),
+        _celula(_campo('Identificação e assinatura', '')),
+        _celula(_campo('Nº NFS-e / Chave da NFS-e', f'{d.numero} / {d.chave}' if d.chave else d.numero)),
+    ]], [_LARGURA * 0.22, _LARGURA * 0.40, _LARGURA * 0.38])
 
 
 def _celula(par_rotulo_valor: list) -> Table:
@@ -617,16 +834,21 @@ def _celula(par_rotulo_valor: list) -> Table:
     return t
 
 
-def _carimbo_marca_dagua(texto: str):
-    """Callback de página: carimba CANCELADA/SUBSTITUÍDA na diagonal, em cinza
-    K35 e ~60pt, conforme a NT 008 (itens 2.5.1 e 2.5.2)."""
+def _pagina(marca_dagua: str | None):
+    """Callback de página: desenha a borda de 1pt ao redor (NT 008 2.2.3) e, se
+    a nota já não vale, o carimbo diagonal CANCELADA/SUBSTITUÍDA (2.5.1/2.5.2)."""
     def _desenhar(canvas, _doc):
         canvas.saveState()
-        canvas.setFont('Helvetica', 60)
-        canvas.setFillColor(_MARCA_DAGUA)
-        canvas.translate(A4[0] / 2, A4[1] / 2)
-        canvas.rotate(45)
-        canvas.drawCentredString(0, 0, texto.upper())
+        canvas.setLineWidth(1)
+        canvas.setStrokeColor(_TINTA)
+        m = 3.5 * mm
+        canvas.rect(m, m, A4[0] - 2 * m, A4[1] - 2 * m)
+        if marca_dagua:
+            canvas.setFont('Helvetica', 60)
+            canvas.setFillColor(_MARCA_DAGUA)
+            canvas.translate(A4[0] / 2, A4[1] / 2)
+            canvas.rotate(45)
+            canvas.drawCentredString(0, 0, marca_dagua.upper())
         canvas.restoreState()
     return _desenhar
 
@@ -647,47 +869,68 @@ def gerar_danfse_pdf(xml: str, consulta_url: str | None = None,
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
         buf, pagesize=A4,
-        leftMargin=12 * mm, rightMargin=12 * mm,
-        topMargin=10 * mm, bottomMargin=10 * mm,
+        leftMargin=_MARGEM, rightMargin=_MARGEM,
+        topMargin=_MARGEM, bottomMargin=_MARGEM,
         title=f'NFS-e {d.numero}'.strip(), author='MasterSat',
     )
-    hist: list = [_cabecalho(d), Spacer(1, 2.5 * mm)]
-    hist += [_identificacao(d), Spacer(1, 1.5 * mm)]
+    hist: list = [_cabecalho(d), Spacer(1, 0.4 * mm)]
+    hist += [_secao('Dados da NFS-e'), _identificacao(d)]
     if d.chave:
-        hist += [_grade([[_celula([Paragraph('CHAVE DE ACESSO', _P_ROTULO),
-                                   Paragraph(_esc(d.chave), _P_CHAVE)])]], [_LARGURA]),
-                 Spacer(1, 2.5 * mm)]
+        hist.append(_grade([[_celula([Paragraph('CHAVE DE ACESSO DA NFS-E', _P_ROTULO),
+                                      Paragraph(_esc(d.chave), _P_CHAVE)])]], [_LARGURA]))
+    hist.append(Spacer(1, 0.3 * mm))
 
-    hist += [_secao('Prestador de serviços'), _bloco_pessoa(d.prestador), Spacer(1, 2 * mm)]
-    hist += [_secao('Tomador de serviços'), _bloco_pessoa(d.tomador), Spacer(1, 2 * mm)]
+    if d.formato == 'nacional':
+        # Todos os blocos do Anexo I (NT 008), na ordem exigida. Blocos
+        # suprimíveis colapsam para uma linha (item 2.3); campos sem dado saem
+        # com traço (Nota 12).
+        hist += [_secao('Prestador / Fornecedor'),
+                 _bloco_pessoa(d.prestador, extra_rows=[[
+                     ('Simples Nacional na competência', d.regime_simples or '-'),
+                     ('Regime de apuração pelo SN', d.regime_apuracao or '-')]]),
+                 Spacer(1, 0.3 * mm)]
 
-    # ── Serviço ──
-    hist += [
-        _secao('Discriminação dos serviços'),
-        _grade([[_celula(_campo('Código de tributação', d.codigo_servico)),
-                 _celula(_campo('Descrição da tributação', d.descricao_tributacao))]],
-               [_LARGURA * 0.28, _LARGURA * 0.72]),
-        _grade([[Paragraph(_esc(d.descricao_servico) or '—', _P_TEXTO)]], [_LARGURA]),
-        Spacer(1, 2 * mm),
-    ]
+        hist.append(_secao('Tomador / Adquirente'))
+        hist.append(_bloco_pessoa(d.tomador) if (d.tomador.nome or d.tomador.documento)
+                    else _bloco_texto('TOMADOR/ADQUIRENTE DA OPERAÇÃO NÃO IDENTIFICADO NA NFS-e'))
+        hist.append(Spacer(1, 0.3 * mm))
 
-    tributacao = _bloco_tributacao(d)
-    if tributacao is not None:
-        hist += [_secao('Tributação'), tributacao, Spacer(1, 2 * mm)]
+        hist.append(_secao('Destinatário da Operação'))
+        hist.append(_bloco_texto('O DESTINATÁRIO É O PRÓPRIO TOMADOR/ADQUIRENTE DA OPERAÇÃO')
+                    if d.destinatario_proprio_tomador else _bloco_pessoa(d.destinatario))
+        hist.append(Spacer(1, 0.3 * mm))
 
-    hist += [_secao('Valores'), *_bloco_valores(d), Spacer(1, 2 * mm)]
+        hist.append(_secao('Intermediário da Operação'))
+        hist.append(_bloco_pessoa(d.intermediario) if (d.intermediario.nome or d.intermediario.documento)
+                    else _bloco_texto('INTERMEDIÁRIO DA OPERAÇÃO NÃO IDENTIFICADO NA NFS-e'))
+        hist.append(Spacer(1, 0.3 * mm))
 
-    if d.outras_informacoes:
-        hist += [_secao('Outras informações'),
-                 _grade([[Paragraph(_esc(d.outras_informacoes), _P_TEXTO)]], [_LARGURA]),
+        hist += [_secao('Serviço Prestado'), *_bloco_servico(d), Spacer(1, 0.3 * mm)]
+        hist += [_secao('Tributação Municipal (ISSQN)'), _bloco_campos(d.issqn_campos, 4), Spacer(1, 0.3 * mm)]
+        hist += [_secao('Tributação Federal (Exceto CBS)'), _bloco_campos(d.federal_campos, 3), Spacer(1, 0.3 * mm)]
+        hist += [_secao('Tributação IBS / CBS'), _bloco_campos(d.ibscbs_campos, 3), Spacer(1, 0.3 * mm)]
+        hist += [_secao('Valor Total da NFS-e'), *_bloco_valor_total(d), Spacer(1, 0.3 * mm)]
+        hist += [_secao('Informações Complementares'), _bloco_info_compl(d), Spacer(1, 0.3 * mm)]
+        hist += [_secao('Canhoto'), _bloco_canhoto(d)]
+    else:
+        # Legado de Joinville (notas anteriores ao padrão nacional): leiaute simples.
+        hist += [_secao('Prestador de serviços'), _bloco_pessoa(d.prestador), Spacer(1, 2 * mm)]
+        hist += [_secao('Tomador de serviços'), _bloco_pessoa(d.tomador), Spacer(1, 2 * mm)]
+        hist += [_secao('Discriminação dos serviços'),
+                 _grade([[Paragraph(_esc(d.descricao_servico) or '—', _P_TEXTO)]], [_LARGURA]),
                  Spacer(1, 2 * mm)]
+        trib = _bloco_tributacao(d)
+        if trib is not None:
+            hist += [_secao('Tributação'), trib, Spacer(1, 2 * mm)]
+        hist += [_secao('Valores'), *_bloco_valores(d), Spacer(1, 2 * mm)]
+        if d.outras_informacoes:
+            hist += [_secao('Outras informações'),
+                     _grade([[Paragraph(_esc(d.outras_informacoes), _P_TEXTO)]], [_LARGURA]),
+                     Spacer(1, 2 * mm)]
 
     hist.append(_rodape(d))
-    if marca_dagua:
-        cb = _carimbo_marca_dagua(marca_dagua)
-        doc.build(hist, onFirstPage=cb, onLaterPages=cb)
-    else:
-        doc.build(hist)
+    cb = _pagina(marca_dagua)
+    doc.build(hist, onFirstPage=cb, onLaterPages=cb)
     return buf.getvalue()
 
 
@@ -734,25 +977,25 @@ def _cabecalho(d: Danfse) -> Table:
         ('BACKGROUND', (0, 0), (-1, -1), _CINZA),   # cabeçalho sombreado (NT 008 2.2.3)
         ('BOX', (0, 0), (-1, -1), 0.5, _BORDA),
         ('LEFTPADDING', (0, 0), (-1, -1), 5), ('RIGHTPADDING', (0, 0), (-1, -1), 5),
-        ('TOPPADDING', (0, 0), (-1, -1), 5), ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+        ('TOPPADDING', (0, 0), (-1, -1), 3), ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
     ]))
     return t
 
 
 def _identificacao(d: Danfse) -> Table:
-    """
-    Número da NFS-e e número/série da DPS são coisas diferentes: a série 40000 é
-    da DPS que enviamos, não da nota. Ficavam lado a lado sugerindo o contrário.
-    """
-    dps = ' / '.join(x for x in (d.numero_dps, d.serie) if x)
+    """Dados de Identificação da NFS-e (NT 008, item 2.1.2) — os 10 campos, com
+    número da NFS-e e número/série da DPS bem separados (são coisas diferentes)."""
     return _grade([
         [_celula(_campo('Número da NFS-e', d.numero)),
          _celula(_campo('Competência', d.competencia)),
-         _celula(_campo('Data e hora de emissão', d.data_emissao))],
-        [_celula(_campo('DPS nº / série', dps)),
-         _celula(_campo('Município de emissão', d.municipio_emissao)),
-         _celula(_campo('Local da prestação', d.municipio_prestacao))],
-    ], [_LARGURA * 0.32, _LARGURA * 0.30, _LARGURA * 0.38])
+         _celula(_campo('Data e hora de emissão da NFS-e', d.data_emissao))],
+        [_celula(_campo('Número da DPS', d.numero_dps)),
+         _celula(_campo('Série da DPS', d.serie)),
+         _celula(_campo('Data e hora de emissão da DPS', d.data_emissao_dps))],
+        [_celula(_campo('Emitente da NFS-e', d.emitente_tipo)),
+         _celula(_campo('Situação da NFS-e', d.situacao)),
+         _celula(_campo('Finalidade', d.finalidade))],
+    ], [_LARGURA * 0.34, _LARGURA * 0.28, _LARGURA * 0.38])
 
 
 def _bloco_tributacao(d: Danfse) -> Table | None:
