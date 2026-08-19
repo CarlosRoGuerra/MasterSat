@@ -554,6 +554,11 @@ export default function FinanceiroPage() {
   const [carneBillings, setCarneBillings] = useState<Billing[]>([]);
   const [carneSelected, setCarneSelected] = useState<number[]>([]);
   const [carneLoading, setCarneLoading] = useState(false);
+  const [carneMode, setCarneMode] = useState<'existentes' | 'plano'>('existentes');
+  const [carneContractId, setCarneContractId] = useState('');
+  const [carneNumParcelas, setCarneNumParcelas] = useState('12');
+  const [carnePrimeiroVenc, setCarnePrimeiroVenc] = useState('');
+  const [carneValor, setCarneValor] = useState('');
   const [batchReceiveModal, setBatchReceiveModal] = useState(false);
   const [batchReceiveForm, setBatchReceiveForm] = useState({ payment_date: new Date().toISOString().slice(0, 10), payment_method: 'pix' });
   const [batchMaintModal, setBatchMaintModal] = useState(false);
@@ -1012,9 +1017,14 @@ export default function FinanceiroPage() {
   }
 
   function openCarneModal() {
+    setCarneMode('existentes');
     setCarneClientId('');
     setCarneBillings([]);
     setCarneSelected([]);
+    setCarneContractId('');
+    setCarneNumParcelas('12');
+    setCarnePrimeiroVenc('');
+    setCarneValor('');
     setModalError('');
     setCarneModal(true);
   }
@@ -1025,6 +1035,8 @@ export default function FinanceiroPage() {
     setCarneClientId(clientId);
     setCarneBillings([]);
     setCarneSelected([]);
+    setCarneContractId('');
+    setCarneValor('');
     if (!token || !clientId) return;
     setCarneLoading(true);
     try {
@@ -1035,49 +1047,71 @@ export default function FinanceiroPage() {
     } catch (err) { setModalError(parseError(err)); } finally { setCarneLoading(false); }
   }
 
-  /**
-   * Gera o carnê a partir dos boletos de UM cliente: registra o lote na Ailos
-   * (um boleto real por parcela), aguarda o processamento assíncrono e baixa o
-   * PDF. O backend também recusa parcelas de clientes diferentes.
-   */
+  // Núcleo do carnê: registra o lote na Ailos, aguarda o processamento
+  // assíncrono e baixa o PDF. Assume ids do MESMO cliente (o backend valida).
+  async function _registrarCarne(ids: number[]) {
+    const lote = await apiFetch<{ id: number; ticket: string; status: string }>(
+      '/ailos/carne/lote',
+      { method: 'POST', body: JSON.stringify({ billing_ids: ids }) },
+      token!,
+    );
+    let status = lote.status;
+    for (let i = 0; i < 15 && status === 'processing'; i++) {
+      await new Promise((r) => setTimeout(r, 3000));
+      const st = await apiFetch<{ status: string }>(`/ailos/lotes/${lote.ticket}`, {}, token!).catch(() => ({ status } as { status: string }));
+      status = st.status;
+    }
+    setCarneModal(false);
+    if (status === 'processing') {
+      setFeedback(`Carnê registrado (lote #${lote.id}). As parcelas ainda estão sendo processadas na Ailos — baixe o PDF em instantes.`);
+      await loadData(token!);
+      return;
+    }
+    const resp = await fetch(`${API_URL.replace(/\/+$/, '')}/boletos/carne/${lote.id}/pdf`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!resp.ok) {
+      let detalhe = `Erro ${resp.status}`;
+      try { detalhe = (await resp.json())?.detail || detalhe; } catch { /* noop */ }
+      throw new Error(`Carnê registrado (lote #${lote.id}), mas o PDF ainda não saiu: ${detalhe}`);
+    }
+    entregarArquivo(await resp.blob(), `carne-${lote.id}.pdf`, { emNovaAba: true });
+    setFeedback(`Carnê gerado com ${ids.length} parcela(s).`);
+    await loadData(token!);
+  }
+
+  // Modo "boletos existentes": carnê a partir dos boletos em aberto selecionados.
   async function gerarCarne(ids: number[]) {
     if (!token) return;
     if (ids.length < 2) { alert('Selecione ao menos 2 boletos para gerar o carnê.'); return; }
-    const qtd = ids.length;
-    if (!confirm(`Gerar o carnê registra ${qtd} boletos reais na Ailos (um por parcela). Continuar?`)) return;
-    setGerandoCarne(true);
-    setError(''); setModalError('');
+    if (!confirm(`Gerar o carnê registra ${ids.length} boletos reais na Ailos (um por parcela). Continuar?`)) return;
+    setGerandoCarne(true); setError(''); setModalError('');
+    try { await _registrarCarne(ids); }
+    catch (err) { setError(parseError(err)); }
+    finally { setGerandoCarne(false); }
+  }
+
+  // Modo "a partir do plano": cria N parcelas do contrato (valor do plano) e as
+  // transforma em carnê. Vincula ao plano do veículo + a quantidade de parcelas.
+  async function gerarCarneDoPlano() {
+    if (!token || !carneContractId) { alert('Selecione o contrato (plano do veículo).'); return; }
+    const n = Number(carneNumParcelas);
+    if (!n || n < 2) { alert('Informe ao menos 2 parcelas.'); return; }
+    if (!confirm(`Serão criadas ${n} parcelas do plano e registradas na Ailos como carnê. Continuar?`)) return;
+    setGerandoCarne(true); setError(''); setModalError('');
     try {
-      const lote = await apiFetch<{ id: number; ticket: string; status: string }>(
-        '/ailos/carne/lote',
-        { method: 'POST', body: JSON.stringify({ billing_ids: ids }) },
-        token,
-      );
-      let status = lote.status;
-      for (let i = 0; i < 15 && status === 'processing'; i++) {
-        await new Promise((r) => setTimeout(r, 3000));
-        const st = await apiFetch<{ status: string }>(`/ailos/lotes/${lote.ticket}`, {}, token).catch(() => ({ status } as { status: string }));
-        status = st.status;
-      }
-      setCarneModal(false);
-      if (status === 'processing') {
-        setFeedback(`Carnê registrado (lote #${lote.id}). As parcelas ainda estão sendo processadas na Ailos — baixe o PDF em instantes.`);
-        await loadData(token);
-        return;
-      }
-      const resp = await fetch(`${API_URL.replace(/\/+$/, '')}/boletos/carne/${lote.id}/pdf`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!resp.ok) {
-        let detalhe = `Erro ${resp.status}`;
-        try { detalhe = (await resp.json())?.detail || detalhe; } catch { /* noop */ }
-        throw new Error(`Carnê registrado (lote #${lote.id}), mas o PDF ainda não saiu: ${detalhe}`);
-      }
-      entregarArquivo(await resp.blob(), `carne-${lote.id}.pdf`, { emNovaAba: true });
-      setFeedback(`Carnê gerado com ${qtd} parcela(s).`);
-      await loadData(token);
+      const criados = await apiFetch<{ id: number }[]>('/billings/parcelar', {
+        method: 'POST',
+        body: JSON.stringify({
+          contract_id: Number(carneContractId),
+          num_parcelas: n,
+          valor_parcela: carneValor ? Number(carneValor.replace(',', '.')) : null,
+          primeiro_vencimento: carnePrimeiroVenc || null,
+        }),
+      }, token);
+      await _registrarCarne(criados.map(b => b.id));
     } catch (err) {
-      setError(parseError(err));
+      setModalError(parseError(err));
     } finally {
       setGerandoCarne(false);
     }
@@ -1959,7 +1993,7 @@ export default function FinanceiroPage() {
         </form>
       </Modal>
 
-      <Modal open={carneModal} onClose={() => setCarneModal(false)} title="Gerar carnê" description="Escolha o cliente e as parcelas (boletos pendentes e vencidos) que vão compor o carnê. Um carnê é sempre de um único cliente." size="xl">
+      <Modal open={carneModal} onClose={() => setCarneModal(false)} title="Gerar carnê" description="Gere o carnê a partir dos boletos em aberto do cliente, ou criando parcelas do plano do veículo. Um carnê é sempre de um único cliente." size="xl">
         {modalError && <p className="mb-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>}
         <div className="space-y-4">
           <div>
@@ -1967,7 +2001,22 @@ export default function FinanceiroPage() {
             <ClientAutocomplete clients={clients} value={carneClientId} onChange={carregarBoletosCarne} placeholder="Busque o cliente pelo nome ou CPF/CNPJ" />
           </div>
 
-          {carneLoading ? (
+          {/* Modo: a partir de boletos já existentes ou criando parcelas do plano */}
+          <div className="flex gap-1">
+            {(['existentes', 'plano'] as const).map(m => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setCarneMode(m)}
+                className={['rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors',
+                  carneMode === m ? 'bg-brand-700 text-white' : 'border border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300'].join(' ')}
+              >
+                {m === 'existentes' ? 'Boletos existentes' : 'A partir do plano'}
+              </button>
+            ))}
+          </div>
+
+          {carneMode === 'existentes' ? (carneLoading ? (
             <p className="text-sm text-slate-500">Carregando boletos do cliente…</p>
           ) : carneClientId && carneBillings.length === 0 ? (
             <p className="rounded-2xl border border-slate-200 px-4 py-3 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">Este cliente não tem boletos pendentes ou vencidos para gerar carnê.</p>
@@ -1995,11 +2044,43 @@ export default function FinanceiroPage() {
             </>
           ) : (
             <p className="text-sm text-slate-400">Selecione um cliente para listar os boletos.</p>
+          )) : !carneClientId ? (
+            <p className="text-sm text-slate-400">Selecione um cliente para escolher o contrato.</p>
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <label className="sm:col-span-2 text-sm">
+                <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Contrato (plano do veículo)</span>
+                <select className={fieldClass} value={carneContractId} onChange={e => {
+                  const id = e.target.value;
+                  const ct = contracts.find(c => String(c.id) === id);
+                  setCarneContractId(id);
+                  if (ct?.monthly_value != null) setCarneValor(String(ct.monthly_value));
+                }}>
+                  <option value="">Selecione o contrato</option>
+                  {contracts.filter(c => String(c.client_id) === carneClientId).map(c => (
+                    <option key={c.id} value={c.id}>{c.plan_name || 'Plano'}{c.vehicle_plate ? ` • ${c.vehicle_plate}` : ''}{c.monthly_value != null ? ` • ${formatCurrency(c.monthly_value)}` : ''}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-sm">
+                <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Quantidade de parcelas</span>
+                <input className={fieldClass} inputMode="numeric" value={carneNumParcelas} onChange={e => setCarneNumParcelas(e.target.value.replace(/\D/g, '').slice(0, 2))} placeholder="12" />
+              </label>
+              <label className="text-sm">
+                <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Valor de cada parcela (R$)</span>
+                <input className={fieldClass} value={carneValor} onChange={e => setCarneValor(e.target.value)} placeholder="valor do plano" />
+              </label>
+              <label className="sm:col-span-2 text-sm">
+                <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Primeiro vencimento <span className="font-normal text-slate-400">(opcional — padrão: próximo vencimento do contrato)</span></span>
+                <input type="date" className={fieldClass} value={carnePrimeiroVenc} onChange={e => setCarnePrimeiroVenc(e.target.value)} />
+              </label>
+              <p className="sm:col-span-2 text-xs text-slate-400">Serão criadas {Number(carneNumParcelas) || 0} parcelas mensais do plano e registradas na Ailos como carnê (1 boleto por parcela).</p>
+            </div>
           )}
         </div>
         <div className="mt-5 flex justify-end gap-3">
           <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200" onClick={() => setCarneModal(false)}>Cancelar</button>
-          <Button onClick={() => gerarCarne(carneSelected)} disabled={gerandoCarne || carneSelected.length < 2}>{gerandoCarne ? 'Gerando carnê…' : `Gerar carnê (${carneSelected.length})`}</Button>
+          <Button onClick={carneMode === 'existentes' ? () => gerarCarne(carneSelected) : gerarCarneDoPlano} disabled={gerandoCarne || (carneMode === 'existentes' ? carneSelected.length < 2 : (!carneContractId || Number(carneNumParcelas) < 2))}>{gerandoCarne ? 'Gerando carnê…' : carneMode === 'existentes' ? `Gerar carnê (${carneSelected.length})` : `Gerar carnê (${Number(carneNumParcelas) || 0} parcelas)`}</Button>
         </div>
       </Modal>
 

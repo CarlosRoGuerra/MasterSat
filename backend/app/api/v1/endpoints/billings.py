@@ -3,9 +3,11 @@ from __future__ import annotations
 import csv
 from collections import defaultdict
 from datetime import date, datetime
+from decimal import Decimal
 from io import BytesIO, StringIO
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from reportlab.lib.pagesizes import A4
@@ -40,11 +42,14 @@ from app.schemas.billing import (
     RevenueReportItem,
 )
 from app.services.financial import (
+    add_months,
     decimal_to_float,
     generate_receipt_number,
     marcar_billing_pago,
     mark_charge_item_if_settled,
+    normalize_due_date,
     period_bucket,
+    plan_title,
     refresh_overdue_statuses,
     valor_com_juros,
 )
@@ -305,6 +310,65 @@ def create_item(payload: BillingCreate, db: Session = Depends(get_db), _: object
         mark_charge_item_if_settled(db, obj.item_id)
     row = base_query(db).filter(Billing.id == obj.id).first()
     return serialize_billing(row)
+
+
+class ParcelarContratoIn(BaseModel):
+    contract_id: int
+    num_parcelas: int = Field(ge=2, le=60)
+    valor_parcela: float | None = None       # padrão: valor do plano do contrato
+    primeiro_vencimento: date | None = None  # padrão: próximo dia de vencimento do contrato
+
+
+@router.post('/parcelar', response_model=list[BillingOut])
+def parcelar_contrato(payload: ParcelarContratoIn, db: Session = Depends(get_db),
+                      _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
+    """Cria N parcelas (boletos) de um contrato — vincula ao plano do veículo e à
+    quantidade de parcelas — para depois virarem carnê. Cada parcela vale o valor
+    do plano (ou o valor informado), com vencimentos mensais."""
+    contract = db.get(Contract, payload.contract_id)
+    if not contract or contract.is_deleted:
+        raise HTTPException(status_code=404, detail='Contrato não encontrado')
+    plan = db.get(Plan, contract.plan_id)
+    if not plan or plan.is_deleted:
+        raise HTTPException(status_code=404, detail='Plano do contrato não encontrado')
+
+    valor = Decimal(str(payload.valor_parcela)) if payload.valor_parcela else Decimal(str(plan.price))
+    if valor <= 0:
+        raise HTTPException(status_code=422, detail='Valor da parcela deve ser maior que zero.')
+
+    billing_day = contract.billing_day or (payload.primeiro_vencimento.day if payload.primeiro_vencimento else 10)
+    if payload.primeiro_vencimento:
+        primeiro = payload.primeiro_vencimento
+    else:
+        hoje = date.today()
+        primeiro = normalize_due_date(hoje.replace(day=1), 0 if hoje.day <= billing_day else 1, billing_day, 1)
+
+    total = payload.num_parcelas
+    criados: list[Billing] = []
+    for i in range(total):
+        venc = add_months(primeiro, i)
+        b = Billing(
+            contract_id=contract.id,
+            client_id=contract.client_id,
+            vehicle_id=getattr(contract, 'vehicle_id', None),
+            tracker_id=getattr(contract, 'tracker_id', None),
+            title=f'{plan_title(plan)} • parcela {i + 1}/{total}',
+            billing_type='carne',
+            installment_number=i + 1,
+            installment_total=total,
+            amount=valor,
+            due_date=venc,
+            status=BillingStatus.PENDING if venc >= date.today() else BillingStatus.OVERDUE,
+            period_label=venc.strftime('%m/%Y'),
+            payment_method=getattr(contract, 'payment_method', None) or 'boleto',
+        )
+        db.add(b)
+        criados.append(b)
+    db.commit()
+
+    ids = [b.id for b in criados]
+    rows = base_query(db).filter(Billing.id.in_(ids)).order_by(Billing.installment_number.asc()).all()
+    return [serialize_billing(r) for r in rows]
 
 
 @router.post('/lote/situacao')
