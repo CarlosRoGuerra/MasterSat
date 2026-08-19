@@ -29,7 +29,7 @@ from app.core.crypto import CryptoError
 from app.db.session import get_db
 from app.models.billing import Billing
 from app.models.client import Client
-from app.models.enums import UserRole
+from app.models.enums import BillingStatus, UserRole
 from app.models.nfse_nota import NfseNota
 from app.models.user import User
 from app.schemas.nfse import (
@@ -117,6 +117,10 @@ def emitir(
     billing = db.get(Billing, billing_id)
     if billing is None or getattr(billing, 'is_deleted', False):
         raise HTTPException(status_code=404, detail='Cobrança não encontrada')
+    # Nota fiscal de cobrança cancelada (inclui as originais consolidadas em
+    # boleto único, que ficam 'cancelada') não pode ser emitida.
+    if billing.status == BillingStatus.CANCELED:
+        raise HTTPException(status_code=400, detail='Não é possível emitir NFS-e de uma cobrança cancelada.')
     client = db.get(Client, billing.client_id)
     if client is None:
         raise HTTPException(status_code=404, detail='Cliente da cobrança não encontrado')

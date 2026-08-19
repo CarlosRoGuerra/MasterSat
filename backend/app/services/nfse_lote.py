@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 from app.db.session import SessionLocal
 from app.models.ailos_boleto import AilosBoleto
 from app.models.billing import Billing
+from app.models.enums import BillingStatus
 from app.models.client import Client
 from app.models.nfse_lote import NfseLote
 from app.models.nfse_nota import NfseNota
@@ -67,6 +68,9 @@ def listar_elegiveis(
         .outerjoin(AilosBoleto, AilosBoleto.billing_id == Billing.id)
         .filter(
             Billing.is_deleted.is_(False),
+            # Cobrança cancelada (inclui as originais consolidadas em boleto
+            # único) não é elegível para NFS-e.
+            Billing.status != BillingStatus.CANCELED,
             Billing.period_label == period_label,
             Client.is_deleted.is_(False),
             Client.issue_invoice == 'sim',

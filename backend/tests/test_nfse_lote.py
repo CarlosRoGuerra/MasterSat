@@ -82,6 +82,25 @@ def test_elegiveis_ignora_cobranca_deletada(db):
     assert nfse_lote.listar_elegiveis(db, '07/2026')['total_elegiveis'] == 0
 
 
+def test_elegiveis_ignora_cobranca_cancelada(db):
+    # Cobrança cancelada (ex.: original consolidada em boleto único) não pode
+    # gerar NFS-e — o serviço não foi efetivamente faturado nela.
+    c = _client(db, 'CLIENTE')
+    b = _billing(db, c)
+    b.status = BillingStatus.CANCELED
+    db.commit()
+    assert nfse_lote.listar_elegiveis(db, '07/2026')['total_elegiveis'] == 0
+
+
+def test_criar_lote_ignora_cobranca_cancelada(db):
+    c = _client(db, 'CLIENTE')
+    b = _billing(db, c)
+    b.status = BillingStatus.CANCELED
+    db.commit()
+    with pytest.raises(nfse_lote.LoteError):
+        nfse_lote.criar_lote(db, '07/2026', [b.id], emitir_async=False)
+
+
 def test_idempotencia_nota_emitida_nao_reaparece(db):
     c = _client(db, 'CLIENTE')
     b = _billing(db, c)
@@ -334,6 +353,16 @@ def test_endpoint_listar_e_detalhar_lote(db, http_fin):
 def test_endpoint_lote_exige_perfil_autorizado(db, http_cliente):
     r = http_cliente.get('/api/v1/nfse/lotes/elegiveis', params={'period_label': '07/2026'})
     assert r.status_code == 403
+
+
+def test_endpoint_emitir_recusa_cobranca_cancelada(db, http_fin):
+    c = _client(db, 'CLIENTE API')
+    b = _billing(db, c)
+    b.status = BillingStatus.CANCELED
+    db.commit()
+    r = http_fin.post(f'/api/v1/nfse/emitir/{b.id}')
+    assert r.status_code == 400
+    assert 'cancelada' in r.json()['detail'].lower()
 
 
 # ---------------------------------------------------------------------------

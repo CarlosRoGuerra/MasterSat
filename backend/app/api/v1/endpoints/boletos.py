@@ -413,6 +413,10 @@ def get_boleto_publico(
     if not hmac.compare_digest(token, _public_token(billing_id)):
         raise HTTPException(status_code=404, detail="Boleto não encontrado")
     b = _get_billing_or_404(billing_id, db)
+    # Cobrança cancelada não pode continuar pagável pelo link público — mesmo que
+    # o titulo ainda esteja registrado na Ailos, não apresentamos o boleto.
+    if b.status == BillingStatus.CANCELED:
+        raise HTTPException(status_code=404, detail="Boleto não encontrado")
     # Link já enviado ao cliente + boleto ainda não registrado = cliente com um
     # papel impagável na mão. 404 (e não 409) para não expor a cobrança a quem
     # tenha o link de um título que não existe no banco.

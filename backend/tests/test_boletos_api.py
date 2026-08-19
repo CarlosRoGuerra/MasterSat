@@ -13,6 +13,7 @@ from decimal import Decimal
 
 import pytest
 
+from app.api.v1.endpoints.boletos import _public_token
 from app.models.ailos_boleto import AilosBoleto
 from app.models.billing import Billing
 from app.models.enums import BillingStatus
@@ -85,6 +86,27 @@ def test_o_boleto_usa_o_codigo_oficial_da_ailos_e_nao_o_calculado(http, db, cobr
     com_registro = http.get(f'/api/v1/boletos/{cobranca.id}').json()
     assert com_registro['boleto_registrado'] is True
     assert com_registro['codigo_barras'] == oficial
+
+
+# ---------------------------------------------------------------------------
+# Link público (sem login) — não pode servir boleto de cobrança cancelada
+# ---------------------------------------------------------------------------
+
+def test_link_publico_serve_boleto_ativo(http, db, cobranca):
+    _registrar(db, cobranca.id)
+    resp = http.get(f'/api/v1/public/boleto/{cobranca.id}/{_public_token(cobranca.id)}')
+    assert resp.status_code == 200
+    assert resp.content[:4] == b'%PDF'
+
+
+def test_link_publico_recusa_boleto_de_cobranca_cancelada(http, db, cobranca):
+    # Mesmo com o título ainda registrado na Ailos, cobrança cancelada não pode
+    # continuar pagável pelo link já enviado ao cliente.
+    _registrar(db, cobranca.id)
+    cobranca.status = BillingStatus.CANCELED
+    db.commit()
+    resp = http.get(f'/api/v1/public/boleto/{cobranca.id}/{_public_token(cobranca.id)}')
+    assert resp.status_code == 404
 
 
 # ---------------------------------------------------------------------------
