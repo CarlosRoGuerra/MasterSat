@@ -102,6 +102,30 @@ class TestSimulateClosure:
         result = simulate_closure(db, REF_MONTH)
         assert result["total_contracts"] == 0
 
+    def test_expired_contract_excluded(self, db, cliente, plan):
+        """Contrato com vigência encerrada ANTES do mês não entra no fechamento."""
+        c = Contract(
+            client_id=cliente.id, plan_id=plan.id,
+            start_date=date(2025, 1, 15), end_date=date(2025, 4, 30),
+            status="ativo", billing_day=15,
+        )
+        db.add(c)
+        db.commit()
+        result = simulate_closure(db, REF_MONTH)   # maio/2025
+        assert result["total_contracts"] == 0
+
+    def test_contract_ending_in_reference_month_still_billed(self, db, cliente, plan):
+        """Contrato que termina no próprio mês ainda é faturado (último mês)."""
+        c = Contract(
+            client_id=cliente.id, plan_id=plan.id,
+            start_date=date(2025, 1, 15), end_date=date(2025, 5, 20),
+            status="ativo", billing_day=15,
+        )
+        db.add(c)
+        db.commit()
+        result = simulate_closure(db, REF_MONTH)
+        assert result["total_contracts"] >= 1
+
     def test_quarterly_contract_not_due_in_may_excluded(self, db, cliente, plan):
         # Plano trimestral começando em Março → ciclos: Mar, Jun, Set, Dez → Maio fora
         plan_q = Plan(name="Trimestral", price=Decimal("300.00"), active=True, billing_interval_months=3)

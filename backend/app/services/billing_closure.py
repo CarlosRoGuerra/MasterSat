@@ -265,6 +265,9 @@ def simulate_closure(
         Contract.status == 'ativo',
         Client.is_deleted.is_(False),
         Plan.is_deleted.is_(False),
+        # Contrato com vigência já encerrada antes do mês de referência não entra
+        # no fechamento — senão sairia boleto/NFS-e de um contrato que acabou.
+        or_(Contract.end_date.is_(None), Contract.end_date >= reference_month),
     )
 
     if filter_type == 'pf':

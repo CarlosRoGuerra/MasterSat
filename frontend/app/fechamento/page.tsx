@@ -305,11 +305,16 @@ export default function FechamentoPage() {
     try {
       const params = new URLSearchParams({ reference_month: referenceMonth, filter_type: filterType });
       if (filterType === 'client' && selectedClientId) params.set('client_id', selectedClientId);
-      // Pass selected contract IDs only if not all are selected (avoid huge URL)
+      // Manda a seleção EXATA das mensalidades. Quando não estão todas
+      // selecionadas (inclusive quando nenhuma está), envia os IDs escolhidos —
+      // e um sentinela (-1) quando são zero, senão o backend geraria TODAS
+      // (ausência de contract_ids = "processar todos"). Bug: desmarcar tudo e
+      // gerar (por causa de uma taxa/serviço) recriava todas as mensalidades.
       const allPending = recorrentes.filter(i => !i.already_generated);
-      const isPartial = selectedContractIds.size < allPending.length;
-      if (isPartial && selectedContractIds.size > 0) {
+      const allSelected = selectedContractIds.size === allPending.length;
+      if (!allSelected) {
         selectedContractIds.forEach(id => params.append('contract_ids', String(id)));
+        if (selectedContractIds.size === 0) params.append('contract_ids', '-1');
       }
       const result = await apiFetch<GenerateResult>(`/billing-closure/generate?${params}`, { method: 'POST' }, token);
       setGenerateResult(result);
