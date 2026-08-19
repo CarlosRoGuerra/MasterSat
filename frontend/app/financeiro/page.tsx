@@ -2057,9 +2057,11 @@ export default function FinanceiroPage() {
                   if (ct?.monthly_value != null) setCarneValor(String(ct.monthly_value));
                 }}>
                   <option value="">Selecione o contrato</option>
-                  {contracts.filter(c => String(c.client_id) === carneClientId).map(c => (
-                    <option key={c.id} value={c.id}>{c.plan_name || 'Plano'}{c.vehicle_plate ? ` • ${c.vehicle_plate}` : ''}{c.monthly_value != null ? ` • ${formatCurrency(c.monthly_value)}` : ''}</option>
-                  ))}
+                  {contracts
+                    .filter(c => String(c.client_id) === carneClientId && c.status === 'ativo')
+                    .map(c => (
+                      <option key={c.id} value={c.id}>#{c.id} • {c.plan_name || 'Plano'}{c.vehicle_plate ? ` • ${c.vehicle_plate}` : ''}{c.monthly_value != null ? ` • ${formatCurrency(c.monthly_value)}` : ''}</option>
+                    ))}
                 </select>
               </label>
               <label className="text-sm">
