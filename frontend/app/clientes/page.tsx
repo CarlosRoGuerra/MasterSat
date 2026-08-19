@@ -253,12 +253,17 @@ type ContractSheetItem = {
   start_date: string;
   end_date?: string | null;
   status: string;
+  signed?: boolean | null;
   monthly_value?: number | null;
 };
 
-/** Situação da vigência: em vigor, vencido ou encerrado/cancelado. */
+/**
+ * Situação do contrato. Só entra "Em vigor" depois de assinado (o contrato
+ * assinado é enviado no bloco abaixo); antes disso fica "Aguardando assinatura".
+ */
 function contractSituacao(c: ContractSheetItem): { label: string; variant: 'success' | 'warning' | 'danger' } {
-  if (c.status === 'cancelado' || c.status === 'encerrado') return { label: 'Encerrado', variant: 'warning' };
+  if (c.status === 'cancelado' || c.status === 'encerrado') return { label: 'Cancelado', variant: 'warning' };
+  if (!c.signed) return { label: 'Aguardando assinatura', variant: 'warning' };
   const hoje = new Date().toISOString().slice(0, 10);
   if (c.end_date && c.end_date < hoje) return { label: 'Vencido', variant: 'danger' };
   return { label: 'Em vigor', variant: 'success' };
@@ -443,6 +448,7 @@ export default function ClientesPage() {
   // Contrato assinado guardado nos documentos (categoria 'contrato')
   const [contractDocs, setContractDocs] = useState<ClientDocument[]>([]);
   const [contractSheetItems, setContractSheetItems] = useState<ContractSheetItem[]>([]);
+  const [contractSignAlvo, setContractSignAlvo] = useState('');   // contrato que o assinado enviado coloca "em vigor"
   const [contractFile, setContractFile] = useState<File | null>(null);
   const [uploadingContract, setUploadingContract] = useState(false);
   const [contractCheck, setContractCheck] = useState<{ level: string; message: string } | null>(null);
@@ -886,6 +892,9 @@ export default function ClientesPage() {
       ]);
       setContractDocs(docs.filter((d) => d.category === 'contrato'));
       setContractSheetItems(contratos);
+      // Sugere colocar "em vigor" o primeiro contrato ainda não assinado.
+      const pendente = contratos.find((c) => !c.signed && c.status !== 'cancelado' && c.status !== 'encerrado');
+      setContractSignAlvo(pendente ? String(pendente.id) : '');
     } finally {
       setContractSheetLoading(false);
     }
@@ -908,10 +917,10 @@ export default function ClientesPage() {
         );
       } catch { verdict = null; }
       setContractCheck(verdict && verdict.message ? verdict : null);
-      // Só o "mismatch" (parece arquivo errado) pede confirmação; escaneamento
-      // ilegível apenas avisa, sem travar o operador em toda subida.
-      if (verdict && verdict.level === 'mismatch') {
-        if (!window.confirm(`${verdict.message}\n\nDeseja salvar mesmo assim?`)) {
+      // "em branco" (não preenchido) e "mismatch" (arquivo errado) pedem
+      // confirmação — fica opcional seguir. Escaneamento ilegível só avisa.
+      if (verdict && (verdict.level === 'blank' || verdict.level === 'mismatch')) {
+        if (!window.confirm(`${verdict.message}\n\nDeseja enviar mesmo assim?`)) {
           setUploadingContract(false);
           return;
         }
@@ -925,6 +934,14 @@ export default function ClientesPage() {
       const docs = await apiFetch<ClientDocument[]>(`/clients/${contractSheetClient.id}/documents`, {}, token).catch(() => []);
       setContractDocs(docs.filter((d) => d.category === 'contrato'));
       setContractSheetClient((prev) => (prev ? { ...prev, contrato_armazenado: true } : prev));
+      // 3. O contrato escolhido passa a valer ("em vigor") — assinado recebido.
+      if (contractSignAlvo) {
+        await apiFetch(`/contracts/${contractSignAlvo}`, { method: 'PUT', body: JSON.stringify({ signed: true }) }, token).catch(() => null);
+        const contratos = await apiFetch<ContractSheetItem[]>(`/contracts?client_id=${contractSheetClient.id}&limit=200`, {}, token).catch(() => []);
+        setContractSheetItems(contratos);
+        const pendente = contratos.find((c) => !c.signed && c.status !== 'cancelado' && c.status !== 'encerrado');
+        setContractSignAlvo(pendente ? String(pendente.id) : '');
+      }
       await loadClients(token); // atualiza o selo "armazenado" na listagem
     } catch (e) {
       alert(e instanceof Error ? e.message : 'Erro ao enviar o contrato assinado');
@@ -2030,7 +2047,7 @@ export default function ClientesPage() {
       {/* ══ Modal: Ficha de adesão / contratos do cliente ══════════════════ */}
       <Modal
         open={contractSheetOpen}
-        onClose={() => { setContractSheetOpen(false); setContractSheetClient(null); setContractDocs([]); setContractSheetItems([]); setContractFile(null); setContractCheck(null); }}
+        onClose={() => { setContractSheetOpen(false); setContractSheetClient(null); setContractDocs([]); setContractSheetItems([]); setContractSignAlvo(''); setContractFile(null); setContractCheck(null); }}
         title={contractSheetClient ? `Contratos — ${contractSheetClient.name}` : 'Contratos'}
         size="2xl"
       >
@@ -2100,7 +2117,19 @@ export default function ClientesPage() {
             <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Contrato assinado</p>
             <span className="text-xs text-slate-400">{contractDocs.length} arquivo(s)</span>
           </div>
-          <p className="mt-0.5 text-xs text-slate-400">Depois que o cliente devolver o contrato assinado, anexe o arquivo (PDF ou imagem) aqui.</p>
+          <p className="mt-0.5 text-xs text-slate-400">Depois que o cliente devolver o contrato assinado, anexe o arquivo (PDF ou imagem) aqui. O sistema confere se ele foi preenchido antes de guardar.</p>
+
+          {canEdit && contractSheetItems.some(c => c.status !== 'cancelado' && c.status !== 'encerrado') && (
+            <div className="mt-3">
+              <p className="mb-1 text-xs font-medium text-slate-500 dark:text-slate-400">Ao enviar, colocar &quot;em vigor&quot; o contrato:</p>
+              <Select value={contractSignAlvo} onChange={(e) => setContractSignAlvo(e.target.value)} className="w-full">
+                <option value="">Não vincular — só guardar o arquivo</option>
+                {contractSheetItems.filter(c => c.status !== 'cancelado' && c.status !== 'encerrado').map(c => (
+                  <option key={c.id} value={c.id}>#{c.id} • {c.plan_name || 'Plano'}{c.vehicle_plate ? ` • ${c.vehicle_plate}` : ''}{c.signed ? ' — já assinado' : ''}</option>
+                ))}
+              </Select>
+            </div>
+          )}
 
           {canEdit && (
             <div className="mt-3 flex flex-wrap items-center gap-2">

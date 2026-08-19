@@ -89,10 +89,12 @@ def verificar_contrato_assinado(data: bytes, content_type: str, client) -> dict:
     cpf_digits = re.sub(r'\D', '', getattr(client, 'cpf_cnpj', '') or '')
     cpf_ok = bool(cpf_digits) and cpf_digits in re.sub(r'\D', '', texto)
     if not (nome_ok or cpf_ok):
+        # Tem os marcadores do nosso contrato, mas nenhum dado do cliente: é o
+        # modelo AINDA EM BRANCO (o cliente não preencheu a parte dele).
         return {
-            'level': 'mismatch',
-            'message': 'O arquivo não parece ser o contrato deste cliente '
-                       '(nome/CPF não localizados no texto). Confira antes de salvar.',
+            'level': 'blank',
+            'message': 'O contrato parece estar EM BRANCO — não localizei os dados do cliente '
+                       '(nome/CPF) preenchidos. Confira se o cliente preencheu e assinou antes de salvar.',
         }
 
     return {'level': 'ok', 'message': 'Arquivo confere com o contrato deste cliente.'}
