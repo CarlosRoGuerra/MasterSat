@@ -244,6 +244,26 @@ const initialForm: ClientFormState = {
 
 const documentCategoryOptions = ['cnh', 'rg', 'cpf', 'contrato', 'comprovante_endereco', 'cartao_cnpj', 'contrato_social', 'outro'];
 
+/** Registro de contrato do cliente (para listar/excluir na modal de contratos). */
+type ContractSheetItem = {
+  id: number;
+  plan_name?: string | null;
+  vehicle_plate?: string | null;
+  tracker_identifier?: string | null;
+  start_date: string;
+  end_date?: string | null;
+  status: string;
+  monthly_value?: number | null;
+};
+
+/** Situação da vigência: em vigor, vencido ou encerrado/cancelado. */
+function contractSituacao(c: ContractSheetItem): { label: string; variant: 'success' | 'warning' | 'danger' } {
+  if (c.status === 'cancelado' || c.status === 'encerrado') return { label: 'Encerrado', variant: 'warning' };
+  const hoje = new Date().toISOString().slice(0, 10);
+  if (c.end_date && c.end_date < hoje) return { label: 'Vencido', variant: 'danger' };
+  return { label: 'Em vigor', variant: 'success' };
+}
+
 /** "enviado por Fulano em 12/08/2026" — metadados do anexo, quando houver. */
 function envioMeta(doc: { uploaded_by?: string | null; created_at?: string | null }): string | null {
   if (!doc.uploaded_by && !doc.created_at) return null;
@@ -422,6 +442,7 @@ export default function ClientesPage() {
   const [contractSheetLoading, setContractSheetLoading] = useState(false);
   // Contrato assinado guardado nos documentos (categoria 'contrato')
   const [contractDocs, setContractDocs] = useState<ClientDocument[]>([]);
+  const [contractSheetItems, setContractSheetItems] = useState<ContractSheetItem[]>([]);
   const [contractFile, setContractFile] = useState<File | null>(null);
   const [uploadingContract, setUploadingContract] = useState(false);
   const [contractCheck, setContractCheck] = useState<{ level: string; message: string } | null>(null);
@@ -857,9 +878,14 @@ export default function ClientesPage() {
     setContractSheetLoading(true);
     setContractFile(null);
     setContractCheck(null);
+    setContractSheetItems([]);
     try {
-      const docs = await apiFetch<ClientDocument[]>(`/clients/${client.id}/documents`, {}, token!).catch(() => []);
+      const [docs, contratos] = await Promise.all([
+        apiFetch<ClientDocument[]>(`/clients/${client.id}/documents`, {}, token!).catch(() => []),
+        apiFetch<ContractSheetItem[]>(`/contracts?client_id=${client.id}&limit=200`, {}, token!).catch(() => []),
+      ]);
       setContractDocs(docs.filter((d) => d.category === 'contrato'));
+      setContractSheetItems(contratos);
     } finally {
       setContractSheetLoading(false);
     }
@@ -919,6 +945,32 @@ export default function ClientesPage() {
       await loadClients(token);
     } catch (e) {
       alert(e instanceof Error ? e.message : 'Erro ao remover o contrato assinado');
+    }
+  }
+
+  // Abre o PDF do contrato (registro) gerado a partir dos dados dele.
+  async function baixarContrato(id: number) {
+    if (!token) return;
+    try {
+      const resp = await fetch(`${API_URL.replace(/\/+$/, '')}/contracts/${id}/pdf`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!resp.ok) throw new Error(`Erro ${resp.status} ao gerar o contrato`);
+      entregarArquivo(await resp.blob(), `contrato-${id}.pdf`, { emNovaAba: true });
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Erro ao abrir o contrato');
+    }
+  }
+
+  // Cancela/exclui um contrato (soft delete: vira "cancelado" e some das listagens).
+  async function excluirContrato(id: number) {
+    if (!token) return;
+    if (!window.confirm('Cancelar/excluir este contrato? Ele passa a "cancelado" e some das listagens.')) return;
+    try {
+      await apiFetch(`/contracts/${id}`, { method: 'DELETE' }, token);
+      setContractSheetItems((prev) => prev.filter((c) => c.id !== id));
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Erro ao excluir o contrato');
     }
   }
 
@@ -1978,7 +2030,7 @@ export default function ClientesPage() {
       {/* ══ Modal: Ficha de adesão / contratos do cliente ══════════════════ */}
       <Modal
         open={contractSheetOpen}
-        onClose={() => { setContractSheetOpen(false); setContractSheetClient(null); setContractDocs([]); setContractFile(null); setContractCheck(null); }}
+        onClose={() => { setContractSheetOpen(false); setContractSheetClient(null); setContractDocs([]); setContractSheetItems([]); setContractFile(null); setContractCheck(null); }}
         title={contractSheetClient ? `Contratos — ${contractSheetClient.name}` : 'Contratos'}
         size="2xl"
       >
@@ -1990,6 +2042,55 @@ export default function ClientesPage() {
             contractSheetClient.contrato_armazenado
               ? <Badge variant="success">Contrato armazenado</Badge>
               : <Badge variant="warning">Assinado pendente</Badge>
+          )}
+        </div>
+
+        {/* Contratos vinculados (registros): visualizar e cancelar/excluir. */}
+        <div className="mb-4">
+          <p className="mb-2 text-sm font-semibold text-slate-700 dark:text-slate-200">Contratos vinculados ({contractSheetItems.length})</p>
+          {contractSheetLoading ? (
+            <p className="text-xs text-slate-400">Carregando…</p>
+          ) : contractSheetItems.length === 0 ? (
+            <p className="text-xs text-slate-400">Nenhum contrato vinculado a este cliente.</p>
+          ) : (
+            <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 bg-slate-50 text-left text-[11px] uppercase tracking-wider text-slate-500 dark:border-slate-700 dark:bg-slate-800/50">
+                    <th className="px-3 py-2 font-semibold">Plano</th>
+                    <th className="px-3 py-2 font-semibold">Vínculo</th>
+                    <th className="px-3 py-2 font-semibold">Vigência</th>
+                    <th className="px-3 py-2 font-semibold">Situação</th>
+                    <th className="px-3 py-2" />
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {contractSheetItems.map((c) => {
+                    const sit = contractSituacao(c);
+                    return (
+                      <tr key={c.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
+                        <td className="px-3 py-2"><span className="text-xs text-slate-400">#{c.id}</span> {c.plan_name ?? '—'}</td>
+                        <td className="px-3 py-2 text-xs text-slate-500">{c.vehicle_plate || c.tracker_identifier || 'Geral'}</td>
+                        <td className="whitespace-nowrap px-3 py-2 text-xs">
+                          {c.start_date ? new Date(c.start_date + 'T12:00:00').toLocaleDateString('pt-BR') : '—'}
+                          {' → '}
+                          {c.end_date ? new Date(c.end_date + 'T12:00:00').toLocaleDateString('pt-BR') : 'Indeterminada'}
+                        </td>
+                        <td className="px-3 py-2"><Badge variant={sit.variant}>{sit.label}</Badge></td>
+                        <td className="px-3 py-2">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button type="button" onClick={() => baixarContrato(c.id)} className="rounded-lg border border-brand-200 bg-brand-50 px-2.5 py-1 text-[11px] font-semibold text-brand-700 hover:bg-brand-100 dark:border-brand-900/40 dark:bg-brand-950/30 dark:text-brand-400">Ver</button>
+                            {canEdit && (
+                              <button type="button" onClick={() => excluirContrato(c.id)} className="rounded-lg border border-rose-200 px-2 py-1 text-[11px] font-medium text-rose-600 hover:bg-rose-50 dark:border-rose-900/40 dark:text-rose-400 dark:hover:bg-rose-950/30">Excluir</button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
 
