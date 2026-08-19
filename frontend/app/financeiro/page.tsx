@@ -1173,7 +1173,23 @@ export default function FinanceiroPage() {
     if (!reason) return;
     setProcessing(true);
     try {
-      await apiFetch(`/billings/${selectedBilling.id}/cancel`, { method: 'POST', body: JSON.stringify({ reason }) }, token);
+      const cancelar = (confirmar_boleto_ailos: boolean) => apiFetch(
+        `/billings/${selectedBilling.id}/cancel`,
+        { method: 'POST', body: JSON.stringify({ reason, confirmar_boleto_ailos }) },
+        token,
+      );
+      try {
+        await cancelar(false);
+      } catch (err) {
+        // Há boleto registrado na Ailos: avisa e só prossegue se confirmado.
+        const e = err as Error & { status?: number; detail?: any };
+        if (e.status === 409 && e.detail?.code === 'boleto_ailos_registrado') {
+          if (!window.confirm(e.detail.message)) { setProcessing(false); return; }
+          await cancelar(true);
+        } else {
+          throw err;
+        }
+      }
       setFeedback('Cobrança cancelada com sucesso.');
       await loadData(token);
     } catch (err) { setError(parseError(err)); } finally { setProcessing(false); }

@@ -84,12 +84,17 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}, token
     }
 
     let message = `HTTP ${response.status}`;
+    let detail: unknown;
     try {
       const data = await response.json();
+      detail = data?.detail;
       if (typeof data?.detail === 'string') {
         message = data.detail;
       } else if (Array.isArray(data?.detail)) {
         message = data.detail.map((item: any) => item?.msg || JSON.stringify(item)).join(' | ');
+      } else if (data?.detail && typeof data.detail === 'object' && typeof data.detail.message === 'string') {
+        // detail estruturado ({code, message, ...}) — mostra a mensagem legível
+        message = data.detail.message;
       } else if (data?.detail) {
         message = JSON.stringify(data.detail);
       } else {
@@ -102,8 +107,9 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}, token
         message = `HTTP ${response.status}`;
       }
     }
-    const error = new Error(message) as Error & { status?: number };
+    const error = new Error(message) as Error & { status?: number; detail?: unknown };
     error.status = response.status;
+    error.detail = detail;
     throw error;
   }
 

@@ -317,6 +317,34 @@ class TestCancelBilling:
         r = http_op.post(f"{PREFIX}/{billing_pendente.id}/cancel", json={"reason": "X"})
         assert r.status_code == 403
 
+    def _registrar_boleto(self, db, billing_id):
+        from app.models.ailos_boleto import AilosBoleto
+        db.add(AilosBoleto(
+            billing_id=billing_id, numero_convenio='102004', nosso_numero='000000301',
+            linha_digitavel='08591.02006 40045.470206 00000.003012 5 14890000009990',
+            codigo_barras='08595148900000099901020040045470200000000301',
+        ))
+        db.commit()
+
+    def test_cancel_com_boleto_ailos_exige_confirmacao(self, http, db, billing_pendente):
+        # Boleto registrado na Ailos → 409 com código para o frontend avisar.
+        self._registrar_boleto(db, billing_pendente.id)
+        r = http.post(f"{PREFIX}/{billing_pendente.id}/cancel", json={"reason": "X"})
+        assert r.status_code == 409
+        assert r.json()["detail"]["code"] == "boleto_ailos_registrado"
+        # Não cancelou ainda.
+        db.refresh(billing_pendente)
+        assert billing_pendente.status == BillingStatus.PENDING
+
+    def test_cancel_com_boleto_ailos_confirmado_prossegue(self, http, db, billing_pendente):
+        self._registrar_boleto(db, billing_pendente.id)
+        r = http.post(f"{PREFIX}/{billing_pendente.id}/cancel",
+                      json={"reason": "X", "confirmar_boleto_ailos": True})
+        assert r.status_code == 200
+        assert r.json()["status"] == "cancelada"
+        db.refresh(billing_pendente)
+        assert "baixa manual pendente" in (billing_pendente.notes or "")
+
 
 # ---------------------------------------------------------------------------
 # PUT /{id} (ajuste)

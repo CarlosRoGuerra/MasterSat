@@ -515,8 +515,38 @@ def cancel_billing(item_id: int, payload: BillingCancel, db: Session = Depends(g
     billing = db.get(Billing, item_id)
     if not billing or billing.is_deleted:
         raise HTTPException(status_code=404, detail='Cobrança não encontrada')
+    if billing.status == BillingStatus.CANCELED:
+        raise HTTPException(status_code=400, detail='Cobrança já está cancelada.')
+
+    # Boleto já registrado na Ailos continua pagável no banco após o
+    # cancelamento — o convênio não expõe baixa automática. Avisa e exige
+    # confirmação explícita para o operador não esquecer a baixa manual.
+    ab = db.query(AilosBoleto).filter_by(billing_id=item_id).first()
+    boleto_no_banco = bool(ab and ab.linha_digitavel and ab.codigo_barras)
+    if boleto_no_banco and not payload.confirmar_boleto_ailos:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'code': 'boleto_ailos_registrado',
+                'nosso_numero': ab.nosso_numero,
+                'message': (
+                    f'Há um boleto registrado na Ailos (nosso número {ab.nosso_numero or "—"}) '
+                    'para esta cobrança. O cancelamento interrompe a cobrança no sistema e '
+                    'desativa o link público, mas o título continua ativo no banco — o convênio '
+                    'não oferece baixa automática. Dê baixa manualmente na Ailos para o cliente '
+                    'não conseguir pagar. Cancelar mesmo assim?'
+                ),
+            },
+        )
+
     billing.status = BillingStatus.CANCELED
-    billing.notes = f'{billing.notes or ""}\nCancelada: {payload.reason}'.strip()
+    nota_extra = ''
+    if boleto_no_banco:
+        nota_extra = (
+            f'\n[ATENÇÃO] Boleto Ailos (nosso número {ab.nosso_numero or "—"}) '
+            'segue ativo no banco — baixa manual pendente.'
+        )
+    billing.notes = f'{billing.notes or ""}\nCancelada: {payload.reason}{nota_extra}'.strip()
     db.commit()
     db.refresh(billing)
     mark_charge_item_if_settled(db, billing.item_id)

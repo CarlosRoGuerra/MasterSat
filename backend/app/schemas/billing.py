@@ -89,6 +89,9 @@ class BillingReceive(BaseModel):
 
 class BillingCancel(BaseModel):
     reason: str
+    # Confirma o cancelamento mesmo havendo boleto registrado na Ailos (que
+    # continua ativo no banco — o convênio não oferece baixa automática).
+    confirmar_boleto_ailos: bool = False
 
 
 class BillingOut(BillingBase):
