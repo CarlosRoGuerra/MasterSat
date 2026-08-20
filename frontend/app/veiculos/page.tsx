@@ -636,7 +636,6 @@ export default function VeiculosPage() {
   const [docFiles, setDocFiles] = useState<File[]>([]);
   const [uninstallOpen, setUninstallOpen] = useState(false);
   const [uninstallDate, setUninstallDate] = useState(new Date().toISOString().slice(0, 10));
-  const [destinationContractId, setDestinationContractId] = useState('');
   const [uninstallServiceProductId, setUninstallServiceProductId] = useState('');
   const [uninstallFee, setUninstallFee] = useState('');
   // Detalhes (abas)
@@ -1090,7 +1089,6 @@ export default function VeiculosPage() {
     try {
       const params = new URLSearchParams();
       if (uninstallDate) params.set('uninstall_date', uninstallDate);
-      if (destinationContractId) params.set('destination_contract_id', destinationContractId);
       if (uninstallServiceProductId) params.set('uninstall_service_product_id', uninstallServiceProductId);
       if (uninstallFee && parseFloat(uninstallFee) > 0) params.set('uninstall_fee', uninstallFee);
       await apiFetch(`/vehicles/${selectedVehicle.id}/uninstall?${params.toString()}`, { method: 'POST' }, token);
@@ -1667,15 +1665,6 @@ export default function VeiculosPage() {
                 Taxa de R$ {Number(uninstallFee || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} será incluída no fechamento do mês da desinstalação.
               </div>
             )}
-            <label className="block md:col-span-2">
-              <span className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-200">Contrato de destino <span className="font-normal text-slate-400">opcional — para transferência de período</span></span>
-              <select className={`${fieldClass} w-full`} value={destinationContractId} onChange={(e) => setDestinationContractId(e.target.value)}>
-                <option value="">Sem transferência</option>
-                {contracts.map((item) => (
-                  <option key={item.id} value={item.id}>{item.client_id} • {item.plan_name || 'Contrato'}</option>
-                ))}
-              </select>
-            </label>
           </div>
           <div className="flex justify-end gap-3">
             <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-600 dark:border-slate-700 dark:text-slate-200 dark:hover:border-cyan-400 dark:hover:text-cyan-300" onClick={() => { setUninstallOpen(false); setUninstallFee(''); }}>Cancelar</button>

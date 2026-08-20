@@ -211,8 +211,6 @@ def uninstall_vehicle(
     uninstall_date: date,
     uninstall_service_product_id: int | None = None,
     uninstall_fee: float | None = None,
-    destination_contract_id: int | None = None,
-    destination_vehicle_id: int | None = None,
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*EDIT_ROLES)),
 ):
@@ -243,7 +241,6 @@ def uninstall_vehicle(
         contract = db.scalar(select(Contract).where(*contract_filters).order_by(Contract.id.desc()))
 
     source_prorated = None
-    destination_prorated = None
     uninstall_fee_billing_id = None
 
     if contract:
@@ -309,7 +306,6 @@ def uninstall_vehicle(
     return {
         'message': 'Desinstalação registrada com sucesso.',
         'source_prorated_amount': source_prorated,
-        'destination_prorated_amount': destination_prorated,
         'uninstall_fee_billing_id': uninstall_fee_billing_id,
         'tracker_returned_to_stock': bool(tracker),
     }
