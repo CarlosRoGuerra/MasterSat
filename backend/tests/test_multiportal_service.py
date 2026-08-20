@@ -130,6 +130,26 @@ class FakeUser:
 
 
 # ---------------------------------------------------------------------------
+# Senha da conta do portal (não pode ser o login)
+# ---------------------------------------------------------------------------
+
+class TestUserPayloadSenha:
+    def test_senha_nao_e_o_login(self):
+        payload = MultiportalService()._build_user_payload(FakeClient(), FakeUser())
+        assert payload['login'] == 'admin@test.local'
+        assert payload['senha'] != payload['login']
+        assert len(payload['senha']) >= 12
+        # Senha aleatória precisa ser entregue ao cliente pelo portal.
+        assert payload['enviarEmail'] is True
+
+    def test_senhas_sao_aleatorias(self):
+        svc = MultiportalService()
+        s1 = svc._build_user_payload(FakeClient(), FakeUser())['senha']
+        s2 = svc._build_user_payload(FakeClient(), FakeUser())['senha']
+        assert s1 != s2
+
+
+# ---------------------------------------------------------------------------
 # enabled
 # ---------------------------------------------------------------------------
 

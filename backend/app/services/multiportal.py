@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import secrets
+import string
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -448,6 +450,17 @@ class MultiportalService:
         }
         return payload
 
+    @staticmethod
+    def _gerar_senha_portal(tamanho: int = 12) -> str:
+        """Senha forte e aleatória para a conta do portal do cliente.
+
+        Antes a senha era o próprio login (e-mail/CPF) — previsível e pública.
+        A senha gerada é entregue ao cliente pelo e-mail de boas-vindas do
+        portal (enviarEmail=True); ele a troca no primeiro acesso.
+        """
+        alfabeto = string.ascii_letters + string.digits
+        return ''.join(secrets.choice(alfabeto) for _ in range(tamanho))
+
     def _build_user_payload(self, local_client: LocalClient, linked_user: LocalUser) -> dict[str, Any]:
         login = (linked_user.email or local_client.email or self._digits(local_client.cpf_cnpj)).strip().lower()
         if not login:
@@ -455,13 +468,15 @@ class MultiportalService:
         return {
             'codigoIntegracao': linked_user.id,
             'login': login,
-            'senha': login,
+            'senha': self._gerar_senha_portal(),
             'nome': linked_user.name or local_client.name,
             'tipoUsuario': 'C',
             'codigosGrupo': settings.multiportal_group_codes,
             'documentoCliente': self._digits(local_client.cpf_cnpj),
             'email': local_client.email,
-            'enviarEmail': settings.multiportal_send_welcome_email,
+            # Senha aleatória PRECISA chegar ao cliente — força o e-mail de
+            # boas-vindas do portal (senão o cliente ficaria sem saber a senha).
+            'enviarEmail': True,
         }
 
     def _build_addresses(self, local_client: LocalClient) -> list[dict[str, Any]]:

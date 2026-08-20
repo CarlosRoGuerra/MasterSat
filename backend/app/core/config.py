@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file='.env', extra='ignore')
 
     app_name: str = 'Sistema de Rastreamento'
+    # 'development' | 'production'. Em produção a app RECUSA subir com segredos
+    # fracos (não só avisa). Deixe 'development' em dev/testes.
+    environment: str = 'development'
     api_v1_prefix: str = '/api/v1'
     secret_key: str = 'change-me-super-secret'
     algorithm: str = 'HS256'
@@ -45,6 +48,10 @@ class Settings(BaseSettings):
 
     multiportal_enabled: bool = False
     multiportal_wsdl_url: str = 'http://webmportal.dynalias.net:83/services/IntegracaoAdmService?wsdl'
+    # O WSDL do parceiro é HTTP (sem TLS). Em produção a app recusa subir com o
+    # Multiportal ligado sobre HTTP a menos que isto seja True (aceite explícito
+    # do risco de tráfego em texto claro).
+    multiportal_allow_insecure_http: bool = False
     multiportal_id: str = ''
     multiportal_password: str = ''
     multiportal_group_codes: str = ''
@@ -159,43 +166,58 @@ class Settings(BaseSettings):
     rate_limit_login: str = '5/minute'
     rate_limit_exports: str = '10/minute'
 
-    def warn_insecure(self) -> None:
-        """Emite avisos se configurações inseguras forem detectadas."""
+    @property
+    def is_production(self) -> bool:
+        return self.environment.strip().lower() in ('production', 'producao', 'prod')
+
+    def _security_problems(self) -> list[str]:
+        """Lista de problemas de configuração insegura (vazia = tudo ok)."""
+        problems: list[str] = []
         if self.secret_key in _WEAK_KEYS or len(self.secret_key) < 32:
-            warnings.warn(
-                '⚠ SECRET_KEY fraca ou padrão detectada! '
-                'Gere uma chave forte: python -c "import secrets; print(secrets.token_hex(32))"',
-                UserWarning,
-                stacklevel=2,
+            problems.append(
+                'SECRET_KEY fraca ou padrão — gere: '
+                'python -c "import secrets; print(secrets.token_hex(32))"'
             )
         if self.debug_return_reset_token:
-            warnings.warn(
-                '⚠ DEBUG_RETURN_RESET_TOKEN=true — '
-                'tokens de reset são expostos no response. Desative em produção.',
-                UserWarning,
-                stacklevel=2,
-            )
+            problems.append('DEBUG_RETURN_RESET_TOKEN=true expõe tokens de reset no response')
         if self.minio_root_password in ('minioadmin', 'admin', ''):
-            warnings.warn(
-                '⚠ Senha do MinIO ainda é o valor padrão. Troque antes de produção.',
-                UserWarning,
-                stacklevel=2,
-            )
+            problems.append('Senha do MinIO ainda é o valor padrão')
         if 'postgres:postgres@' in self.database_url:
-            warnings.warn(
-                '⚠ DATABASE_URL ainda usa a senha padrão "postgres". Troque antes de produção.',
-                UserWarning,
-                stacklevel=2,
-            )
+            problems.append('DATABASE_URL ainda usa a senha padrão "postgres"')
         if self.ailos_client_id and self.ailos_client_secret and not self.ailos_token_encryption_key:
-            warnings.warn(
-                '⚠ Credenciais Ailos configuradas sem AILOS_TOKEN_ENCRYPTION_KEY — '
-                'tokens da integração não poderão ser criptografados. Gere uma chave: '
-                'python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"',
-                UserWarning,
-                stacklevel=2,
+            problems.append(
+                'Credenciais Ailos sem AILOS_TOKEN_ENCRYPTION_KEY — gere: '
+                'python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"'
             )
+        if (
+            self.multiportal_enabled
+            and self.multiportal_wsdl_url.strip().lower().startswith('http://')
+            and not self.multiportal_allow_insecure_http
+        ):
+            problems.append(
+                'Multiportal habilitado com WSDL em HTTP (sem TLS) — dados e credenciais '
+                'trafegam em texto claro. Use HTTPS ou defina MULTIPORTAL_ALLOW_INSECURE_HTTP=true '
+                'para aceitar o risco explicitamente'
+            )
+        return problems
+
+    def enforce_security(self) -> None:
+        """Em produção, RECUSA subir com configuração insegura; fora, só avisa."""
+        problems = self._security_problems()
+        if not problems:
+            return
+        if self.is_production:
+            raise RuntimeError(
+                'Inicialização recusada (ENVIRONMENT=production) por configuração insegura:\n  - '
+                + '\n  - '.join(problems)
+                + '\nCorrija o .env antes de subir a aplicação.'
+            )
+        for problem in problems:
+            warnings.warn(f'⚠ {problem}', UserWarning, stacklevel=2)
+
+    # Compat: nome antigo mantido como alias.
+    warn_insecure = enforce_security
 
 
 settings = Settings()
-settings.warn_insecure()
+settings.enforce_security()
