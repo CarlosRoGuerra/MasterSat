@@ -1,3 +1,8 @@
+// ⚠ DADOS ILUSTRATIVOS (demonstração) — valores fixos usados APENAS na landing
+// pública (`/`), sem vínculo com dados reais de clientes. A UI que os exibe
+// (metrics-section / overview-chart-section) mostra o selo "Dados ilustrativos".
+// Não usar em telas autenticadas nem apresentar como métrica real.
+
 export type MetricIcon = 'truck' | 'target' | 'timer' | 'fuel';
 
 export type HomeMetric = {
