@@ -342,11 +342,17 @@ async def upload_my_document(
     if category not in ALLOWED_CLIENT_DOC_CATEGORIES:
         raise HTTPException(status_code=400, detail='Categoria de documento do cliente inválida')
 
-    content = await file.read()
+    # Leitura limitada (o perfil CLIENTE não é confiável): não deixa um upload
+    # gigante estourar a memória mesmo sem Content-Length correto.
+    content = await file.read(settings.max_upload_bytes + 1)
     if not content:
         raise HTTPException(status_code=400, detail='Arquivo vazio')
+    if len(content) > settings.max_upload_bytes:
+        raise HTTPException(status_code=413, detail='Arquivo excede o tamanho máximo permitido.')
 
-    object_key = f'clients/{client.id}/documents/{date.today().isoformat()}-{file.filename}'
+    # Nome seguro para a chave do objeto (sem separadores de caminho).
+    safe_name = (file.filename or 'arquivo').replace('/', '_').replace('\\', '_').strip() or 'arquivo'
+    object_key = f'clients/{client.id}/documents/{date.today().isoformat()}-{safe_name}'
     upload_bytes(object_name=object_key, content=content, content_type=file.content_type or 'application/octet-stream')
 
     document = Document(

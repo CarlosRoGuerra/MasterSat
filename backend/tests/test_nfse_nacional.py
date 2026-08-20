@@ -310,3 +310,14 @@ def test_erro_danfse_desconhecido_limpa_o_html():
 
     msg = _erro_danfse(_RespFake(418, '<html><body>bule de chá</body></html>'), 'chave')
     assert '<' not in msg and 'bule de chá' in msg
+
+
+def test_emitir_bloqueia_producao_real_sem_confirmacao(monkeypatch):
+    """Nota fiscal REAL (ambiente 'producao') exige confirmação explícita —
+    o guard dispara antes de qualquer acesso a banco/certificado (db=None ok)."""
+    from app.services.nfse_nacional import emitir_nfse
+
+    monkeypatch.setattr(settings, 'nfse_nac_ambiente', 'producao')
+    monkeypatch.setattr(settings, 'nfse_nac_producao_confirmada', False)
+    with pytest.raises(NfseError, match='PRODUÇÃO'):
+        emitir_nfse(None, _billing(), _client(issue_invoice='sim'))

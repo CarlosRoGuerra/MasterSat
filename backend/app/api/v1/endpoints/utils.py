@@ -1,11 +1,14 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 import requests
+
+from app.core.limiter import limiter
 
 router = APIRouter()
 
 
 @router.get('/cep/{cep}')
-def lookup_cep(cep: str):
+@limiter.limit('30/minute')
+def lookup_cep(request: Request, cep: str):
     normalized = ''.join(ch for ch in cep if ch.isdigit())
     if len(normalized) != 8:
         raise HTTPException(status_code=400, detail='CEP inválido.')

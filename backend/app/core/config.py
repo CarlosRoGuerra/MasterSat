@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     database_url: str = 'postgresql+psycopg://postgres:postgres@db:5432/rastreamento'
     frontend_url: str = 'http://localhost:3000'
     backend_public_url: str = 'http://localhost:8000'
+    # Teto de tamanho de requisição/upload (bytes). Protege contra upload gigante
+    # que estouraria a memória (o arquivo é lido inteiro para o MinIO). 25 MB.
+    max_upload_bytes: int = 25 * 1024 * 1024
 
     minio_endpoint: str = 'minio:9000'
     minio_root_user: str = 'minioadmin'
@@ -125,6 +128,9 @@ class Settings(BaseSettings):
     nfse_provedor: str = 'nacional'         # 'nacional' | 'joinville'
     # 'producao_restrita' = ambiente de testes; 'producao' emite nota REAL
     nfse_nac_ambiente: str = 'producao_restrita'
+    # Trava anti-acidente: emitir em 'producao' (nota fiscal REAL, irreversível)
+    # exige este flag explícito True, além de nfse_nac_ambiente='producao'.
+    nfse_nac_producao_confirmada: bool = False
     # Série da DPS. Joinville padronizou as faixas no portal da NF-em:
     # 40000 = aplicativo próprio com integração via API à Sefin Nacional (nosso
     # caso), 60000 = emissor móvel (MEI), 70000 = emissor web (padrão do portal),

@@ -92,9 +92,13 @@ def refresh(payload: RefreshRequest, db: Session = Depends(get_db)):
 
 @router.post('/forgot-password', response_model=ForgotPasswordResponse)
 def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db)):
+    # Resposta IDÊNTICA exista ou não o e-mail — não revela quais e-mails têm
+    # conta (evita enumeração de usuários).
+    generic_message = 'Se o e-mail existir, você receberá as instruções de redefinição.'
+
     user = db.scalar(select(User).where(User.email == payload.email, User.is_deleted.is_(False)))
     if not user:
-        return ForgotPasswordResponse(message='Se o e-mail existir, você receberá as instruções de redefinição.')
+        return ForgotPasswordResponse(message=generic_message)
 
     db.query(PasswordResetToken).filter(
         PasswordResetToken.user_id == user.id,
@@ -108,7 +112,8 @@ def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db
     db.commit()
 
     return ForgotPasswordResponse(
-        message='Solicitação recebida. Use o token abaixo para redefinir sua senha.',
+        message=generic_message,
+        # Só em modo debug (desligado em produção) o token volta no response.
         reset_token=reset_token if settings.debug_return_reset_token else None,
         expires_at=expires_at if settings.debug_return_reset_token else None,
     )

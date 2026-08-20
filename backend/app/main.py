@@ -19,6 +19,7 @@ from app.core.security import get_password_hash
 from app.db.session import Base, SessionLocal, engine
 from app.models import ailos_api_log, ailos_boleto, ailos_client_token, ailos_integration, ailos_lote, ailos_retorno_arquivo, audit_log, billing, billing_change_log, client, client_charge_item, closure_job, contract, document, integration_log, nfse_certificado, nfse_lote, nfse_nota, password_reset_token, payable, plan, service_order, service_order_status_log, service_product, system_setting, tracker, tracker_history, uninstall_event, user, vehicle  # noqa: F401 — side-effect imports that register models with SQLAlchemy Base
 from app.core.audit import AuditMiddleware
+from app.core.body_limit import MaxBodySizeMiddleware
 from app.models.enums import UserRole
 from app.models.user import User
 from app.services.storage import ensure_bucket
@@ -49,6 +50,9 @@ app.add_middleware(
     allow_methods=['*'],
     allow_headers=['*'],
 )
+
+# ── Limite de tamanho de requisição (anti-DoS por upload gigante) ─────────────
+app.add_middleware(MaxBodySizeMiddleware, max_bytes=settings.max_upload_bytes)
 
 # ── Auditoria ─────────────────────────────────────────────────────────────────
 app.add_middleware(AuditMiddleware)

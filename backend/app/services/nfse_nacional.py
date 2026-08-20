@@ -546,6 +546,15 @@ def emitir_nfse(db: Session, billing: Billing, client: Client,
     """
     if not settings.nfse_enabled:
         raise NfseError('Integração NFS-e desabilitada (NFSE_ENABLED=false)')
+    # Trava anti-acidente: emitir nota fiscal REAL (ambiente 'producao') exige
+    # confirmação explícita, além do ambiente — evita emissão irreversível por
+    # engano de .env.
+    if settings.nfse_nac_ambiente == 'producao' and not settings.nfse_nac_producao_confirmada:
+        raise NfseError(
+            'Emissão em PRODUÇÃO (nota fiscal real) bloqueada: defina '
+            'NFSE_NAC_PRODUCAO_CONFIRMADA=true para confirmar. '
+            'Sem isso, use producao_restrita para testes.'
+        )
     if (client.issue_invoice or 'sim') == 'nao':
         raise NfseError(
             'Cliente configurado para NÃO emitir nota fiscal '

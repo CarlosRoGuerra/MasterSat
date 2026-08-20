@@ -140,6 +140,13 @@ class TestForgotPassword:
         assert r.status_code == 200
         assert r.json().get("reset_token") is None
 
+    def test_mensagem_identica_evita_enumeracao(self, http_unauth, db):
+        # A resposta não pode revelar se o e-mail existe (enumeração de usuários).
+        user = _create_user(db)
+        existe = http_unauth.post(PREFIX + "/forgot-password", json={"email": user.email})
+        nao_existe = http_unauth.post(PREFIX + "/forgot-password", json={"email": "nao@existe.com"})
+        assert existe.json()["message"] == nao_existe.json()["message"]
+
 
 # ---------------------------------------------------------------------------
 # POST /reset-password
