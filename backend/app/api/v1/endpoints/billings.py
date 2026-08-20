@@ -511,6 +511,8 @@ def receive_billing(item_id: int, payload: BillingReceive, db: Session = Depends
         raise HTTPException(status_code=404, detail='Cobrança não encontrada')
     if billing.status == BillingStatus.CANCELED:
         raise HTTPException(status_code=400, detail='Cobrança cancelada não pode ser recebida.')
+    if billing.status == BillingStatus.PAID:
+        raise HTTPException(status_code=400, detail='Cobrança já está paga.')
     marcar_billing_pago(
         db, billing,
         payment_date=payload.payment_date,
@@ -529,6 +531,8 @@ def cancel_billing(item_id: int, payload: BillingCancel, db: Session = Depends(g
         raise HTTPException(status_code=404, detail='Cobrança não encontrada')
     if billing.status == BillingStatus.CANCELED:
         raise HTTPException(status_code=400, detail='Cobrança já está cancelada.')
+    if billing.status == BillingStatus.PAID:
+        raise HTTPException(status_code=400, detail='Cobrança paga não pode ser cancelada. Use estorno se precisar reverter o pagamento.')
 
     # Boleto já registrado na Ailos continua pagável no banco após o
     # cancelamento — o convênio não expõe baixa automática. Avisa e exige
@@ -571,8 +575,24 @@ def update_item(item_id: int, payload: BillingUpdate, db: Session = Depends(get_
     billing = db.get(Billing, item_id)
     if not billing or billing.is_deleted:
         raise HTTPException(status_code=404, detail='Cobrança não encontrada')
+    # Estados terminais são imutáveis pelo PUT genérico: alterar valor/vencimento/
+    # status de cobrança paga ou cancelada burlaria a máquina de estados (receber →
+    # estornar; cancelar tem fluxo próprio).
+    if billing.status in (BillingStatus.PAID, BillingStatus.CANCELED):
+        raise HTTPException(
+            status_code=400,
+            detail='Cobrança paga ou cancelada não pode ser alterada.',
+        )
     data = payload.model_dump(exclude_unset=True)
     justification = data.pop('justification', None)
+
+    # Transição de status tem fluxo próprio (Receber/Cancelar), com as travas da
+    # máquina de estados e o aviso de boleto Ailos. O PUT genérico não muda status.
+    if 'status' in data:
+        raise HTTPException(
+            status_code=400,
+            detail='Mudança de situação deve usar Receber ou Cancelar, não a edição da cobrança.',
+        )
 
     if ('amount' in data or 'due_date' in data) and not justification:
         raise HTTPException(status_code=400, detail='Justificativa é obrigatória para alterar valor ou vencimento.')

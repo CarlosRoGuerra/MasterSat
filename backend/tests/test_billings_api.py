@@ -313,6 +313,12 @@ class TestCancelBilling:
         r = http.post(f"{PREFIX}/{billing_pendente.id}/cancel", json={"reason": "X"})
         assert r.status_code == 400
 
+    def test_cancel_paga_bloqueado(self, http, db, billing_pendente):
+        billing_pendente.status = BillingStatus.PAID
+        db.commit()
+        r = http.post(f"{PREFIX}/{billing_pendente.id}/cancel", json={"reason": "X"})
+        assert r.status_code == 400
+
     def test_operational_cannot_cancel(self, http_op, billing_pendente):
         r = http_op.post(f"{PREFIX}/{billing_pendente.id}/cancel", json={"reason": "X"})
         assert r.status_code == 403
@@ -408,6 +414,27 @@ class TestUpdateBilling:
             "amount": 150.00, "justification": "X",
         })
         assert r.status_code == 403
+
+    def test_update_paga_bloqueado(self, http, db, billing_pendente):
+        billing_pendente.status = BillingStatus.PAID
+        db.commit()
+        r = http.put(f"{PREFIX}/{billing_pendente.id}", json={
+            "amount": 150.00, "justification": "X",
+        })
+        assert r.status_code == 400
+
+    def test_update_cancelada_bloqueado(self, http, db, billing_pendente):
+        billing_pendente.status = BillingStatus.CANCELED
+        db.commit()
+        r = http.put(f"{PREFIX}/{billing_pendente.id}", json={
+            "due_date": "2099-11-30", "justification": "X",
+        })
+        assert r.status_code == 400
+
+    def test_update_nao_muda_status(self, http, billing_pendente):
+        # Transição de status é via Receber/Cancelar, não pelo PUT genérico.
+        r = http.put(f"{PREFIX}/{billing_pendente.id}", json={"status": "paga"})
+        assert r.status_code == 400
 
 
 # ---------------------------------------------------------------------------

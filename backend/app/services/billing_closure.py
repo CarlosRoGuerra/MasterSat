@@ -6,7 +6,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from io import BytesIO
 
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session, aliased
 
 from app.models.billing import Billing
@@ -54,6 +54,21 @@ def _billing_due_in_month(contract: Contract, plan: Plan, reference_month: date)
     if due_date.year == reference_month.year and due_date.month == reference_month.month:
         return due_date
     return None
+
+
+def _lock_competencia(db: Session, reference_month: date) -> None:
+    """Serializa fechamentos concorrentes da MESMA competência.
+
+    Sem isto, dois fechamentos simultâneos do mesmo mês veem ``already_generated``
+    False ao mesmo tempo e ambos inserem — duplicando as cobranças. O lock de
+    transação (Postgres) segura o segundo até o primeiro comitar; em SQLite
+    (testes, serial) é no-op.
+    """
+    if db.bind is None or db.bind.dialect.name != 'postgresql':
+        return
+    # Chave estável por competência (AAAAMM) — meses diferentes não se bloqueiam.
+    chave = reference_month.year * 100 + reference_month.month
+    db.execute(text('SELECT pg_advisory_xact_lock(:k)'), {'k': chave})
 
 
 def _has_existing_billing(db: Session, contract_id: int, period_label: str) -> bool:
@@ -413,6 +428,9 @@ def execute_closure(
     client_id: int | None = None,
     contract_ids: list[int] | None = None,
 ) -> dict:
+    # Trava a competência ANTES de simular: simulação + geração ficam atômicas em
+    # relação a outro fechamento do mesmo mês, fechando a corrida de duplicação.
+    _lock_competencia(db, reference_month)
     simulation = simulate_closure(db, reference_month, filter_type, client_id)
     to_generate = [i for i in simulation['items'] if not i['already_generated']]
     if contract_ids is not None:
