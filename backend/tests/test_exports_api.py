@@ -158,3 +158,28 @@ class TestRelatorioCobrancas:
     def test_situacao_invalida_rejeitada(self, http):
         assert http.get(f'{PREFIX}/billings-report',
                         params={'situacao': 'inventada'}).status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# CSV/Excel injection: célula que começa com fórmula é neutralizada
+# ---------------------------------------------------------------------------
+
+class TestFormulaInjection:
+    def test_neutralize_formula_unitario(self):
+        from app.api.v1.endpoints.exports import _neutralize_formula
+        assert _neutralize_formula('=1+1') == "'=1+1"
+        assert _neutralize_formula('@SUM(A1)') == "'@SUM(A1)"
+        assert _neutralize_formula('-2+3') == "'-2+3"
+        assert _neutralize_formula('João Silva') == 'João Silva'   # texto comum intacto
+        assert _neutralize_formula(120.0) == 120.0                 # número intacto
+
+    def test_export_clients_csv_neutraliza_nome_malicioso(self, http, db):
+        from app.models.client import Client
+        from app.models.enums import ClientStatus
+        db.add(Client(name='=HYPERLINK("http://x","clique")', cpf_cnpj='111',
+                      type='pf', status=ClientStatus.ACTIVE))
+        db.commit()
+        r = http.get(f'{PREFIX}/clients', params={'fmt': 'csv'})
+        assert r.status_code == 200
+        assert "'=HYPERLINK" in r.text          # prefixado com apóstrofo
+        assert '\n=HYPERLINK' not in r.text      # nunca cru no início de campo

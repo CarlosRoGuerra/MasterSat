@@ -36,11 +36,22 @@ router = APIRouter()
 VIEW_ROLES = (UserRole.ADMIN, UserRole.FINANCIAL, UserRole.OPERATIONAL)
 
 
+# Célula de texto começando com um destes é interpretada como fórmula por
+# Excel/Sheets (CSV/Excel injection). Prefixamos com apóstrofo p/ virar texto.
+_FORMULA_TRIGGERS = ('=', '+', '-', '@', '\t', '\r')
+
+
+def _neutralize_formula(value):
+    if isinstance(value, str) and value and value[0] in _FORMULA_TRIGGERS:
+        return "'" + value
+    return value
+
+
 def _csv_response(headers: list[str], rows: list[list], filename: str) -> StreamingResponse:
     buf = io.StringIO()
     writer = csv.writer(buf, delimiter=';', quotechar='"', quoting=csv.QUOTE_MINIMAL)
     writer.writerow(headers)
-    writer.writerows(rows)
+    writer.writerows([_neutralize_formula(c) for c in row] for row in rows)
     buf.seek(0)
     return StreamingResponse(
         iter([buf.getvalue().encode('utf-8-sig')]),  # utf-8-sig = BOM para Excel abrir correto
@@ -68,7 +79,7 @@ def _excel_response(headers: list[str], rows: list[list], filename: str) -> Stre
 
     for r, row in enumerate(rows, 2):
         for c, val in enumerate(row, 1):
-            ws.cell(row=r, column=c, value=val)
+            ws.cell(row=r, column=c, value=_neutralize_formula(val))
 
     # Auto-ajusta largura das colunas
     for col in ws.columns:
