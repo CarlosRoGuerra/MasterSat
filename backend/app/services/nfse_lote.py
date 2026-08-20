@@ -32,6 +32,10 @@ from app.models.enums import BillingStatus
 from app.models.client import Client
 from app.models.nfse_lote import NfseLote
 from app.models.nfse_nota import NfseNota
+# Interveniente financeiro = quem responde pela cobrança. Quando existe, ele é o
+# tomador da NFS-e (coerente com o pagador do boleto). resolver_pagador devolve
+# o interveniente-ou-cliente da cobrança.
+from app.services.ailos_boletos import resolver_pagador
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +65,8 @@ def listar_elegiveis(
 
     ``busca`` filtra por nome/razão social ou CPF/CNPJ; ``tipo`` por pf/pj.
     """
+    # Filtros de tomador (issue_invoice/busca/tipo) são aplicados em Python sobre
+    # o tomador RESOLVIDO (interveniente-ou-cliente), não sobre o dono do veículo.
     query = (
         db.query(Billing, Client, NfseNota, AilosBoleto)
         .join(Client, Client.id == Billing.client_id)
@@ -73,35 +79,41 @@ def listar_elegiveis(
             Billing.status != BillingStatus.CANCELED,
             Billing.period_label == period_label,
             Client.is_deleted.is_(False),
-            Client.issue_invoice == 'sim',
         )
     )
-    if (busca or '').strip():
-        alvo = f'%{busca.strip()}%'
-        query = query.filter(or_(Client.name.ilike(alvo), Client.cpf_cnpj.ilike(alvo)))
-    if tipo in ('pf', 'pj'):
-        query = query.filter(Client.type == tipo)
 
+    busca_alvo = (busca or '').strip().lower()
     itens: list[dict] = []
     ja_emitidas = 0
-    for billing, client, nota, boleto in query.order_by(Client.name).all():
+    for billing, owner, nota, boleto in query.all():
+        tomador = resolver_pagador(db, billing, owner)
+        # Só emite NF para tomador com issue_invoice == 'sim'.
+        if (tomador.issue_invoice or '') != 'sim':
+            continue
+        if tipo in ('pf', 'pj') and tomador.type != tipo:
+            continue
+        if busca_alvo and busca_alvo not in (tomador.name or '').lower() \
+                and busca_alvo not in (tomador.cpf_cnpj or '').lower():
+            continue
         if nota is not None and nota.status in _STATUS_BLOQUEIA_REEMISSAO:
             if nota.status == 'emitida':
                 ja_emitidas += 1
             continue
         itens.append({
             'billing_id': billing.id,
-            'client_id': client.id,
-            'tomador': client.name,
-            'cpf_cnpj': client.cpf_cnpj,
-            'tipo': client.type,
-            'cidade': client.city,
+            'client_id': tomador.id,
+            'tomador': tomador.name,
+            'cpf_cnpj': tomador.cpf_cnpj,
+            'tipo': tomador.type,
+            'cidade': tomador.city,
             'nosso_numero': boleto.nosso_numero if boleto else None,
             'valor': float(billing.amount) if billing.amount is not None else 0.0,
             'titulo': billing.title,
             # Cobrança com nota em 'erro' → reprocessamento
             'reprocessamento': nota is not None and nota.status == 'erro',
         })
+
+    itens.sort(key=lambda i: (i['tomador'] or '').lower())
 
     return {
         'period_label': period_label,
@@ -202,7 +214,9 @@ def _emitir_lote_worker(lote_id: int) -> None:
 
 def _emitir_uma(db: Session, nota: NfseNota, emitir_fn, cod_trib_nacional=None) -> None:
     billing = db.get(Billing, nota.billing_id)
-    client = db.get(Client, billing.client_id) if billing else None
+    # Tomador = interveniente do contrato, quando houver; senão o cliente da cobrança.
+    owner = db.get(Client, billing.client_id) if billing else None
+    client = resolver_pagador(db, billing, owner) if (billing and owner) else None
     if billing is None or client is None:
         nota.status = 'erro'
         nota.erro_mensagem = 'Cobrança ou cliente não encontrado.'
@@ -252,19 +266,22 @@ def consultar_lote(db: Session, lote_id: int) -> dict | None:
         .order_by(Client.name)
         .all()
     )
-    itens = [{
-        'nota_id': nota.id,
-        'billing_id': nota.billing_id,
-        'tomador': client.name,
-        'cpf_cnpj': client.cpf_cnpj,
-        'valor': float(billing.amount) if billing.amount is not None else 0.0,
-        'numero_nfse': nota.numero_nfse,
-        'status': nota.status,
-        'chave_acesso': nota.chave_acesso,
-        'link_visualizacao': nota.link_visualizacao,
-        'erro_codigo': nota.erro_codigo,
-        'erro_mensagem': nota.erro_mensagem,
-    } for nota, billing, client in rows]
+    itens = []
+    for nota, billing, client in rows:
+        tomador = resolver_pagador(db, billing, client)
+        itens.append({
+            'nota_id': nota.id,
+            'billing_id': nota.billing_id,
+            'tomador': tomador.name,
+            'cpf_cnpj': tomador.cpf_cnpj,
+            'valor': float(billing.amount) if billing.amount is not None else 0.0,
+            'numero_nfse': nota.numero_nfse,
+            'status': nota.status,
+            'chave_acesso': nota.chave_acesso,
+            'link_visualizacao': nota.link_visualizacao,
+            'erro_codigo': nota.erro_codigo,
+            'erro_mensagem': nota.erro_mensagem,
+        })
     return {**_lote_resumo(lote), 'itens': itens}
 
 
@@ -319,24 +336,27 @@ def listar_notas(
     total = query.count()
     rows = query.order_by(NfseNota.id.desc()).offset(max(offset, 0)).limit(limit).all()
 
-    itens = [{
-        'nota_id': nota.id,
-        'billing_id': nota.billing_id,
-        'lote_id': nota.lote_id,
-        'tomador': client.name,
-        'cpf_cnpj': client.cpf_cnpj,
-        'valor': float(billing.amount) if billing.amount is not None else 0.0,
-        'nosso_numero': boleto.nosso_numero if boleto else None,
-        'numero_nfse': nota.numero_nfse,
-        'status': nota.status,
-        'chave_acesso': nota.chave_acesso,
-        'link_visualizacao': nota.link_visualizacao,
-        'erro_codigo': nota.erro_codigo,
-        'erro_mensagem': nota.erro_mensagem,
-        'tem_xml': bool(nota.xml_retorno),
-        'data_ocorrencia': (nota.data_emissao or getattr(nota, 'created_at', None) or None)
-                           and (nota.data_emissao or nota.created_at).isoformat(),
-    } for nota, billing, client, boleto in rows]
+    itens = []
+    for nota, billing, client, boleto in rows:
+        tomador = resolver_pagador(db, billing, client)
+        itens.append({
+            'nota_id': nota.id,
+            'billing_id': nota.billing_id,
+            'lote_id': nota.lote_id,
+            'tomador': tomador.name,
+            'cpf_cnpj': tomador.cpf_cnpj,
+            'valor': float(billing.amount) if billing.amount is not None else 0.0,
+            'nosso_numero': boleto.nosso_numero if boleto else None,
+            'numero_nfse': nota.numero_nfse,
+            'status': nota.status,
+            'chave_acesso': nota.chave_acesso,
+            'link_visualizacao': nota.link_visualizacao,
+            'erro_codigo': nota.erro_codigo,
+            'erro_mensagem': nota.erro_mensagem,
+            'tem_xml': bool(nota.xml_retorno),
+            'data_ocorrencia': (nota.data_emissao or getattr(nota, 'created_at', None) or None)
+                               and (nota.data_emissao or nota.created_at).isoformat(),
+        })
 
     return {'total': total, 'limit': limit, 'offset': offset, 'itens': itens}
 

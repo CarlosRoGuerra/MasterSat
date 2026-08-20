@@ -8,9 +8,11 @@ import pytest
 
 from app.models.billing import Billing
 from app.models.client import Client
+from app.models.contract import Contract
 from app.models.enums import BillingStatus, ClientStatus, UserRole
 from app.models.nfse_lote import NfseLote
 from app.models.nfse_nota import NfseNota
+from app.models.plan import Plan
 from app.services import nfse_lote
 
 
@@ -47,6 +49,85 @@ def _nota(db, billing, *, status, lote_id=None):
     db.commit()
     db.refresh(n)
     return n
+
+
+def _billing_com_interveniente(db, owner, interveniente, *, period='07/2026'):
+    """Billing recorrente cujo contrato aponta um interveniente financeiro —
+    que passa a ser o tomador da NFS-e."""
+    plan = Plan(name=f'PLANO {owner.id}-{interveniente.id}', price=Decimal('100.00'))
+    db.add(plan)
+    db.commit()
+    db.refresh(plan)
+    contrato = Contract(
+        client_id=owner.id, plan_id=plan.id,
+        interveniente_client_id=interveniente.id,
+        start_date=date(2024, 1, 1), status='ativo', billing_day=10,
+    )
+    db.add(contrato)
+    db.commit()
+    db.refresh(contrato)
+    b = Billing(
+        client_id=owner.id, contract_id=contrato.id, amount=Decimal('120.00'),
+        due_date=date(2026, 7, 10), status=BillingStatus.PENDING, period_label=period,
+        title='MENSALIDADE', billing_type='recorrente',
+    )
+    db.add(b)
+    db.commit()
+    db.refresh(b)
+    return b
+
+
+# ---------------------------------------------------------------------------
+# Interveniente financeiro = tomador da NFS-e
+# ---------------------------------------------------------------------------
+
+def test_elegiveis_tomador_e_o_interveniente(db):
+    owner = _client(db, 'DONO VEICULO', emitir='sim', doc='111')
+    interv = _client(db, 'FINANCEIRA XPTO', emitir='sim', doc='222')
+    _billing_com_interveniente(db, owner, interv)
+
+    item = nfse_lote.listar_elegiveis(db, '07/2026')['itens'][0]
+    assert item['tomador'] == 'FINANCEIRA XPTO'
+    assert item['cpf_cnpj'] == '222'
+
+
+def test_elegiveis_segue_issue_invoice_do_interveniente(db):
+    # Dono NÃO emite, mas o interveniente (tomador) SIM → elegível.
+    owner = _client(db, 'DONO', emitir='nao', doc='111')
+    interv = _client(db, 'FINANCEIRA', emitir='sim', doc='222')
+    _billing_com_interveniente(db, owner, interv)
+
+    res = nfse_lote.listar_elegiveis(db, '07/2026')
+    assert res['total_elegiveis'] == 1
+    assert res['itens'][0]['tomador'] == 'FINANCEIRA'
+
+
+def test_elegiveis_exclui_quando_interveniente_nao_emite(db):
+    # Dono emite, mas o interveniente (tomador) NÃO → fora do lote.
+    owner = _client(db, 'DONO', emitir='sim', doc='111')
+    interv = _client(db, 'FINANCEIRA', emitir='nao', doc='222')
+    _billing_com_interveniente(db, owner, interv)
+
+    assert nfse_lote.listar_elegiveis(db, '07/2026')['total_elegiveis'] == 0
+
+
+def test_emitir_uma_usa_interveniente_como_tomador(db):
+    owner = _client(db, 'DONO', emitir='sim', doc='111')
+    interv = _client(db, 'FINANCEIRA', emitir='sim', doc='222')
+    b = _billing_com_interveniente(db, owner, interv)
+    lote = nfse_lote.criar_lote(db, '07/2026', [b.id], emitir_async=False)
+    nota = db.query(NfseNota).filter_by(lote_id=lote.id).first()
+
+    capturado = {}
+
+    def fake(db_, billing_, client_, cod_trib_nacional=None):
+        capturado['tomador'] = client_.name
+        n = db_.query(NfseNota).filter_by(billing_id=billing_.id).first()
+        n.status = 'emitida'
+        db_.commit()
+
+    nfse_lote._emitir_uma(db, nota, fake)
+    assert capturado['tomador'] == 'FINANCEIRA'
 
 
 # ---------------------------------------------------------------------------

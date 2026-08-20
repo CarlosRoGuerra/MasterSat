@@ -51,6 +51,7 @@ from app.services import (
     nfse_nacional,
     nfse_provider,
 )
+from app.services.ailos_boletos import resolver_pagador
 
 router = APIRouter()
 
@@ -121,9 +122,11 @@ def emitir(
     # boleto único, que ficam 'cancelada') não pode ser emitida.
     if billing.status == BillingStatus.CANCELED:
         raise HTTPException(status_code=400, detail='Não é possível emitir NFS-e de uma cobrança cancelada.')
-    client = db.get(Client, billing.client_id)
-    if client is None:
+    owner = db.get(Client, billing.client_id)
+    if owner is None:
         raise HTTPException(status_code=404, detail='Cliente da cobrança não encontrado')
+    # Tomador = interveniente do contrato, quando houver (coerente com o boleto).
+    client = resolver_pagador(db, billing, owner)
     try:
         return _provedor().emitir_nfse(db, billing, client, cod_trib_nacional=cod_trib_nacional)
     except (*_ERROS_CONFIG, *_ERROS_API) as exc:
