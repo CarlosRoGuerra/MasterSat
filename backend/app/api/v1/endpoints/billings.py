@@ -385,6 +385,9 @@ def batch_status(payload: BillingBatchStatusIn, db: Session = Depends(get_db), c
     abertas = (BillingStatus.PENDING, BillingStatus.OVERDUE)
     processados: list[int] = []
     ignorados: list[int] = []
+    # Cobranças canceladas cujo boleto segue registrado na Ailos — o convênio não
+    # tem baixa automática; o frontend avisa e o operador dá baixa manual.
+    boletos_ativos: list[dict] = []
     for bid in dict.fromkeys(payload.billing_ids):
         b = db.get(Billing, bid)
         if not b or b.is_deleted or b.status not in abertas:
@@ -400,10 +403,17 @@ def batch_status(payload: BillingBatchStatusIn, db: Session = Depends(get_db), c
         else:
             b.status = BillingStatus.CANCELED
             marker = f'Cancelada em lote: {payload.reason}'
+            ab = db.query(AilosBoleto).filter_by(billing_id=bid).first()
+            if ab and ab.linha_digitavel and ab.codigo_barras:
+                boletos_ativos.append({'billing_id': bid, 'nosso_numero': ab.nosso_numero})
+                marker += (
+                    f' | [ATENÇÃO] Boleto Ailos (nosso número {ab.nosso_numero or "—"}) '
+                    'segue ativo no banco — baixa manual pendente.'
+                )
             b.notes = f'{b.notes} | {marker}' if b.notes else marker
         processados.append(bid)
     db.commit()
-    return {'processados': processados, 'ignorados': ignorados}
+    return {'processados': processados, 'ignorados': ignorados, 'boletos_ativos': boletos_ativos}
 
 
 @router.post('/lote/manutencao')

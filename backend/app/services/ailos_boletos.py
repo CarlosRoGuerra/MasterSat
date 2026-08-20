@@ -33,6 +33,7 @@ from app.models.ailos_boleto import AilosBoleto
 from app.models.ailos_lote import AilosLote
 from app.models.billing import Billing
 from app.models.client import Client
+from app.models.contract import Contract
 from app.models.enums import BillingStatus
 from app.services import ailos_client
 from app.services.ailos_validators import (
@@ -88,6 +89,30 @@ def montar_dados_pagador(client: Client) -> dict:
         },
         'mensagemPagador': ['REFERENTE AO CONTRATO DE RASTREAMENTO'],
     }
+
+
+def resolver_pagador(db: Session, billing: Billing, fallback: Client | None = None) -> Client:
+    """Cliente que PAGA o boleto desta cobrança.
+
+    Quando o contrato tem um interveniente financeiro, é ele quem responde pela
+    cobrança — o boleto (pagador/sacado) sai no nome dele, não no do dono do
+    veículo. Sem interveniente (ou se ele foi removido), cai no cliente da
+    própria cobrança.
+    """
+    if billing.contract_id:
+        contrato = db.get(Contract, billing.contract_id)
+        if contrato and contrato.interveniente_client_id:
+            interveniente = db.get(Client, contrato.interveniente_client_id)
+            if interveniente and not interveniente.is_deleted:
+                return interveniente
+    return fallback or _obter_client(db, billing.client_id)
+
+
+def _obter_client(db: Session, client_id: int) -> Client:
+    c = db.get(Client, client_id)
+    if c is None:
+        raise ValueError(f'Cliente {client_id} não encontrado')
+    return c
 
 
 def montar_payload_boleto(billing: Billing, client: Client) -> dict:
@@ -253,7 +278,7 @@ def gerar_boleto(db: Session, billing: Billing, client: Client) -> AilosBoleto:
     if existing is not None and existing.linha_digitavel:
         return existing
 
-    payload = montar_payload_boleto(billing, client)
+    payload = montar_payload_boleto(billing, resolver_pagador(db, billing, client))
 
     try:
         resp = ailos_client.request(
@@ -296,7 +321,10 @@ def _recuperar_boleto_existente(db: Session, billing: Billing, payload: dict) ->
 
 def gerar_boleto_lote(db: Session, billings: list[Billing], clients_by_id: dict[int, Client]) -> AilosLote:
     """Gera um lote assíncrono de boletos. Retorna o ``AilosLote`` (status='processing')."""
-    payloads = [montar_payload_boleto(b, clients_by_id[b.client_id]) for b in billings]
+    payloads = [
+        montar_payload_boleto(b, resolver_pagador(db, b, clients_by_id.get(b.client_id)))
+        for b in billings
+    ]
 
     body_lote = {
         'convenioCobranca': {'codigoCarteiraCobranca': settings.ailos_default_carteira},
@@ -343,7 +371,7 @@ def gerar_carne_lote(
     payloads = []
     billings = []
     for numero_parcela, b in billings_by_parcela:
-        payload = montar_payload_boleto(b, clients_by_id[b.client_id])
+        payload = montar_payload_boleto(b, resolver_pagador(db, b, clients_by_id.get(b.client_id)))
         payload['numeroParcela'] = numero_parcela
         # tipoVencimento é um objeto na v2 (Manual p.39 / Postman v2).
         # tipoVencimento: 1=Mensal, 2=A cada x dias, 3=Dia x de cada mês.

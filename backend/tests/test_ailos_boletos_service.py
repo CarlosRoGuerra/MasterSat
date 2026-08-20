@@ -14,7 +14,8 @@ from app.core.config import settings
 from app.models.ailos_boleto import AilosBoleto
 from app.models.ailos_lote import AilosLote
 from app.models.billing import Billing
-from app.models.enums import BillingStatus
+from app.models.client import Client
+from app.models.enums import BillingStatus, ClientStatus
 from app.services import ailos_client
 from app.services.ailos_boletos import (
     consultar_boleto,
@@ -22,6 +23,7 @@ from app.services.ailos_boletos import (
     gerar_boleto,
     gerar_boleto_lote,
     gerar_carne_lote,
+    resolver_pagador,
 )
 
 
@@ -96,6 +98,50 @@ def _boleto_response(billing_id, nosso_numero='12345678', linha='LINHA-DIGITAVEL
         'valorBoleto': {'valorNominal': 99.9},
         'vencimento': {'dataVencimento': '2099-12-31'},
     }
+
+
+class TestPagadorInterveniente:
+    """Quando o contrato tem interveniente financeiro, o boleto sai no nome
+    dele (quem responde pela cobrança), não no do dono do veículo."""
+
+    def _interveniente(self, db, deleted=False):
+        i = Client(name='FINANCEIRA XPTO', cpf_cnpj='11144477735', type='pj',
+                   status=ClientStatus.ACTIVE, is_deleted=deleted)
+        db.add(i)
+        db.commit()
+        db.refresh(i)
+        return i
+
+    def test_resolver_usa_interveniente_do_contrato(self, db, billing_pendente, contrato):
+        interv = self._interveniente(db)
+        contrato.interveniente_client_id = interv.id
+        db.commit()
+        assert resolver_pagador(db, billing_pendente).id == interv.id
+
+    def test_resolver_cai_no_cliente_sem_interveniente(self, db, billing_pendente, contrato):
+        assert resolver_pagador(db, billing_pendente).id == contrato.client_id
+
+    def test_resolver_ignora_interveniente_deletado(self, db, billing_pendente, contrato):
+        interv = self._interveniente(db, deleted=True)
+        contrato.interveniente_client_id = interv.id
+        db.commit()
+        assert resolver_pagador(db, billing_pendente).id == contrato.client_id
+
+    def test_gerar_boleto_manda_interveniente_como_pagador(self, db, billing_pendente, contrato, cliente):
+        _preencher_endereco(cliente, db)
+        interv = self._interveniente(db)
+        _preencher_endereco(interv, db)
+        contrato.interveniente_client_id = interv.id
+        db.commit()
+
+        resp = _resp(200, json_data=_boleto_response(billing_pendente.id))
+        with patch('app.services.ailos_client.requests') as mock_requests:
+            mock_requests.request.return_value = resp
+            boleto = gerar_boleto(db, billing_pendente, cliente)
+
+        pagador = boleto.payload_request['pagador']['entidadeLegal']
+        assert pagador['nome'] == 'FINANCEIRA XPTO'
+        assert pagador['identificadorReceitaFederal'] == '11144477735'
 
 
 class TestGerarBoleto:

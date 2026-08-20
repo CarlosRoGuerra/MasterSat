@@ -70,6 +70,13 @@ def _get_client_or_404(client_id: int, db: Session) -> Client:
     return c
 
 
+def _pagador_do_billing(b: Billing, db: Session) -> Client:
+    """Cliente que aparece como pagador/sacado no boleto — o interveniente
+    financeiro do contrato, quando houver; senão, o cliente da cobrança.
+    Mantém o PDF/link coerente com o pagador registrado na Ailos."""
+    return ailos_boletos.resolver_pagador(db, b, _get_client_or_404(b.client_id, db))
+
+
 _TIPO_SERVICO = {
     'recorrente': 'MENSALIDADE DE MONITORAMENTO VEICULAR',
     'prorata': 'MENSALIDADE PROPORCIONAL (PRÓ-RATA)',
@@ -191,7 +198,7 @@ def get_boleto(
     sem gerar o PDF. Útil para exibir no frontend ou copiar a linha digitável.
     """
     b = _get_billing_or_404(billing_id, db)
-    c = _get_client_or_404(b.client_id, db)
+    c = _pagador_do_billing(b, db)
     item = _billing_to_boleto_item(b, c)
 
     dados = gerar_dados_boleto(
@@ -332,7 +339,7 @@ def get_boleto_pdf(
             detail='Esta cobrança ainda não tem boleto emitido na Ailos, então não há '
                    'PDF para baixar. Gere o boleto na aba Ailos do Financeiro.',
         )
-    c = _get_client_or_404(b.client_id, db)
+    c = _pagador_do_billing(b, db)
     pdf_bytes, filename = _montar_pdf_boleto(b, c, db, ailos_boleto)
     return Response(
         content=pdf_bytes,
@@ -379,7 +386,7 @@ def get_carne_pdf(
         b = db.get(Billing, billing_id)
         if not b or b.is_deleted:
             continue
-        c = db.get(Client, b.client_id)
+        c = ailos_boletos.resolver_pagador(db, b, db.get(Client, b.client_id))
         if not c:
             continue
         parcelas.append(dados_boleto(b, c, db, ab))
@@ -423,7 +430,7 @@ def get_boleto_publico(
     ailos_boleto = boleto_registrado(billing_id, db)
     if ailos_boleto is None:
         raise HTTPException(status_code=404, detail="Boleto não encontrado")
-    c = _get_client_or_404(b.client_id, db)
+    c = _pagador_do_billing(b, db)
     pdf_bytes, filename = _montar_pdf_boleto(b, c, db, ailos_boleto)
     return Response(
         content=pdf_bytes,
@@ -530,8 +537,10 @@ def _preparar_items(billings: list[Billing], db: Session) -> list[dict]:
     """Converte lista de Billing para lista de dicts para os geradores CNAB."""
     items = []
     for b in billings:
-        c = db.get(Client, b.client_id)
-        if not c or c.is_deleted:
+        dono = db.get(Client, b.client_id)
+        if not dono or dono.is_deleted:
             continue
+        # Remessa CNAB registra o título — o pagador é o interveniente, se houver.
+        c = ailos_boletos.resolver_pagador(db, b, dono)
         items.append(_billing_to_boleto_item(b, c))
     return items

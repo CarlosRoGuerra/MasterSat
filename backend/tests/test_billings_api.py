@@ -347,6 +347,39 @@ class TestCancelBilling:
 
 
 # ---------------------------------------------------------------------------
+# POST /lote/situacao (cancelamento em lote)
+# ---------------------------------------------------------------------------
+
+class TestBatchCancel:
+    def _registrar(self, db, billing_id):
+        from app.models.ailos_boleto import AilosBoleto
+        db.add(AilosBoleto(
+            billing_id=billing_id, numero_convenio='102004', nosso_numero='000000301',
+            linha_digitavel='08591.02006 40045.470206 00000.003012 5 14890000009990',
+            codigo_barras='08595148900000099901020040045470200000000301',
+        ))
+        db.commit()
+
+    def test_lote_cancel_reporta_boletos_ativos(self, http, db, billing_pendente):
+        self._registrar(db, billing_pendente.id)
+        r = http.post(f"{PREFIX}/lote/situacao", json={
+            "billing_ids": [billing_pendente.id], "action": "cancelar", "reason": "teste"})
+        assert r.status_code == 200
+        body = r.json()
+        assert billing_pendente.id in body["processados"]
+        assert len(body["boletos_ativos"]) == 1
+        assert body["boletos_ativos"][0]["nosso_numero"] == "000000301"
+        db.refresh(billing_pendente)
+        assert "baixa manual pendente" in (billing_pendente.notes or "")
+
+    def test_lote_cancel_sem_boleto_lista_vazia(self, http, db, billing_pendente):
+        r = http.post(f"{PREFIX}/lote/situacao", json={
+            "billing_ids": [billing_pendente.id], "action": "cancelar", "reason": "teste"})
+        assert r.status_code == 200
+        assert r.json()["boletos_ativos"] == []
+
+
+# ---------------------------------------------------------------------------
 # PUT /{id} (ajuste)
 # ---------------------------------------------------------------------------
 

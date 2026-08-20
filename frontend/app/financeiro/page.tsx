@@ -983,13 +983,22 @@ export default function FinanceiroPage() {
     if (!reason) return;
     setProcessing(true);
     try {
-      const r = await apiFetch<{ processados: number[]; ignorados: number[] }>('/billings/lote/situacao', {
+      const r = await apiFetch<{ processados: number[]; ignorados: number[]; boletos_ativos?: { billing_id: number; nosso_numero: string | null }[] }>('/billings/lote/situacao', {
         method: 'POST',
         body: JSON.stringify({ billing_ids: selectedBillingIds, action: 'cancelar', reason }),
       }, token);
       setSelectedBillingIds([]);
       setFeedback(`${r.processados.length} cobrança(s) cancelada(s)${r.ignorados.length ? ` · ${r.ignorados.length} ignorada(s)` : ''}.`);
       await loadData(token);
+      // Cancelamento não baixa o título na Ailos — avisa para baixa manual.
+      const ativos = r.boletos_ativos ?? [];
+      if (ativos.length > 0) {
+        const nums = ativos.map(x => x.nosso_numero || `#${x.billing_id}`).join(', ');
+        window.alert(
+          `Atenção: ${ativos.length} boleto(s) cancelado(s) continuam registrados na Ailos e ainda podem ser pagos. ` +
+          `O convênio não tem baixa automática — dê baixa manualmente na Ailos. Nossos números: ${nums}.`,
+        );
+      }
     } catch (err) { setError(parseError(err)); } finally { setProcessing(false); }
   }
 
