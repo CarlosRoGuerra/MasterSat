@@ -239,6 +239,36 @@ class TestUninstallVehicle:
         assert event is not None
         assert float(event.fee_amount) == 100.0
 
+    def test_uninstall_nao_cancela_contrato_de_outro_veiculo(self, http, db, cliente, veiculo, rastreador_instalado, contrato, plan):
+        """Frota: desinstalar o veículo A não pode cancelar o contrato do veículo B."""
+        from app.models.contract import Contract
+        from app.models.vehicle import Vehicle
+        outro_veiculo = Vehicle(client_id=cliente.id, plate='XYZ9Z99', type='passeio',
+                                chassis='9BWZZZ377VT099999')
+        db.add(outro_veiculo)
+        db.commit()
+        db.refresh(outro_veiculo)
+        contrato_b = Contract(client_id=cliente.id, plan_id=plan.id, vehicle_id=outro_veiculo.id,
+                              start_date=date(2024, 3, 1), status='ativo', billing_day=10)
+        db.add(contrato_b)
+        db.commit()
+        db.refresh(contrato_b)
+
+        r = self._uninstall(http, veiculo.id)
+        assert r.status_code == 200
+        db.refresh(contrato)
+        db.refresh(contrato_b)
+        assert contrato.status == 'cancelado'      # o do veículo desinstalado
+        assert contrato_b.status == 'ativo'        # o do outro veículo, intacto
+
+    def test_uninstall_repetido_bloqueado(self, http, db, veiculo, rastreador_instalado, contrato):
+        """Re-desinstalar um veículo já retirado é recusado (evita taxa dupla)."""
+        assert self._uninstall(http, veiculo.id, uninstall_fee=100.0).status_code == 200
+        r2 = self._uninstall(http, veiculo.id, uninstall_fee=100.0)
+        assert r2.status_code == 400
+        # Só um UninstallEvent — a taxa não foi duplicada.
+        assert db.query(UninstallEvent).filter(UninstallEvent.vehicle_id == veiculo.id).count() == 1
+
     def test_uninstall_nonexistent_vehicle_returns_404(self, http):
         r = self._uninstall(http, 99999)
         assert r.status_code == 404

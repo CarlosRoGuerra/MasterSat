@@ -11,7 +11,7 @@ from app.db.session import get_db
 from app.models.billing import Billing
 from app.models.client import Client
 from app.models.contract import Contract
-from app.models.enums import BillingStatus, TrackerStatus, UserRole
+from app.models.enums import BillingStatus, TrackerStatus, UserRole, VehicleStatus
 from app.models.plan import Plan
 from app.models.tracker import Tracker
 from app.models.tracker_history import TrackerHistory
@@ -531,6 +531,12 @@ def link_vehicle(
     if tracker.status == TrackerStatus.STOCK:
         tracker.status = TrackerStatus.INSTALLED
         tracker.install_date = tracker.install_date or date.today()
+
+    # Reinstalar um rastreador reativa o veículo: sem isto, um veículo antes
+    # RETIRADO ficaria travado nesse status e não poderia ser desinstalado de novo.
+    if vehicle.status == VehicleStatus.REMOVED:
+        vehicle.status = VehicleStatus.ACTIVE
+        vehicle.uninstalled_at = None
 
     _register_history(
         db, tracker,

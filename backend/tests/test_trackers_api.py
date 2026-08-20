@@ -435,6 +435,19 @@ class TestLinkVeiculo:
         db.refresh(rastreador)
         assert rastreador.install_date == date.today()
 
+    def test_link_reativa_veiculo_retirado(self, http, db, rastreador, veiculo):
+        """Reinstalar reativa um veículo antes RETIRADO (para poder desinstalar de novo)."""
+        from app.models.enums import VehicleStatus
+        veiculo.status = VehicleStatus.REMOVED
+        veiculo.uninstalled_at = date(2025, 1, 1)
+        db.commit()
+
+        r = http.post(f"{PREFIX}/{rastreador.id}/link-vehicle", json={"vehicle_id": veiculo.id})
+        assert r.status_code == 200
+        db.refresh(veiculo)
+        assert veiculo.status == VehicleStatus.ACTIVE
+        assert veiculo.uninstalled_at is None
+
     def test_link_with_plan_creates_contract(self, http, db, rastreador, veiculo, plan):
         from app.models.contract import Contract
         r = http.post(f"{PREFIX}/{rastreador.id}/link-vehicle", json={

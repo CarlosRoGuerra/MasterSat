@@ -217,8 +217,30 @@ def uninstall_vehicle(
     _: object = Depends(require_roles(*EDIT_ROLES)),
 ):
     vehicle = _get_vehicle_or_404(item_id, db)
+    # Idempotência: veículo já retirado não pode ser desinstalado de novo — senão
+    # cada re-clique cria outra taxa de desinstalação e cancela outro contrato.
+    if vehicle.status == VehicleStatus.REMOVED:
+        raise HTTPException(status_code=400, detail='Este veículo já está desinstalado.')
+
     tracker = db.scalar(select(Tracker).where(Tracker.vehicle_id == vehicle.id, Tracker.is_deleted.is_(False)))
-    contract = db.scalar(select(Contract).where(Contract.client_id == vehicle.client_id, Contract.status == 'ativo', Contract.is_deleted.is_(False)).order_by(Contract.id.desc()))
+    # Contrato DESTE veículo (não "qualquer contrato ativo do cliente"): em clientes
+    # com frota, buscar só pelo cliente cancelava o contrato do veículo errado.
+    contract_filters = [
+        Contract.vehicle_id == vehicle.id,
+        Contract.status == 'ativo',
+        Contract.is_deleted.is_(False),
+    ]
+    if tracker is not None:
+        # Havendo rastreador, casa também pelo equipamento para desempatar
+        # frotas com mais de um contrato no mesmo veículo.
+        contract = db.scalar(
+            select(Contract).where(*contract_filters, Contract.tracker_id == tracker.id)
+            .order_by(Contract.id.desc())
+        )
+    else:
+        contract = None
+    if contract is None:
+        contract = db.scalar(select(Contract).where(*contract_filters).order_by(Contract.id.desc()))
 
     source_prorated = None
     destination_prorated = None
