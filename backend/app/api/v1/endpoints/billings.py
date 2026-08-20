@@ -27,6 +27,7 @@ from app.models.plan import Plan
 from app.models.tracker import Tracker
 from app.models.vehicle import Vehicle
 from app.models.user import User
+from app.services.ailos_boletos import resolver_pagador
 from app.schemas.billing import (
     BillingBatchMaintIn,
     BillingBatchStatusIn,
@@ -274,7 +275,8 @@ def download_receipt(item_id: int, db: Session = Depends(get_db), _: object = De
     billing, *_ = row
     if billing.status != BillingStatus.PAID:
         raise HTTPException(status_code=400, detail='Recibo disponível apenas para cobranças pagas')
-    client = db.get(Client, billing.client_id)
+    # Recibo em nome de quem pagou = interveniente do contrato, quando houver.
+    client = resolver_pagador(db, billing, db.get(Client, billing.client_id))
     buffer = _receipt_pdf(billing, client)
     filename = f'recibo-{billing.receipt_number or item_id}.pdf'
     return StreamingResponse(buffer, media_type='application/pdf', headers={'Content-Disposition': f'inline; filename={filename}'})

@@ -26,7 +26,7 @@ from app.models.ailos_boleto import AilosBoleto
 from app.models.billing import Billing
 from app.models.client import Client
 from app.models.enums import BillingStatus
-from app.services.ailos_boletos import aplicar_dados_oficiais_ailos
+from app.services.ailos_boletos import aplicar_dados_oficiais_ailos, resolver_pagador
 from app.services.boleto_ailos import gerar_dados_boleto
 from app.services.boleto_pdf import gerar_boleto_pdf
 from app.services.financial import refresh_overdue_statuses, valor_com_juros
@@ -151,7 +151,11 @@ def listar_cobrancas(
         query = query.filter(Client.delivery_method.in_(['email', 'todos']))
 
     rows = query.order_by(Billing.due_date.asc()).limit(limit).all()
-    cobrancas = [_cobranca_payload(billing, client, boleto) for billing, client, boleto in rows]
+    # Quem paga (e recebe a mensagem) é o interveniente do contrato, se houver.
+    cobrancas = [
+        _cobranca_payload(billing, resolver_pagador(db, billing, client), boleto)
+        for billing, client, boleto in rows
+    ]
     return {'total': len(cobrancas), 'cobrancas': cobrancas}
 
 
@@ -162,6 +166,8 @@ def _get_cobranca_or_404(billing_id: int, db: Session) -> tuple[Billing, Client,
     client = db.get(Client, billing.client_id)
     if not client or client.is_deleted:
         raise HTTPException(status_code=404, detail='Cliente não encontrado')
+    # Pagador da cobrança = interveniente do contrato, quando houver.
+    client = resolver_pagador(db, billing, client)
     ailos_boleto = db.query(AilosBoleto).filter_by(billing_id=billing.id).first()
     return billing, client, ailos_boleto
 

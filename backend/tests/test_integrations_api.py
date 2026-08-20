@@ -9,7 +9,10 @@ import pytest
 from app.core.config import settings
 from app.models.ailos_boleto import AilosBoleto
 from app.models.billing import Billing
-from app.models.enums import BillingStatus
+from app.models.client import Client
+from app.models.contract import Contract
+from app.models.enums import BillingStatus, ClientStatus
+from app.models.plan import Plan
 
 
 @pytest.fixture()
@@ -66,6 +69,38 @@ def boleto_registrado(db, cobranca) -> AilosBoleto:
     db.commit()
     db.refresh(ab)
     return ab
+
+
+def test_cobranca_usa_interveniente_como_pagador(http_unauth, api_key, db, cliente):
+    """Com interveniente no contrato, o CobraZap recebe a cobrança no nome do
+    interveniente (quem paga e recebe a mensagem)."""
+    interv = Client(name='FINANCEIRA XPTO', cpf_cnpj='11144477735', type='pj',
+                    status=ClientStatus.ACTIVE, issue_invoice='sim')
+    db.add(interv)
+    db.commit()
+    db.refresh(interv)
+    plan = Plan(name='PLANO CZ', price=Decimal('100.00'))
+    db.add(plan)
+    db.commit()
+    db.refresh(plan)
+    contrato = Contract(client_id=cliente.id, plan_id=plan.id,
+                        interveniente_client_id=interv.id,
+                        start_date=date(2024, 1, 1), status='ativo', billing_day=10)
+    db.add(contrato)
+    db.commit()
+    db.refresh(contrato)
+    b = Billing(client_id=cliente.id, contract_id=contrato.id, amount=Decimal('99.90'),
+                due_date=date.today() + timedelta(days=15), status=BillingStatus.PENDING,
+                billing_type='recorrente', title='Mensalidade')
+    db.add(b)
+    db.commit()
+    db.refresh(b)
+
+    resp = http_unauth.get('/api/v1/integrations/cobrancas', headers={'X-API-Key': api_key})
+    assert resp.status_code == 200
+    item = next(c for c in resp.json()['cobrancas'] if c['id'] == b.id)
+    assert item['cliente']['nome'] == 'FINANCEIRA XPTO'
+    assert item['cliente']['cpf_cnpj'] == '11144477735'
 
 
 # ── Autenticação ──────────────────────────────────────────────────────────────
