@@ -79,6 +79,11 @@ class AilosLoteStatusOut(BaseModel):
     ticket: str
     status: str
     boletos: list[AilosBoletoOut] | None = None
+    # Progresso estruturado — a tela de acompanhamento do carnê usa isto para
+    # mostrar "3 de 12 confirmadas" mesmo enquanto status ainda é 'processing',
+    # em vez de um spinner sem informação nenhuma.
+    total: int = 0
+    prontas: int = 0
 
 
 # ── Pagadores ───────────────────────────────────────────────────────────────

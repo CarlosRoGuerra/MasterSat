@@ -186,24 +186,31 @@ def get_lote_status(
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*ALLOWED_ROLES)),
 ):
-    """Consulta o status de um lote/carnê. Se concluído, atualiza os boletos correspondentes."""
+    """Consulta o status de um lote/carnê. Se concluído, atualiza os boletos
+    correspondentes. Também é o endpoint usado para "verificar/tentar
+    novamente" manualmente na tela de acompanhamento do carnê."""
     lote = db.query(AilosLote).filter_by(ticket=ticket).first()
     if lote is None:
         raise HTTPException(status_code=404, detail="Lote não encontrado")
 
-    if lote.status == 'processing':
+    status_atual = lote.status
+    if status_atual == 'processing':
         try:
             result = consultar_lote(db, lote)
         except _AILOS_EXCEPTIONS as exc:
             raise_ailos_error(exc)
+        status_atual = result.get('status', 'processing')
 
-        if result.get('status') == 'processing':
-            return AilosLoteStatusOut(ticket=lote.ticket, status='processing', boletos=None)
-        lote = result['lote']
-
+    # Consultado sempre — inclusive enquanto ainda 'processing' — para a tela
+    # mostrar "3 de 12 confirmadas" em vez de um spinner sem informação, já
+    # que cada consultar_lote() acima atualiza as parcelas que resolveram
+    # mesmo sem fechar o lote inteiro ainda.
     boletos = db.query(AilosBoleto).filter_by(lote_id=lote.id).all()
+    prontas = sum(1 for b in boletos if b.linha_digitavel)
     return AilosLoteStatusOut(
         ticket=lote.ticket,
-        status=lote.status,
-        boletos=[AilosBoletoOut.model_validate(b) for b in boletos],
+        status=status_atual,
+        boletos=[AilosBoletoOut.model_validate(b) for b in boletos] if status_atual != 'processing' else None,
+        total=len(lote.billing_ids or []),
+        prontas=prontas,
     )

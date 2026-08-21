@@ -1,7 +1,7 @@
 'use client';
 
 import { FormEvent, Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { TrendingUp, AlertTriangle, FileText, CheckCircle2, Clock, MoreHorizontal, ChevronDown, ChevronRight, Lock, PenSquare, ListChecks, Banknote, Layers, Mail, PieChart, Barcode, Wallet, Coins, FilePlus, Tags, BookText } from 'lucide-react';
+import { TrendingUp, AlertTriangle, FileText, CheckCircle2, Clock, MoreHorizontal, ChevronDown, ChevronRight, Lock, PenSquare, ListChecks, Banknote, Layers, Mail, PieChart, Barcode, Wallet, Coins, FilePlus, Tags, BookText, Loader2, RefreshCw, Download } from 'lucide-react';
 
 import { PageShell } from '@/components/page-shell';
 import { Card } from '@/components/ui/card';
@@ -567,6 +567,22 @@ export default function FinanceiroPage() {
   const [carneNumParcelas, setCarneNumParcelas] = useState('12');
   const [carnePrimeiroVenc, setCarnePrimeiroVenc] = useState('');
   const [carneValor, setCarneValor] = useState('');
+  // Tela de acompanhamento do registro do carnê na Ailos: mostra progresso ao
+  // vivo (X de Y confirmadas), tenta de novo sozinha por um tempo e, se ainda
+  // não tiver terminado, oferece um botão para tentar/baixar manualmente.
+  type CarneTrackFase = 'registrando' | 'acompanhando' | 'completo' | 'erro-registro' | 'aguardando-manual';
+  const [carneTrack, setCarneTrack] = useState<{
+    ids: number[];
+    fase: CarneTrackFase;
+    loteId: number | null;
+    ticket: string | null;
+    prontas: number;
+    total: number;
+    erro: string;
+  } | null>(null);
+  // Guarda de corrida: se o operador fechar/reiniciar, os pollings antigos em
+  // voo param de mexer no estado (comparam contra este ticket "ativo").
+  const carneTrackAtivoRef = useRef<string | null>(null);
   const [batchReceiveModal, setBatchReceiveModal] = useState(false);
   const [batchReceiveForm, setBatchReceiveForm] = useState({ payment_date: new Date().toISOString().slice(0, 10), payment_method: 'pix' });
   const [batchMaintModal, setBatchMaintModal] = useState(false);
@@ -1064,37 +1080,80 @@ export default function FinanceiroPage() {
     } catch (err) { setModalError(parseError(err)); } finally { setCarneLoading(false); }
   }
 
-  // Núcleo do carnê: registra o lote na Ailos, aguarda o processamento
-  // assíncrono e baixa o PDF. Assume ids do MESMO cliente (o backend valida).
-  async function _registrarCarne(ids: number[]) {
-    const lote = await apiFetch<{ id: number; ticket: string; status: string }>(
-      '/ailos/carne/lote',
-      { method: 'POST', body: JSON.stringify({ billing_ids: ids }) },
-      token!,
-    );
-    let status = lote.status;
-    for (let i = 0; i < 15 && status === 'processing'; i++) {
-      await new Promise((r) => setTimeout(r, 3000));
-      const st = await apiFetch<{ status: string }>(`/ailos/lotes/${lote.ticket}`, {}, token!).catch(() => ({ status } as { status: string }));
-      status = st.status;
-    }
-    setCarneModal(false);
-    if (status === 'processing') {
-      setFeedback(`Carnê registrado (lote #${lote.id}). As parcelas ainda estão sendo processadas na Ailos — baixe o PDF em instantes.`);
-      await loadData(token!);
-      return;
-    }
-    const resp = await fetch(`${API_URL.replace(/\/+$/, '')}/boletos/carne/${lote.id}/pdf`, {
+  // Baixa o PDF de um carnê já com lote registrado (usado tanto no fim do
+  // acompanhamento automático quanto no botão manual "Baixar o que tiver pronto").
+  async function baixarPdfCarne(loteId: number) {
+    const resp = await fetch(`${API_URL.replace(/\/+$/, '')}/boletos/carne/${loteId}/pdf`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!resp.ok) {
       let detalhe = `Erro ${resp.status}`;
       try { detalhe = (await resp.json())?.detail || detalhe; } catch { /* noop */ }
-      throw new Error(`Carnê registrado (lote #${lote.id}), mas o PDF ainda não saiu: ${detalhe}`);
+      throw new Error(detalhe);
     }
-    entregarArquivo(await resp.blob(), `carne-${lote.id}.pdf`, { emNovaAba: true });
-    setFeedback(`Carnê gerado com ${ids.length} parcela(s).`);
-    await loadData(token!);
+    entregarArquivo(await resp.blob(), `carne-${loteId}.pdf`, { emNovaAba: true });
+  }
+
+  const CARNE_POLL_MS = 3000;
+  const CARNE_TENTATIVAS_AUTO = 20; // ~1 min de retry automático antes de pedir ação manual
+
+  // Consulta o status de um lote em voo e decide o próximo passo: atualiza o
+  // progresso na tela, baixa o PDF sozinho ao completar, tenta de novo
+  // automaticamente por um tempo e, se ainda não resolveu, para de insistir
+  // sozinho e deixa o botão manual assumir.
+  async function acompanharCarne(ticket: string, loteId: number, tentativa: number) {
+    if (carneTrackAtivoRef.current !== ticket) return; // operador fechou/reiniciou
+    try {
+      const st = await apiFetch<{ status: string; total: number; prontas: number }>(`/ailos/lotes/${ticket}`, {}, token!);
+      if (carneTrackAtivoRef.current !== ticket) return;
+      setCarneTrack(prev => (prev && prev.ticket === ticket) ? { ...prev, prontas: st.prontas, total: st.total || prev.total } : prev);
+      if (st.status === 'completed') {
+        setCarneTrack(prev => (prev && prev.ticket === ticket) ? { ...prev, fase: 'completo' } : prev);
+        try {
+          await baixarPdfCarne(loteId);
+          setFeedback(`Carnê gerado com ${st.total} parcela(s).`);
+        } catch (err) {
+          // Registrado e completo, só o download falhou — o botão "Baixar"
+          // na própria tela de acompanhamento cobre o reprocessamento.
+          setCarneTrack(prev => (prev && prev.ticket === ticket) ? { ...prev, erro: parseError(err) } : prev);
+        }
+        await loadData(token!);
+        return;
+      }
+    } catch (err) {
+      if (carneTrackAtivoRef.current !== ticket) return;
+      setCarneTrack(prev => (prev && prev.ticket === ticket) ? { ...prev, erro: parseError(err) } : prev);
+    }
+    if (tentativa + 1 >= CARNE_TENTATIVAS_AUTO) {
+      setCarneTrack(prev => (prev && prev.ticket === ticket) ? { ...prev, fase: 'aguardando-manual' } : prev);
+      return;
+    }
+    setTimeout(() => acompanharCarne(ticket, loteId, tentativa + 1), CARNE_POLL_MS);
+  }
+
+  // Registra o lote na Ailos (ou tenta de novo, se a tentativa anterior falhou
+  // — ex.: sessão do cooperado caiu). Não recria as parcelas locais, só
+  // reenvia os mesmos billing_ids para registro.
+  async function tentarRegistrarCarne(ids: number[]) {
+    carneTrackAtivoRef.current = null; // invalida qualquer polling anterior em voo
+    setCarneTrack({ ids, fase: 'registrando', loteId: null, ticket: null, prontas: 0, total: ids.length, erro: '' });
+    try {
+      const lote = await apiFetch<{ id: number; ticket: string; status: string }>(
+        '/ailos/carne/lote',
+        { method: 'POST', body: JSON.stringify({ billing_ids: ids }) },
+        token!,
+      );
+      carneTrackAtivoRef.current = lote.ticket;
+      setCarneTrack({ ids, fase: 'acompanhando', loteId: lote.id, ticket: lote.ticket, prontas: 0, total: ids.length, erro: '' });
+      acompanharCarne(lote.ticket, lote.id, 0);
+    } catch (err) {
+      setCarneTrack(prev => prev && ({ ...prev, fase: 'erro-registro', erro: parseError(err) }));
+    }
+  }
+
+  function fecharAcompanhamentoCarne() {
+    carneTrackAtivoRef.current = null;
+    setCarneTrack(null);
   }
 
   // Modo "boletos existentes": carnê a partir dos boletos em aberto selecionados.
@@ -1102,10 +1161,8 @@ export default function FinanceiroPage() {
     if (!token) return;
     if (ids.length < 2) { alert('Selecione ao menos 2 boletos para gerar o carnê.'); return; }
     if (!confirm(`Gerar o carnê registra ${ids.length} boletos reais na Ailos (um por parcela). Continuar?`)) return;
-    setGerandoCarne(true); setError(''); setModalError('');
-    try { await _registrarCarne(ids); }
-    catch (err) { setError(parseError(err)); }
-    finally { setGerandoCarne(false); }
+    setCarneModal(false);
+    await tentarRegistrarCarne(ids);
   }
 
   // Modo "a partir do plano": cria N parcelas do contrato (valor do plano) e as
@@ -1115,7 +1172,7 @@ export default function FinanceiroPage() {
     const n = Number(carneNumParcelas);
     if (!n || n < 2) { alert('Informe ao menos 2 parcelas.'); return; }
     if (!confirm(`Serão criadas ${n} parcelas do plano e registradas na Ailos como carnê. Continuar?`)) return;
-    setGerandoCarne(true); setError(''); setModalError('');
+    setGerandoCarne(true); setModalError('');
     try {
       const criados = await apiFetch<{ id: number }[]>('/billings/parcelar', {
         method: 'POST',
@@ -1126,7 +1183,8 @@ export default function FinanceiroPage() {
           primeiro_vencimento: carnePrimeiroVenc || null,
         }),
       }, token);
-      await _registrarCarne(criados.map(b => b.id));
+      setCarneModal(false);
+      await tentarRegistrarCarne(criados.map(b => b.id));
     } catch (err) {
       setModalError(parseError(err));
     } finally {
@@ -2150,6 +2208,101 @@ export default function FinanceiroPage() {
           <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200" onClick={() => setCarneModal(false)}>Cancelar</button>
           <Button onClick={carneMode === 'existentes' ? () => gerarCarne(carneSelected) : gerarCarneDoPlano} disabled={gerandoCarne || (carneMode === 'existentes' ? carneSelected.length < 2 : (!carneContractId || Number(carneNumParcelas) < 2))}>{gerandoCarne ? 'Gerando carnê…' : carneMode === 'existentes' ? `Gerar carnê (${carneSelected.length})` : `Gerar carnê (${Number(carneNumParcelas) || 0} parcelas)`}</Button>
         </div>
+      </Modal>
+
+      {/* Acompanhamento do registro do carnê na Ailos: progresso ao vivo,
+          retry automático por ~1min e, se ainda não terminou, botão manual. */}
+      <Modal
+        open={!!carneTrack}
+        onClose={fecharAcompanhamentoCarne}
+        title="Gerando carnê"
+        subtitle={carneTrack?.total ? `${carneTrack.total} parcela(s)` : undefined}
+        size="sm"
+      >
+        {carneTrack && (
+          <div className="flex flex-col items-center gap-4 py-4 text-center">
+            {carneTrack.fase === 'registrando' && (
+              <>
+                <Loader2 className="h-10 w-10 animate-spin text-brand-600" />
+                <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Registrando o carnê na Ailos…</p>
+              </>
+            )}
+
+            {carneTrack.fase === 'erro-registro' && (
+              <>
+                <AlertTriangle className="h-10 w-10 text-red-500" />
+                <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Não foi possível registrar o carnê</p>
+                <p className="text-xs text-red-600 dark:text-red-400">{carneTrack.erro}</p>
+                <div className="flex gap-2">
+                  <Button onClick={() => tentarRegistrarCarne(carneTrack.ids)} className="gap-2"><RefreshCw className="h-4 w-4" />Tentar novamente</Button>
+                  <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200" onClick={fecharAcompanhamentoCarne}>Fechar</button>
+                </div>
+              </>
+            )}
+
+            {(carneTrack.fase === 'acompanhando' || carneTrack.fase === 'aguardando-manual') && (
+              <>
+                {carneTrack.fase === 'acompanhando'
+                  ? <Loader2 className="h-10 w-10 animate-spin text-brand-600" />
+                  : <Clock className="h-10 w-10 text-amber-500" />}
+                <div>
+                  <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+                    {carneTrack.prontas} de {carneTrack.total} parcela(s) confirmada(s) na Ailos
+                  </p>
+                  <p className="mt-1 text-xs text-slate-400">
+                    {carneTrack.fase === 'acompanhando'
+                      ? 'Acompanhando automaticamente — isto pode levar alguns instantes.'
+                      : 'Ainda não confirmou todas. Pode tentar de novo ou baixar o que já estiver pronto.'}
+                  </p>
+                  {carneTrack.erro && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{carneTrack.erro}</p>}
+                </div>
+                {carneTrack.fase === 'aguardando-manual' && carneTrack.ticket && carneTrack.loteId && (
+                  <div className="flex flex-wrap justify-center gap-2">
+                    <Button
+                      onClick={() => {
+                        setCarneTrack(prev => prev && ({ ...prev, fase: 'acompanhando', erro: '' }));
+                        acompanharCarne(carneTrack.ticket!, carneTrack.loteId!, 0);
+                      }}
+                      className="gap-2"
+                    ><RefreshCw className="h-4 w-4" />Verificar novamente</Button>
+                    {carneTrack.prontas > 0 && (
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200"
+                        onClick={async () => {
+                          try { await baixarPdfCarne(carneTrack.loteId!); }
+                          catch (err) { setCarneTrack(prev => prev && ({ ...prev, erro: parseError(err) })); }
+                        }}
+                      ><Download className="h-4 w-4" />Baixar o que estiver pronto</button>
+                    )}
+                    <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200" onClick={fecharAcompanhamentoCarne}>Fechar e acompanhar depois</button>
+                  </div>
+                )}
+              </>
+            )}
+
+            {carneTrack.fase === 'completo' && (
+              <>
+                <CheckCircle2 className="h-10 w-10 text-emerald-500" />
+                <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Carnê gerado com {carneTrack.total} parcela(s)</p>
+                {carneTrack.erro ? (
+                  <>
+                    <p className="text-xs text-red-600 dark:text-red-400">Registrado, mas o download falhou: {carneTrack.erro}</p>
+                    <Button
+                      onClick={async () => {
+                        try { await baixarPdfCarne(carneTrack.loteId!); setCarneTrack(prev => prev && ({ ...prev, erro: '' })); }
+                        catch (err) { setCarneTrack(prev => prev && ({ ...prev, erro: parseError(err) })); }
+                      }}
+                      className="gap-2"
+                    ><Download className="h-4 w-4" />Baixar PDF</Button>
+                  </>
+                ) : (
+                  <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200" onClick={fecharAcompanhamentoCarne}>Fechar</button>
+                )}
+              </>
+            )}
+          </div>
+        )}
       </Modal>
 
       <Modal open={chargeModal} onClose={() => { setChargeModal(false); setModalError(''); }} title="Novo lançamento financeiro" description="Lance serviços, produtos e taxas com opção de parcelamento e remoção após pagamento." size="xl">

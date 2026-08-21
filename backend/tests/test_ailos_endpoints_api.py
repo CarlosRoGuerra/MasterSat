@@ -7,11 +7,19 @@ GET /status nunca expõe tokens.
 """
 from __future__ import annotations
 
+from datetime import date
+from decimal import Decimal
+from unittest.mock import MagicMock, patch
+
 from cryptography.fernet import Fernet
 
 from app.core.config import settings
 from app.core.crypto import encrypt_token
+from app.models.ailos_boleto import AilosBoleto
 from app.models.ailos_integration import AilosIntegration
+from app.models.ailos_lote import AilosLote
+from app.models.billing import Billing
+from app.models.enums import BillingStatus
 
 PREFIX = '/api/v1/ailos'
 
@@ -159,3 +167,60 @@ class TestStatusNuncaExpoeTokens:
         assert encrypt_token(segredo) != segredo  # sanity: token está de fato criptografado
         for chave in ('cooperado_token_encrypted', 'access_token_encrypted', 'access_token', 'cooperado_token'):
             assert chave not in body
+
+
+class TestLoteStatusProgresso:
+    """A tela de acompanhamento do carnê precisa de 'X de Y confirmadas' mesmo
+    enquanto o lote ainda está 'processing' — não só um status sem número."""
+
+    def _billing(self, db, cliente, valor='129.98'):
+        b = Billing(client_id=cliente.id, amount=Decimal(valor),
+                   due_date=date.today(), status=BillingStatus.PENDING,
+                   billing_type='carne', title='Parcela')
+        db.add(b)
+        db.commit()
+        return b
+
+    def test_processing_traz_prontas_e_total(self, http, db, cliente):
+        b1 = self._billing(db, cliente)
+        b2 = self._billing(db, cliente)
+        lote = AilosLote(tipo='carne', ticket='TICKET-PROGRESSO', numero_convenio='102004',
+                         billing_ids=[b1.id, b2.id], status='processing')
+        db.add(lote)
+        db.commit()
+        # b1 já confirmou na Ailos; b2 ainda não.
+        db.add(AilosBoleto(billing_id=b1.id, numero_convenio='102004', lote_id=lote.id,
+                           linha_digitavel='LD-1', codigo_barras='CB-1',
+                           payload_request={'documento': {'numeroDocumento': b1.id}}))
+        db.add(AilosBoleto(billing_id=b2.id, numero_convenio='102004', lote_id=lote.id,
+                           payload_request={'documento': {'numeroDocumento': b2.id}}))
+        db.commit()
+
+        with patch('app.services.ailos_client.requests') as mock_requests:
+            mock_requests.request.return_value = MagicMock(status_code=404, text='nao', headers={}, content=b'')
+            r = http.get(f'{PREFIX}/lotes/TICKET-PROGRESSO')
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body['status'] == 'processing'
+        assert body['total'] == 2
+        assert body['prontas'] == 1
+        assert body['boletos'] is None  # forma resumida enquanto processa
+
+    def test_completed_traz_prontas_igual_total(self, http, db, cliente):
+        b1 = self._billing(db, cliente)
+        lote = AilosLote(tipo='carne', ticket='TICKET-DONE', numero_convenio='102004',
+                         billing_ids=[b1.id], status='completed')
+        db.add(lote)
+        db.commit()
+        db.add(AilosBoleto(billing_id=b1.id, numero_convenio='102004', lote_id=lote.id,
+                           linha_digitavel='LD-1', codigo_barras='CB-1'))
+        db.commit()
+
+        r = http.get(f'{PREFIX}/lotes/TICKET-DONE')
+        assert r.status_code == 200
+        body = r.json()
+        assert body['status'] == 'completed'
+        assert body['total'] == 1
+        assert body['prontas'] == 1
+        assert len(body['boletos']) == 1
