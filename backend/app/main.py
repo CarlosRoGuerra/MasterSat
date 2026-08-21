@@ -543,17 +543,43 @@ def _ailos_baixa_automatica():
             return conciliar_boletos_abertos(db)
         return None
 
+    # Alerta quando a conciliação falha de forma PERSISTENTE (ex.: API Ailos fora
+    # por horas): sem isto, boletos pagos não são baixados e ninguém percebe —
+    # clientes que pagaram viram inadimplentes. Só warning não é suficiente.
+    LIMITE_ALERTA = 3          # ~3h de falhas seguidas
+    falhas_seguidas = 0
+    ja_alertado = False
+
     while True:
         time.sleep(3600)  # 1h
         try:
             res = _run_locked(918273647, _job)
-            if res and res.get('baixados'):
-                logger.info(
-                    'Conciliação Ailos: %s baixado(s) de %s consultado(s).',
-                    res['baixados'], res['consultados'],
-                )
+            # res=dict → conciliou de verdade; res=None → não rodou (sem lock ou
+            # sem cooperado autorizado): não conta como sucesso nem falha.
+            if isinstance(res, dict):
+                if ja_alertado:
+                    _alerta_admin('✅ Conciliação Ailos NORMALIZADA — baixa de boletos pagos voltou.', logger)
+                    ja_alertado = False
+                falhas_seguidas = 0
+                if res.get('baixados'):
+                    logger.info(
+                        'Conciliação Ailos: %s baixado(s) de %s consultado(s).',
+                        res['baixados'], res['consultados'],
+                    )
         except Exception as exc:  # noqa: BLE001 — conciliação nunca pode derrubar o worker
-            logger.warning('Conciliação automática Ailos falhou (tentará no próximo ciclo): %s', exc)
+            falhas_seguidas += 1
+            logger.warning(
+                'Conciliação automática Ailos falhou (%s consecutiva(s)): %s',
+                falhas_seguidas, exc,
+            )
+            if falhas_seguidas >= LIMITE_ALERTA and not ja_alertado:
+                _alerta_admin(
+                    f'🚨 Conciliação Ailos FALHANDO há {falhas_seguidas} ciclos (~{falhas_seguidas}h). '
+                    'Boletos pagos podem não estar sendo baixados — clientes que pagaram '
+                    'aparecem como inadimplentes. Verifique a disponibilidade da API Ailos.',
+                    logger,
+                )
+                ja_alertado = True
 
 
 @app.on_event('startup')
