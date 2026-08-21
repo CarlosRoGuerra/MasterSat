@@ -4,7 +4,7 @@ gerar_carne_lote, consultar_boleto, consultar_lote.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
@@ -466,6 +466,54 @@ class TestConsultarCarne:
         ab2 = db.query(AilosBoleto).filter_by(billing_id=billing2.id).first()
         assert ab1.linha_digitavel == 'LD-1'
         assert ab2.linha_digitavel == 'LD-2'
+
+    def test_carne_parcial_nao_fecha_o_lote(self, db, billing_pendente, contrato, cliente):
+        """Regressão do bug: com 1 de 2 parcelas registradas, o lote tinha que
+        continuar 'processing' — não 'completed' com só 1 boleto pronto (o PDF
+        sairia com uma parcela só em vez do carnê completo)."""
+        billing2 = _criar_billing_futuro(db, contrato)
+        lote = self._lote_carne(db, [billing_pendente.id, billing2.id])
+        respostas = {
+            str(billing_pendente.id): _resp(200, json_data=_boleto_response(billing_pendente.id, linha='LD-1', codigo='CB-1')),
+            # billing2 ainda não está pronta do lado do banco.
+            str(billing2.id): _resp(404, text='not found'),
+        }
+
+        def _fake(method, url, **kw):
+            ultimo = url.rstrip('/').split('/')[-1]
+            return respostas.get(ultimo, _resp(404, text='nao'))
+
+        with patch('app.services.ailos_client.requests') as mock_requests:
+            mock_requests.request.side_effect = _fake
+            result = consultar_lote(db, lote)
+
+        assert result == {'status': 'processing'}
+        assert lote.status == 'processing'
+        ab1 = db.query(AilosBoleto).filter_by(billing_id=billing_pendente.id).first()
+        assert ab1.linha_digitavel == 'LD-1'  # a que resolveu já foi salva
+
+    def test_carne_parcial_fecha_apos_prazo_esgotado(self, db, billing_pendente, contrato, cliente):
+        """Se uma parcela nunca resolve, o lote não pode ficar 'processing'
+        para sempre — depois de um tempo, fecha com o que conseguiu."""
+        billing2 = _criar_billing_futuro(db, contrato)
+        lote = self._lote_carne(db, [billing_pendente.id, billing2.id])
+        lote.created_at = datetime.now(timezone.utc) - timedelta(minutes=11)
+        db.commit()
+        respostas = {
+            str(billing_pendente.id): _resp(200, json_data=_boleto_response(billing_pendente.id, linha='LD-1', codigo='CB-1')),
+            str(billing2.id): _resp(404, text='not found'),
+        }
+
+        def _fake(method, url, **kw):
+            ultimo = url.rstrip('/').split('/')[-1]
+            return respostas.get(ultimo, _resp(404, text='nao'))
+
+        with patch('app.services.ailos_client.requests') as mock_requests:
+            mock_requests.request.side_effect = _fake
+            result = consultar_lote(db, lote)
+
+        assert result['status'] == 'completed'
+        assert lote.status == 'completed'
 
     def test_carne_ainda_processando_fica_processing(self, db, billing_pendente, contrato, cliente):
         """Nenhuma parcela registrada ainda → segue 'processing', não estoura."""

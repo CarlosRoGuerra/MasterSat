@@ -23,7 +23,7 @@ Conformidade com a documentação (Manual v2, Postman oficial jan/26):
 from __future__ import annotations
 
 import dataclasses
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from sqlalchemy.orm import Session
@@ -436,14 +436,22 @@ def _consultar_carne_por_boleto(db: Session, lote: AilosLote) -> dict:
     gateway do APIM ("No matching resource found") — o recurso não está
     publicado, apesar de constar no Postman. Já a consulta de boleto individual
     (/v2/.../consultar/boleto/...) funciona; é a mesma usada na recuperação do
-    boleto avulso. Marca o lote 'completed' quando ao menos uma parcela já tem
-    os dados oficiais (linha digitável).
+    boleto avulso.
+
+    Só marca o lote 'completed' quando TODAS as parcelas já têm os dados
+    oficiais — não a primeira que resolver. Antes, o lote fechava assim que UMA
+    parcela ficava pronta; o frontend via 'completed' e baixava o PDF na hora,
+    que saía com só essa parcela (o carnê "gerava 1 boleto só"). Timeout
+    defensivo de 10 min: se uma parcela específica nunca resolver (falha
+    pontual do lado do banco), o lote fecha mesmo assim com o que conseguiu —
+    senão ficaria 'processing' para sempre.
     """
-    algum_registrado = False
+    total = len(lote.billing_ids or [])
+    resolvidos = 0
     for billing_id in (lote.billing_ids or []):
         boleto = db.query(AilosBoleto).filter_by(billing_id=billing_id).first()
         if boleto is not None and boleto.linha_digitavel:
-            algum_registrado = True
+            resolvidos += 1
             continue
         try:
             dados = consultar_boleto(db, str(billing_id))
@@ -456,9 +464,17 @@ def _consultar_carne_por_boleto(db: Session, lote: AilosLote) -> dict:
         payload_request = boleto.payload_request if (boleto and boleto.payload_request) else {}
         atualizado = _upsert_ailos_boleto(db, billing_id, payload_request, dados, lote_id=lote.id)
         if atualizado.linha_digitavel:
-            algum_registrado = True
+            resolvidos += 1
 
-    if not algum_registrado:
+    if resolvidos == 0:
+        return {'status': 'processing'}
+
+    criado_em = lote.created_at
+    if criado_em.tzinfo is None:
+        criado_em = criado_em.replace(tzinfo=timezone.utc)
+    prazo_esgotado = (datetime.now(timezone.utc) - criado_em) > timedelta(minutes=10)
+
+    if resolvidos < total and not prazo_esgotado:
         return {'status': 'processing'}
 
     lote.status = 'completed'
