@@ -567,6 +567,23 @@ def on_startup():
         Base.metadata.create_all(bind=engine)
         ensure_schema_updates()
         _seed_admin()
+        # Recupera notas NFS-e presas em 'pending'/'processing' de um reinício
+        # anterior (o worker é thread daemon; um restart mata a emissão em voo).
+        # No boot ainda não há worker ativo, então é seguro reprocessá-las.
+        try:
+            from app.services.nfse_lote import recuperar_notas_orfas
+            _db = SessionLocal()
+            try:
+                _recuperadas = recuperar_notas_orfas(_db)
+            finally:
+                _db.close()
+            if _recuperadas:
+                logging.getLogger('uvicorn.error').warning(
+                    'NFS-e: %s nota(s) órfã(s) recuperada(s) no boot (marcadas p/ reprocesso).',
+                    _recuperadas,
+                )
+        except Exception:  # noqa: BLE001 — recuperação nunca pode derrubar o boot
+            logging.getLogger('uvicorn.error').exception('Falha ao recuperar notas NFS-e órfãs.')
     finally:
         try:
             lock_conn.exec_driver_sql('SELECT pg_advisory_unlock(918273645)')

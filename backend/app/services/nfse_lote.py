@@ -233,6 +233,31 @@ def _emitir_uma(db: Session, nota: NfseNota, emitir_fn, cod_trib_nacional=None) 
         db.commit()
 
 
+def recuperar_notas_orfas(db: Session) -> int:
+    """Recupera notas presas em 'pending'/'processing' de uma execução anterior.
+
+    A emissão roda em thread daemon; um reinício do processo (deploy, crash, OOM)
+    mata a thread em voo e deixa notas 'pending'/'processing' que NUNCA mais são
+    tocadas — e ``listar_elegiveis`` as trata como "em voo", então não reaparecem
+    para reprocessar. No boot ainda NÃO há worker ativo, logo qualquer nota nesses
+    estados é órfã: vira 'erro' (reprocessável) e o lote é fechado. Chamado no
+    startup. Retorna quantas notas foram recuperadas.
+    """
+    orfas = db.query(NfseNota).filter(NfseNota.status.in_(('pending', 'processing'))).all()
+    if not orfas:
+        return 0
+    lote_ids = set()
+    for nota in orfas:
+        nota.status = 'erro'
+        nota.erro_mensagem = 'Emissão interrompida por reinício do servidor — reprocesse o lote.'
+        if nota.lote_id:
+            lote_ids.add(nota.lote_id)
+    db.commit()
+    for lote_id in lote_ids:
+        _fechar_lote(db, lote_id)
+    return len(orfas)
+
+
 def _fechar_lote(db: Session, lote_id: int) -> None:
     lote = db.get(NfseLote, lote_id)
     if lote is None:

@@ -257,6 +257,36 @@ def test_criar_lote_tudo_ja_emitido_avisa_lote_processado(db):
         nfse_lote.criar_lote(db, '07/2026', [b.id], emitir_async=False)
 
 
+def test_recuperar_notas_orfas_marca_erro_e_fecha_lote(db):
+    # Simula um restart: notas ficaram presas em 'pending'/'processing'.
+    c = _client(db, 'CLIENTE')
+    b1, b2, b3 = _billing(db, c), _billing(db, c), _billing(db, c)
+    lote = nfse_lote.criar_lote(db, '07/2026', [b1.id, b2.id, b3.id], emitir_async=False)
+    notas = db.query(NfseNota).filter_by(lote_id=lote.id).order_by(NfseNota.id).all()
+    notas[0].status = 'emitida'      # já saiu antes do restart
+    notas[1].status = 'pending'      # órfã
+    notas[2].status = 'processing'   # órfã
+    db.commit()
+
+    recuperadas = nfse_lote.recuperar_notas_orfas(db)
+    assert recuperadas == 2
+    for n in notas:
+        db.refresh(n)
+    assert notas[0].status == 'emitida'                 # intacta
+    assert notas[1].status == 'erro' and notas[2].status == 'erro'
+    assert 'reinício' in (notas[1].erro_mensagem or '')
+    # E o lote foi fechado (não fica 'processando' para sempre).
+    db.refresh(lote)
+    assert lote.status == 'com_erro'
+    assert lote.concluido_em is not None
+
+
+def test_recuperar_notas_orfas_sem_orfas_retorna_zero(db):
+    c = _client(db, 'CLIENTE')
+    _nota(db, _billing(db, c), status='emitida')
+    assert nfse_lote.recuperar_notas_orfas(db) == 0
+
+
 def test_criar_lote_reaproveita_nota_de_erro(db):
     c = _client(db, 'CLIENTE')
     b = _billing(db, c)

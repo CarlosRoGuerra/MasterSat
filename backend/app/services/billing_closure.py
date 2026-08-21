@@ -9,6 +9,7 @@ from io import BytesIO
 from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session, aliased
 
+from app.core.timezone import hoje
 from app.models.billing import Billing
 from app.models.client import Client
 from app.models.client_charge_item import ClientChargeItem
@@ -476,7 +477,7 @@ def execute_closure(
                 tracker_id=getattr(contract, 'tracker_id', None),
                 amount=combined_amount,
                 due_date=item['due_date'],
-                status=BillingStatus.PENDING if item['due_date'] >= date.today() else BillingStatus.OVERDUE,
+                status=BillingStatus.PENDING if item['due_date'] >= hoje() else BillingStatus.OVERDUE,
                 period_label=item['period_label'],
                 payment_method=contract.payment_method,
                 notes=notes,
@@ -492,7 +493,7 @@ def execute_closure(
                 charge_obj = db.get(ClientChargeItem, charge['item_id'])
                 if charge_obj:
                     charge_obj.active = False
-                    charge_obj.completed_at = date.today()
+                    charge_obj.completed_at = hoje()
                     charge_obj.status = 'concluido'
 
         else:
@@ -516,7 +517,7 @@ def execute_closure(
                 tracker_id=getattr(contract, 'tracker_id', None),
                 amount=billing_amount,
                 due_date=item['due_date'],
-                status=BillingStatus.PENDING if item['due_date'] >= date.today() else BillingStatus.OVERDUE,
+                status=BillingStatus.PENDING if item['due_date'] >= hoje() else BillingStatus.OVERDUE,
                 period_label=item['period_label'],
                 payment_method=contract.payment_method,
                 notes=notes,
@@ -563,7 +564,7 @@ def execute_closure(
             title=f'Mensalidades — {len(grupo)} veículos (boleto único)',
             amount=total,
             due_date=venc,
-            status=BillingStatus.PENDING if venc >= date.today() else BillingStatus.OVERDUE,
+            status=BillingStatus.PENDING if venc >= hoje() else BillingStatus.OVERDUE,
             period_label=period,
             payment_method=grupo[0].payment_method,
             notes=f'Boleto único ({period}): {detalhes}',
@@ -609,7 +610,7 @@ def execute_closure(
             billing_type='taxa_desinstalacao',
             amount=fee_amount,
             due_date=due_date,
-            status=BillingStatus.PENDING if due_date >= date.today() else BillingStatus.OVERDUE,
+            status=BillingStatus.PENDING if due_date >= hoje() else BillingStatus.OVERDUE,
             period_label=due_date.strftime('%m/%Y'),
             notes=(
                 f'Taxa de desinstalação — retirada em {event.uninstall_date.strftime("%d/%m/%Y")}'

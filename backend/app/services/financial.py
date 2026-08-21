@@ -7,6 +7,7 @@ from typing import Iterable
 
 from sqlalchemy.orm import Session
 
+from app.core.timezone import hoje
 from app.models.billing import Billing
 from app.models.client_charge_item import ClientChargeItem
 from app.models.contract import Contract
@@ -55,12 +56,12 @@ def plan_title(plan) -> str:
     return name if name.lower().startswith('plano') else f'Plano {name}'
 
 
-def valor_com_juros(amount, due_date: date, hoje: date | None = None) -> float | None:
+def valor_com_juros(amount, due_date: date, referencia: date | None = None) -> float | None:
     """Valor atualizado de cobrança em atraso: multa 2% + juros de 1% ao mês
     ou fração (cláusula 4.3 do contrato). None se não está em atraso.
     Fonte ÚNICA do cálculo — tela, mensagens e integrações usam este valor."""
-    hoje = hoje or date.today()
-    dias = (hoje - due_date).days
+    referencia = referencia or hoje()
+    dias = (referencia - due_date).days
     if dias <= 0:
         return None
     meses = -(-dias // 30)  # ceil
@@ -70,7 +71,7 @@ def valor_com_juros(amount, due_date: date, hoje: date | None = None) -> float |
 
 def refresh_overdue_statuses(db: Session) -> None:
     """Reclassifica pendente↔vencida via UPDATE no banco (sem carregar a tabela)."""
-    today = date.today()
+    today = hoje()
     db.query(Billing).filter(
         Billing.is_deleted == False,
         Billing.status == BillingStatus.PENDING,
@@ -187,7 +188,7 @@ def generate_prorated_first_billing(
         tracker_id=getattr(contract, 'tracker_id', None),
         amount=prorated,
         due_date=due_date,
-        status=BillingStatus.PENDING if due_date >= date.today() else BillingStatus.OVERDUE,
+        status=BillingStatus.PENDING if due_date >= hoje() else BillingStatus.OVERDUE,
         period_label=period_label,
         payment_method=contract.payment_method,
         notes=f'Pró-rata: {remaining_days} de {days_in_month} dias do mês',
@@ -206,7 +207,7 @@ def generate_prorated_first_billing(
             tracker_id=getattr(contract, 'tracker_id', None),
             amount=fee,
             due_date=due_date,
-            status=BillingStatus.PENDING if due_date >= date.today() else BillingStatus.OVERDUE,
+            status=BillingStatus.PENDING if due_date >= hoje() else BillingStatus.OVERDUE,
             period_label=period_label,
             payment_method=contract.payment_method,
             notes='Taxa de instalação do rastreador',
@@ -266,7 +267,7 @@ def generate_monthly_billings(db: Session, contract: Contract, cycles: int = 12,
             client_id=contract.client_id,
             amount=plan.price,
             due_date=due_date,
-            status=BillingStatus.PENDING if due_date >= date.today() else BillingStatus.OVERDUE,
+            status=BillingStatus.PENDING if due_date >= hoje() else BillingStatus.OVERDUE,
             period_label=period_label,
             payment_method=contract.payment_method,
             notes=notes,
@@ -329,7 +330,7 @@ def generate_item_billings(db: Session, item: ClientChargeItem, force: bool = Fa
             installment_total=installments,
             amount=amount,
             due_date=due_date,
-            status=BillingStatus.PENDING if due_date >= date.today() else BillingStatus.OVERDUE,
+            status=BillingStatus.PENDING if due_date >= hoje() else BillingStatus.OVERDUE,
             period_label=due_date.strftime('%m/%Y'),
             notes=item.description,
         )
@@ -385,7 +386,7 @@ def mark_charge_item_if_settled(db: Session, item_id: int | None) -> None:
     if open_items == 0 and item.remove_after_payment:
         item.active = False
         item.status = 'concluido'
-        item.completed_at = date.today()
+        item.completed_at = hoje()
         db.commit()
 
 
