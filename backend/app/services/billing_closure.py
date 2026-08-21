@@ -77,7 +77,10 @@ def _has_existing_billing(db: Session, contract_id: int, period_label: str) -> b
         Billing.is_deleted.is_(False),
         Billing.contract_id == contract_id,
         Billing.period_label == period_label,
-        Billing.billing_type.in_(['recorrente', 'prorata', 'primeira_mensalidade']),
+        # 'carne': parcela de carnê já cobre o mês — sem isto o fechamento
+        # mensal gerava uma mensalidade recorrente POR CIMA de um mês já
+        # pago via carnê (cobrança duplicada).
+        Billing.billing_type.in_(['recorrente', 'prorata', 'primeira_mensalidade', 'carne']),
     ).first() is not None
 
 

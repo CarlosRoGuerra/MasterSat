@@ -173,7 +173,7 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
   const [trackerImei, setTrackerImei] = useState('');
 
   // Step 3 — plan + billing
-  const [pf, setPf] = useState({ plan_id: '', payment_method: 'boleto', billing_day: '' });
+  const [pf, setPf] = useState({ plan_id: '', payment_method: 'boleto', billing_day: '', billing_mode: 'recorrente' as 'recorrente' | 'carne', num_parcelas: '12' });
   const [selectedProductIds, setSelectedProductIds] = useState<number[]>([]);
 
   // Load remote data once on open
@@ -194,7 +194,7 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
       setVehicle(null);
       setTf({ tracker_id: '', start_date: new Date().toISOString().slice(0, 10) });
       setTrackerImei('');
-      setPf({ plan_id: '', payment_method: 'boleto', billing_day: '' });
+      setPf({ plan_id: '', payment_method: 'boleto', billing_day: '', billing_mode: 'recorrente', num_parcelas: '12' });
       setSelectedProductIds([]);
     }
   }, [open]);
@@ -314,6 +314,12 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
   /* ── Step 3: confirm plan ── */
   async function confirmPlan() {
     if (!vehicle || !pf.plan_id) { setError('Selecione um plano.'); return; }
+    const carneMode = pf.payment_method === 'boleto' && pf.billing_mode === 'carne';
+    const numParcelas = Number(pf.num_parcelas);
+    if (carneMode && (!numParcelas || numParcelas < 2)) {
+      setError('Informe ao menos 2 parcelas para o carnê.');
+      return;
+    }
     setSaving(true); setError('');
     try {
       // Create contract
@@ -333,6 +339,22 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
         },
         token,
       );
+
+      // Carnê: cria as N parcelas já de uma vez (o fechamento mensal reconhece
+      // essas parcelas pelo period_label e não gera mensalidade em cima delas).
+      if (carneMode) {
+        await apiFetch(
+          '/billings/parcelar',
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              contract_id: contract.id,
+              num_parcelas: numParcelas,
+            }),
+          },
+          token,
+        );
+      }
 
       // Create a charge item for each selected service product
       await Promise.all(
@@ -909,7 +931,12 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
                         <button
                           key={opt.value}
                           type="button"
-                          onClick={() => setPf(prev => ({ ...prev, payment_method: opt.value }))}
+                          onClick={() => setPf(prev => ({
+                            ...prev,
+                            payment_method: opt.value,
+                            // Carnê é um mecanismo de boleto na Ailos — não existe em cartão/PIX/dinheiro.
+                            billing_mode: opt.value === 'boleto' ? prev.billing_mode : 'recorrente',
+                          }))}
                           className={[
                             'rounded-xl border px-3 py-3 text-center text-sm font-semibold transition-colors',
                             pf.payment_method === opt.value
@@ -923,8 +950,60 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
                     </div>
                   </div>
 
+                  {/* Billing mode: recorrente mensal x carnê (só faz sentido com boleto) */}
+                  {pf.payment_method === 'boleto' && (
+                    <div>
+                      <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">
+                        Modalidade de cobrança
+                      </p>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setPf(prev => ({ ...prev, billing_mode: 'recorrente' }))}
+                          className={[
+                            'rounded-xl border px-4 py-3 text-left text-sm transition-colors',
+                            pf.billing_mode === 'recorrente'
+                              ? 'border-brand-500 bg-brand-50 dark:border-brand-400 dark:bg-brand-950/30'
+                              : 'border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800/60',
+                          ].join(' ')}
+                        >
+                          <span className="block font-semibold">Recorrente mensal</span>
+                          <span className="mt-0.5 block text-xs text-slate-400">Um boleto por mês, gerado no fechamento</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPf(prev => ({ ...prev, billing_mode: 'carne' }))}
+                          className={[
+                            'rounded-xl border px-4 py-3 text-left text-sm transition-colors',
+                            pf.billing_mode === 'carne'
+                              ? 'border-brand-500 bg-brand-50 dark:border-brand-400 dark:bg-brand-950/30'
+                              : 'border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800/60',
+                          ].join(' ')}
+                        >
+                          <span className="block font-semibold">Carnê</span>
+                          <span className="mt-0.5 block text-xs text-slate-400">N parcelas já criadas de uma vez</span>
+                        </button>
+                      </div>
+
+                      {pf.billing_mode === 'carne' && (
+                        <div className="mt-3 flex items-center gap-3">
+                          <label className="text-sm">
+                            <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Quantidade de parcelas</span>
+                            <input
+                              className={fieldClass}
+                              inputMode="numeric"
+                              value={pf.num_parcelas}
+                              onChange={e => setPf(prev => ({ ...prev, num_parcelas: e.target.value.replace(/\D/g, '').slice(0, 2) }))}
+                              placeholder="12"
+                            />
+                          </label>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {/* Monthly plan → recurrence info (no installment field) */}
-                  {isMonthlyPlan && (
+                  {isMonthlyPlan && pf.billing_mode === 'recorrente' && (
                     <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 dark:border-blue-900/40 dark:bg-blue-950/30">
                       <p className="text-sm font-semibold text-blue-700 dark:text-blue-300">
                         Cobrança recorrente mensal
@@ -935,6 +1014,21 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
                       <p className="mt-1 text-xs text-blue-500 dark:text-blue-500">
                         Estimativa da 1ª cobrança:{' '}
                         <strong className="text-blue-700 dark:text-blue-300">{nextBillingDate}</strong>
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Carnê: parcelas criadas no cadastro; registro na Ailos fica para Financeiro */}
+                  {pf.billing_mode === 'carne' && (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-900/40 dark:bg-amber-950/30">
+                      <p className="text-sm font-semibold text-amber-700 dark:text-amber-300">
+                        Carnê de {Number(pf.num_parcelas) || 0} parcela(s)
+                      </p>
+                      <p className="mt-1 text-sm text-amber-600 dark:text-amber-400">
+                        {Number(pf.num_parcelas) || 0} cobranças mensais de {selectedPlan ? `R$ ${Number(selectedPlan.price).toFixed(2)}` : 'valor do plano'} serão criadas junto com o contrato.
+                      </p>
+                      <p className="mt-1 text-xs text-amber-600 dark:text-amber-500">
+                        O registro dos boletos na Ailos e o PDF do carnê ficam em Financeiro → Gerar carnê.
                       </p>
                     </div>
                   )}

@@ -161,6 +161,28 @@ class TestSimulateClosure:
         assert result["already_generated"] >= 1
         assert result["to_generate"] == 0
 
+    def test_parcela_de_carne_bloqueia_mensalidade_duplicada(self, db, cliente, plan):
+        """Regressão: contrato com uma parcela de carnê no mês de referência não
+        pode gerar TAMBÉM uma mensalidade recorrente por cima (cobrança dobrada)."""
+        contract = _make_active_contract(db, cliente, plan)
+        b = Billing(
+            contract_id=contract.id,
+            client_id=cliente.id,
+            amount=plan.price,
+            due_date=date(2025, 5, 15),
+            status=BillingStatus.PENDING,
+            billing_type="carne",
+            installment_number=3,
+            installment_total=12,
+            period_label="05/2025",
+            title="Plano Teste • parcela 3/12",
+        )
+        db.add(b)
+        db.commit()
+        result = simulate_closure(db, REF_MONTH)
+        assert result["already_generated"] >= 1
+        assert result["to_generate"] == 0
+
     def test_uninstall_event_appears_in_response(self, db, cliente, veiculo):
         _make_pending_event(db, cliente, veiculo, fee_amount=Decimal("100.00"))
         result = simulate_closure(db, REF_MONTH)
