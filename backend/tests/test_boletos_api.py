@@ -8,7 +8,7 @@ impedia que fosse enviado ao cliente.
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -203,12 +203,27 @@ def test_carne_gera_pdf_com_as_parcelas_registradas(http, db, cliente):
     assert r.content[:4] == b'%PDF'
 
 
-def test_carne_ignora_parcela_nao_registrada(http, db, cliente):
-    """Parcela sem registro na Ailos não é pagável — fica de fora, mas o carnê
-    sai com as que estão prontas."""
+def test_carne_com_parcela_faltando_recusa_enquanto_recente(http, db, cliente):
+    """Carnê recém-criado com 1 de 2 parcelas registradas: recusa o download em
+    vez de servir um PDF incompleto sem avisar (era assim que o carnê "saía com
+    1 boleto só" — a parcela que faltava era simplesmente pulada em silêncio)."""
     b1 = _cobranca(db, cliente); _registrar(db, b1.id)
-    b2 = _cobranca(db, cliente)  # sem registro
+    b2 = _cobranca(db, cliente)  # sem registro ainda
     lote = _lote_carne(db, [b1.id, b2.id])
+    r = http.get(f'/api/v1/boletos/carne/{lote.id}/pdf')
+    assert r.status_code == 409
+    assert '1 de 2' in r.json()['detail']
+
+
+def test_carne_com_parcela_faltando_serve_parcial_apos_prazo(http, db, cliente):
+    """Se uma parcela nunca resolve, o download não pode ficar bloqueado para
+    sempre — depois do prazo de espera, serve o que conseguiu."""
+    b1 = _cobranca(db, cliente); _registrar(db, b1.id)
+    b2 = _cobranca(db, cliente)  # nunca chega a registrar
+    lote = _lote_carne(db, [b1.id, b2.id])
+    lote.created_at = datetime.now(timezone.utc) - timedelta(minutes=11)
+    db.commit()
+
     r = http.get(f'/api/v1/boletos/carne/{lote.id}/pdf')
     assert r.status_code == 200
     assert r.content[:4] == b'%PDF'

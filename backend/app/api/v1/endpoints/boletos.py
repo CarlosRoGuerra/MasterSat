@@ -360,8 +360,14 @@ def get_carne_pdf(
 
     Se alguma parcela ainda não tem os dados oficiais (linha digitável), tenta
     recuperá-la na Ailos antes de montar — o registro pode ter sido feito, mas
-    a consulta de status ter falhado na geração. Parcela que segue sem registro
-    fica de fora; se nenhuma estiver pronta, 409.
+    a consulta de status ter falhado na geração.
+
+    Enquanto houver parcela pendente e o prazo de espera não tiver esgotado
+    (mesmos 10 min de `_consultar_carne_por_boleto`), recusa o download em vez
+    de servir um carnê incompleto sem avisar — o carnê "gerava 1 boleto só"
+    quando baixado cedo demais, com o resto pulado em silêncio. Depois do
+    prazo, serve o que conseguiu (senão o download ficaria bloqueado para
+    sempre por uma parcela que nunca resolve do lado do banco).
     """
     lote = db.get(AilosLote, lote_id)
     if lote is None or lote.tipo != 'carne':
@@ -370,12 +376,13 @@ def get_carne_pdf(
     # Auto-recuperação: se falta linha digitável em alguma parcela, consulta a
     # Ailos (parcela por parcela). Best-effort — se a Ailos estiver fora, segue
     # com o que já houver salvo.
-    faltando = any(boleto_registrado(bid, db) is None for bid in (lote.billing_ids or []))
-    if faltando:
+    faltando_ids = [bid for bid in (lote.billing_ids or []) if boleto_registrado(bid, db) is None]
+    if faltando_ids:
         try:
             ailos_boletos.consultar_lote(db, lote)
         except Exception:  # noqa: BLE001 — download não pode depender da Ailos
             pass
+        faltando_ids = [bid for bid in (lote.billing_ids or []) if boleto_registrado(bid, db) is None]
 
     parcelas: list[DadosBoleto] = []
     # A ordem das parcelas é a ordem em que os billing_ids foram enviados.
@@ -396,6 +403,14 @@ def get_carne_pdf(
             status_code=409,
             detail='Nenhuma parcela deste carnê está registrada na Ailos ainda. '
                    'Aguarde o processamento e tente novamente em instantes.',
+        )
+
+    if faltando_ids and not ailos_boletos.carne_prazo_esgotado(lote):
+        raise HTTPException(
+            status_code=409,
+            detail=f'{len(parcelas)} de {len(lote.billing_ids or [])} parcelas prontas — '
+                   'as demais ainda estão sendo processadas na Ailos. '
+                   'Aguarde e tente novamente em instantes.',
         )
 
     return Response(

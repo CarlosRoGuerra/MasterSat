@@ -427,6 +427,20 @@ def consultar_boleto(db: Session, numero_boleto: str) -> dict | list | None:
     return resp.json
 
 
+CARNE_PRAZO_ESPERA = timedelta(minutes=10)
+
+
+def carne_prazo_esgotado(lote: AilosLote) -> bool:
+    """True quando já passou tempo suficiente desde a criação do lote para
+    desistir de esperar as parcelas que ainda não confirmaram (usado tanto
+    para fechar o status do lote quanto para decidir se o PDF pode sair
+    parcial em vez de recusar o download)."""
+    criado_em = lote.created_at
+    if criado_em.tzinfo is None:
+        criado_em = criado_em.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - criado_em) > CARNE_PRAZO_ESPERA
+
+
 def _consultar_carne_por_boleto(db: Session, lote: AilosLote) -> dict:
     """
     Recupera as parcelas de um carnê consultando cada boleto individualmente
@@ -469,12 +483,7 @@ def _consultar_carne_por_boleto(db: Session, lote: AilosLote) -> dict:
     if resolvidos == 0:
         return {'status': 'processing'}
 
-    criado_em = lote.created_at
-    if criado_em.tzinfo is None:
-        criado_em = criado_em.replace(tzinfo=timezone.utc)
-    prazo_esgotado = (datetime.now(timezone.utc) - criado_em) > timedelta(minutes=10)
-
-    if resolvidos < total and not prazo_esgotado:
+    if resolvidos < total and not carne_prazo_esgotado(lote):
         return {'status': 'processing'}
 
     lote.status = 'completed'
