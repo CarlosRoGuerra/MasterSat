@@ -1,6 +1,7 @@
 'use client';
 
 import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { AlertTriangle } from 'lucide-react';
 
 import { ClientAutocomplete } from '@/components/ui/client-autocomplete';
 import { PageShell } from '@/components/page-shell';
@@ -152,6 +153,7 @@ function typeLabel(value: OrderType) {
 function OSTable({
   orders,
   loading,
+  error,
   canEdit,
   onDetails,
   onEdit,
@@ -160,6 +162,7 @@ function OSTable({
 }: {
   orders: ServiceOrder[];
   loading: boolean;
+  error?: string;
   canEdit: boolean;
   onDetails: (o: ServiceOrder) => void;
   onEdit: (o: ServiceOrder) => void;
@@ -169,6 +172,7 @@ function OSTable({
   const pg = usePagination(orders, 20);
 
   if (loading) return <TableSkeleton rows={8} cols={5} />;
+  if (error) return <EmptyState icon={AlertTriangle} tone="warning" title="Não foi possível carregar as ordens" description="Veja o erro acima e tente novamente." />;
   if (orders.length === 0) return <EmptyState title="Nenhuma ordem encontrada" description="Ajuste os filtros ou abra uma nova OS." />;
 
   return (
@@ -532,6 +536,7 @@ export default function ServiceOrdersPage() {
             <OSTable
               orders={orders}
               loading={loading}
+              error={error}
               canEdit={canEdit}
               onDetails={(o) => {
                 setSelectedOrder(o);

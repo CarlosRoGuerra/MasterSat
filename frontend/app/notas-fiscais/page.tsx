@@ -234,12 +234,12 @@ export default function NotasFiscaisPage() {
   /* ── Carregamentos ── */
   const carregarResumo = useCallback(() => {
     if (!token) return;
-    apiFetch<Resumo>('/nfse/resumo', {}, token).then(setResumo).catch(() => {});
+    apiFetch<Resumo>('/nfse/resumo', {}, token).then(setResumo).catch((e) => setError(parseErr(e)));
   }, [token]);
 
   const carregarLotes = useCallback(() => {
     if (!token) return;
-    apiFetch<LoteResumo[]>('/nfse/lotes', {}, token).then(setLotes).catch(() => {});
+    apiFetch<LoteResumo[]>('/nfse/lotes', {}, token).then(setLotes).catch((e) => setError(parseErr(e)));
   }, [token]);
 
   // Busca no servidor: espera parar de digitar para não disparar uma
@@ -260,7 +260,7 @@ export default function NotasFiscaisPage() {
   const carregarCertificado = useCallback(() => {
     if (!token) return;
     apiFetch<Certificado | null>('/nfse/certificado', {}, token)
-      .then(setCertificado).catch(() => {});
+      .then(setCertificado).catch((e) => setError(parseErr(e)));
   }, [token]);
 
   useEffect(() => { carregarResumo(); carregarLotes(); carregarCertificado(); },
@@ -577,7 +577,11 @@ export default function NotasFiscaisPage() {
             </div>
           </div>
 
-          {!notas || notas.itens.length === 0 ? (
+          {error ? (
+            <div className="p-6">
+              <EmptyState icon={AlertTriangle} tone="warning" title="Não foi possível carregar as notas" description="Veja o erro acima e tente novamente." />
+            </div>
+          ) : !notas || notas.itens.length === 0 ? (
             <div className="p-6">
               <EmptyState icon={Receipt} title="Nenhuma nota encontrada"
                           description="As NFS-e emitidas aparecerão aqui." />
@@ -677,7 +681,11 @@ export default function NotasFiscaisPage() {
               <Button onClick={() => setAba('gerar')}><Plus className="h-4 w-4" /> Gerar</Button>
             </div>
           </div>
-          {lotes.length === 0 ? (
+          {error ? (
+            <div className="p-6">
+              <EmptyState icon={AlertTriangle} tone="warning" title="Não foi possível carregar os lotes" description="Veja o erro acima e tente novamente." />
+            </div>
+          ) : lotes.length === 0 ? (
             <div className="p-6">
               <EmptyState icon={Layers} title="Nenhum lote emitido"
                           description="Os lotes de NFS-e emitidos aparecerão aqui." />

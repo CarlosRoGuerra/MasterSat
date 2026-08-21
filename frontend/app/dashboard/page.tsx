@@ -436,7 +436,14 @@ export default function DashboardPage() {
           <Card>
             <SectionHeader eyebrow="Atenção" title="Próximos vencimentos" description="Cobranças nos próximos 7 dias." />
             <div className="mt-4">
-              {!data ? (
+              {error ? (
+                // Sem 'data' e SEM tentativa em andamento — não deixa o
+                // skeleton girando pra sempre quando a carga falhou de vez.
+                <div className="flex flex-col items-center gap-2 py-6">
+                  <AlertTriangle className="h-8 w-8 text-amber-400 dark:text-amber-500" strokeWidth={1.5} />
+                  <p className="text-[13px] font-medium text-slate-500 dark:text-slate-400">Não foi possível carregar — veja o erro acima</p>
+                </div>
+              ) : !data ? (
                 <div className="space-y-2">
                   {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
                 </div>

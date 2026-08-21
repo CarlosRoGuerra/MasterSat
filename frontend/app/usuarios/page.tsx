@@ -1,7 +1,7 @@
 'use client';
 
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { ShieldCheck, Plus, Pencil, Trash2, RefreshCw } from 'lucide-react';
+import { ShieldCheck, Plus, Pencil, Trash2, RefreshCw, AlertTriangle } from 'lucide-react';
 
 import { PageShell } from '@/components/page-shell';
 import { Button } from '@/components/ui/button';
@@ -138,6 +138,8 @@ export default function UsersPage() {
 
           {loading || guardLoading ? (
             <TableSkeleton rows={5} cols={4} />
+          ) : error ? (
+            <EmptyState icon={AlertTriangle} tone="warning" title="Não foi possível carregar os usuários" description="Veja o erro acima e tente novamente." />
           ) : filtered.length === 0 ? (
             <EmptyState
               icon={ShieldCheck}

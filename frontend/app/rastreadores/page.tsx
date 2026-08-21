@@ -1,6 +1,7 @@
 'use client';
 
 import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { AlertTriangle } from 'lucide-react';
 
 import { PageShell } from '@/components/page-shell';
 import { Card } from '@/components/ui/card';
@@ -152,12 +153,14 @@ function friendlyAction(value: string) {
 function RastreadoresTableContent({
   trackers,
   loading,
+  error,
   canEdit,
   onDetails,
   onEdit,
 }: {
   trackers: Tracker[];
   loading: boolean;
+  error?: string;
   canEdit: boolean;
   onDetails: (t: Tracker) => void;
   onEdit: (t: Tracker) => void;
@@ -165,6 +168,7 @@ function RastreadoresTableContent({
   const pg = usePagination(trackers, 20);
 
   if (loading) return <TableSkeleton rows={8} cols={5} />;
+  if (error) return <EmptyState icon={AlertTriangle} tone="warning" title="Não foi possível carregar os rastreadores" description="Veja o erro acima e tente novamente." />;
   if (trackers.length === 0) return <EmptyState title="Nenhum rastreador encontrado" description="Ajuste os filtros ou adicione um novo rastreador." />;
 
   return (
@@ -566,6 +570,7 @@ export default function RastreadoresPage() {
             <RastreadoresTableContent
               trackers={trackers}
               loading={loading}
+              error={error}
               canEdit={canEdit}
               onDetails={(t) => { setSelectedTracker(t); setDetailsTab('dados'); setDetailsOpen(true); }}
               onEdit={openEditModal}

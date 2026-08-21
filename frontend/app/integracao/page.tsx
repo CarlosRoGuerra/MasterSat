@@ -225,7 +225,9 @@ export default function IntegracaoPage() {
         <Card>
           <SectionHeader eyebrow="Ações" title="Sincronização por rastreador" description="Execute o fluxo completo (cliente → veículo → equipamento → vínculo) ou só o equipamento isoladamente." />
           <div className="mt-5 space-y-3 max-h-[420px] overflow-y-auto pr-1">
-            {trackers.length === 0 ? (
+            {error ? (
+              <p className="flex items-center gap-2 text-sm text-slate-500"><AlertTriangle className="h-4 w-4 text-amber-500" />Não foi possível carregar — veja o erro acima.</p>
+            ) : trackers.length === 0 ? (
               <p className="text-sm text-slate-500">Nenhum rastreador cadastrado.</p>
             ) : trackers.map((t) => (
               <div key={t.id} className="rounded-[24px] border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60">
@@ -343,7 +345,9 @@ export default function IntegracaoPage() {
             }
           />
           <div className="mt-5 space-y-2">
-            {filteredLogs.length === 0 ? (
+            {error ? (
+              <p className="flex items-center gap-2 text-sm text-slate-500"><AlertTriangle className="h-4 w-4 text-amber-500" />Não foi possível carregar — veja o erro acima.</p>
+            ) : filteredLogs.length === 0 ? (
               <p className="text-sm text-slate-500">Nenhum log encontrado com o filtro selecionado.</p>
             ) : filteredLogs.map((entry) => {
               const expanded = expandedLogs.has(entry.id);

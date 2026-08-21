@@ -17,7 +17,7 @@ import { EmptyState, TableSkeleton } from '@/components/ui/empty-state';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { FormField, FormGrid } from '@/components/ui/form-field';
-import { Eye, DollarSign, ClipboardList, Pencil, CreditCard, Zap, Building2, Banknote, FileText as FileBillet, Search, X } from 'lucide-react';
+import { Eye, DollarSign, ClipboardList, Pencil, CreditCard, Zap, Building2, Banknote, FileText as FileBillet, Search, X, AlertTriangle } from 'lucide-react';
 import { ExportButton } from '@/components/ui/export-button';
 import { apiFetch } from '@/lib/api';
 import { fetchAddressByCep } from '@/lib/cep';
@@ -1151,6 +1151,8 @@ export default function VeiculosPage() {
           <div className="mt-4">
             {loading ? (
               <TableSkeleton rows={7} cols={5} />
+            ) : error ? (
+              <EmptyState icon={AlertTriangle} tone="warning" title="Não foi possível carregar os veículos" description="Veja o erro acima e tente novamente." />
             ) : vehicles.length === 0 ? (
               <EmptyState title="Nenhum veículo encontrado" description="Ajuste os filtros ou cadastre o primeiro veículo." action={canEdit ? <Button onClick={() => setWizardOpen(true)}>Adicionar veículo</Button> : undefined} />
             ) : (

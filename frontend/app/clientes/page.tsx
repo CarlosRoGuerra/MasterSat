@@ -1358,6 +1358,11 @@ export default function ClientesPage() {
           <div className="mt-4">
             {loading ? (
               <TableSkeleton rows={7} cols={5} />
+            ) : error ? (
+              // Falha ao carregar não é a mesma coisa que "zero clientes" — o
+              // banner de erro acima já explica o problema; aqui só evitamos o
+              // CTA "cadastre o primeiro cliente" que contradiria o erro.
+              <EmptyState icon={AlertTriangle} tone="warning" title="Não foi possível carregar os clientes" description="Veja o erro acima e tente novamente." />
             ) : clients.length === 0 ? (
               <EmptyState icon={Users} title="Nenhum cliente encontrado" description="Ajuste os filtros ou cadastre o primeiro cliente." action={canEdit ? <Button onClick={openCreateModal} className="gap-2"><Plus className="h-4 w-4" />Adicionar cliente</Button> : undefined} />
             ) : (

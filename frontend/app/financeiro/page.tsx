@@ -23,6 +23,9 @@ import { useAuthGuard } from '@/lib/use-auth-guard';
 import { useDebouncedValue, useEffectSkipFirst } from '@/lib/use-debounced-value';
 
 /* ── Types ──────────────────────────────────────────────────────────── */
+const TAB_ORDER = ['menu', 'overview', 'management', 'payables'] as const;
+type FinanceiroTab = (typeof TAB_ORDER)[number];
+
 type BillingInterval = 1 | 3 | 6 | 12;
 type BillingStatus = 'pendente' | 'paga' | 'vencida' | 'cancelada';
 
@@ -310,6 +313,7 @@ function GroupedContractsTable({
 function BillingTableSection({
   billings,
   loading,
+  error,
   billingView,
   billingSearch,
   billingStatusFilter,
@@ -330,6 +334,7 @@ function BillingTableSection({
 }: {
   billings: Billing[];
   loading: boolean;
+  error?: string;
   billingView: 'alert' | 'all';
   billingSearch: string;
   billingStatusFilter: string;
@@ -406,7 +411,10 @@ function BillingTableSection({
       )}
 
       <div className="mt-4">
-        {loading ? <TableSkeleton rows={8} cols={5} /> : list.length === 0 ? (
+        {loading ? <TableSkeleton rows={8} cols={5} /> : error ? (
+          // "Todas em dia" seria uma mentira tranquilizadora se a carga falhou.
+          <EmptyState icon={AlertTriangle} tone="warning" title="Não foi possível carregar as cobranças" description="Veja o erro acima e tente novamente." />
+        ) : list.length === 0 ? (
           <EmptyState icon={CheckCircle2} title={billingView === 'alert' ? 'Nenhuma cobrança urgente' : 'Nenhuma cobrança encontrada'} description={billingView === 'alert' ? 'Todas as cobranças estão em dia.' : 'Tente ajustar os filtros.'} />
         ) : (
           <>
@@ -574,12 +582,12 @@ export default function FinanceiroPage() {
   const [adjustModal, setAdjustModal] = useState(false);
 
   // Tab navigation with URL sync
-  const [activeTab, setActiveTab] = useState<'menu' | 'overview' | 'management' | 'payables'>('menu');
+  const [activeTab, setActiveTab] = useState<FinanceiroTab>('menu');
 
   // Plans table sort
   const [planSort, setPlanSort] = useState<{ field: 'name' | 'price' | 'active_contracts'; dir: 'asc' | 'desc' }>({ field: 'name', dir: 'asc' });
 
-  function switchTab(tab: 'menu' | 'overview' | 'management' | 'payables') {
+  function switchTab(tab: FinanceiroTab) {
     setActiveTab(tab);
     if (typeof window === 'undefined') return;
     const url = new URL(window.location.href);
@@ -1363,11 +1371,33 @@ export default function FinanceiroPage() {
       )}
 
       {/* ── 2. Tab navigation ── */}
-      <div className="mb-6 flex gap-1 rounded-2xl border border-slate-200 bg-slate-50 p-1 dark:border-slate-800 dark:bg-slate-900/60">
-        {(['menu', 'overview', 'management', 'payables'] as const).map(tab => (
+      <div
+        role="tablist"
+        aria-label="Seções do Financeiro"
+        className="mb-6 flex gap-1 rounded-2xl border border-slate-200 bg-slate-50 p-1 dark:border-slate-800 dark:bg-slate-900/60"
+        onKeyDown={(e) => {
+          if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+          e.preventDefault();
+          const idx = TAB_ORDER.indexOf(activeTab);
+          const next =
+            e.key === 'Home' ? 0
+            : e.key === 'End' ? TAB_ORDER.length - 1
+            : e.key === 'ArrowLeft' ? (idx - 1 + TAB_ORDER.length) % TAB_ORDER.length
+            : (idx + 1) % TAB_ORDER.length;
+          const nextTab = TAB_ORDER[next];
+          switchTab(nextTab);
+          document.getElementById(`financeiro-tab-${nextTab}`)?.focus();
+        }}
+      >
+        {TAB_ORDER.map((tab) => (
           <button
             key={tab}
             type="button"
+            id={`financeiro-tab-${tab}`}
+            role="tab"
+            aria-selected={activeTab === tab}
+            aria-controls={`financeiro-panel-${tab}`}
+            tabIndex={activeTab === tab ? 0 : -1}
             onClick={() => switchTab(tab)}
             className={[
               'flex-1 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all',
@@ -1385,7 +1415,7 @@ export default function FinanceiroPage() {
           TAB: Menu (grade de atalhos no padrão do sistema de referência)
       ══════════════════════════════════════════════════════════════ */}
       {activeTab === 'menu' && (
-        <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <section id="financeiro-panel-menu" role="tabpanel" aria-labelledby="financeiro-tab-menu" tabIndex={0} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {([
             { label: 'Fechamento', Icon: Lock, run: () => { window.location.href = '/fechamento'; } },
             { label: 'Alterar situação boleto', Icon: PenSquare, run: () => setCarteiraMode('situacao') },
@@ -1418,7 +1448,7 @@ export default function FinanceiroPage() {
           TAB: Visão Geral
       ══════════════════════════════════════════════════════════════ */}
       {activeTab === 'overview' && (
-        <>
+        <div id="financeiro-panel-overview" role="tabpanel" aria-labelledby="financeiro-tab-overview" tabIndex={0}>
           <section className="space-y-6">
             {/* CNAB export buttons */}
             {token && canEdit && (
@@ -1458,6 +1488,7 @@ export default function FinanceiroPage() {
             <BillingTableSection
               billings={billings}
               loading={loading}
+              error={error}
               billingView={billingView}
               billingSearch={billingSearch}
               billingStatusFilter={billingStatusFilter}
@@ -1518,7 +1549,12 @@ export default function FinanceiroPage() {
                     Clientes inadimplentes{delinquents.length > 0 ? ` (${delinquents.length})` : ''}
                   </p>
                   <div className="space-y-2">
-                    {delinquents.length === 0 ? (
+                    {error ? (
+                      <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+                        <AlertTriangle className="h-4 w-4 text-amber-500" />
+                        Não foi possível carregar — veja o erro acima.
+                      </div>
+                    ) : delinquents.length === 0 ? (
                       <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
                         <CheckCircle2 className="h-4 w-4 text-emerald-500" />
                         Nenhum cliente inadimplente no momento.
@@ -1540,14 +1576,14 @@ export default function FinanceiroPage() {
               </div>
             </Card>
           </section>
-        </>
+        </div>
       )}
 
       {/* ══════════════════════════════════════════════════════════════
           TAB: Planos e Contratos
       ══════════════════════════════════════════════════════════════ */}
       {activeTab === 'management' && (
-        <section className="space-y-6">
+        <section id="financeiro-panel-management" role="tabpanel" aria-labelledby="financeiro-tab-management" tabIndex={0} className="space-y-6">
           {/* Quick actions */}
           <Card>
             <SectionHeader
@@ -1573,7 +1609,9 @@ export default function FinanceiroPage() {
                 Adicionar plano
               </Button>
             </div>
-            {plans.length === 0 ? (
+            {error ? (
+              <EmptyState icon={AlertTriangle} tone="warning" title="Não foi possível carregar os planos" description="Veja o erro acima e tente novamente." />
+            ) : plans.length === 0 ? (
               <EmptyState title="Nenhum plano" description="Crie o primeiro plano de serviço." />
             ) : (
               <Table>
@@ -1637,7 +1675,9 @@ export default function FinanceiroPage() {
                 Adicionar serviço
               </Button>
             </div>
-            {serviceProducts.length === 0 ? (
+            {error ? (
+              <EmptyState icon={AlertTriangle} tone="warning" title="Não foi possível carregar os serviços" description="Veja o erro acima e tente novamente." />
+            ) : serviceProducts.length === 0 ? (
               <EmptyState title="Nenhum serviço" description="Cadastre os serviços cobrados (instalação, desinstalação, visita técnica…)." />
             ) : (
               <Table>
@@ -1701,7 +1741,7 @@ export default function FinanceiroPage() {
           TAB: Contas a Pagar
       ══════════════════════════════════════════════════════════════ */}
       {activeTab === 'payables' && (
-        <section className="space-y-6">
+        <section id="financeiro-panel-payables" role="tabpanel" aria-labelledby="financeiro-tab-payables" tabIndex={0} className="space-y-6">
           <Card>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <SectionHeader eyebrow="Contas a Pagar" title="Despesas da empresa" />
@@ -1806,6 +1846,7 @@ export default function FinanceiroPage() {
             <BillingTableSection
               billings={billings}
               loading={loading}
+              error={error}
               billingView="all"
               billingSearch={billingSearch}
               billingStatusFilter={billingStatusFilter}

@@ -261,6 +261,8 @@ export default function AuditoriaPage() {
         <div className="mt-5">
           {loading || guardLoading ? (
             <TableSkeleton rows={10} cols={5} />
+          ) : error ? (
+            <EmptyState icon={AlertTriangle} tone="warning" title="Não foi possível carregar a auditoria" description="Veja o erro acima e tente novamente." />
           ) : filtered.length === 0 ? (
             <EmptyState
               icon={Shield}

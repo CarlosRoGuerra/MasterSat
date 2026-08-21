@@ -616,6 +616,15 @@ export default function RelatoriosPage() {
               <div className="space-y-2">
                 {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
               </div>
+            ) : error ? (
+              // "Tudo certo" verde não pode aparecer quando a carga FALHOU — o
+              // operador leria como "sem inadimplentes" quando, na verdade, o
+              // relatório nem chegou a carregar.
+              <div className="flex flex-col items-center gap-2 py-10">
+                <AlertTriangle className="h-10 w-10 text-amber-400 dark:text-amber-500" strokeWidth={1.5} />
+                <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Não foi possível carregar a inadimplência</p>
+                <p className="text-xs text-slate-400">Veja o erro acima e tente novamente.</p>
+              </div>
             ) : delinquents.length === 0 ? (
               /* ── All-clear empty state ── */
               <div className="flex flex-col items-center gap-2 py-10">
