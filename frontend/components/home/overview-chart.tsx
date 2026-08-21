@@ -169,26 +169,32 @@ export function OverviewChart({ data }: { data: OverviewPoint[] }) {
         )}
       </div>
 
-      {/* Tabela acessível para leitores de tela */}
-      <table className="sr-only">
-        <caption>Evolução mensal de entregas realizadas e veículos ativos</caption>
-        <thead>
-          <tr>
-            <th scope="col">Mês</th>
-            <th scope="col">Entregas realizadas</th>
-            <th scope="col">Veículos ativos</th>
-          </tr>
-        </thead>
-        <tbody>
-          {data.map((d) => (
-            <tr key={d.month}>
-              <th scope="row">{d.month}</th>
-              <td>{d.deliveries}</td>
-              <td>{d.activeVehicles}</td>
+      {/* Tabela acessível para leitores de tela.
+          A classe sr-only vai no <div> que envolve a tabela, não na <table>
+          diretamente: o box model de display:table de alguns navegadores não
+          respeita bem position:absolute do sr-only, e a tabela "invisível"
+          acaba inflando a largura rolável da página no mobile. */}
+      <div className="sr-only">
+        <table>
+          <caption>Evolução mensal de entregas realizadas e veículos ativos</caption>
+          <thead>
+            <tr>
+              <th scope="col">Mês</th>
+              <th scope="col">Entregas realizadas</th>
+              <th scope="col">Veículos ativos</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {data.map((d) => (
+              <tr key={d.month}>
+                <th scope="row">{d.month}</th>
+                <td>{d.deliveries}</td>
+                <td>{d.activeVehicles}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

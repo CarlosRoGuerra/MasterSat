@@ -1,8 +1,11 @@
 'use client';
 
-import { ReactNode, useEffect } from 'react';
+import { ReactNode, useEffect, useId, useRef } from 'react';
 import { X } from 'lucide-react';
 import clsx from 'clsx';
+
+const FOCUSABLE_SELECTOR =
+  'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 export function Modal({
   open,
@@ -23,13 +26,56 @@ export function Modal({
   size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl';
   footer?: ReactNode;
 }) {
+  const titleId = useId();
+  const descriptionId = useId();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLElement | null>(null);
+
   useEffect(() => {
     if (!open) return;
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+
+    // Guarda o elemento com foco antes de abrir, para devolver o foco a ele
+    // ao fechar (senão o teclado "perde o lugar" depois de fechar a modal).
+    triggerRef.current = document.activeElement as HTMLElement | null;
+    // Foco inicial no próprio contêiner do diálogo — não assume qual é o
+    // "primeiro campo certo" em conteúdos tão variados quanto os deste app.
+    const focusTimer = window.setTimeout(() => dialogRef.current?.focus(), 0);
+
+    function handler(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        onClose();
+        return;
+      }
+      if (e.key !== 'Tab' || !dialogRef.current) return;
+
+      // Focus trap: Tab/Shift+Tab não escapam da modal enquanto ela está aberta.
+      const focusable = Array.from(
+        dialogRef.current.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
+      ).filter((el) => el.offsetParent !== null);
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement as HTMLElement | null;
+
+      if (e.shiftKey) {
+        if (active === first || !dialogRef.current.contains(active)) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else if (active === last || !dialogRef.current.contains(active)) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
     window.addEventListener('keydown', handler);
-    return () => { document.body.style.overflow = prev; window.removeEventListener('keydown', handler); };
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener('keydown', handler);
+      window.clearTimeout(focusTimer);
+      triggerRef.current?.focus?.();
+    };
   }, [open, onClose]);
 
   if (!open) return null;
@@ -50,8 +96,15 @@ export function Modal({
       onMouseDown={onClose}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={description ? descriptionId : undefined}
+        tabIndex={-1}
         className={clsx(
-          'flex max-h-[90vh] w-full flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-elevated dark:border-slate-800 dark:bg-slate-900',
+          'flex max-h-[90vh] w-full flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-elevated',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40 dark:border-slate-800 dark:bg-slate-900',
           widths[size],
         )}
         onMouseDown={(e) => e.stopPropagation()}
@@ -64,9 +117,9 @@ export function Modal({
                 {subtitle}
               </p>
             )}
-            <h3 className="text-lg font-semibold text-slate-900 dark:text-white">{title}</h3>
+            <h3 id={titleId} className="text-lg font-semibold text-slate-900 dark:text-white">{title}</h3>
             {description && (
-              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{description}</p>
+              <p id={descriptionId} className="mt-1 text-sm text-slate-500 dark:text-slate-400">{description}</p>
             )}
           </div>
           <button
