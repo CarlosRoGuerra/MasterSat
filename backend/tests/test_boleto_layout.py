@@ -146,3 +146,39 @@ def test_recibo_tem_assinatura():
     fim_sem = boleto_pdf._draw_bloco_cobranca(
         c, _dados(), topo, titulo='X', rotulo_total='X:', com_assinatura=False)
     assert fim_sem > fim_com
+
+
+# ---------------------------------------------------------------------------
+# Carnê — modelo Hinova/Itaú de referência: canhoto + ficha compactos,
+# 3 parcelas por página A4 (era 2, com muito espaço vazio sobrando).
+# ---------------------------------------------------------------------------
+
+def _parcelas(n: int):
+    return [_dados(billing_id=100 + i, vencimento=date(2027 + (i // 12), (i % 12) + 1, 15)) for i in range(n)]
+
+
+def test_carne_cabe_3_por_pagina():
+    """Regressão de densidade: 7 parcelas devem ocupar 3 páginas (3+3+1),
+    não 4 (3+2+2 ou pior) — era o sintoma de um carnê 'espalhado'."""
+    from pypdf import PdfReader
+    pdf = boleto_pdf.gerar_carne_pdf(_parcelas(7))
+    assert pdf[:4] == b'%PDF'
+    assert len(PdfReader(io.BytesIO(pdf)).pages) == 3
+
+
+@pytest.mark.parametrize('n,paginas', [(1, 1), (3, 1), (4, 2), (6, 2), (9, 3)])
+def test_carne_paginacao_por_n_parcelas(n, paginas):
+    from pypdf import PdfReader
+    pdf = boleto_pdf.gerar_carne_pdf(_parcelas(n))
+    assert len(PdfReader(io.BytesIO(pdf)).pages) == paginas
+
+
+def test_carne_traz_numero_da_parcela():
+    """'Parcela X/N' no cabeçalho — é o que diferencia uma ficha da outra
+    num carnê de várias mensalidades iguais."""
+    from pypdf import PdfReader
+    pdf = boleto_pdf.gerar_carne_pdf(_parcelas(3))
+    texto = ''.join(p.extract_text() or '' for p in PdfReader(io.BytesIO(pdf)).pages)
+    assert 'Parcela 1/3' in texto
+    assert 'Parcela 2/3' in texto
+    assert 'Parcela 3/3' in texto
