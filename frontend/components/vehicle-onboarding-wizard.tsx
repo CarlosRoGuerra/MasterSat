@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { ClientAutocomplete } from '@/components/ui/client-autocomplete';
 import { TrackerAutocomplete } from '@/components/ui/tracker-autocomplete';
 import { BillingDayInput } from '@/components/ui/billing-day-input';
+import { CarneTrackingModal, useCarneTracking } from '@/components/carne-tracking-modal';
 import { apiFetch } from '@/lib/api';
 import { fetchAddressByCep } from '@/lib/cep';
 import { formatZipCode, onlyDigits } from '@/lib/format';
@@ -176,6 +177,22 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
   const [pf, setPf] = useState({ plan_id: '', payment_method: 'boleto', billing_day: '', billing_mode: 'recorrente' as 'recorrente' | 'carne', num_parcelas: '12' });
   const [selectedProductIds, setSelectedProductIds] = useState<number[]>([]);
 
+  // Ao escolher pagamento em carnê, a confirmação abre o acompanhamento de
+  // registro na Ailos (mesma tela usada em Financeiro) em vez de só criar as
+  // parcelas locais e fechar o assistente. carneIniciado marca que entramos
+  // nesse fluxo, para o efeito abaixo saber que o fechamento do
+  // acompanhamento (não o carregamento inicial) é que deve concluir o
+  // assistente.
+  const carne = useCarneTracking(token);
+  const [carneIniciado, setCarneIniciado] = useState(false);
+
+  useEffect(() => {
+    if (carneIniciado && !carne.track) {
+      setCarneIniciado(false);
+      onComplete();
+    }
+  }, [carne.track, carneIniciado]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Load remote data once on open
   useEffect(() => {
     if (!open || !token) return;
@@ -342,8 +359,9 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
 
       // Carnê: cria as N parcelas já de uma vez (o fechamento mensal reconhece
       // essas parcelas pelo period_label e não gera mensalidade em cima delas).
+      let parcelasCarne: { id: number }[] = [];
       if (carneMode) {
-        await apiFetch(
+        parcelasCarne = await apiFetch<{ id: number }[]>(
           '/billings/parcelar',
           {
             method: 'POST',
@@ -383,10 +401,25 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
         }),
       );
 
+      // Carnê: abre o acompanhamento de registro na Ailos em vez de fechar o
+      // assistente na hora — sem isso, as parcelas ficavam criadas mas sem
+      // boleto real gerado até alguém lembrar de ir em Financeiro fazer isso
+      // manualmente. onComplete() só é chamado quando o acompanhamento fechar
+      // (ver o efeito que observa carne.track).
+      if (carneMode && parcelasCarne.length > 0) {
+        setCarneIniciado(true);
+        setSaving(false);
+        await carne.iniciar(parcelasCarne.map(b => b.id));
+        return;
+      }
+
       onComplete();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erro ao confirmar contratação.');
-    } finally { setSaving(false); }
+      setSaving(false);
+      return;
+    }
+    setSaving(false);
   }
 
   /* ── CEP lookup ── */
@@ -440,6 +473,14 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
 
   if (!open) return null;
 
+  // Não fecha o assistente enquanto o carnê está sendo registrado/acompanhado
+  // na Ailos — fechar aqui derrubaria o acompanhamento em voo (fica embutido
+  // no ciclo de vida deste componente, controlado pelo "open" do pai).
+  function handleClose() {
+    if (carne.track) return;
+    onClose();
+  }
+
   const selectedTracker = stockTrackers.find(t => String(t.id) === tf.tracker_id);
 
   return (
@@ -458,7 +499,7 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
               </h2>
             </div>
             <button
-              onClick={onClose}
+              onClick={handleClose}
               className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-slate-400 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800"
             >
               <X className="h-4 w-4" />
@@ -1157,6 +1198,8 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
           )}
         </div>
       </div>
+
+      <CarneTrackingModal carne={carne} />
     </div>
   );
 }

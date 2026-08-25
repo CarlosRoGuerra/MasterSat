@@ -275,6 +275,34 @@ def test_lista_carnes_do_cliente(http, db, cliente):
     assert carnes[0]['ticket'] == lote.ticket
 
 
+def test_lista_carnes_traz_situacao_de_pagamento_por_parcela(http, db, cliente):
+    """A tela de 'Carnês gerados' precisa saber quais parcelas já foram pagas
+    e quais ainda faltam — não só quantas foram registradas na Ailos."""
+    b1 = _cobranca(db, cliente); _registrar(db, b1.id)
+    b2 = _cobranca(db, cliente); _registrar(db, b2.id)
+    b1.status = BillingStatus.PAID
+    b1.payment_date = date.today()
+    b1.installment_number = 1
+    b2.installment_number = 2
+    db.commit()
+    lote = _lote_carne(db, [b1.id, b2.id])
+    for bid in (b1.id, b2.id):
+        ab = db.query(AilosBoleto).filter_by(billing_id=bid).first()
+        ab.lote_id = lote.id
+    db.commit()
+
+    r = http.get(f'/api/v1/boletos/carne?client_id={cliente.id}')
+    assert r.status_code == 200
+    carne = r.json()[0]
+    assert carne['parcelas_pagas'] == 1
+    assert carne['valor_pago'] == pytest.approx(float(b1.amount))
+    detalhe_by_billing = {p['billing_id']: p for p in carne['parcelas_detalhe']}
+    assert detalhe_by_billing[b1.id]['status'] == 'paga'
+    assert detalhe_by_billing[b1.id]['data_pagamento'] == date.today().isoformat()
+    assert detalhe_by_billing[b2.id]['status'] == 'pendente'
+    assert detalhe_by_billing[b2.id]['data_pagamento'] is None
+
+
 def test_lista_carne_nao_vaza_de_outro_cliente(http, db, cliente, outro_cliente):
     b = _cobranca(db, cliente); _registrar(db, b.id)
     lote = _lote_carne(db, [b.id])

@@ -1,7 +1,7 @@
 'use client';
 
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { Users, AlertTriangle, Building2, CheckCircle2, FileText, Wrench, CheckCircle, Clock, AlertCircle, Download, Plus, Trash2, Car, Coins, DollarSign, Flag, Mail, MessageCircle, PawPrint, Pencil, Printer, Receipt, Search } from 'lucide-react';
+import { Users, AlertTriangle, Building2, CheckCircle2, FileText, Wrench, CheckCircle, Clock, AlertCircle, Download, Plus, Trash2, Car, Coins, DollarSign, Flag, Mail, MessageCircle, PawPrint, Pencil, Printer, Receipt, Search, ChevronDown, ChevronRight } from 'lucide-react';
 
 import { PageShell } from '@/components/page-shell';
 import { Card } from '@/components/ui/card';
@@ -114,13 +114,26 @@ type BillingItem = {
   boleto_ailos?: boolean;
 };
 
+type CarneParcelaDetalhe = {
+  billing_id: number;
+  numero_parcela: number | null;
+  vencimento: string | null;
+  valor: number;
+  status: string;
+  data_pagamento: string | null;
+};
+
 type CarneItem = {
   lote_id: number;
+  ticket?: string | null;
   criado_em?: string | null;
   parcelas: number;
   parcelas_registradas: number;
+  parcelas_pagas: number;
   total: number;
+  valor_pago: number;
   status: string;
+  parcelas_detalhe: CarneParcelaDetalhe[];
 };
 
 type IntervContract = { id: number; client_name?: string | null; vehicle_plate?: string | null; plan_name?: string | null; status: string; monthly_value?: number | null };
@@ -419,8 +432,10 @@ export default function ClientesPage() {
   // Seleção múltipla de boletos (soma para pagamento em lote)
   const [selectedBillingIds, setSelectedBillingIds] = useState<number[]>([]);
   const [gerandoCarne, setGerandoCarne] = useState(false);
-  // Carnês já gerados do cliente (reabrir/baixar)
+  // Carnês já gerados do cliente (reabrir/baixar) — carneExpandido controla
+  // qual card está com o detalhe por parcela (pago/pendente) aberto.
   const [carnes, setCarnes] = useState<CarneItem[]>([]);
+  const [carneExpandido, setCarneExpandido] = useState<number | null>(null);
 
   // Unificação de boletos (negociação: N boletos abertos → 1 avulso)
   const [unifyOpen, setUnifyOpen] = useState(false);
@@ -2275,17 +2290,57 @@ export default function ClientesPage() {
               {carnes.map((c) => {
                 const fmt = (v: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v);
                 const prontas = c.parcelas_registradas >= c.parcelas;
+                const quitado = c.parcelas_pagas >= c.parcelas;
+                const aberto = carneExpandido === c.lote_id;
                 return (
-                  <div key={c.lote_id} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2.5 text-sm">
-                    <span className="font-semibold text-slate-700 dark:text-slate-200">Carnê #{c.lote_id}</span>
-                    <span className="text-slate-500 dark:text-slate-400">{c.parcelas} parcela(s) · {fmt(c.total)}</span>
-                    {c.criado_em && <span className="text-xs text-slate-400">{new Date(c.criado_em).toLocaleDateString('pt-BR')}</span>}
-                    {!prontas && (
-                      <Badge variant="warning">{c.parcelas_registradas}/{c.parcelas} prontas</Badge>
+                  <div key={c.lote_id}>
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2.5 text-sm">
+                      <button
+                        type="button"
+                        onClick={() => setCarneExpandido(aberto ? null : c.lote_id)}
+                        className="flex items-center gap-1.5 font-semibold text-slate-700 hover:underline dark:text-slate-200"
+                      >
+                        {aberto ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                        Carnê #{c.lote_id}
+                      </button>
+                      <span className="text-slate-500 dark:text-slate-400">{c.parcelas} parcela(s) · {fmt(c.total)}</span>
+                      {c.criado_em && <span className="text-xs text-slate-400">{new Date(c.criado_em).toLocaleDateString('pt-BR')}</span>}
+                      <Badge variant={quitado ? 'success' : c.parcelas_pagas > 0 ? 'info' : 'default'}>
+                        {c.parcelas_pagas}/{c.parcelas} paga(s)
+                      </Badge>
+                      {!prontas && (
+                        <Badge variant="warning">{c.parcelas_registradas}/{c.parcelas} registrada(s) na Ailos</Badge>
+                      )}
+                      <Button variant="secondary" onClick={() => baixarCarne(c.lote_id)} className="ml-auto !py-1.5 text-xs">
+                        Baixar carnê
+                      </Button>
+                    </div>
+                    {aberto && (
+                      <div className="border-t border-slate-100 bg-slate-50/60 px-4 py-2 dark:border-slate-800 dark:bg-slate-900/40">
+                        <table className="w-full text-xs">
+                          <thead className="text-slate-400">
+                            <tr>
+                              <th className="py-1 text-left font-medium">Parcela</th>
+                              <th className="py-1 text-left font-medium">Vencimento</th>
+                              <th className="py-1 text-right font-medium">Valor</th>
+                              <th className="py-1 text-left font-medium">Situação</th>
+                              <th className="py-1 text-left font-medium">Pago em</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                            {c.parcelas_detalhe.map((p) => (
+                              <tr key={p.billing_id}>
+                                <td className="py-1 text-slate-600 dark:text-slate-300">{p.numero_parcela ?? '—'}</td>
+                                <td className="py-1 text-slate-500 dark:text-slate-400">{p.vencimento ? new Date(p.vencimento).toLocaleDateString('pt-BR') : '—'}</td>
+                                <td className="py-1 text-right font-mono text-slate-600 dark:text-slate-300">{fmt(p.valor)}</td>
+                                <td className="py-1"><Badge variant={statusVariant(p.status)}>{statusLabel(p.status)}</Badge></td>
+                                <td className="py-1 text-slate-500 dark:text-slate-400">{p.data_pagamento ? new Date(p.data_pagamento).toLocaleDateString('pt-BR') : '—'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
                     )}
-                    <Button variant="secondary" onClick={() => baixarCarne(c.lote_id)} className="ml-auto !py-1.5 text-xs">
-                      Baixar carnê
-                    </Button>
                   </div>
                 );
               })}

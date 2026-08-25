@@ -172,14 +172,30 @@ def listar_carnes(
         ids = lote.billing_ids or []
         cobrancas = db.query(Billing).filter(Billing.id.in_(ids)).all() if ids else []
         registradas = sum(1 for bid in ids if boleto_registrado(bid, db) is not None)
+        pagas = sum(1 for b in cobrancas if b.status == BillingStatus.PAID)
         resultado.append({
             'lote_id': lote.id,
             'ticket': lote.ticket,
             'criado_em': lote.created_at.isoformat() if lote.created_at else None,
             'parcelas': len(ids),
             'parcelas_registradas': registradas,
+            'parcelas_pagas': pagas,
             'total': float(sum((b.amount or 0) for b in cobrancas)),
+            'valor_pago': float(sum((b.amount or 0) for b in cobrancas if b.status == BillingStatus.PAID)),
             'status': lote.status,
+            # Detalhe por parcela — a tela usa isto para mostrar o que já foi
+            # pago e o que ainda falta, sem precisar de outra chamada.
+            'parcelas_detalhe': [
+                {
+                    'billing_id': b.id,
+                    'numero_parcela': b.installment_number,
+                    'vencimento': b.due_date.isoformat() if b.due_date else None,
+                    'valor': float(b.amount or 0),
+                    'status': b.status.value,
+                    'data_pagamento': b.payment_date.isoformat() if b.payment_date else None,
+                }
+                for b in sorted(cobrancas, key=lambda x: (x.installment_number or 0, x.due_date or date.min))
+            ],
         })
     return resultado
 
