@@ -122,6 +122,20 @@ export function useCarneTracking(token: string | null, onCompleted?: (info: { lo
       );
       ativoRef.current = lote.ticket;
       setTrack({ ids, fase: 'acompanhando', loteId: lote.id, ticket: lote.ticket, prontas: 0, total: ids.length, erro: '', parcelas: [], retryingId: null, registrandoPendentes: false });
+      // A Ailos aceita as N parcelas no POST do lote, mas na prática só
+      // efetiva o registro de uma parte delas (comportamento observado do
+      // endpoint, não é "ainda processando") — as demais nunca resolveriam
+      // sozinhas no polling abaixo. O caminho individual (gerar_boleto) é
+      // comprovadamente confiável, então completa por ali imediatamente, em
+      // vez de depender do lote da Ailos ou exigir clique manual depois.
+      if (ativoRef.current === lote.ticket) {
+        try {
+          await apiFetch(`/ailos/lotes/${lote.id}/registrar-pendentes`, { method: 'POST' }, token!);
+        } catch {
+          // Sem problema — o polling abaixo mostra o que ainda faltar, com
+          // retry individual/em massa disponíveis na tela.
+        }
+      }
       acompanhar(lote.ticket, lote.id, 0);
     } catch (err) {
       setTrack(prev => prev && ({ ...prev, fase: 'erro-registro', erro: parseError(err) }));
