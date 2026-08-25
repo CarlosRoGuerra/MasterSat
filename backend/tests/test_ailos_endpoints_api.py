@@ -11,6 +11,7 @@ from datetime import date
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
+import pytest
 from cryptography.fernet import Fernet
 
 from app.core.config import settings
@@ -20,6 +21,7 @@ from app.models.ailos_integration import AilosIntegration
 from app.models.ailos_lote import AilosLote
 from app.models.billing import Billing
 from app.models.enums import BillingStatus
+from app.services import ailos_client
 
 PREFIX = '/api/v1/ailos'
 
@@ -53,6 +55,14 @@ class TestNotFound:
 
     def test_get_lote_status_inexistente(self, http):
         r = http.get(f'{PREFIX}/lotes/TICKET-INEXISTENTE')
+        assert r.status_code == 404
+
+    def test_registrar_parcela_lote_inexistente(self, http):
+        r = http.post(f'{PREFIX}/lotes/999999/parcelas/1/registrar')
+        assert r.status_code == 404
+
+    def test_registrar_pendentes_lote_inexistente(self, http):
+        r = http.post(f'{PREFIX}/lotes/999999/registrar-pendentes')
         assert r.status_code == 404
 
 
@@ -109,6 +119,22 @@ class TestAuthorizationRoles:
         r = http_unauth.get(f'{PREFIX}/lotes/TICKET-1')
         assert r.status_code == 401
 
+    def test_registrar_parcela_negado_para_operacional(self, http_op):
+        r = http_op.post(f'{PREFIX}/lotes/1/parcelas/1/registrar')
+        assert r.status_code == 403
+
+    def test_registrar_parcela_nao_autenticado(self, http_unauth):
+        r = http_unauth.post(f'{PREFIX}/lotes/1/parcelas/1/registrar')
+        assert r.status_code == 401
+
+    def test_registrar_pendentes_negado_para_operacional(self, http_op):
+        r = http_op.post(f'{PREFIX}/lotes/1/registrar-pendentes')
+        assert r.status_code == 403
+
+    def test_registrar_pendentes_nao_autenticado(self, http_unauth):
+        r = http_unauth.post(f'{PREFIX}/lotes/1/registrar-pendentes')
+        assert r.status_code == 401
+
 
 class TestCooperadoNaoAutorizado:
     def test_gerar_boleto_sem_credenciais_retorna_400(self, http, db, billing_pendente, cliente):
@@ -134,7 +160,13 @@ class TestValidationError:
 
 
 class TestStatusNuncaExpoeTokens:
-    def test_status_sem_integracao(self, http):
+    def test_status_sem_integracao(self, http, monkeypatch):
+        # Isola do .env real: este teste verifica o comportamento "sem
+        # credenciais configuradas", não deve depender de o ambiente rodando
+        # os testes ter (ou não) AILOS_CLIENT_ID/SECRET reais configurados.
+        monkeypatch.setattr(settings, 'ailos_client_id', '')
+        monkeypatch.setattr(settings, 'ailos_client_secret', '')
+
         r = http.get(f'{PREFIX}/status')
 
         assert r.status_code == 200
@@ -181,7 +213,15 @@ class TestLoteStatusProgresso:
         db.commit()
         return b
 
-    def test_processing_traz_prontas_e_total(self, http, db, cliente):
+    def test_processing_traz_prontas_e_total(self, http, db, cliente, monkeypatch):
+        # Isola do .env real (ver test_status_sem_integracao): sem isso, se o
+        # ambiente tiver AILOS_CLIENT_ID/SECRET reais configurados, a consulta
+        # da parcela pendente tenta buscar um client token de verdade antes de
+        # chegar no mock de app.services.ailos_client.requests, e quebra numa
+        # camada que este teste não está testando.
+        monkeypatch.setattr(settings, 'ailos_client_id', '')
+        monkeypatch.setattr(settings, 'ailos_client_secret', '')
+
         b1 = self._billing(db, cliente)
         b2 = self._billing(db, cliente)
         lote = AilosLote(tipo='carne', ticket='TICKET-PROGRESSO', numero_convenio='102004',
@@ -206,6 +246,10 @@ class TestLoteStatusProgresso:
         assert body['total'] == 2
         assert body['prontas'] == 1
         assert body['boletos'] is None  # forma resumida enquanto processa
+        assert body['lote_id'] == lote.id
+        parcelas_by_billing = {p['billing_id']: p for p in body['parcelas']}
+        assert parcelas_by_billing[b1.id]['status'] == 'registrado'
+        assert parcelas_by_billing[b2.id]['status'] == 'processando'
 
     def test_completed_traz_prontas_igual_total(self, http, db, cliente):
         b1 = self._billing(db, cliente)
@@ -224,3 +268,99 @@ class TestLoteStatusProgresso:
         assert body['total'] == 1
         assert body['prontas'] == 1
         assert len(body['boletos']) == 1
+
+
+class TestRegistrarParcelaEPendentesEndpoints:
+    """Retry individual e em massa de parcelas de um lote/carnê já criado —
+    reusam gerar_boleto (idempotente) por baixo, expostos como endpoints
+    HTTP para os botões da tela de acompanhamento."""
+
+    @pytest.fixture(autouse=True)
+    def _tokens(self, monkeypatch):
+        # Sem isso, get_valid_client_token tentaria buscar um token de app de
+        # verdade via AILOS_CLIENT_ID/SECRET do .env real do ambiente rodando
+        # os testes — independente de o que este teste está exercitando.
+        monkeypatch.setattr(ailos_client, 'get_valid_client_token', lambda db: 'client-token')
+        monkeypatch.setattr(ailos_client, 'get_valid_cooperado_token', lambda db: 'coop-token')
+
+    def _boleto_response(self, billing_id, linha='LD-X'):
+        return {
+            'documento': {'numeroDocumento': billing_id, 'nossoNumero': '1', 'identificadorUnicoTitulo': '1'},
+            'codigoBarras': {'codigoBarras': 'CB', 'linhaDigitavel': linha},
+            'indicadorSituacaoBoleto': 'REGISTRADO',
+            'valorBoleto': {'valorNominal': 129.98},
+            'vencimento': {'dataVencimento': '2099-12-31'},
+        }
+
+    def _lote_carne(self, db, ids):
+        lote = AilosLote(tipo='carne', ticket='TICKET-RETRY-EP', numero_convenio='102004',
+                         billing_ids=list(ids), status='processing')
+        db.add(lote)
+        db.commit()
+        for bid in ids:
+            db.add(AilosBoleto(billing_id=bid, numero_convenio='102004', lote_id=lote.id,
+                               payload_request={'documento': {'numeroDocumento': bid}}))
+        db.commit()
+        db.refresh(lote)
+        return lote
+
+    def test_registrar_parcela_com_sucesso(self, http, db, cliente):
+        _preencher_endereco(cliente, db)
+        b1 = Billing(client_id=cliente.id, amount=Decimal('129.98'), due_date=date.today(),
+                     status=BillingStatus.PENDING, billing_type='carne', title='Parcela')
+        db.add(b1); db.commit(); db.refresh(b1)
+        lote = self._lote_carne(db, [b1.id])
+
+        with patch('app.services.ailos_client.requests') as mock_requests:
+            mock_requests.request.return_value = MagicMock(
+                status_code=200, headers={'Content-Type': 'application/json'}, text='',
+                content=b'{}', json=MagicMock(return_value=self._boleto_response(b1.id)),
+            )
+            r = http.post(f'{PREFIX}/lotes/{lote.id}/parcelas/{b1.id}/registrar')
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body['linha_digitavel'] == 'LD-X'
+        assert body['lote_id'] == lote.id
+
+    def test_registrar_parcela_fora_do_lote_retorna_400(self, http, db, cliente):
+        _preencher_endereco(cliente, db)
+        b1 = Billing(client_id=cliente.id, amount=Decimal('129.98'), due_date=date.today(),
+                     status=BillingStatus.PENDING, billing_type='carne', title='Parcela')
+        b_fora = Billing(client_id=cliente.id, amount=Decimal('50'), due_date=date.today(),
+                         status=BillingStatus.PENDING, billing_type='avulsa', title='Outra')
+        db.add(b1); db.add(b_fora); db.commit(); db.refresh(b1); db.refresh(b_fora)
+        lote = self._lote_carne(db, [b1.id])
+
+        r = http.post(f'{PREFIX}/lotes/{lote.id}/parcelas/{b_fora.id}/registrar')
+        assert r.status_code == 400
+
+    def test_registrar_pendentes_avanca_o_que_der(self, http, db, cliente):
+        _preencher_endereco(cliente, db)
+        b1 = Billing(client_id=cliente.id, amount=Decimal('129.98'), due_date=date.today(),
+                     status=BillingStatus.PENDING, billing_type='carne', title='Parcela 1')
+        b2 = Billing(client_id=cliente.id, amount=Decimal('129.98'), due_date=date.today(),
+                     status=BillingStatus.PENDING, billing_type='carne', title='Parcela 2')
+        db.add(b1); db.add(b2); db.commit(); db.refresh(b1); db.refresh(b2)
+        lote = self._lote_carne(db, [b1.id, b2.id])
+
+        respostas = {
+            b1.id: MagicMock(status_code=200, headers={'Content-Type': 'application/json'}, text='',
+                             content=b'{}', json=MagicMock(return_value=self._boleto_response(b1.id, linha='LD-1'))),
+            b2.id: MagicMock(status_code=422, headers={'Content-Type': 'application/json'}, text='',
+                             content=b'{}', json=MagicMock(return_value={'mensagem': 'Endereco invalido'})),
+        }
+
+        def _fake(method, url, **kw):
+            numero_doc = (kw.get('json') or {}).get('documento', {}).get('numeroDocumento')
+            return respostas.get(numero_doc, MagicMock(status_code=404, headers={}, text='nao', content=b''))
+
+        with patch('app.services.ailos_client.requests') as mock_requests:
+            mock_requests.request.side_effect = _fake
+            r = http.post(f'{PREFIX}/lotes/{lote.id}/registrar-pendentes')
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body['sucesso'] == [b1.id]
+        assert len(body['falhas']) == 1
+        assert body['falhas'][0]['billing_id'] == b2.id

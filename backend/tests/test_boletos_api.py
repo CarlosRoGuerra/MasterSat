@@ -271,6 +271,8 @@ def test_lista_carnes_do_cliente(http, db, cliente):
     assert carnes[0]['lote_id'] == lote.id
     assert carnes[0]['parcelas'] == 2
     assert carnes[0]['parcelas_registradas'] == 2
+    # ticket exposto para a tela poder reabrir o acompanhamento (GET /ailos/lotes/{ticket})
+    assert carnes[0]['ticket'] == lote.ticket
 
 
 def test_lista_carne_nao_vaza_de_outro_cliente(http, db, cliente, outro_cliente):

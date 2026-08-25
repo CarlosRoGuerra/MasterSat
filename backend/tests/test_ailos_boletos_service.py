@@ -23,6 +23,9 @@ from app.services.ailos_boletos import (
     gerar_boleto,
     gerar_boleto_lote,
     gerar_carne_lote,
+    parcelas_do_lote,
+    registrar_parcela_individual,
+    registrar_pendentes_do_lote,
     resolver_pagador,
 )
 
@@ -542,3 +545,182 @@ class TestConsultarCarne:
             mock_requests.request.side_effect = _fake
             result = consultar_lote(db, lote)
         assert result['status'] == 'completed'
+
+
+class TestParcelasDoLote:
+    """Status por parcela (não só o agregado 'X de Y') — base da tela de
+    acompanhamento com tabela e retry individual."""
+
+    def _lote_carne(self, db, ids):
+        lote = AilosLote(tipo='carne', ticket='TICKET-DETALHE', numero_convenio='102004',
+                         billing_ids=list(ids), status='processing')
+        db.add(lote)
+        db.commit()
+        db.refresh(lote)
+        for bid in ids:
+            db.add(AilosBoleto(billing_id=bid, numero_convenio='102004', lote_id=lote.id,
+                               payload_request={'documento': {'numeroDocumento': bid}}))
+        db.commit()
+        return lote
+
+    def test_registrada_processando_e_erro(self, db, billing_pendente, contrato, cliente):
+        billing2 = _criar_billing_futuro(db, contrato)
+        billing3 = _criar_billing_futuro(db, contrato, due_date=date(2099, 7, 30), title='Plano Teste 3')
+        lote = self._lote_carne(db, [billing_pendente.id, billing2.id, billing3.id])
+
+        ab1 = db.query(AilosBoleto).filter_by(billing_id=billing_pendente.id).first()
+        ab1.linha_digitavel = 'LD-1'; ab1.codigo_barras = 'CB-1'; db.commit()
+
+        # billing3 já teve uma tentativa de REGISTRO individual que falhou de
+        # verdade (não é uma consulta "ainda não encontrado" — é uma rejeição
+        # da Ailos numa tentativa de gerar/boleto).
+        _preencher_endereco(cliente, db)
+        erro_validacao = _resp(422, json_data={'mensagem': 'CPF inválido'})
+        with patch('app.services.ailos_client.requests') as mock_requests:
+            mock_requests.request.return_value = erro_validacao
+            with pytest.raises(ailos_client.AilosApiError):
+                gerar_boleto(db, billing3, cliente)
+
+        parcelas = parcelas_do_lote(db, lote)
+        by_billing = {p['billing_id']: p for p in parcelas}
+        assert by_billing[billing_pendente.id]['status'] == 'registrado'
+        assert by_billing[billing_pendente.id]['numero_parcela'] == 1
+        assert by_billing[billing2.id]['status'] == 'processando'
+        assert by_billing[billing2.id]['erro'] is None
+        assert by_billing[billing3.id]['status'] == 'erro'
+        assert 'CPF inválido' in (by_billing[billing3.id]['erro'] or '')
+
+    def test_consulta_de_acompanhamento_nao_vira_erro(self, db, billing_pendente, contrato, cliente):
+        """Uma parcela ainda não confirmada pela Ailos 404 na consulta
+        individual durante o polling normal — isso não pode aparecer como
+        'erro' (é só cedo demais), senão a tela mostraria erro em toda
+        parcela que ainda está sendo processada pelo banco."""
+        billing2 = _criar_billing_futuro(db, contrato)
+        lote = self._lote_carne(db, [billing_pendente.id, billing2.id])
+
+        with patch('app.services.ailos_client.requests') as mock_requests:
+            mock_requests.request.return_value = _resp(404, text='not found')
+            consultar_lote(db, lote)  # dispara consultas individuais (ambas 404)
+
+        parcelas = parcelas_do_lote(db, lote)
+        assert all(p['status'] == 'processando' for p in parcelas)
+
+
+class TestRegistrarParcelaIndividual:
+    def _lote_carne(self, db, ids):
+        lote = AilosLote(tipo='carne', ticket='TICKET-RETRY', numero_convenio='102004',
+                         billing_ids=list(ids), status='processing')
+        db.add(lote)
+        db.commit()
+        db.refresh(lote)
+        for bid in ids:
+            db.add(AilosBoleto(billing_id=bid, numero_convenio='102004', lote_id=lote.id,
+                               payload_request={'documento': {'numeroDocumento': bid}}))
+        db.commit()
+        return lote
+
+    def test_registra_e_mantem_associacao_ao_lote(self, db, billing_pendente, contrato, cliente):
+        _preencher_endereco(cliente, db)
+        billing2 = _criar_billing_futuro(db, contrato)
+        lote = self._lote_carne(db, [billing_pendente.id, billing2.id])
+
+        with patch('app.services.ailos_client.requests') as mock_requests:
+            mock_requests.request.return_value = _resp(200, json_data=_boleto_response(billing2.id, linha='LD-2'))
+            boleto = registrar_parcela_individual(db, lote, billing2.id)
+
+        assert boleto.linha_digitavel == 'LD-2'
+        assert boleto.lote_id == lote.id
+
+    def test_idempotente_nao_rechama_ailos_se_ja_registrada(self, db, billing_pendente, contrato, cliente):
+        _preencher_endereco(cliente, db)
+        lote = self._lote_carne(db, [billing_pendente.id])
+        ab = db.query(AilosBoleto).filter_by(billing_id=billing_pendente.id).first()
+        ab.linha_digitavel = 'JA-TENHO'; ab.codigo_barras = 'CB'; db.commit()
+
+        with patch('app.services.ailos_client.requests') as mock_requests:
+            boleto = registrar_parcela_individual(db, lote, billing_pendente.id)
+            mock_requests.request.assert_not_called()
+
+        assert boleto.linha_digitavel == 'JA-TENHO'
+
+    def test_billing_fora_do_lote_leva_a_erro(self, db, billing_pendente, contrato, cliente):
+        billing_fora = _criar_billing_futuro(db, contrato)
+        lote = self._lote_carne(db, [billing_pendente.id])
+
+        with pytest.raises(ValueError):
+            registrar_parcela_individual(db, lote, billing_fora.id)
+
+
+class TestRegistrarPendentesDoLote:
+    def _lote_carne(self, db, ids):
+        lote = AilosLote(tipo='carne', ticket='TICKET-BULK', numero_convenio='102004',
+                         billing_ids=list(ids), status='processing')
+        db.add(lote)
+        db.commit()
+        db.refresh(lote)
+        for bid in ids:
+            db.add(AilosBoleto(billing_id=bid, numero_convenio='102004', lote_id=lote.id,
+                               payload_request={'documento': {'numeroDocumento': bid}}))
+        db.commit()
+        return lote
+
+    def test_uma_falha_nao_bloqueia_as_demais(self, db, billing_pendente, contrato, cliente):
+        """Erro pontual numa parcela não pode impedir que as outras avancem
+        — é exatamente o cenário que motivou o botão 'gerar pendentes'."""
+        _preencher_endereco(cliente, db)
+        billing_ok = _criar_billing_futuro(db, contrato)
+        billing_falha = _criar_billing_futuro(db, contrato, due_date=date(2099, 8, 30), title='Plano Teste 4')
+        lote = self._lote_carne(db, [billing_pendente.id, billing_ok.id, billing_falha.id])
+
+        # billing_pendente já registrada antes (não deve nem tentar de novo).
+        ab_pronta = db.query(AilosBoleto).filter_by(billing_id=billing_pendente.id).first()
+        ab_pronta.linha_digitavel = 'JA-TENHO'; ab_pronta.codigo_barras = 'CB'; db.commit()
+
+        respostas = {
+            str(billing_ok.id): _resp(200, json_data=_boleto_response(billing_ok.id, linha='LD-OK')),
+            str(billing_falha.id): _resp(422, json_data={'mensagem': 'Endereço inválido'}),
+        }
+
+        def _fake(method, url, **kw):
+            if method == 'POST':
+                ultimo = kw.get('json', {}).get('documento', {}).get('numeroDocumento')
+                return respostas.get(str(ultimo), _resp(404, text='nao'))
+            return _resp(404, text='nao')
+
+        with patch('app.services.ailos_client.requests') as mock_requests:
+            mock_requests.request.side_effect = _fake
+            resultado = registrar_pendentes_do_lote(db, lote)
+
+        assert resultado['sucesso'] == [billing_ok.id]
+        assert len(resultado['falhas']) == 1
+        assert resultado['falhas'][0]['billing_id'] == billing_falha.id
+        assert 'Endereço inválido' in resultado['falhas'][0]['erro']
+        db.refresh(lote)
+        assert lote.status == 'processing'  # ainda falta billing_falha
+
+        by_billing = {p['billing_id']: p for p in resultado['parcelas']}
+        assert by_billing[billing_ok.id]['status'] == 'registrado'
+        assert by_billing[billing_falha.id]['status'] == 'erro'
+
+    def test_fecha_lote_quando_todas_resolvem(self, db, billing_pendente, contrato, cliente):
+        _preencher_endereco(cliente, db)
+        billing2 = _criar_billing_futuro(db, contrato)
+        lote = self._lote_carne(db, [billing_pendente.id, billing2.id])
+
+        respostas = {
+            str(billing_pendente.id): _resp(200, json_data=_boleto_response(billing_pendente.id, linha='LD-1')),
+            str(billing2.id): _resp(200, json_data=_boleto_response(billing2.id, linha='LD-2')),
+        }
+
+        def _fake(method, url, **kw):
+            ultimo = kw.get('json', {}).get('documento', {}).get('numeroDocumento')
+            return respostas.get(str(ultimo), _resp(404, text='nao'))
+
+        with patch('app.services.ailos_client.requests') as mock_requests:
+            mock_requests.request.side_effect = _fake
+            resultado = registrar_pendentes_do_lote(db, lote)
+
+        assert set(resultado['sucesso']) == {billing_pendente.id, billing2.id}
+        assert resultado['falhas'] == []
+        db.refresh(lote)
+        assert lote.status == 'completed'

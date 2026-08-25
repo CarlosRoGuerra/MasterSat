@@ -33,6 +33,9 @@ from app.services.ailos_boletos import (
     gerar_boleto,
     gerar_boleto_lote,
     gerar_carne_lote,
+    parcelas_do_lote,
+    registrar_parcela_individual,
+    registrar_pendentes_do_lote,
     verificar_pagamento,
 )
 from app.services.ailos_client import AilosApiError, AilosError
@@ -210,7 +213,53 @@ def get_lote_status(
     return AilosLoteStatusOut(
         ticket=lote.ticket,
         status=status_atual,
+        lote_id=lote.id,
         boletos=[AilosBoletoOut.model_validate(b) for b in boletos] if status_atual != 'processing' else None,
         total=len(lote.billing_ids or []),
         prontas=prontas,
+        parcelas=parcelas_do_lote(db, lote),
     )
+
+
+# ---------------------------------------------------------------------------
+# POST /ailos/lotes/{lote_id}/parcelas/{billing_id}/registrar — retry individual
+# ---------------------------------------------------------------------------
+
+@router.post('/lotes/{lote_id}/parcelas/{billing_id}/registrar', response_model=AilosBoletoOut)
+def registrar_parcela_endpoint(
+    lote_id: int,
+    billing_id: int,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    """Tenta registrar (ou recuperar) uma única parcela de um lote/carnê que
+    ainda não confirmou — reaproveita ``gerar_boleto`` (idempotente, não cria
+    Billing novo) e mantém a parcela associada a este lote."""
+    lote = db.get(AilosLote, lote_id)
+    if lote is None:
+        raise HTTPException(status_code=404, detail='Lote não encontrado')
+    try:
+        return registrar_parcela_individual(db, lote, billing_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except _AILOS_EXCEPTIONS as exc:
+        raise_ailos_error(exc)
+
+
+# ---------------------------------------------------------------------------
+# POST /ailos/lotes/{lote_id}/registrar-pendentes — retry em massa
+# ---------------------------------------------------------------------------
+
+@router.post('/lotes/{lote_id}/registrar-pendentes')
+def registrar_pendentes_endpoint(
+    lote_id: int,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    """"Gerar boletos pendentes": tenta registrar de uma vez todas as
+    parcelas do lote que ainda não confirmaram. Uma falha pontual numa
+    parcela não impede as demais de serem tentadas."""
+    lote = db.get(AilosLote, lote_id)
+    if lote is None:
+        raise HTTPException(status_code=404, detail='Lote não encontrado')
+    return registrar_pendentes_do_lote(db, lote)

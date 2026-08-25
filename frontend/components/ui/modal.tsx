@@ -31,6 +31,19 @@ export function Modal({
   const dialogRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
 
+  // onClose costuma ser passado como arrow function inline pelos chamadores
+  // (`onClose={() => setXModal(false)}`), então sua identidade muda a cada
+  // render do componente pai — inclusive a cada tecla digitada em qualquer
+  // campo da modal. Se o efeito abaixo dependesse de `onClose` diretamente,
+  // ele re-executaria a cada tecla e o cleanup devolveria o foco ao
+  // elemento que abriu a modal no meio da digitação. Por isso a última
+  // versão de onClose fica numa ref, e o efeito de foco/teclado depende só
+  // de `open` (abre/fecha), não da identidade da função.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
   useEffect(() => {
     if (!open) return;
     const prev = document.body.style.overflow;
@@ -45,7 +58,7 @@ export function Modal({
 
     function handler(e: KeyboardEvent) {
       if (e.key === 'Escape') {
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (e.key !== 'Tab' || !dialogRef.current) return;
@@ -76,7 +89,7 @@ export function Modal({
       window.clearTimeout(focusTimer);
       triggerRef.current?.focus?.();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 

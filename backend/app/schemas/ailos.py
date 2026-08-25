@@ -75,15 +75,38 @@ class AilosLoteOut(BaseModel):
     model_config = {'from_attributes': True}
 
 
+class AilosParcelaOut(BaseModel):
+    """Status individual de UMA parcela de um lote/carnê — não só o agregado.
+
+    'erro' só é atribuído quando uma tentativa de REGISTRO (não uma consulta
+    de acompanhamento) falhou de fato; uma parcela ainda não confirmada
+    durante o processamento normal do lote fica 'processando' até o prazo de
+    espera se esgotar — a Ailos não distingue "ainda processando" de "não vai
+    processar" na consulta individual, só o tempo decorrido permite inferir.
+    """
+    billing_id: int
+    numero_parcela: int
+    vencimento: date | None = None
+    valor: float | None = None
+    status: str  # 'processando' | 'registrado' | 'erro'
+    nosso_numero: str | None = None
+    linha_digitavel: str | None = None
+    erro: str | None = None
+
+
 class AilosLoteStatusOut(BaseModel):
     ticket: str
     status: str
+    lote_id: int | None = None
     boletos: list[AilosBoletoOut] | None = None
     # Progresso estruturado — a tela de acompanhamento do carnê usa isto para
     # mostrar "3 de 12 confirmadas" mesmo enquanto status ainda é 'processing',
     # em vez de um spinner sem informação nenhuma.
     total: int = 0
     prontas: int = 0
+    # Detalhe por parcela — tabela de acompanhamento com status/erro/retry
+    # individual, sempre presente (inclusive durante 'processing').
+    parcelas: list[AilosParcelaOut] = Field(default_factory=list)
 
 
 # ── Pagadores ───────────────────────────────────────────────────────────────

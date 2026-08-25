@@ -174,6 +174,7 @@ def listar_carnes(
         registradas = sum(1 for bid in ids if boleto_registrado(bid, db) is not None)
         resultado.append({
             'lote_id': lote.id,
+            'ticket': lote.ticket,
             'criado_em': lote.created_at.isoformat() if lote.created_at else None,
             'parcelas': len(ids),
             'parcelas_registradas': registradas,

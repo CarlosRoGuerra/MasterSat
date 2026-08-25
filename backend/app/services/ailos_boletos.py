@@ -29,6 +29,7 @@ from decimal import Decimal
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.models.ailos_api_log import AilosApiLog
 from app.models.ailos_boleto import AilosBoleto
 from app.models.ailos_lote import AilosLote
 from app.models.billing import Billing
@@ -37,6 +38,7 @@ from app.models.contract import Contract
 from app.models.enums import BillingStatus
 from app.services import ailos_client
 from app.services.ailos_validators import (
+    AilosValidationError,
     normalize_text,
     only_digits,
     split_phone,
@@ -490,6 +492,122 @@ def _consultar_carne_por_boleto(db: Session, lote: AilosLote) -> dict:
     db.commit()
     db.refresh(lote)
     return {'status': 'completed', 'lote': lote}
+
+
+def parcelas_do_lote(db: Session, lote: AilosLote) -> list[dict]:
+    """Detalhe por parcela de um lote/carnê — status individual, não só o
+    agregado 'X de Y'. Usado pela tela de acompanhamento para montar a tabela
+    com uma linha por parcela e ação de retry quando aplicável.
+
+    'erro' só é atribuído a partir de uma tentativa de REGISTRO malsucedida
+    (POST gerar/boleto — o mesmo path usado por ``gerar_boleto``/retry
+    individual), nunca de uma consulta: durante o processamento normal do
+    lote, cada parcela ainda não confirmada 404 na consulta individual até a
+    Ailos terminar de processá-la, e isso não é um erro — é só cedo demais
+    para saber. Sem uma tentativa de registro que tenha de fato falhado, a
+    parcela fica 'processando' (o frontend usa o prazo de 10 min do lote para
+    sugerir "não localizado, gerar manualmente").
+    """
+    billing_ids = lote.billing_ids or []
+    boletos_by_billing = {
+        b.billing_id: b
+        for b in db.query(AilosBoleto).filter(AilosBoleto.billing_id.in_(billing_ids)).all()
+    } if billing_ids else {}
+    billings_by_id = {
+        b.id: b
+        for b in db.query(Billing).filter(Billing.id.in_(billing_ids)).all()
+    } if billing_ids else {}
+
+    resultado = []
+    for numero_parcela, billing_id in enumerate(billing_ids, start=1):
+        boleto = boletos_by_billing.get(billing_id)
+        billing = billings_by_id.get(billing_id)
+        status = 'processando'
+        erro = None
+        if boleto is not None and boleto.linha_digitavel:
+            status = 'registrado'
+        else:
+            ultima_tentativa = (
+                db.query(AilosApiLog)
+                .filter(AilosApiLog.billing_id == billing_id, AilosApiLog.endpoint.contains('gerar/boleto'))
+                .order_by(AilosApiLog.id.desc())
+                .first()
+            )
+            if ultima_tentativa is not None and not ultima_tentativa.success:
+                status = 'erro'
+                erro = ultima_tentativa.error_message
+        resultado.append({
+            'billing_id': billing_id,
+            'numero_parcela': numero_parcela,
+            'vencimento': billing.due_date if billing else None,
+            'valor': float(billing.amount) if billing else None,
+            'status': status,
+            'nosso_numero': boleto.nosso_numero if boleto else None,
+            'linha_digitavel': boleto.linha_digitavel if boleto else None,
+            'erro': erro,
+        })
+    return resultado
+
+
+def _mensagem_erro(exc: Exception) -> str:
+    """Mensagem legível de uma falha de registro — prioriza a mensagem real
+    devolvida pela Ailos (``AilosApiError.ailos_message``) sobre o texto
+    genérico de ``str(exc)``/``friendly_message`` (ex.: "HTTP 422" sem
+    nenhum contexto do que de fato foi rejeitado)."""
+    if isinstance(exc, ailos_client.AilosApiError):
+        return exc.ailos_message or exc.friendly_message or str(exc)
+    return str(exc)
+
+
+def registrar_parcela_individual(db: Session, lote: AilosLote, billing_id: int) -> AilosBoleto:
+    """Tenta registrar (ou recuperar) UMA parcela específica de um lote/carnê.
+
+    Reaproveita ``gerar_boleto`` — mesma idempotência (não rechama a Ailos se
+    já tem linha digitável; recupera pelo numeroDocumento se a Ailos disser
+    "já cadastrado"), e nunca cria um Billing novo, só registra o que já
+    existe. Mantém a associação ao lote original mesmo quando o registro é
+    feito por aqui em vez do envio em lote inicial.
+    """
+    if billing_id not in (lote.billing_ids or []):
+        raise ValueError(f'A cobrança {billing_id} não pertence a este lote.')
+    billing = db.get(Billing, billing_id)
+    if billing is None or billing.is_deleted:
+        raise ValueError(f'Cobrança {billing_id} não encontrada.')
+
+    boleto = gerar_boleto(db, billing, resolver_pagador(db, billing))
+    if boleto.lote_id != lote.id:
+        boleto.lote_id = lote.id
+        db.commit()
+        db.refresh(boleto)
+    return boleto
+
+
+def registrar_pendentes_do_lote(db: Session, lote: AilosLote) -> dict:
+    """"Gerar boletos pendentes": tenta registrar TODAS as parcelas do lote
+    que ainda não confirmaram, uma a uma. Uma falha pontual não interrompe as
+    demais — o objetivo é avançar o máximo possível numa única ação.
+
+    Fecha o lote como 'completed' se, ao final, todas as parcelas resolverem.
+    """
+    sucesso: list[int] = []
+    falhas: list[dict] = []
+    for billing_id in (lote.billing_ids or []):
+        boleto_atual = db.query(AilosBoleto).filter_by(billing_id=billing_id).first()
+        if boleto_atual is not None and boleto_atual.linha_digitavel:
+            continue
+        try:
+            registrar_parcela_individual(db, lote, billing_id)
+            sucesso.append(billing_id)
+        except (ailos_client.AilosError, ailos_client.AilosApiError, AilosValidationError, ValueError) as exc:
+            falhas.append({'billing_id': billing_id, 'erro': _mensagem_erro(exc)})
+
+    boletos = db.query(AilosBoleto).filter_by(lote_id=lote.id).all()
+    prontas = sum(1 for b in boletos if b.linha_digitavel)
+    if prontas == len(lote.billing_ids or []):
+        lote.status = 'completed'
+        db.commit()
+
+    return {'sucesso': sucesso, 'falhas': falhas, 'parcelas': parcelas_do_lote(db, lote)}
 
 
 def consultar_lote(db: Session, lote: AilosLote) -> dict:
