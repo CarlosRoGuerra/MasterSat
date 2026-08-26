@@ -247,7 +247,10 @@ def reprocess_last_failed(tracker_id: int, db: Session = Depends(get_db), _: obj
         if failed_log.operation == 'sincronizaCliente':
             if not local_client:
                 raise HTTPException(status_code=400, detail='Rastreador sem cliente vinculado para reprocessar cliente.')
-            steps = [multiportal_service.sync_client(local_client, linked_user)]
+            steps = [multiportal_service.sync_client(
+                local_client, linked_user,
+                contract=active_contract_for(db, vehicle_id=vehicle.id if vehicle else None, client_id=local_client.id),
+            )]
         elif failed_log.operation == 'sincronizaUsuario':
             if not local_client or not linked_user:
                 raise HTTPException(status_code=400, detail='Cliente sem usuário de portal vinculado para reprocessar.')
@@ -296,7 +299,10 @@ def sync_client(client_id: int, db: Session = Depends(get_db), _: object = Depen
     linked_user = _linked_client_user(local_client.id, db)
     batch_id = uuid4().hex
     try:
-        result = multiportal_service.sync_client(local_client, linked_user)
+        result = multiportal_service.sync_client(
+            local_client, linked_user,
+            contract=active_contract_for(db, client_id=local_client.id),
+        )
     except MultiportalError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     _save_log(db=db, batch_id=batch_id, entity_type='client', entity_id=local_client.id, result=result)
@@ -344,7 +350,10 @@ def sync_flow(tracker_id: int, db: Session = Depends(get_db), _: object = Depend
     linked_user = _linked_client_user(local_client.id, db)
     batch_id = uuid4().hex
     try:
-        steps = multiportal_service.full_sync_for_tracker(tracker=tracker, vehicle=vehicle, local_client=local_client, linked_user=linked_user)
+        steps = multiportal_service.full_sync_for_tracker(
+            tracker=tracker, vehicle=vehicle, local_client=local_client, linked_user=linked_user,
+            contract=active_contract_for(db, vehicle_id=vehicle.id, client_id=local_client.id),
+        )
     except MultiportalError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

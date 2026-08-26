@@ -174,8 +174,15 @@ class MultiportalService:
                     result.append({'code': code, 'description': description})
         return result
 
-    def sync_client(self, local_client: LocalClient, linked_user: LocalUser | None = None, *, operation_code: int = 1) -> CallResult:
-        payload = self._build_client_payload(local_client, linked_user)
+    def sync_client(
+        self,
+        local_client: LocalClient,
+        linked_user: LocalUser | None = None,
+        *,
+        operation_code: int = 1,
+        contract: Any | None = None,
+    ) -> CallResult:
+        payload = self._build_client_payload(local_client, linked_user, contract)
         result = self._call(
             'sincronizaCliente',
             id=settings.multiportal_id,
@@ -184,7 +191,7 @@ class MultiportalService:
             cliente=payload,
         )
         if result.status_code == '20' and operation_code == 1:
-            return self.sync_client(local_client, linked_user, operation_code=4)
+            return self.sync_client(local_client, linked_user, operation_code=4, contract=contract)
         return result
 
     def sync_user(self, local_client: LocalClient, linked_user: LocalUser, *, operation_code: int = 1) -> CallResult:
@@ -339,9 +346,10 @@ class MultiportalService:
         vehicle: LocalVehicle,
         local_client: LocalClient,
         linked_user: LocalUser | None,
+        contract: Any | None = None,
     ) -> list[CallResult]:
         results: list[CallResult] = []
-        results.append(self.sync_client(local_client, linked_user))
+        results.append(self.sync_client(local_client, linked_user, contract=contract))
         if linked_user and settings.multiportal_group_codes:
             results.append(self.sync_user(local_client, linked_user))
         results.append(self.sync_vehicle(vehicle))
@@ -362,16 +370,14 @@ class MultiportalService:
             'email': (local_client.email or '').strip(),
         }
 
-    def _build_client_payload(self, local_client: LocalClient, linked_user: LocalUser | None) -> dict[str, Any]:
+    def _build_client_payload(
+        self,
+        local_client: LocalClient,
+        linked_user: LocalUser | None,
+        contract: Any | None = None,
+    ) -> dict[str, Any]:
         payload = self._build_client_reference(local_client)
-        payload.update(
-            {
-                'numeroContrato': None,
-                'diaVencimentoFatura': None,
-                'tempoContrato': None,
-                'formaPagamento': None,
-            }
-        )
+        payload.update(self._build_contract_fields(contract))
         if local_client.type == 'pj':
             payload['nomeFantasia'] = local_client.name
 
@@ -485,10 +491,86 @@ class MultiportalService:
             'enviarEmail': True,
         }
 
+    # Códigos de formaPagamento aceitos pelo provedor. O WSDL declara o campo
+    # como xs:int sem enumeração, e o servidor valida códigos (já recusou
+    # 'relacao 9' em contatos), então um palpite quebraria a sincronização de
+    # todos os clientes. Fica vazio até o fornecedor confirmar a tabela: com o
+    # dicionário vazio, o campo simplesmente não é enviado — mesmo
+    # comportamento de hoje, sem risco.
+    _FORMA_PAGAMENTO_CODES: dict[str, int] = {}
+
+    def _build_contract_fields(self, contract: Any | None) -> dict[str, Any]:
+        """Dados contratuais do cliente para o provedor.
+
+        Estes quatro campos eram enviados fixos como None, então o cliente
+        chegava ao sistema que efetivamente entrega o rastreamento sem número
+        de contrato, sem dia de vencimento e sem duração — informação que o
+        provedor usa para cobrança e vigência.
+
+        Só é enviado o que tem significado inequívoco no WSDL. formaPagamento
+        depende de uma tabela de códigos que ainda não temos (ver
+        _FORMA_PAGAMENTO_CODES).
+        """
+        campos: dict[str, Any] = {
+            'numeroContrato': None,
+            'diaVencimentoFatura': None,
+            'tempoContrato': None,
+            'formaPagamento': None,
+        }
+        if contract is None:
+            return campos
+
+        numero = getattr(contract, 'contract_number', None) or getattr(contract, 'id', None)
+        if numero is not None:
+            campos['numeroContrato'] = str(numero)
+
+        billing_day = getattr(contract, 'billing_day', None)
+        if billing_day:
+            campos['diaVencimentoFatura'] = int(billing_day)
+
+        meses = self._contract_duration_months(contract)
+        if meses:
+            campos['tempoContrato'] = meses
+
+        metodo = (getattr(contract, 'payment_method', None) or '').strip().lower()
+        codigo = self._FORMA_PAGAMENTO_CODES.get(metodo)
+        if codigo is not None:
+            campos['formaPagamento'] = codigo
+
+        return campos
+
+    @staticmethod
+    def _contract_duration_months(contract: Any) -> int | None:
+        """Vigência do contrato em meses (tempoContrato é xs:int).
+
+        Preferimos a vigência real (início → fim). Sem data de término, o
+        contrato é por prazo indeterminado e nada é enviado — melhor omitir do
+        que informar uma duração inventada.
+        """
+        inicio = getattr(contract, 'start_date', None)
+        fim = getattr(contract, 'end_date', None)
+        if not inicio or not fim:
+            return None
+        meses = (fim.year - inicio.year) * 12 + (fim.month - inicio.month)
+        if fim.day < inicio.day:
+            meses -= 1
+        return meses if meses > 0 else None
+
     def _build_addresses(self, local_client: LocalClient) -> list[dict[str, Any]]:
-        # Este servidor rejeita endereços com latitude/longitude = 0.0 (código 1111),
-        # mas aceita clientes sem listaEnderecos (retorna 200).
-        # Como o sistema não armazena coordenadas GPS, não enviamos endereço.
+        """Endereço do cliente — hoje sempre vazio, por limitação do provedor.
+
+        O WSDL declara latitude/longitude como ``xs:double`` SEM
+        ``nillable="true"``: quando os campos não são enviados, o servidor Java
+        os desserializa como primitivo (0.0) e recusa o endereço com o código
+        1111. Não existe, no contrato atual do serviço, forma de enviar
+        endereço sem coordenadas — o payload original já não as mandava e foi
+        justamente por isso que o envio precisou ser desligado.
+
+        Cliente sem listaEnderecos é aceito (200), então o comportamento seguro
+        é omitir. Para reativar é preciso uma das duas coisas: o fornecedor
+        marcar os campos como nillable, ou passarmos a geocodificar o endereço
+        (o ViaCEP, usado em utils/cep, não devolve coordenadas).
+        """
         return []
 
     def _build_contacts(self, local_client: LocalClient) -> list[dict[str, Any]]:

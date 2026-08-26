@@ -57,6 +57,43 @@ TRACKER_MULTIPORTAL_FIELDS = frozenset({
 })
 
 
+def active_contract_for(db: Session, *, vehicle_id: int | None = None, client_id: int | None = None):
+    """Contrato ativo que descreve a relação comercial enviada ao provedor.
+
+    O provedor guarda número do contrato, dia de vencimento e vigência no
+    cadastro do CLIENTE, então precisamos escolher um contrato ao sincronizá-lo.
+    Preferimos o do veículo em questão; sem ele, o contrato ativo mais recente
+    do cliente. Retorna None quando não há contrato ativo — nesse caso os campos
+    contratuais simplesmente não são enviados.
+    """
+    from app.models.contract import Contract
+
+    if vehicle_id is not None:
+        contrato = db.scalar(
+            select(Contract)
+            .where(
+                Contract.vehicle_id == vehicle_id,
+                Contract.status == 'ativo',
+                Contract.is_deleted.is_(False),
+            )
+            .order_by(Contract.id.desc())
+        )
+        if contrato is not None:
+            return contrato
+
+    if client_id is not None:
+        return db.scalar(
+            select(Contract)
+            .where(
+                Contract.client_id == client_id,
+                Contract.status == 'ativo',
+                Contract.is_deleted.is_(False),
+            )
+            .order_by(Contract.id.desc())
+        )
+    return None
+
+
 def has_relevant_changes(
     instance: object,
     updates: Mapping[str, Any],

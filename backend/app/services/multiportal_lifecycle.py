@@ -204,6 +204,7 @@ def transfer_tracker_assignment(
     old_vehicle: Vehicle,
     new_vehicle: Vehicle,
     new_client: Client,
+    new_contract=None,
 ) -> LifecycleResult:
     if not _ensure_available([tracker]):
         return LifecycleResult()
@@ -230,7 +231,8 @@ def transfer_tracker_assignment(
         # de usuário e pode gerar nova senha/e-mail de boas-vindas. Transferir
         # equipamento não tem autorização para alterar credenciais do cliente.
         destination_steps = (
-            ('client', new_client.id, 'sync_new_client', lambda: multiportal_service.sync_client(new_client, None)),
+            ('client', new_client.id, 'sync_new_client',
+             lambda: multiportal_service.sync_client(new_client, None, contract=new_contract)),
             ('vehicle', new_vehicle.id, 'sync_new_vehicle', lambda: multiportal_service.sync_vehicle(new_vehicle)),
             ('tracker', tracker.id, 'sync_new_equipment', lambda: multiportal_service.sync_equipment(tracker)),
             (

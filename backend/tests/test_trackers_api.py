@@ -644,7 +644,7 @@ class TestLinkVeiculo:
         monkeypatch.setattr(multiportal_service, 'unlink_equipment_vehicle', unlink)
         monkeypatch.setattr(
             multiportal_service, 'sync_client',
-            lambda client, linked_user: calls.append(('sync_client', client.id)) or _multiportal_result('sincronizaCliente'),
+            lambda client, linked_user=None, **kw: calls.append(('sync_client', client.id)) or _multiportal_result('sincronizaCliente'),
         )
         monkeypatch.setattr(
             multiportal_service, 'sync_vehicle',
@@ -750,7 +750,7 @@ class TestLinkVeiculo:
         monkeypatch.setattr(
             multiportal_service,
             'sync_client',
-            lambda client, linked_user: calls.append(('sync_client', client.id)) or _multiportal_result('sincronizaCliente'),
+            lambda client, linked_user=None, **kw: calls.append(('sync_client', client.id)) or _multiportal_result('sincronizaCliente'),
         )
         monkeypatch.setattr(
             multiportal_service,

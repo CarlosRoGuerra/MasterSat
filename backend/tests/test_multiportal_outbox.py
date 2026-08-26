@@ -339,3 +339,44 @@ class TestIntegracaoTransacional:
         r = http.put(f'/api/v1/vehicles/{veiculo.id}', json={'notes': 'observação interna'})
         assert r.status_code == 200
         assert db.query(MultiportalOutbox).count() == 0
+
+
+class TestContratoAtivoParaSincronizacao:
+    """O provedor guarda numero do contrato, vencimento e vigencia no cadastro
+    do CLIENTE, entao e preciso escolher um contrato ao sincroniza-lo."""
+
+    def test_prefere_o_contrato_do_veiculo(self, db, cliente, veiculo, plan):
+        from app.models.contract import Contract
+        from app.services.multiportal_sync_state import active_contract_for
+
+        outro = Contract(client_id=cliente.id, plan_id=plan.id, start_date=date(2025, 1, 1), status='ativo')
+        do_veiculo = Contract(client_id=cliente.id, plan_id=plan.id, vehicle_id=veiculo.id,
+                              start_date=date(2025, 1, 1), status='ativo')
+        db.add(outro); db.add(do_veiculo); db.commit()
+
+        achado = active_contract_for(db, vehicle_id=veiculo.id, client_id=cliente.id)
+        assert achado.id == do_veiculo.id
+
+    def test_sem_contrato_do_veiculo_cai_no_do_cliente(self, db, cliente, veiculo, plan):
+        from app.models.contract import Contract
+        from app.services.multiportal_sync_state import active_contract_for
+
+        do_cliente = Contract(client_id=cliente.id, plan_id=plan.id, start_date=date(2025, 1, 1), status='ativo')
+        db.add(do_cliente); db.commit()
+
+        achado = active_contract_for(db, vehicle_id=veiculo.id, client_id=cliente.id)
+        assert achado.id == do_cliente.id
+
+    def test_ignora_contrato_cancelado(self, db, cliente, veiculo, plan):
+        from app.models.contract import Contract
+        from app.services.multiportal_sync_state import active_contract_for
+
+        cancelado = Contract(client_id=cliente.id, plan_id=plan.id, vehicle_id=veiculo.id,
+                             start_date=date(2025, 1, 1), status='cancelado')
+        db.add(cancelado); db.commit()
+
+        assert active_contract_for(db, vehicle_id=veiculo.id, client_id=cliente.id) is None
+
+    def test_sem_contrato_retorna_none(self, db, cliente, veiculo):
+        from app.services.multiportal_sync_state import active_contract_for
+        assert active_contract_for(db, vehicle_id=veiculo.id, client_id=cliente.id) is None

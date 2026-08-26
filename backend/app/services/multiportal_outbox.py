@@ -248,6 +248,7 @@ def process_item(db: Session, item: MultiportalOutbox) -> bool:
     from app.models.user import User
     from app.models.vehicle import Vehicle
     from app.services.multiportal import multiportal_service
+    from app.services.multiportal_sync_state import active_contract_for
 
     batch_id = uuid4().hex
     tracker = db.get(Tracker, item.tracker_id)
@@ -285,6 +286,7 @@ def process_item(db: Session, item: MultiportalOutbox) -> bool:
     try:
         steps = multiportal_service.full_sync_for_tracker(
             tracker=tracker, vehicle=vehicle, local_client=client, linked_user=linked_user,
+            contract=active_contract_for(db, vehicle_id=vehicle.id, client_id=client.id),
         )
     except Exception as exc:  # noqa: BLE001 — indisponibilidade vira retry, não crash do worker
         tracker.integration_status = 'erro'
