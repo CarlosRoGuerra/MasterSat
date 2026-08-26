@@ -800,3 +800,107 @@ class TestTaxaDesinstalacaoNaoDuplica:
         execute_closure(db, REF_MONTH)
         db.refresh(evento)
         assert db.get(Billing, evento.billing_id).title == produto_desinstalacao.name
+
+
+# ---------------------------------------------------------------------------
+# Atomicidade do fechamento
+# ---------------------------------------------------------------------------
+
+class TestFechamentoAtomico:
+    """O fechamento toma um pg_advisory_xact_lock da competência, que só vale
+    enquanto a transação viver. Serviços chamados no meio comitavam por conta
+    própria — matando o lock e deixando cobranças gravadas mesmo se o
+    fechamento falhasse adiante."""
+
+    def _charge_item(self, db, cliente):
+        """Item de cobrança pendente: é o que faz o fechamento chegar em
+        generate_item_billings, o último passo antes do commit."""
+        from app.models.client_charge_item import ClientChargeItem
+        item = ClientChargeItem(
+            client_id=cliente.id,
+            title='Servico avulso',
+            quantity=1,
+            unit_price=Decimal('50.00'),
+            total_amount=Decimal('50.00'),
+            installment_count=1,
+            start_date=date(2025, 5, 5),
+            active=True,
+            status='ativo',
+        )
+        db.add(item)
+        db.commit()
+        return item
+
+    def _explodir_no_ultimo_passo(self, monkeypatch):
+        import app.services.billing_closure as bc
+
+        def _explode(*args, **kwargs):
+            raise RuntimeError('falha simulada apos criar mensalidades e taxas')
+
+        monkeypatch.setattr(bc, 'generate_item_billings', _explode)
+
+    def test_falha_no_meio_nao_deixa_cobranca_gravada(self, db, cliente, plan, monkeypatch):
+        _make_active_contract(db, cliente, plan)
+        self._charge_item(db, cliente)
+        antes = db.query(Billing).count()
+
+        self._explodir_no_ultimo_passo(monkeypatch)
+        with pytest.raises(RuntimeError):
+            execute_closure(db, REF_MONTH)
+
+        db.rollback()
+        assert db.query(Billing).count() == antes
+
+    def test_evento_de_desinstalacao_nao_fica_marcado_se_o_fechamento_falhar(
+        self, db, cliente, veiculo, plan, monkeypatch,
+    ):
+        _make_active_contract(db, cliente, plan)
+        self._charge_item(db, cliente)
+        evento = _make_pending_event(db, cliente, veiculo)
+
+        self._explodir_no_ultimo_passo(monkeypatch)
+        with pytest.raises(RuntimeError):
+            execute_closure(db, REF_MONTH)
+
+        db.rollback()
+        db.refresh(evento)
+        # Se o evento ficasse 'processed' sem a cobranca existir, a taxa
+        # sumiria: nunca mais seria coletada por um novo fechamento.
+        assert evento.status == 'pending'
+        assert evento.billing_id is None
+
+    def test_falha_no_segundo_item_desfaz_o_primeiro(self, db, cliente, plan, monkeypatch):
+        """O cenario que expoe o bug: com dois itens, o commit interno do
+        primeiro ja persistia mensalidades, taxas e o proprio item. Um erro no
+        segundo nao tinha como desfazer isso — sobrava meio fechamento."""
+        _make_active_contract(db, cliente, plan)
+        self._charge_item(db, cliente)
+        self._charge_item(db, cliente)
+        antes = db.query(Billing).count()
+
+        import app.services.billing_closure as bc
+        original = bc.generate_item_billings
+        chamadas = {'n': 0}
+
+        def _falha_no_segundo(*args, **kwargs):
+            chamadas['n'] += 1
+            if chamadas['n'] >= 2:
+                raise RuntimeError('falha no segundo item')
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(bc, 'generate_item_billings', _falha_no_segundo)
+
+        with pytest.raises(RuntimeError):
+            execute_closure(db, REF_MONTH)
+
+        db.rollback()
+        assert chamadas['n'] == 2, 'o teste precisa chegar no segundo item'
+        assert db.query(Billing).count() == antes
+
+    def test_fechamento_bem_sucedido_continua_gravando(self, db, cliente, plan):
+        _make_active_contract(db, cliente, plan)
+        self._charge_item(db, cliente)
+        result = execute_closure(db, REF_MONTH)
+        assert result['generated'] >= 1
+        assert result['services_generated'] >= 1
+        assert db.query(Billing).count() >= 1

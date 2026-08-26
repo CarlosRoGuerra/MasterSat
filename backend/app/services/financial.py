@@ -69,8 +69,13 @@ def valor_com_juros(amount, due_date: date, referencia: date | None = None) -> f
     return round(valor * 1.02 + valor * 0.01 * meses, 2)
 
 
-def refresh_overdue_statuses(db: Session) -> None:
-    """Reclassifica pendente↔vencida via UPDATE no banco (sem carregar a tabela)."""
+def refresh_overdue_statuses(db: Session, *, commit: bool = True) -> None:
+    """Reclassifica pendente↔vencida via UPDATE no banco (sem carregar a tabela).
+
+    ``commit=False`` para quem já está dentro de uma transação maior: comitar
+    aqui encerraria a transação do chamador e, com ela, qualquer
+    ``pg_advisory_xact_lock`` que ele tenha tomado.
+    """
     today = hoje()
     db.query(Billing).filter(
         Billing.is_deleted == False,
@@ -82,7 +87,10 @@ def refresh_overdue_statuses(db: Session) -> None:
         Billing.status == BillingStatus.OVERDUE,
         Billing.due_date >= today,
     ).update({Billing.status: BillingStatus.PENDING}, synchronize_session=False)
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()
 
 
 def mark_delinquent_clients(db: Session) -> dict:
@@ -285,7 +293,15 @@ def generate_monthly_billings(db: Session, contract: Contract, cycles: int = 12,
     return created
 
 
-def generate_item_billings(db: Session, item: ClientChargeItem, force: bool = False) -> list[Billing]:
+def generate_item_billings(
+    db: Session, item: ClientChargeItem, force: bool = False, *, commit: bool = True,
+) -> list[Billing]:
+    """Gera as parcelas de um item de cobrança.
+
+    ``commit=False`` para uso dentro de uma transação maior (o fechamento
+    mensal): quem orquestra é que decide quando confirmar, senão um erro
+    posterior deixa o fechamento gravado pela metade.
+    """
     total_amount = _quantize_amount(item.total_amount)
     installments = max(int(item.installment_count or 1), 1)
     base_amount = (total_amount / installments).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
@@ -337,10 +353,14 @@ def generate_item_billings(db: Session, item: ClientChargeItem, force: bool = Fa
         db.add(billing)
         created.append(billing)
 
-    db.commit()
-    for row in created:
-        db.refresh(row)
-    refresh_overdue_statuses(db)
+    if commit:
+        db.commit()
+        for row in created:
+            db.refresh(row)
+    else:
+        # flush() dá id às linhas novas sem encerrar a transação do chamador.
+        db.flush()
+    refresh_overdue_statuses(db, commit=commit)
     return created
 
 

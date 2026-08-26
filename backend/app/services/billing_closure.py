@@ -294,8 +294,14 @@ def simulate_closure(
     reference_month: date,
     filter_type: str = 'all',
     client_id: int | None = None,
+    *,
+    commit: bool = True,
 ) -> dict:
-    refresh_overdue_statuses(db)
+    # commit=False quando chamada de dentro de execute_closure: o refresh abaixo
+    # comitava e, com isso, encerrava a transação que segura o lock da
+    # competência — na prática o lock morria aqui, antes de qualquer cobrança
+    # ser criada.
+    refresh_overdue_statuses(db, commit=commit)
 
     # Cliente que responde pela cobrança (interveniente). Sem ele, o próprio
     # cliente do contrato é o responsável — é por ele que o relatório agrupa.
@@ -462,8 +468,10 @@ def execute_closure(
 ) -> dict:
     # Trava a competência ANTES de simular: simulação + geração ficam atômicas em
     # relação a outro fechamento do mesmo mês, fechando a corrida de duplicação.
+    # O lock é de TRANSAÇÃO (pg_advisory_xact_lock), então nada daqui até o
+    # commit final pode comitar — daí o commit=False propagado abaixo.
     _lock_competencia(db, reference_month)
-    simulation = simulate_closure(db, reference_month, filter_type, client_id)
+    simulation = simulate_closure(db, reference_month, filter_type, client_id, commit=False)
     to_generate = [i for i in simulation['items'] if not i['already_generated']]
     if contract_ids is not None:
         to_generate = [i for i in to_generate if i['contract_id'] in contract_ids]
@@ -655,12 +663,14 @@ def execute_closure(
     for charge_item_dict in simulation['charge_items']:
         item_obj = db.get(ClientChargeItem, charge_item_dict['item_id'])
         if item_obj:
-            new_billings = generate_item_billings(db, item_obj)
+            new_billings = generate_item_billings(db, item_obj, commit=False)
             for b in new_billings:
-                db.flush()
                 service_billing_ids.append(b.id)
             services_generated += len(new_billings)
 
+    # Único commit do fechamento: até aqui nada foi confirmado, então uma falha
+    # em qualquer etapa acima desfaz o fechamento inteiro em vez de deixar
+    # metade das cobranças gravadas.
     db.commit()
     refresh_overdue_statuses(db)
 
