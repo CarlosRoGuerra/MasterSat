@@ -24,6 +24,26 @@ import pytest
 PREFIX = "/api/v1/trackers"
 
 
+def _multiportal_result(operation: str, *, success: bool = True):
+    from app.services.multiportal import CallResult
+    return CallResult(
+        operation=operation,
+        transaction_id='1234567890123456789',
+        status_code='200' if success else '99',
+        status_description='OK' if success else 'Falha simulada',
+        success=success,
+        response_payload={},
+    )
+
+
+def _enable_multiportal(monkeypatch):
+    from app.core.config import settings
+    monkeypatch.setattr(settings, 'multiportal_enabled', True)
+    monkeypatch.setattr(settings, 'multiportal_id', 'test-id')
+    monkeypatch.setattr(settings, 'multiportal_password', 'test-password')
+    monkeypatch.setattr(settings, 'multiportal_wsdl_url', 'https://multiportal.invalid/wsdl')
+
+
 # ---------------------------------------------------------------------------
 # GET / — listar rastreadores
 # ---------------------------------------------------------------------------
@@ -348,14 +368,15 @@ class TestUpdateRastreador:
         ).all()
         assert len(history) >= 1
 
-    def test_vehicle_link_change_logs_linked(self, http, db, rastreador, veiculo):
+    def test_vehicle_link_change_requires_controlled_flow(self, http, db, rastreador, veiculo):
         from app.models.tracker_history import TrackerHistory
-        http.put(f"{PREFIX}/{rastreador.id}", json={"vehicle_id": veiculo.id})
+        r = http.put(f"{PREFIX}/{rastreador.id}", json={"vehicle_id": veiculo.id})
+        assert r.status_code == 409
         history = db.query(TrackerHistory).filter(
             TrackerHistory.tracker_id == rastreador.id,
             TrackerHistory.action == "linked",
         ).all()
-        assert len(history) >= 1
+        assert history == []
 
     def test_xss_in_notes_stored(self, http, rastreador):
         xss = "<svg onload=alert(1)>"
@@ -376,12 +397,12 @@ class TestDeleteRastreador:
         db.refresh(rastreador)
         assert rastreador.is_deleted is True
 
-    def test_clears_vehicle_and_client_on_delete(self, http, db, rastreador_instalado):
+    def test_linked_tracker_must_be_uninstalled_before_delete(self, http, db, rastreador_instalado):
         r = http.delete(f"{PREFIX}/{rastreador_instalado.id}")
-        assert r.status_code == 200
+        assert r.status_code == 409
         db.refresh(rastreador_instalado)
-        assert rastreador_instalado.vehicle_id is None
-        assert rastreador_instalado.client_id is None
+        assert rastreador_instalado.vehicle_id is not None
+        assert rastreador_instalado.is_deleted is False
 
     def test_not_found(self, http):
         r = http.delete(f"{PREFIX}/99999")
@@ -562,6 +583,192 @@ class TestLinkVeiculo:
             TrackerHistory.action == "linked",
         ).all()
         assert len(history) >= 1
+
+    def test_transfer_unlinks_old_syncs_new_and_closes_old_contract(
+        self, http, db, cliente, veiculo, rastreador_instalado, contrato, monkeypatch,
+    ):
+        from app.models.enums import VehicleStatus
+        from app.models.tracker_history import TrackerHistory
+        from app.models.vehicle import Vehicle
+        from app.services.multiportal import multiportal_service
+
+        destination = Vehicle(
+            client_id=cliente.id,
+            plate='NEW1A23',
+            type='passeio',
+            chassis='9BWZZZ377VT000321',
+        )
+        db.add(destination)
+        rastreador_instalado.integration_status = 'sincronizado'
+        db.commit()
+        db.refresh(destination)
+        _enable_multiportal(monkeypatch)
+        calls = []
+
+        def unlink(tracker, vehicle, when=None):
+            calls.append(('unlink', vehicle.id))
+            return _multiportal_result('vinculoEquipamentoVeiculo')
+
+        monkeypatch.setattr(multiportal_service, 'unlink_equipment_vehicle', unlink)
+        monkeypatch.setattr(
+            multiportal_service, 'sync_client',
+            lambda client, linked_user: calls.append(('sync_client', client.id)) or _multiportal_result('sincronizaCliente'),
+        )
+        monkeypatch.setattr(
+            multiportal_service, 'sync_vehicle',
+            lambda target: calls.append(('sync_vehicle', target.id)) or _multiportal_result('sincronizaVeiculo'),
+        )
+        monkeypatch.setattr(
+            multiportal_service, 'sync_equipment',
+            lambda target: calls.append(('sync_equipment', target.id)) or _multiportal_result('sincronizaEquipamento'),
+        )
+        monkeypatch.setattr(
+            multiportal_service, 'link_vehicle_client',
+            lambda target, client, when=None: calls.append(('link_client', target.id)) or _multiportal_result('vinculoVeiculoCliente'),
+        )
+        monkeypatch.setattr(
+            multiportal_service, 'link_equipment_vehicle',
+            lambda target, destination_vehicle, when=None: calls.append(('link_equipment', destination_vehicle.id)) or _multiportal_result('vinculoEquipamentoVeiculo'),
+        )
+
+        r = http.post(
+            f"{PREFIX}/{rastreador_instalado.id}/link-vehicle",
+            json={'vehicle_id': destination.id, 'confirm_transfer': True},
+        )
+        assert r.status_code == 200
+        assert r.json()['previous_contracts_closed'] == 1
+        assert r.json()['multiportal_synchronized'] is True
+        assert calls == [
+            ('unlink', veiculo.id),
+            ('sync_client', cliente.id),
+            ('sync_vehicle', destination.id),
+            ('sync_equipment', rastreador_instalado.id),
+            ('link_client', destination.id),
+            ('link_equipment', destination.id),
+        ]
+        db.refresh(rastreador_instalado)
+        db.refresh(contrato)
+        db.refresh(veiculo)
+        assert rastreador_instalado.vehicle_id == destination.id
+        assert rastreador_instalado.integration_status == 'sincronizado'
+        assert contrato.status == 'cancelado'
+        assert contrato.end_date == date.today()
+        assert veiculo.status == VehicleStatus.NO_TRACKER
+        history = db.query(TrackerHistory).filter_by(
+            tracker_id=rastreador_instalado.id,
+            action='transferred',
+        ).all()
+        assert len(history) == 1
+
+    def test_transfer_requires_explicit_confirmation(
+        self, http, db, cliente, veiculo, rastreador_instalado, contrato,
+    ):
+        from app.models.vehicle import Vehicle
+
+        destination = Vehicle(
+            client_id=cliente.id,
+            plate='NEW4D56',
+            type='passeio',
+            chassis='9BWZZZ377VT000324',
+        )
+        db.add(destination)
+        db.commit()
+        db.refresh(destination)
+
+        r = http.post(
+            f"{PREFIX}/{rastreador_instalado.id}/link-vehicle",
+            json={'vehicle_id': destination.id},
+        )
+        assert r.status_code == 409
+        assert r.json()['detail']['code'] == 'transfer_confirmation_required'
+        db.refresh(rastreador_instalado)
+        db.refresh(contrato)
+        assert rastreador_instalado.vehicle_id == veiculo.id
+        assert contrato.status == 'ativo'
+
+    def test_transfer_failure_restores_old_external_and_local_assignment(
+        self, http, db, cliente, veiculo, rastreador_instalado, contrato, monkeypatch,
+    ):
+        from app.models.vehicle import Vehicle
+        from app.services.multiportal import multiportal_service
+
+        destination = Vehicle(
+            client_id=cliente.id,
+            plate='NEW2B34',
+            type='passeio',
+            chassis='9BWZZZ377VT000322',
+        )
+        db.add(destination)
+        rastreador_instalado.integration_status = 'sincronizado'
+        db.commit()
+        db.refresh(destination)
+        _enable_multiportal(monkeypatch)
+        calls = []
+
+        def unlink(tracker, vehicle, when=None):
+            calls.append(('unlink', vehicle.id))
+            return _multiportal_result('vinculoEquipamentoVeiculo')
+
+        def relink(tracker, vehicle, when=None):
+            calls.append(('relink', vehicle.id))
+            return _multiportal_result('vinculoEquipamentoVeiculo')
+
+        monkeypatch.setattr(multiportal_service, 'unlink_equipment_vehicle', unlink)
+        monkeypatch.setattr(multiportal_service, 'link_equipment_vehicle', relink)
+        monkeypatch.setattr(
+            multiportal_service,
+            'sync_client',
+            lambda client, linked_user: calls.append(('sync_client', client.id)) or _multiportal_result('sincronizaCliente'),
+        )
+        monkeypatch.setattr(
+            multiportal_service,
+            'sync_vehicle',
+            lambda target: calls.append(('sync_vehicle', target.id)) or _multiportal_result('sincronizaVeiculo', success=False),
+        )
+
+        r = http.post(
+            f"{PREFIX}/{rastreador_instalado.id}/link-vehicle",
+            json={'vehicle_id': destination.id, 'confirm_transfer': True},
+        )
+        assert r.status_code == 502
+        assert r.json()['detail']['reconciliation_required'] is False
+        assert calls == [
+            ('unlink', veiculo.id),
+            ('sync_client', cliente.id),
+            ('sync_vehicle', destination.id),
+            ('unlink', destination.id),
+            ('relink', veiculo.id),
+        ]
+        db.refresh(rastreador_instalado)
+        db.refresh(contrato)
+        assert rastreador_instalado.vehicle_id == veiculo.id
+        assert contrato.status == 'ativo'
+
+    def test_synced_transfer_is_blocked_when_multiportal_is_disabled(
+        self, http, db, cliente, veiculo, rastreador_instalado, contrato,
+    ):
+        from app.models.vehicle import Vehicle
+
+        destination = Vehicle(
+            client_id=cliente.id,
+            plate='NEW3C45',
+            type='passeio',
+            chassis='9BWZZZ377VT000323',
+        )
+        db.add(destination)
+        rastreador_instalado.integration_status = 'sincronizado'
+        db.commit()
+        db.refresh(destination)
+
+        r = http.post(
+            f"{PREFIX}/{rastreador_instalado.id}/link-vehicle",
+            json={'vehicle_id': destination.id, 'confirm_transfer': True},
+        )
+        assert r.status_code == 503
+        db.refresh(rastreador_instalado)
+        db.refresh(contrato)
+        assert rastreador_instalado.vehicle_id == veiculo.id
+        assert contrato.status == 'ativo'
 
 
 # ---------------------------------------------------------------------------

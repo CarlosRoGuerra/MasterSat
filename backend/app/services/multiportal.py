@@ -99,7 +99,11 @@ class MultiportalService:
         if self._client is None:
             self._ensure_enabled()
             session = requests.Session()
-            transport = Transport(session=session, timeout=settings.multiportal_request_timeout)
+            transport = Transport(
+                session=session,
+                timeout=settings.multiportal_request_timeout,
+                operation_timeout=settings.multiportal_request_timeout,
+            )
             self._client = Client(
                 settings.multiportal_wsdl_url,
                 transport=transport,
@@ -108,9 +112,11 @@ class MultiportalService:
         return self._client
 
     def _next_transaction_id(self) -> str:
-        # idTransacao é Java Long (max 19 dígitos) — não incluir microssegundos
-        from datetime import timezone
-        return datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')
+        # idTransacao é Java Long (máximo de 19 dígitos). O timestamp anterior,
+        # com precisão de segundos, repetia o mesmo ID em todas as etapas de um
+        # fluxo e entre workers concorrentes. Um inteiro aleatório de 63 bits
+        # permanece dentro do limite de Long e torna colisões impraticáveis.
+        return str(secrets.randbelow(8_000_000_000_000_000_000) + 1_000_000_000_000_000_000)
 
     def _call(self, operation: str, **params: Any) -> CallResult:
         client = self._get_client()

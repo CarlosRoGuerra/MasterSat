@@ -442,6 +442,20 @@ export default function RastreadoresPage() {
     try {
       const selectedManufacturer = manufacturers.find((item) => item.code === form.external_manufacturer_id);
       const isLinkingVehicle = !!form.vehicle_id && (!selectedTracker || selectedTracker.vehicle_id !== Number(form.vehicle_id));
+      const isTransfer = Boolean(
+        isEditing && selectedTracker?.vehicle_id && form.vehicle_id
+        && selectedTracker.vehicle_id !== Number(form.vehicle_id),
+      );
+      const isRemovingVehicle = Boolean(isEditing && selectedTracker?.vehicle_id && !form.vehicle_id);
+      if (isRemovingVehicle) {
+        throw new Error('Use a desinstalação do veículo para remover um vínculo existente.');
+      }
+      if (isTransfer && !window.confirm(
+        'Este rastreador já está instalado em outro veículo. A transferência encerrará o contrato anterior, '
+        + 'desfará o vínculo no Multiportal e criará o novo vínculo. Deseja continuar?',
+      )) {
+        return;
+      }
 
       const payload = {
         imei: onlyDigits(form.imei),
@@ -463,22 +477,28 @@ export default function RastreadoresPage() {
 
       let saved: Tracker;
       if (isEditing && selectedTracker) {
-        saved = await apiFetch<Tracker>(`/trackers/${selectedTracker.id}`, { method: 'PUT', body: JSON.stringify(payload) }, token);
+        // O PUT genérico não pode alterar vínculos. Em uma vinculação/transferência,
+        // salva somente dados técnicos e delega toda a relação ao endpoint seguro.
+        const updatePayload: Record<string, unknown> = { ...payload };
+        if (isLinkingVehicle) {
+          delete updatePayload.vehicle_id;
+          delete updatePayload.client_id;
+        }
+        saved = await apiFetch<Tracker>(`/trackers/${selectedTracker.id}`, { method: 'PUT', body: JSON.stringify(updatePayload) }, token);
 
-        // Se está vinculando a um veículo novo e selecionou plano → usar endpoint dedicado
-        if (isLinkingVehicle && form.link_plan_id) {
-          await apiFetch(`/trackers/${selectedTracker.id}/link-vehicle`, {
+        if (isLinkingVehicle) {
+          const linkResult = await apiFetch<{ tracker: Tracker }>(`/trackers/${selectedTracker.id}/link-vehicle`, {
             method: 'POST',
             body: JSON.stringify({
               vehicle_id: Number(form.vehicle_id),
-              plan_id: Number(form.link_plan_id),
+              confirm_transfer: isTransfer,
+              plan_id: form.link_plan_id ? Number(form.link_plan_id) : null,
               start_date: form.link_start_date,
               billing_day: form.link_billing_day ? Number(form.link_billing_day) : null,
               payment_method: form.link_payment_method || null,
-              auto_generate_billings: true,
-              billing_cycles: Number(form.link_billing_cycles) || 12,
             }),
           }, token);
+          saved = linkResult.tracker;
         }
       } else {
         saved = await apiFetch<Tracker>('/trackers', { method: 'POST', body: JSON.stringify(payload) }, token);

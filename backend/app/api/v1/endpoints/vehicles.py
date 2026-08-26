@@ -26,6 +26,13 @@ from app.models.vehicle import Vehicle
 from app.schemas.document import DocumentDeleteOut, DocumentOut, DocumentReviewUpdate
 from app.schemas.vehicle import VehicleCreate, VehicleOut, VehicleUpdate
 from app.services.financial import add_months, current_cycle_bounds, decimal_to_float, period_label_for_date, prorated_amount
+from app.services.multiportal_lifecycle import (
+    LifecycleSyncError,
+    add_lifecycle_logs,
+    apply_tracker_integration_result,
+    compensate_successful_uninstall,
+    unlink_vehicle_assignments,
+)
 from app.services.storage import remove_object, upload_bytes
 
 router = APIRouter()
@@ -210,40 +217,83 @@ def uninstall_vehicle(
     item_id: int,
     uninstall_date: date,
     uninstall_service_product_id: int | None = None,
-    uninstall_fee: float | None = None,
+    uninstall_fee: float | None = Query(default=None, ge=0, le=1_000_000),
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*EDIT_ROLES)),
 ):
-    vehicle = _get_vehicle_or_404(item_id, db)
+    vehicle = db.scalar(
+        select(Vehicle)
+        .where(Vehicle.id == item_id, Vehicle.is_deleted.is_(False))
+        .with_for_update()
+    )
+    if not vehicle:
+        raise HTTPException(status_code=404, detail='Veículo não encontrado')
     # Idempotência: veículo já retirado não pode ser desinstalado de novo — senão
     # cada re-clique cria outra taxa de desinstalação e cancela outro contrato.
     if vehicle.status == VehicleStatus.REMOVED:
         raise HTTPException(status_code=400, detail='Este veículo já está desinstalado.')
 
-    tracker = db.scalar(select(Tracker).where(Tracker.vehicle_id == vehicle.id, Tracker.is_deleted.is_(False)))
-    # Contrato DESTE veículo (não "qualquer contrato ativo do cliente"): em clientes
-    # com frota, buscar só pelo cliente cancelava o contrato do veículo errado.
-    contract_filters = [
-        Contract.vehicle_id == vehicle.id,
-        Contract.status == 'ativo',
-        Contract.is_deleted.is_(False),
-    ]
-    if tracker is not None:
-        # Havendo rastreador, casa também pelo equipamento para desempatar
-        # frotas com mais de um contrato no mesmo veículo.
-        contract = db.scalar(
-            select(Contract).where(*contract_filters, Contract.tracker_id == tracker.id)
+    if uninstall_date > date.today():
+        raise HTTPException(status_code=422, detail='A data de desinstalação não pode estar no futuro.')
+
+    trackers = list(
+        db.scalars(
+            select(Tracker)
+            .where(Tracker.vehicle_id == vehicle.id, Tracker.is_deleted.is_(False))
+            .order_by(Tracker.id)
+            .with_for_update()
+        ).all()
+    )
+    contracts = list(
+        db.scalars(
+            select(Contract)
+            .where(
+                Contract.vehicle_id == vehicle.id,
+                Contract.status == 'ativo',
+                Contract.is_deleted.is_(False),
+            )
             .order_by(Contract.id.desc())
-        )
-    else:
-        contract = None
-    if contract is None:
-        contract = db.scalar(select(Contract).where(*contract_filters).order_by(Contract.id.desc()))
+            .with_for_update()
+        ).all()
+    )
+    if any(uninstall_date < contract.start_date for contract in contracts):
+        raise HTTPException(status_code=422, detail='A desinstalação não pode ser anterior ao início do contrato.')
+
+    if uninstall_service_product_id:
+        product = db.get(ServiceProduct, uninstall_service_product_id)
+        if not product or product.is_deleted or not product.active:
+            raise HTTPException(status_code=404, detail='Produto de desinstalação não encontrado ou inativo.')
+
+    client = db.scalar(
+        select(Client).where(Client.id == vehicle.client_id, Client.is_deleted.is_(False))
+    )
+    if not client:
+        raise HTTPException(status_code=409, detail='O cliente do veículo não está disponível para desfazer o vínculo externo.')
+
+    try:
+        lifecycle = unlink_vehicle_assignments(trackers=trackers, vehicle=vehicle, client=client)
+    except LifecycleSyncError as exc:
+        add_lifecycle_logs(db, exc.calls)
+        if exc.compensation_failed:
+            affected_ids = {call.tracker_id for call in exc.calls if call.tracker_id}
+            for tracker in trackers:
+                if tracker.id in affected_ids:
+                    apply_tracker_integration_result(tracker, exc.calls, status='erro')
+        db.commit()
+        raise HTTPException(
+            status_code=exc.http_status,
+            detail={
+                'code': 'multiportal_unlink_failed',
+                'message': str(exc),
+                'reconciliation_required': exc.compensation_failed,
+            },
+        ) from exc
 
     source_prorated = None
     uninstall_fee_billing_id = None
 
-    if contract:
+    source_prorated_total = Decimal('0')
+    for contract in contracts:
         plan = db.get(Plan, contract.plan_id)
         if plan and plan.active:
             cycle_start, cycle_end = current_cycle_bounds(contract, plan, uninstall_date)
@@ -263,7 +313,9 @@ def uninstall_vehicle(
                 current_billing.amount = source_amount
                 current_billing.title = f'Plano pró-rata até desinstalação • {vehicle.plate}'
                 current_billing.notes = f'Cobrança proporcional até {uninstall_date.strftime("%d/%m/%Y")}'
-                source_prorated = decimal_to_float(source_amount)
+                source_prorated_total += source_amount
+    if source_prorated_total:
+        source_prorated = decimal_to_float(source_prorated_total)
 
     # Registra evento de desinstalação pendente — a taxa será injetada pelo motor
     # de fechamento mensal ao rodar o mês correspondente à data de retirada.
@@ -277,8 +329,8 @@ def uninstall_vehicle(
             notes_parts.append(f'Produto de serviço ID {uninstall_service_product_id}')
         event = UninstallEvent(
             vehicle_id=vehicle.id,
-            tracker_id=tracker.id if tracker else None,
-            contract_id=contract.id if contract else None,
+            tracker_id=trackers[0].id if trackers else None,
+            contract_id=contracts[0].id if contracts else None,
             client_id=vehicle.client_id,
             uninstall_date=uninstall_date,
             fee_amount=fee_value,
@@ -290,24 +342,65 @@ def uninstall_vehicle(
         db.flush()
         uninstall_fee_billing_id = None  # será preenchido no fechamento
 
-    if tracker:
+    for tracker in trackers:
         tracker.vehicle_id = None
         tracker.client_id = None
         tracker.status = TrackerStatus.STOCK
         tracker.install_date = None
         tracker.uninstall_date = uninstall_date
+        apply_tracker_integration_result(
+            tracker,
+            lifecycle.calls,
+            status='desvinculado' if lifecycle.managed_externally else 'sem_vinculo_externo',
+        )
     vehicle.status = VehicleStatus.REMOVED
     vehicle.uninstalled_at = uninstall_date
-    if contract:
+    for contract in contracts:
         contract.status = 'cancelado'
         contract.end_date = uninstall_date
-    db.commit()
+        transfer_note = f'Desinstalado em {uninstall_date.strftime("%d/%m/%Y")}'
+        contract.notes = f'{contract.notes}\n{transfer_note}'.strip() if contract.notes else transfer_note
+
+    add_lifecycle_logs(db, lifecycle.calls)
+    managed_trackers = [
+        tracker for tracker in trackers
+        if any(call.tracker_id == tracker.id and call.phase == 'unlink_equipment' for call in lifecycle.calls)
+    ]
+    try:
+        db.commit()
+    except Exception as db_exc:
+        db.rollback()
+        compensation_failed = False
+        if lifecycle.managed_externally:
+            try:
+                compensation_calls, compensation_failed = compensate_successful_uninstall(
+                    trackers=managed_trackers,
+                    vehicle=vehicle,
+                    client=client,
+                )
+                add_lifecycle_logs(db, lifecycle.calls + compensation_calls)
+                db.commit()
+            except Exception:
+                db.rollback()
+                compensation_failed = True
+        if compensation_failed:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    'code': 'multiportal_compensation_failed',
+                    'message': 'A gravação local falhou e o vínculo externo não pôde ser restaurado automaticamente.',
+                    'reconciliation_required': True,
+                },
+            ) from db_exc
+        raise
 
     return {
         'message': 'Desinstalação registrada com sucesso.',
         'source_prorated_amount': source_prorated,
         'uninstall_fee_billing_id': uninstall_fee_billing_id,
-        'tracker_returned_to_stock': bool(tracker),
+        'tracker_returned_to_stock': bool(trackers),
+        'trackers_returned_to_stock': len(trackers),
+        'multiportal_unlinked': lifecycle.managed_externally,
     }
 
 @router.get('/{item_id}/documents', response_model=list[DocumentOut])

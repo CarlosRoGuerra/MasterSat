@@ -230,18 +230,38 @@ class TestEnsureEnabled:
 # ---------------------------------------------------------------------------
 
 class TestNextTransactionId:
-    def test_format_is_14_digits(self):
+    def test_format_fits_java_long(self):
         svc = MultiportalService()
         tid = svc._next_transaction_id()
         assert tid.isdigit()
-        assert len(tid) == 14
+        assert len(tid) == 19
+        assert int(tid) <= 9_223_372_036_854_775_807
 
-    def test_different_calls_may_differ(self):
+    def test_different_calls_are_unique(self):
         svc = MultiportalService()
-        t1 = svc._next_transaction_id()
-        t2 = svc._next_transaction_id()
-        assert isinstance(t1, str)
-        assert isinstance(t2, str)
+        transaction_ids = {svc._next_transaction_id() for _ in range(100)}
+        assert len(transaction_ids) == 100
+
+
+class TestSoapTimeouts:
+    def test_wsdl_and_operation_have_bounded_timeout(self):
+        svc = MultiportalService()
+        with (
+            patch('app.services.multiportal.settings') as mocked_settings,
+            patch('app.services.multiportal.Transport') as transport_cls,
+            patch('app.services.multiportal.Client') as client_cls,
+        ):
+            mocked_settings.multiportal_enabled = True
+            mocked_settings.multiportal_id = 'id'
+            mocked_settings.multiportal_password = 'password'
+            mocked_settings.multiportal_wsdl_url = 'https://multiportal.invalid/wsdl'
+            mocked_settings.multiportal_request_timeout = 7
+            svc._get_client()
+
+        kwargs = transport_cls.call_args.kwargs
+        assert kwargs['timeout'] == 7
+        assert kwargs['operation_timeout'] == 7
+        client_cls.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

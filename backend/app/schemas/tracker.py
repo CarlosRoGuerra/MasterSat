@@ -192,6 +192,9 @@ class TrackerHistoryOut(BaseModel):
 
 class TrackerLinkPayload(BaseModel):
     vehicle_id: int
+    # Proteção contra clique/retry acidental: só é exigido quando o rastreador
+    # já está em outro veículo e a operação vira uma transferência destrutiva.
+    confirm_transfer: bool = False
     plan_id: int | None = None
     start_date: date = Field(default_factory=date.today)
     # 1..31 — meses curtos são ajustados por normalize_due_date()

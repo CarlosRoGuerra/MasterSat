@@ -28,6 +28,14 @@ from app.schemas.tracker import (
     TrackerOut,
     TrackerUpdate,
 )
+from app.services.multiportal_lifecycle import (
+    LifecycleResult,
+    LifecycleSyncError,
+    add_lifecycle_logs,
+    apply_tracker_integration_result,
+    compensate_successful_transfer,
+    transfer_tracker_assignment,
+)
 
 router = APIRouter()
 
@@ -398,7 +406,20 @@ def update_item(
     if 'imei' in data and data['imei'] is not None:
         _ensure_imei_available(data['imei'], db, ignore_id=item_id)
     if 'vehicle_id' in data:
-        _ensure_vehicle_assignment_available(data.get('vehicle_id'), db, ignore_tracker_id=item_id)
+        requested_vehicle_id = data.get('vehicle_id')
+        if requested_vehicle_id != tracker.vehicle_id:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    'O vínculo com veículo não pode ser alterado pela edição comum. '
+                    'Use o fluxo de vinculação/transferência ou a desinstalação.'
+                ),
+            )
+    if tracker.vehicle_id and 'client_id' in data and data.get('client_id') != tracker.client_id:
+        raise HTTPException(
+            status_code=409,
+            detail='O cliente do rastreador é definido pelo veículo vinculado e não pode ser alterado diretamente.',
+        )
 
     for key, value in data.items():
         setattr(tracker, key, value)
@@ -441,6 +462,14 @@ def delete_item(
     current_user: User = Depends(require_roles(*EDIT_ROLES)),
 ):
     tracker = _get_tracker_or_404(item_id, db)
+    if tracker.vehicle_id is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                'Rastreador vinculado não pode ser excluído. '
+                'Desinstale-o do veículo antes de remover o cadastro.'
+            ),
+        )
     tracker.is_deleted = True
     _register_history(
         db,
@@ -514,16 +543,120 @@ def link_vehicle(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(*EDIT_ROLES)),
 ):
-    """Vincula rastreador a um veículo e, opcionalmente, cria o contrato com plano."""
-    tracker = _get_tracker_or_404(item_id, db)
-    vehicle = _get_vehicle_or_404(payload.vehicle_id, db)
+    """Vincula ou transfere um rastreador e, opcionalmente, cria o contrato."""
+    tracker = db.scalar(
+        select(Tracker)
+        .where(Tracker.id == item_id, Tracker.is_deleted.is_(False))
+        .with_for_update()
+    )
+    if not tracker:
+        raise HTTPException(status_code=404, detail='Rastreador não encontrado')
+    vehicle = db.scalar(
+        select(Vehicle)
+        .where(Vehicle.id == payload.vehicle_id, Vehicle.is_deleted.is_(False))
+        .with_for_update()
+    )
+    if not vehicle:
+        raise HTTPException(status_code=404, detail='Veículo não encontrado')
 
     if not vehicle.client_id:
         raise HTTPException(status_code=400, detail='O veículo não possui cliente vinculado.')
 
+    new_client = db.scalar(
+        select(Client).where(Client.id == vehicle.client_id, Client.is_deleted.is_(False))
+    )
+    if not new_client:
+        raise HTTPException(status_code=409, detail='O cliente do veículo não está disponível.')
+
+    plan = None
+    if payload.plan_id:
+        plan = db.get(Plan, payload.plan_id)
+        if not plan or plan.is_deleted or not plan.active:
+            raise HTTPException(status_code=404, detail='Plano não encontrado ou inativo.')
+
+    interveniente_id = payload.interveniente_client_id
+    if interveniente_id == vehicle.client_id:
+        interveniente_id = None
+    if interveniente_id:
+        interveniente = db.get(Client, interveniente_id)
+        if not interveniente or interveniente.is_deleted:
+            raise HTTPException(status_code=404, detail='Interveniente não encontrado na base de clientes.')
+
     previous_vehicle_id = tracker.vehicle_id
     previous_client_id = tracker.client_id
     previous_status = tracker.status.value if isinstance(tracker.status, TrackerStatus) else str(tracker.status)
+    is_transfer = previous_vehicle_id is not None and previous_vehicle_id != vehicle.id
+    if is_transfer and not payload.confirm_transfer:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'code': 'transfer_confirmation_required',
+                'message': (
+                    'O rastreador já está instalado em outro veículo. '
+                    'Confirme explicitamente a transferência para encerrar o vínculo anterior.'
+                ),
+                'previous_vehicle_id': previous_vehicle_id,
+                'destination_vehicle_id': vehicle.id,
+            },
+        )
+
+    active_contracts = list(
+        db.scalars(
+            select(Contract)
+            .where(
+                Contract.tracker_id == tracker.id,
+                Contract.status == 'ativo',
+                Contract.is_deleted.is_(False),
+            )
+            .order_by(Contract.id.desc())
+            .with_for_update()
+        ).all()
+    )
+    if any(payload.start_date < contract.start_date for contract in active_contracts):
+        raise HTTPException(status_code=422, detail='A transferência não pode ser anterior ao início do contrato atual.')
+
+    if previous_vehicle_id == vehicle.id and not payload.plan_id:
+        return {
+            'tracker': _tracker_to_out(tracker, db),
+            'contract': None,
+            'message': f'Rastreador já está vinculado ao veículo {vehicle.plate}.',
+        }
+    if previous_vehicle_id == vehicle.id and payload.plan_id and active_contracts:
+        raise HTTPException(status_code=409, detail='Já existe contrato ativo para este rastreador e veículo.')
+
+    old_vehicle = None
+    lifecycle = None
+    if is_transfer:
+        old_vehicle = db.scalar(
+            select(Vehicle).where(Vehicle.id == previous_vehicle_id).with_for_update()
+        )
+        if not old_vehicle:
+            raise HTTPException(
+                status_code=409,
+                detail='O veículo anterior não existe mais; reconcilie o vínculo antes de transferir.',
+            )
+        try:
+            lifecycle = transfer_tracker_assignment(
+                tracker=tracker,
+                old_vehicle=old_vehicle,
+                new_vehicle=vehicle,
+                new_client=new_client,
+            )
+        except LifecycleSyncError as exc:
+            add_lifecycle_logs(db, exc.calls)
+            if exc.compensation_failed:
+                apply_tracker_integration_result(tracker, exc.calls, status='erro')
+            db.commit()
+            raise HTTPException(
+                status_code=exc.http_status,
+                detail={
+                    'code': 'multiportal_transfer_failed',
+                    'message': str(exc),
+                    'reconciliation_required': exc.compensation_failed,
+                },
+            ) from exc
+    else:
+        lifecycle = LifecycleResult()
 
     tracker.vehicle_id = vehicle.id
     tracker.client_id = vehicle.client_id
@@ -538,9 +671,34 @@ def link_vehicle(
         vehicle.status = VehicleStatus.ACTIVE
         vehicle.uninstalled_at = None
 
+    if is_transfer:
+        for old_contract in active_contracts:
+            old_contract.status = 'cancelado'
+            old_contract.end_date = payload.start_date
+            transfer_note = f'Transferido para o veículo {vehicle.plate} em {payload.start_date.strftime("%d/%m/%Y")}'
+            old_contract.notes = (
+                f'{old_contract.notes}\n{transfer_note}'.strip()
+                if old_contract.notes else transfer_note
+            )
+        other_tracker = db.scalar(
+            select(Tracker.id).where(
+                Tracker.vehicle_id == old_vehicle.id,
+                Tracker.id != tracker.id,
+                Tracker.is_deleted.is_(False),
+            )
+        )
+        if not other_tracker and old_vehicle.status == VehicleStatus.ACTIVE:
+            old_vehicle.status = VehicleStatus.NO_TRACKER
+
+    apply_tracker_integration_result(
+        tracker,
+        lifecycle.calls,
+        status='sincronizado' if lifecycle.managed_externally else 'pendente',
+    )
+
     _register_history(
         db, tracker,
-        action='linked',
+        action='transferred' if is_transfer else 'linked',
         previous_vehicle_id=previous_vehicle_id,
         new_vehicle_id=vehicle.id,
         previous_client_id=previous_client_id,
@@ -548,29 +706,17 @@ def link_vehicle(
         previous_status=previous_status,
         new_status=tracker.status.value if isinstance(tracker.status, TrackerStatus) else str(tracker.status),
         created_by_user_id=current_user.id,
-        notes=f'Vinculado ao veículo {vehicle.plate}' + (f' com plano #{payload.plan_id}' if payload.plan_id else ''),
+        notes=(f'Transferido para o veículo {vehicle.plate}' if is_transfer else f'Vinculado ao veículo {vehicle.plate}')
+        + (f' com plano #{payload.plan_id}' if payload.plan_id else ''),
     )
 
     contract_out: ContractOut | None = None
-    if payload.plan_id:
-        plan = db.get(Plan, payload.plan_id)
-        if not plan or plan.is_deleted:
-            raise HTTPException(status_code=404, detail='Plano não encontrado.')
-
+    if plan:
         # Dia de vencimento: usa payload > cliente > dia do mês de início (cap 28)
-        client_obj = db.get(Client, vehicle.client_id)
-        client_billing_day = getattr(client_obj, 'billing_day', None) if client_obj else None
+        client_billing_day = getattr(new_client, 'billing_day', None)
         billing_day = payload.billing_day or client_billing_day or (
             payload.start_date.day if payload.start_date.day <= 28 else 28
         )
-
-        interveniente_id = payload.interveniente_client_id
-        if interveniente_id == vehicle.client_id:
-            interveniente_id = None  # o próprio cliente → não registra interveniente
-        if interveniente_id:
-            interveniente = db.get(Client, interveniente_id)
-            if not interveniente or interveniente.is_deleted:
-                raise HTTPException(status_code=404, detail='Interveniente não encontrado na base de clientes.')
 
         contract = Contract(
             client_id=vehicle.client_id,
@@ -590,11 +736,43 @@ def link_vehicle(
         db.flush()
         contract_out = _serialize_contract(db, contract)
 
-    db.commit()
+    add_lifecycle_logs(db, lifecycle.calls)
+    try:
+        db.commit()
+    except Exception as db_exc:
+        db.rollback()
+        compensation_failed = False
+        if is_transfer and lifecycle.managed_externally and old_vehicle:
+            try:
+                compensation_calls, compensation_failed = compensate_successful_transfer(
+                    tracker=tracker,
+                    old_vehicle=old_vehicle,
+                    new_vehicle=vehicle,
+                )
+                add_lifecycle_logs(db, lifecycle.calls + compensation_calls)
+                db.commit()
+            except Exception:
+                db.rollback()
+                compensation_failed = True
+        if compensation_failed:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    'code': 'multiportal_compensation_failed',
+                    'message': 'A gravação local falhou e o vínculo externo não pôde ser restaurado automaticamente.',
+                    'reconciliation_required': True,
+                },
+            ) from db_exc
+        raise
     db.refresh(tracker)
 
     return {
         'tracker': _tracker_to_out(tracker, db),
         'contract': contract_out,
-        'message': f'Rastreador vinculado ao veículo {vehicle.plate}' + (' com contrato criado.' if contract_out else '.'),
+        'message': (
+            f'Rastreador transferido para o veículo {vehicle.plate}'
+            if is_transfer else f'Rastreador vinculado ao veículo {vehicle.plate}'
+        ) + (' com contrato criado.' if contract_out else '.'),
+        'previous_contracts_closed': len(active_contracts) if is_transfer else 0,
+        'multiportal_synchronized': lifecycle.managed_externally,
     }
