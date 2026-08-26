@@ -173,6 +173,36 @@ class TestUpdateVehicle:
         r = http.put(f"{PREFIX}/99999", json={"model": "X"})
         assert r.status_code == 404
 
+    def test_multiportal_change_marks_all_vehicle_trackers_pending(
+        self, http, db, cliente, veiculo, rastreador, rastreador_instalado,
+    ):
+        rastreador.vehicle_id = veiculo.id
+        rastreador.client_id = cliente.id
+        rastreador.status = TrackerStatus.INSTALLED
+        rastreador.integration_status = 'sincronizado'
+        rastreador_instalado.integration_status = 'sincronizado'
+        db.commit()
+
+        r = http.put(f"{PREFIX}/{veiculo.id}", json={"model": "Modelo atualizado"})
+
+        assert r.status_code == 200
+        db.refresh(rastreador)
+        db.refresh(rastreador_instalado)
+        assert rastreador.integration_status == 'pendente'
+        assert rastreador_instalado.integration_status == 'pendente'
+
+    def test_local_only_change_keeps_tracker_synced(
+        self, http, db, veiculo, rastreador_instalado,
+    ):
+        rastreador_instalado.integration_status = 'sincronizado'
+        db.commit()
+
+        r = http.put(f"{PREFIX}/{veiculo.id}", json={"sales_point": "Loja Centro"})
+
+        assert r.status_code == 200
+        db.refresh(rastreador_instalado)
+        assert rastreador_instalado.integration_status == 'sincronizado'
+
 
 # ---------------------------------------------------------------------------
 # DELETE /{id}

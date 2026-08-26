@@ -26,6 +26,11 @@ from app.models.user import User
 from app.models.vehicle import Vehicle
 from app.schemas.client import ClientCreate, ClientOut, ClientUpdate
 from app.schemas.document import DocumentDeleteOut, DocumentOut, DocumentReviewUpdate
+from app.services.multiportal_sync_state import (
+    CLIENT_MULTIPORTAL_FIELDS,
+    has_relevant_changes,
+    invalidate_client_trackers,
+)
 from app.services.storage import remove_object, upload_bytes
 
 router = APIRouter()
@@ -234,8 +239,11 @@ def update_item(
         }
         data['address'] = build_address(base)
 
+    multiportal_changed = has_relevant_changes(obj, data, CLIENT_MULTIPORTAL_FIELDS)
     for key, value in data.items():
         setattr(obj, key, value)
+    if multiportal_changed:
+        invalidate_client_trackers(db, obj.id)
     _sync_client_user(obj, db)
     db.commit()
     db.refresh(obj)

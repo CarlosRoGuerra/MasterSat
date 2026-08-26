@@ -34,6 +34,11 @@ from app.services.multiportal_lifecycle import (
     compensate_successful_uninstall,
     unlink_vehicle_assignments,
 )
+from app.services.multiportal_sync_state import (
+    VEHICLE_MULTIPORTAL_FIELDS,
+    has_relevant_changes,
+    invalidate_vehicle_trackers,
+)
 from app.services.storage import remove_object, upload_bytes
 
 router = APIRouter()
@@ -187,8 +192,11 @@ def update_item(
     if 'chassis' in data:
         _ensure_chassis_available(data['chassis'], db, ignore_id=item_id)
 
+    multiportal_changed = has_relevant_changes(obj, data, VEHICLE_MULTIPORTAL_FIELDS)
     for key, value in data.items():
         setattr(obj, key, value)
+    if multiportal_changed:
+        invalidate_vehicle_trackers(db, obj.id)
     db.commit()
     db.refresh(obj)
     return obj

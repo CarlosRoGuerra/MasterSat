@@ -184,6 +184,34 @@ class TestUpdateClient:
         data = r.json()
         assert data["cpf_cnpj"] == cliente.cpf_cnpj  # unchanged
 
+    def test_multiportal_change_marks_linked_trackers_pending(
+        self, http, db, cliente, rastreador_instalado,
+    ):
+        rastreador_instalado.integration_status = 'sincronizado'
+        rastreador_instalado.integration_last_code = '200'
+        db.commit()
+
+        r = http.put(f"{PREFIX}/{cliente.id}", json={"name": "Nome enviado ao Multiportal"})
+
+        assert r.status_code == 200
+        db.refresh(rastreador_instalado)
+        assert rastreador_instalado.integration_status == 'pendente'
+        # O retorno anterior continua disponível para diagnóstico; o badge de
+        # estado, porém, não pode mais afirmar que os dados atuais sincronizaram.
+        assert rastreador_instalado.integration_last_code == '200'
+
+    def test_local_only_change_keeps_synced_status(
+        self, http, db, cliente, rastreador_instalado,
+    ):
+        rastreador_instalado.integration_status = 'sincronizado'
+        db.commit()
+
+        r = http.put(f"{PREFIX}/{cliente.id}", json={"notes": "Observação somente interna"})
+
+        assert r.status_code == 200
+        db.refresh(rastreador_instalado)
+        assert rastreador_instalado.integration_status == 'sincronizado'
+
 
 # ---------------------------------------------------------------------------
 # DELETE /{id}

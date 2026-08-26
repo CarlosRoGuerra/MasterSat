@@ -26,6 +26,11 @@ from app.schemas.client_portal import (
     ClientVehicleDocumentOut,
     ClientVehicleOut,
 )
+from app.services.multiportal_sync_state import (
+    CLIENT_MULTIPORTAL_FIELDS,
+    has_relevant_changes,
+    invalidate_client_trackers,
+)
 from app.services.storage import remove_object, upload_bytes
 
 router = APIRouter()
@@ -250,10 +255,13 @@ def update_profile(
     elif data.get('email') and data.get('extra_emails'):
         data['extra_emails'] = [email for email in data['extra_emails'] if email != data['email']] or None
 
+    multiportal_changed = has_relevant_changes(client, data, CLIENT_MULTIPORTAL_FIELDS)
     for key, value in data.items():
         setattr(client, key, value)
 
     client.address = _build_address(client)
+    if multiportal_changed:
+        invalidate_client_trackers(db, client.id)
     db.commit()
     db.refresh(client)
     db.refresh(current_user)

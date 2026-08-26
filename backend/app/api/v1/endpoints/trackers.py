@@ -36,6 +36,11 @@ from app.services.multiportal_lifecycle import (
     compensate_successful_transfer,
     transfer_tracker_assignment,
 )
+from app.services.multiportal_sync_state import (
+    TRACKER_MULTIPORTAL_FIELDS,
+    has_relevant_changes,
+    invalidate_tracker,
+)
 
 router = APIRouter()
 
@@ -421,15 +426,22 @@ def update_item(
             detail='O cliente do rastreador é definido pelo veículo vinculado e não pode ser alterado diretamente.',
         )
 
+    multiportal_changed = has_relevant_changes(tracker, data, TRACKER_MULTIPORTAL_FIELDS)
     for key, value in data.items():
         setattr(tracker, key, value)
+    if multiportal_changed:
+        invalidate_tracker(tracker)
 
     new_vehicle_id = tracker.vehicle_id
     new_client_id = tracker.client_id
     new_status = tracker.status.value if isinstance(tracker.status, TrackerStatus) else str(tracker.status)
 
     action = 'updated'
-    notes = 'Dados gerais atualizados'
+    notes = (
+        'Dados enviados à Multiportal atualizados; nova sincronização pendente'
+        if multiportal_changed
+        else 'Dados gerais atualizados'
+    )
     if previous_vehicle_id != new_vehicle_id:
         action = 'linked' if new_vehicle_id else 'unlinked'
         notes = 'Vínculo do rastreador atualizado'

@@ -384,6 +384,38 @@ class TestUpdateRastreador:
         assert r.status_code == 200
         assert r.json()["notes"] == xss
 
+    def test_equipment_change_marks_tracker_pending(self, http, db, rastreador):
+        rastreador.integration_status = 'sincronizado'
+        rastreador.integration_last_code = '200'
+        db.commit()
+
+        r = http.put(f"{PREFIX}/{rastreador.id}", json={"sim_iccid": "8955123456789012345"})
+
+        assert r.status_code == 200
+        assert r.json()["integration_status"] == 'pendente'
+        db.refresh(rastreador)
+        assert rastreador.integration_status == 'pendente'
+        assert rastreador.integration_last_code == '200'
+
+    def test_local_only_change_keeps_tracker_synced(self, http, db, rastreador):
+        rastreador.integration_status = 'sincronizado'
+        db.commit()
+
+        r = http.put(f"{PREFIX}/{rastreador.id}", json={"notes": "Somente uso interno"})
+
+        assert r.status_code == 200
+        assert r.json()["integration_status"] == 'sincronizado'
+
+    def test_same_external_value_does_not_create_false_pending(self, http, db, rastreador):
+        rastreador.sim_iccid = '8955123456789012345'
+        rastreador.integration_status = 'sincronizado'
+        db.commit()
+
+        r = http.put(f"{PREFIX}/{rastreador.id}", json={"sim_iccid": "8955123456789012345"})
+
+        assert r.status_code == 200
+        assert r.json()["integration_status"] == 'sincronizado'
+
 
 # ---------------------------------------------------------------------------
 # DELETE /{id}
