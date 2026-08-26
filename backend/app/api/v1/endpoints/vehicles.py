@@ -22,6 +22,7 @@ from app.models.plan import Plan
 from app.models.service_product import ServiceProduct
 from app.models.tracker import Tracker
 from app.models.uninstall_event import UninstallEvent
+from app.models.user import User
 from app.models.vehicle import Vehicle
 from app.schemas.document import DocumentDeleteOut, DocumentOut, DocumentReviewUpdate
 from app.schemas.vehicle import VehicleCreate, VehicleOut, VehicleUpdate
@@ -219,7 +220,7 @@ def uninstall_vehicle(
     uninstall_service_product_id: int | None = None,
     uninstall_fee: float | None = Query(default=None, ge=0, le=1_000_000),
     db: Session = Depends(get_db),
-    _: object = Depends(require_roles(*EDIT_ROLES)),
+    current_user: User = Depends(require_roles(*EDIT_ROLES)),
 ):
     vehicle = db.scalar(
         select(Vehicle)
@@ -264,6 +265,25 @@ def uninstall_vehicle(
         uninstall_product = db.get(ServiceProduct, uninstall_service_product_id)
         if not uninstall_product or uninstall_product.is_deleted or not uninstall_product.active:
             raise HTTPException(status_code=404, detail='Produto de desinstalação não encontrado ou inativo.')
+
+    # Cobrar abaixo do preço de tabela é conceder desconto — decisão comercial,
+    # não operacional. Sem esta trava, um perfil OPERACIONAL poderia registrar
+    # o serviço e informar um valor abaixo do mínimo faturável, fazendo a taxa
+    # ser descartada silenciosamente no fechamento (veículo retirado, receita
+    # perdida, sem rastro de quem autorizou).
+    desconto_concedido = (
+        uninstall_product is not None
+        and uninstall_fee is not None
+        and Decimal(str(uninstall_fee)) < Decimal(str(uninstall_product.default_price))
+    )
+    if desconto_concedido and current_user.role not in (UserRole.ADMIN, UserRole.FINANCIAL):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f'Cobrar abaixo do preço de tabela do serviço '
+                f'(R$ {float(uninstall_product.default_price):.2f}) exige perfil financeiro ou administrador.'
+            ),
+        )
 
     client = db.scalar(
         select(Client).where(Client.id == vehicle.client_id, Client.is_deleted.is_(False))
@@ -339,6 +359,12 @@ def uninstall_vehicle(
             notes_parts.append(f'Taxa: R$ {fee_value:.2f}')
         if uninstall_product is not None:
             notes_parts.append(f'Serviço: {uninstall_product.name} (ID {uninstall_service_product_id})')
+        if desconto_concedido:
+            # Rastro de quem autorizou: a taxa saiu abaixo da tabela.
+            notes_parts.append(
+                f'Desconto autorizado por {current_user.name} (#{current_user.id}) — '
+                f'tabela R$ {float(uninstall_product.default_price):.2f}'
+            )
         event = UninstallEvent(
             vehicle_id=vehicle.id,
             tracker_id=trackers[0].id if trackers else None,

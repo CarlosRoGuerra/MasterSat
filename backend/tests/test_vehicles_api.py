@@ -401,6 +401,44 @@ class TestUninstallVehicle:
         assert rastreador_instalado.vehicle_id == veiculo.id
         assert contrato.status == 'ativo'
 
+    def test_operacional_nao_pode_cobrar_abaixo_da_tabela(
+        self, http_op, db, veiculo, rastreador_instalado, contrato, produto_desinstalacao,
+    ):
+        """Exploit fechado: com o valor mandando sobre o catalogo, um perfil
+        OPERACIONAL poderia registrar o servico e informar R$ 4,99 — abaixo do
+        minimo faturavel — fazendo a taxa ser descartada no fechamento. Veiculo
+        retirado, receita perdida, sem rastro de quem autorizou."""
+        r = self._uninstall(
+            http_op, veiculo.id,
+            uninstall_service_product_id=produto_desinstalacao.id,
+            uninstall_fee=4.99,
+        )
+        assert r.status_code == 403
+        assert db.query(UninstallEvent).filter_by(vehicle_id=veiculo.id).count() == 0
+
+    def test_operacional_pode_desinstalar_pelo_preco_de_tabela(
+        self, http_op, db, veiculo, rastreador_instalado, contrato, produto_desinstalacao,
+    ):
+        r = self._uninstall(
+            http_op, veiculo.id,
+            uninstall_service_product_id=produto_desinstalacao.id,
+            uninstall_fee=float(produto_desinstalacao.default_price),
+        )
+        assert r.status_code == 200
+
+    def test_admin_pode_conceder_desconto_e_fica_registrado(
+        self, http, db, veiculo, rastreador_instalado, contrato, produto_desinstalacao,
+    ):
+        r = self._uninstall(
+            http, veiculo.id,
+            uninstall_service_product_id=produto_desinstalacao.id,
+            uninstall_fee=80.0,
+        )
+        assert r.status_code == 200
+        event = db.query(UninstallEvent).filter_by(vehicle_id=veiculo.id).first()
+        assert float(event.fee_amount) == 80.0
+        assert 'Desconto autorizado por' in (event.notes or '')
+
     def test_uninstall_processes_all_trackers_and_contracts(
         self, http, db, cliente, veiculo, rastreador_instalado, contrato, plan,
     ):
