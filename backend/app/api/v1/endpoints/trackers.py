@@ -41,6 +41,9 @@ from app.services.multiportal_sync_state import (
     has_relevant_changes,
     invalidate_tracker,
 )
+from app.services.multiportal_outbox import (
+    enqueue_full_sync,
+)
 
 router = APIRouter()
 
@@ -430,7 +433,7 @@ def update_item(
     for key, value in data.items():
         setattr(tracker, key, value)
     if multiportal_changed:
-        invalidate_tracker(tracker)
+        invalidate_tracker(tracker, db)
 
     new_vehicle_id = tracker.vehicle_id
     new_client_id = tracker.client_id
@@ -707,6 +710,12 @@ def link_vehicle(
         lifecycle.calls,
         status='sincronizado' if lifecycle.managed_externally else 'pendente',
     )
+    if not lifecycle.managed_externally:
+        # Vínculo criado sem passar pelo Multiportal (integração desligada ou
+        # sem referência externa ainda): entra na fila para o worker levar o
+        # cadastro completo quando o provedor estiver disponível, em vez de
+        # ficar 'pendente' esperando alguém clicar em sincronizar.
+        enqueue_full_sync(db, tracker.id, reason='vínculo criado', flush=False)
 
     _register_history(
         db, tracker,

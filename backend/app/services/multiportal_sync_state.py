@@ -69,12 +69,25 @@ def has_relevant_changes(
     )
 
 
-def _mark_pending(trackers: list[Tracker]) -> int:
+def _mark_pending(trackers: list[Tracker], db: Session | None = None, reason: str | None = None) -> int:
+    """Marca os rastreadores como pendentes e os enfileira para sincronizar.
+
+    O enfileiramento acontece na MESMA transação da alteração do dado (padrão
+    outbox): ou as duas coisas valem, ou nenhuma. Marcar como pendente sem
+    enfileirar deixaria o registro esperando um clique manual — que é o
+    problema que a fila existe para resolver.
+    """
+    from app.services.multiportal_outbox import enqueue_full_sync
+
     changed = 0
     for tracker in trackers:
         if tracker.integration_status != 'pendente':
             tracker.integration_status = 'pendente'
             changed += 1
+        # Enfileira mesmo se já estava 'pendente': o dado mudou de novo, e
+        # enqueue_full_sync é idempotente por rastreador.
+        if db is not None and tracker.vehicle_id:
+            enqueue_full_sync(db, tracker.id, reason=reason, flush=False)
     return changed
 
 
@@ -95,7 +108,7 @@ def invalidate_client_trackers(db: Session, client_id: int) -> int:
             )
         ).all()
     )
-    return _mark_pending(trackers)
+    return _mark_pending(trackers, db, reason='cliente alterado')
 
 
 def invalidate_vehicle_trackers(db: Session, vehicle_id: int) -> int:
@@ -108,12 +121,15 @@ def invalidate_vehicle_trackers(db: Session, vehicle_id: int) -> int:
             )
         ).all()
     )
-    return _mark_pending(trackers)
+    return _mark_pending(trackers, db, reason='veículo alterado')
 
 
-def invalidate_tracker(tracker: Tracker) -> bool:
-    """Marca o próprio equipamento para nova sincronização."""
-    if tracker.integration_status == 'pendente':
-        return False
+def invalidate_tracker(tracker: Tracker, db: Session | None = None) -> bool:
+    """Marca o próprio equipamento para nova sincronização e o enfileira."""
+    from app.services.multiportal_outbox import enqueue_full_sync
+
+    ja_pendente = tracker.integration_status == 'pendente'
     tracker.integration_status = 'pendente'
-    return True
+    if db is not None and tracker.vehicle_id:
+        enqueue_full_sync(db, tracker.id, reason='rastreador alterado', flush=False)
+    return not ja_pendente

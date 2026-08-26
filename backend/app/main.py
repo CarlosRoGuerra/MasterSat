@@ -17,7 +17,7 @@ from app.core.config import settings
 from app.core.limiter import limiter
 from app.core.security import get_password_hash
 from app.db.session import Base, SessionLocal, engine
-from app.models import ailos_api_log, ailos_boleto, ailos_client_token, ailos_integration, ailos_lote, ailos_retorno_arquivo, audit_log, billing, billing_change_log, client, client_charge_item, closure_job, contract, document, integration_log, nfse_certificado, nfse_lote, nfse_nota, password_reset_token, payable, plan, service_order, service_order_status_log, service_product, system_setting, tracker, tracker_history, uninstall_event, user, vehicle  # noqa: F401 — side-effect imports that register models with SQLAlchemy Base
+from app.models import ailos_api_log, ailos_boleto, ailos_client_token, ailos_integration, ailos_lote, ailos_retorno_arquivo, audit_log, billing, billing_change_log, client, client_charge_item, closure_job, contract, document, integration_log, multiportal_outbox, nfse_certificado, nfse_lote, nfse_nota, password_reset_token, payable, plan, service_order, service_order_status_log, service_product, system_setting, tracker, tracker_history, uninstall_event, user, vehicle  # noqa: F401 — side-effect imports that register models with SQLAlchemy Base
 from app.core.audit import AuditMiddleware
 from app.core.body_limit import MaxBodySizeMiddleware
 from app.models.enums import UserRole
@@ -582,6 +582,68 @@ def _ailos_baixa_automatica():
                 ja_alertado = True
 
 
+def _multiportal_outbox_worker():
+    """Consome a fila de sincronizações do Multiportal.
+
+    Roda a cada 60s com advisory lock (um worker por vez). O retry exponencial
+    fica na própria fila, então este loop só precisa acordar e drenar o que
+    está vencido. A cada ~10 ciclos também reconcilia rastreadores pendentes
+    que não estão na fila — a rede de segurança para intenções perdidas.
+    """
+    from app.services import multiportal_outbox
+    from app.services.multiportal import multiportal_service
+    logger = logging.getLogger('uvicorn.error')
+
+    LIMITE_ALERTA = 30          # ~30 min de fila parada com item vencido
+    ciclos = 0
+    ja_alertado = False
+
+    def _job(db):
+        resultado = multiportal_outbox.run_once(db)
+        if ciclos % 10 == 0:
+            resultado['reconciliados'] = multiportal_outbox.reconcile_pending_trackers(db)
+        return resultado
+
+    while True:
+        time.sleep(60)
+        ciclos += 1
+        if not multiportal_service.enabled:
+            continue
+        try:
+            res = _run_locked(918273648, _job)
+            if isinstance(res, dict):
+                if res.get('processados') or res.get('reconciliados'):
+                    logger.info(
+                        'Outbox Multiportal: %s processado(s), %s falha(s), %s reenfileirado(s), %s reconciliado(s).',
+                        res.get('processados', 0), res.get('falhas', 0),
+                        res.get('reenfileirados', 0), res.get('reconciliados', 0),
+                    )
+                # Alerta quando a fila trava: itens vencidos que não saem do
+                # 'pending' significam cadastro que nunca chega ao provedor —
+                # o rastreador não é monitorado de verdade e ninguém percebe.
+                if res.get('processados') and res.get('sucesso') == 0:
+                    ja_alertado = _alerta_fila(logger, ja_alertado, LIMITE_ALERTA)
+                elif res.get('sucesso'):
+                    if ja_alertado:
+                        _alerta_admin('✅ Fila Multiportal NORMALIZADA — sincronizações voltaram a completar.', logger)
+                    ja_alertado = False
+        except Exception as exc:  # noqa: BLE001 — a fila nunca pode derrubar o worker
+            logger.warning('Worker da outbox Multiportal falhou: %s', exc)
+
+
+def _alerta_fila(logger, ja_alertado: bool, limite: int) -> bool:
+    if ja_alertado:
+        return True
+    _alerta_admin(
+        '🚨 Fila de sincronização do Multiportal FALHANDO — nenhuma sincronização '
+        'completou no último ciclo. Cadastros novos/alterados podem não estar '
+        'chegando ao provedor: o rastreador aparece ativo no MasterSat mas não '
+        'é monitorado de verdade. Verifique a disponibilidade do Multiportal.',
+        logger,
+    )
+    return True
+
+
 @app.on_event('startup')
 def on_startup():
     # Com múltiplos workers (uvicorn --workers), o startup roda em cada processo.
@@ -624,6 +686,12 @@ def on_startup():
     if settings.ailos_client_id and settings.ailos_token_encryption_key:
         threading.Thread(target=_cooperado_token_keepalive, daemon=True).start()
         threading.Thread(target=_ailos_baixa_automatica, daemon=True).start()
+
+    # Fila durável de sincronização com o Multiportal: sem ela, uma queda do
+    # provedor no meio do cadastro exigia que alguém percebesse e reprocessasse
+    # à mão.
+    if settings.multiportal_enabled:
+        threading.Thread(target=_multiportal_outbox_worker, daemon=True).start()
 
     # Verificação inicial de inadimplência (idempotente; não bloqueia o startup)
     try:

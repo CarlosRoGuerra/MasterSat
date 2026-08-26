@@ -111,6 +111,75 @@ def integration_status(_: object = Depends(require_roles(*VIEW_ROLES))):
     )
 
 
+@router.get('/queue')
+def integration_queue(
+    limit: int = Query(default=50, ge=1, le=200),
+    status: str | None = Query(default=None, pattern='^(pending|processing|done|failed)$'),
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*VIEW_ROLES)),
+):
+    """Fila de sincronização com o Multiportal: o que está esperando, o que
+    falhou e quando será a próxima tentativa."""
+    from app.models.multiportal_outbox import MultiportalOutbox
+    from app.services.multiportal_outbox import MAX_ATTEMPTS, queue_stats
+
+    stmt = select(MultiportalOutbox)
+    if status:
+        stmt = stmt.where(MultiportalOutbox.status == status)
+    itens = list(
+        db.scalars(
+            stmt.order_by(MultiportalOutbox.status.asc(), MultiportalOutbox.next_attempt_at.asc()).limit(limit)
+        ).all()
+    )
+    return {
+        'stats': queue_stats(db),
+        'max_attempts': MAX_ATTEMPTS,
+        'items': [
+            {
+                'id': i.id,
+                'tracker_id': i.tracker_id,
+                'operation': i.operation,
+                'status': i.status,
+                'attempts': i.attempts,
+                'next_attempt_at': i.next_attempt_at.isoformat() if i.next_attempt_at else None,
+                'reason': i.reason,
+                'last_error': i.last_error,
+                'batch_id': i.batch_id,
+                'created_at': i.created_at.isoformat() if i.created_at else None,
+                'completed_at': i.completed_at.isoformat() if i.completed_at else None,
+            }
+            for i in itens
+        ],
+    }
+
+
+@router.post('/queue/{item_id}/retry')
+def retry_queue_item(
+    item_id: int,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*EDIT_ROLES)),
+):
+    """Devolve um item à fila. Serve para o caso terminal ('failed'), depois de
+    corrigido o dado que causava a recusa — o worker não ressuscita esses
+    sozinho, justamente para não repetir um erro de cadastro para sempre."""
+    from app.models.multiportal_outbox import MultiportalOutbox
+    from app.services.multiportal_outbox import _now
+
+    item = db.get(MultiportalOutbox, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail='Item da fila não encontrado.')
+    if item.status == 'done':
+        raise HTTPException(status_code=400, detail='Este item já foi concluído.')
+
+    item.status = 'pending'
+    item.attempts = 0
+    item.next_attempt_at = _now()
+    item.last_error = None
+    item.completed_at = None
+    db.commit()
+    return {'id': item.id, 'status': item.status, 'tracker_id': item.tracker_id}
+
+
 @router.get('/manufacturers', response_model=list[ManufacturerOut])
 def list_manufacturers(_: object = Depends(require_roles(*VIEW_ROLES))):
     try:
