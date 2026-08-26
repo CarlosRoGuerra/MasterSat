@@ -1633,7 +1633,7 @@ export default function VeiculosPage() {
               <input type="date" className={`${fieldClass} w-full`} value={uninstallDate} onChange={(e) => setUninstallDate(e.target.value)} />
             </label>
             <label className="block">
-              <span className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-200">Taxa direta (R$) <span className="font-normal text-slate-400">opcional</span></span>
+              <span className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-200">Valor a cobrar (R$) <span className="font-normal text-slate-400">opcional</span></span>
               <input
                 type="number"
                 min="0"
@@ -1662,9 +1662,10 @@ export default function VeiculosPage() {
                 ))}
               </select>
             </label>
-            {uninstallServiceProductId && (
+            {(uninstallServiceProductId || Number(uninstallFee) > 0) && (
               <div className="md:col-span-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-400">
-                Taxa de R$ {Number(uninstallFee || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} será incluída no fechamento do mês da desinstalação.
+                Será cobrado {Number(uninstallFee || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} no fechamento do mês da desinstalação.
+                {uninstallServiceProductId && ' O serviço define o que é cobrado; o valor acima é o que vale — ajuste-o para registrar um desconto.'}
               </div>
             )}
           </div>

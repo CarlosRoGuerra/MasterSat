@@ -118,6 +118,38 @@ def _pending_uninstall_events_for_month(db: Session, reference_month: date) -> l
     )
 
 
+def uninstall_fee_for_event(db: Session, event: UninstallEvent) -> tuple[Decimal, str]:
+    """Valor e título da taxa de um evento de desinstalação.
+
+    ``fee_amount`` é o valor efetivamente acordado no momento da retirada e
+    tem precedência absoluta: o produto de serviço define apenas O QUE foi
+    cobrado (título/vínculo com o catálogo), nunca QUANTO.
+
+    Antes as duas coisas eram somadas. Como a tela preenche a taxa direta com
+    o preço do produto ao selecioná-lo, escolher um serviço de desinstalação
+    cobrava o dobro de forma determinística. Somar também deixava o valor
+    refém do catálogo: mudar o preço do produto depois alterava uma cobrança
+    já negociada com o cliente.
+
+    O preço do produto só é consultado como fallback, para eventos antigos
+    gravados sem ``fee_amount``.
+    """
+    product = None
+    if event.service_product_id:
+        candidate = db.get(ServiceProduct, event.service_product_id)
+        if candidate and not candidate.is_deleted:
+            product = candidate
+
+    if event.fee_amount is not None and Decimal(str(event.fee_amount)) > 0:
+        fee_amount = Decimal(str(event.fee_amount))
+    elif product is not None:
+        fee_amount = Decimal(str(product.default_price))
+    else:
+        fee_amount = Decimal('0')
+
+    return fee_amount, (product.name if product else 'Taxa de desinstalação')
+
+
 def _due_date_for_uninstall_event(event: UninstallEvent, db: Session) -> date:
     contract = db.get(Contract, event.contract_id) if event.contract_id else None
     client = db.get(Client, event.client_id)
@@ -379,11 +411,7 @@ def simulate_closure(
     for event in uninstall_events:
         client = db.get(Client, event.client_id)
         vehicle = db.get(Vehicle, event.vehicle_id)
-        fee_amount = Decimal(str(event.fee_amount)) if event.fee_amount else Decimal('0')
-        if event.service_product_id:
-            product = db.get(ServiceProduct, event.service_product_id)
-            if product and not product.is_deleted:
-                fee_amount += Decimal(str(product.default_price))
+        fee_amount, _ = uninstall_fee_for_event(db, event)
         uninstall_items.append({
             'type': 'taxa_desinstalacao',
             'event_id': event.id,
@@ -589,13 +617,7 @@ def execute_closure(
     now_utc = datetime.now(timezone.utc)
 
     for event in uninstall_events:
-        fee_amount = Decimal(str(event.fee_amount)) if event.fee_amount else Decimal('0')
-        fee_title = 'Taxa de desinstalação'
-        if event.service_product_id:
-            product = db.get(ServiceProduct, event.service_product_id)
-            if product and not product.is_deleted:
-                fee_amount += Decimal(str(product.default_price))
-                fee_title = product.name
+        fee_amount, fee_title = uninstall_fee_for_event(db, event)
 
         if fee_amount < MIN_BILLING_AMOUNT:
             event.status = 'skipped'

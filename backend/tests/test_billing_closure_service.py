@@ -710,3 +710,93 @@ class TestFormatoSimulacao:
         txt = self._texto([])
         assert 'Total Geral' not in txt
         assert 'PRÉVIA DE FECHAMENTO' in txt     # o título continua
+
+
+# ---------------------------------------------------------------------------
+# Taxa de desinstalação: valor congelado, nunca somado
+# ---------------------------------------------------------------------------
+
+class TestTaxaDesinstalacaoNaoDuplica:
+    """A tela preenche a taxa direta com o preço do produto ao selecioná-lo e
+    envia os dois campos. Somar produto + taxa cobrava o dobro de forma
+    determinística; o valor gravado no evento é o acordado e manda sempre."""
+
+    def _evento(self, db, cliente, veiculo, **kw) -> UninstallEvent:
+        e = UninstallEvent(
+            vehicle_id=veiculo.id,
+            client_id=cliente.id,
+            uninstall_date=date(2025, 5, 10),
+            status='pending',
+            **kw,
+        )
+        db.add(e)
+        db.commit()
+        db.refresh(e)
+        return e
+
+    def test_produto_e_taxa_juntos_nao_somam(self, db, cliente, veiculo, produto_desinstalacao):
+        # Regressão do bug: produto de R$ 120 + taxa de R$ 120 cobrava R$ 240.
+        evento = self._evento(
+            db, cliente, veiculo,
+            fee_amount=Decimal('120.00'),
+            service_product_id=produto_desinstalacao.id,
+        )
+        result = execute_closure(db, REF_MONTH)
+        db.refresh(evento)
+        billing = db.get(Billing, evento.billing_id)
+        assert billing.amount == Decimal('120.00')
+        assert result['uninstall_fees_generated'] >= 1
+
+    def test_simulacao_mostra_o_mesmo_valor_da_execucao(self, db, cliente, veiculo, produto_desinstalacao):
+        # A prévia também somava — o operador via o dobro antes mesmo de fechar.
+        self._evento(
+            db, cliente, veiculo,
+            fee_amount=Decimal('120.00'),
+            service_product_id=produto_desinstalacao.id,
+        )
+        sim = simulate_closure(db, REF_MONTH)
+        evento_sim = [e for e in sim['uninstall_events'] if e['vehicle_plate'] == veiculo.plate][0]
+        assert evento_sim['fee_amount'] == pytest.approx(120.0)
+
+    def test_valor_negociado_prevalece_sobre_o_preco_de_tabela(self, db, cliente, veiculo, produto_desinstalacao):
+        # Desconto acordado na retirada: R$ 80 num serviço de tabela R$ 120.
+        evento = self._evento(
+            db, cliente, veiculo,
+            fee_amount=Decimal('80.00'),
+            service_product_id=produto_desinstalacao.id,
+        )
+        execute_closure(db, REF_MONTH)
+        db.refresh(evento)
+        assert db.get(Billing, evento.billing_id).amount == Decimal('80.00')
+
+    def test_evento_antigo_sem_valor_cai_no_preco_do_produto(self, db, cliente, veiculo, produto_desinstalacao):
+        # Compatibilidade: eventos gravados antes do congelamento do valor.
+        evento = self._evento(db, cliente, veiculo, service_product_id=produto_desinstalacao.id)
+        execute_closure(db, REF_MONTH)
+        db.refresh(evento)
+        assert db.get(Billing, evento.billing_id).amount == Decimal('120.00')
+
+    def test_mudanca_de_preco_no_catalogo_nao_altera_taxa_ja_acordada(
+        self, db, cliente, veiculo, produto_desinstalacao,
+    ):
+        evento = self._evento(
+            db, cliente, veiculo,
+            fee_amount=Decimal('120.00'),
+            service_product_id=produto_desinstalacao.id,
+        )
+        produto_desinstalacao.default_price = Decimal('500.00')
+        db.commit()
+
+        execute_closure(db, REF_MONTH)
+        db.refresh(evento)
+        assert db.get(Billing, evento.billing_id).amount == Decimal('120.00')
+
+    def test_titulo_usa_o_nome_do_servico(self, db, cliente, veiculo, produto_desinstalacao):
+        evento = self._evento(
+            db, cliente, veiculo,
+            fee_amount=Decimal('120.00'),
+            service_product_id=produto_desinstalacao.id,
+        )
+        execute_closure(db, REF_MONTH)
+        db.refresh(evento)
+        assert db.get(Billing, evento.billing_id).title == produto_desinstalacao.name

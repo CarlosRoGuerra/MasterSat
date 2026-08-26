@@ -259,9 +259,10 @@ def uninstall_vehicle(
     if any(uninstall_date < contract.start_date for contract in contracts):
         raise HTTPException(status_code=422, detail='A desinstalação não pode ser anterior ao início do contrato.')
 
+    uninstall_product = None
     if uninstall_service_product_id:
-        product = db.get(ServiceProduct, uninstall_service_product_id)
-        if not product or product.is_deleted or not product.active:
+        uninstall_product = db.get(ServiceProduct, uninstall_service_product_id)
+        if not uninstall_product or uninstall_product.is_deleted or not uninstall_product.active:
             raise HTTPException(status_code=404, detail='Produto de desinstalação não encontrado ou inativo.')
 
     client = db.scalar(
@@ -321,12 +322,23 @@ def uninstall_vehicle(
     # de fechamento mensal ao rodar o mês correspondente à data de retirada.
     has_fee = (uninstall_fee and uninstall_fee > 0) or uninstall_service_product_id
     if has_fee:
-        fee_value = float(uninstall_fee) if (uninstall_fee and uninstall_fee > 0) else None
+        # O valor cobrado é congelado AQUI, no momento da retirada: é o que foi
+        # acordado com o cliente e mostrado na tela. O produto de serviço diz
+        # apenas O QUE foi cobrado — o fechamento não reconsulta o catálogo,
+        # senão uma alteração de preço posterior mudaria uma cobrança já
+        # negociada. Taxa informada tem precedência (permite valor negociado
+        # diferente do preço de tabela); sem ela, cai no preço do produto.
+        if uninstall_fee and uninstall_fee > 0:
+            fee_value = float(uninstall_fee)
+        elif uninstall_product is not None:
+            fee_value = float(uninstall_product.default_price)
+        else:
+            fee_value = None
         notes_parts = [f'Desinstalação registrada em {uninstall_date.strftime("%d/%m/%Y")}']
         if fee_value:
-            notes_parts.append(f'Taxa direta: R$ {fee_value:.2f}')
-        if uninstall_service_product_id:
-            notes_parts.append(f'Produto de serviço ID {uninstall_service_product_id}')
+            notes_parts.append(f'Taxa: R$ {fee_value:.2f}')
+        if uninstall_product is not None:
+            notes_parts.append(f'Serviço: {uninstall_product.name} (ID {uninstall_service_product_id})')
         event = UninstallEvent(
             vehicle_id=vehicle.id,
             tracker_id=trackers[0].id if trackers else None,
