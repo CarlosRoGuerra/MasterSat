@@ -98,4 +98,15 @@ def generate(
         raise HTTPException(status_code=422, detail='client_id obrigatório quando filter_type=client.')
 
     result = execute_closure(db, ref, filter_type, client_id, contract_ids or None)
-    return {'status': 'completed', 'reference_month': reference_month, **result}
+    # `**result` traz um reference_month já formatado para exibição (MM/YYYY) e
+    # vinha sobrescrevendo o eco do parâmetro logo acima. O efeito era um
+    # contrato inconsistente: a API só aceita YYYY-MM, mas devolvia 05/2025 —
+    # que ela própria rejeita com 422 se o cliente reenviar o valor recebido.
+    # Agora o campo canônico ecoa a entrada e o formato de exibição fica num
+    # campo próprio, sem colisão.
+    return {
+        'status': 'completed',
+        **result,
+        'reference_month': reference_month,
+        'reference_month_label': result.get('reference_month'),
+    }

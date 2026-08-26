@@ -91,7 +91,10 @@ type Simulation = {
 
 type GenerateResult = {
   status: 'completed';
+  /** Formato canônico da API (YYYY-MM) — o mesmo aceito nos parâmetros. */
   reference_month: string;
+  /** Mesmo mês em formato de exibição (MM/YYYY). */
+  reference_month_label: string;
   generated: number;
   total_amount: number;
   uninstall_fees_generated: number;
@@ -879,7 +882,7 @@ export default function FechamentoPage() {
             <div className="space-y-5">
               <span className="inline-flex items-center gap-2 rounded-full bg-emerald-100 px-3 py-1.5 text-sm font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400">
                 <CheckCircle2 className="h-3.5 w-3.5" />
-                Fechamento concluído — {generateResult.reference_month}
+                Fechamento concluído — {generateResult.reference_month_label || generateResult.reference_month}
               </span>
 
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

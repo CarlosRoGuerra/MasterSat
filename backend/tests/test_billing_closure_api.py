@@ -185,6 +185,22 @@ class TestGenerate:
         r = http.post(PREFIX + "/generate", params={"reference_month": REF_MONTH})
         assert r.json()["reference_month"] == REF_MONTH
 
+    def test_reference_month_da_resposta_e_aceito_de_volta(self, http):
+        """Round-trip: o mês devolvido tem que ser reenviável à própria API.
+
+        O `**result` do serviço sobrescrevia o eco do parâmetro e a resposta
+        saía como 05/2025 — formato que o endpoint rejeita com 422.
+        """
+        primeira = http.post(PREFIX + "/generate", params={"reference_month": REF_MONTH})
+        devolvido = primeira.json()["reference_month"]
+
+        segunda = http.post(PREFIX + "/generate", params={"reference_month": devolvido})
+        assert segunda.status_code == 200
+
+    def test_response_traz_mes_formatado_para_exibicao(self, http):
+        r = http.post(PREFIX + "/generate", params={"reference_month": REF_MONTH})
+        assert r.json()["reference_month_label"] == "05/2025"
+
     def test_response_has_result_fields(self, http):
         r = http.post(PREFIX + "/generate", params={"reference_month": REF_MONTH})
         data = r.json()
