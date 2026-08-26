@@ -43,3 +43,23 @@ export function validatePassword(password: string) {
     special: /[^A-Za-z0-9]/.test(password),
   };
 }
+
+/** Rótulo da periodicidade de cobrança a partir do intervalo em meses. */
+export function intervalLabel(months?: number | null): string {
+  const m = months || 1;
+  return ({ 1: 'Mensal', 3: 'Trimestral', 6: 'Semestral', 12: 'Anual' } as Record<number, string>)[m]
+    || `A cada ${m} meses`;
+}
+
+/**
+ * Sufixo do preço de um plano: "/mês", "/ano", " a cada 3 meses".
+ *
+ * Planos trimestrais/semestrais/anuais eram exibidos como "/mês" em todas as
+ * telas, dando ao operador e ao cliente uma previsão comercial errada.
+ */
+export function pricePeriodSuffix(months?: number | null): string {
+  const m = months || 1;
+  if (m === 1) return '/mês';
+  if (m === 12) return '/ano';
+  return ` a cada ${m} meses`;
+}

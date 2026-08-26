@@ -9,7 +9,7 @@ import { BillingDayInput } from '@/components/ui/billing-day-input';
 import { CarneTrackingModal, useCarneTracking } from '@/components/carne-tracking-modal';
 import { apiFetch } from '@/lib/api';
 import { fetchAddressByCep } from '@/lib/cep';
-import { formatZipCode, onlyDigits } from '@/lib/format';
+import { formatZipCode, intervalLabel, onlyDigits, pricePeriodSuffix } from '@/lib/format';
 
 /* ── Types ──────────────────────────────────────────────────────────── */
 type ClientOption = {
@@ -38,8 +38,12 @@ type PlanOption = {
   id: number;
   name: string;
   price: number;
-  periodicity?: number;
+  /** Intervalo de cobrança em meses (1=mensal, 3=trimestral, 6=semestral, 12=anual).
+   *  Este é o nome do campo na API; o wizard lia `periodicity`, que não existe —
+   *  o valor vinha sempre undefined e TODO plano era tratado como mensal. */
+  billing_interval_months?: number;
 };
+
 
 type ServiceProductOption = {
   id: number;
@@ -218,8 +222,9 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
 
   /* ── Billing logic ── */
   const selectedPlan = plans.find(p => String(p.id) === pf.plan_id);
-  // Plan is "monthly" when periodicity is 1 or absent (conservative default)
-  const isMonthlyPlan = !selectedPlan?.periodicity || selectedPlan.periodicity === 1;
+  // Intervalo do plano selecionado; 1 (mensal) como padrão conservador.
+  const planIntervalMonths = selectedPlan?.billing_interval_months || 1;
+  const isMonthlyPlan = planIntervalMonths === 1;
 
   const nextBillingDate = (() => {
     const d = new Date();
@@ -946,11 +951,11 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
                           {plan.name}
                         </span>
                         <span className="mt-0.5 block font-mono text-sm text-brand-600 dark:text-brand-400">
-                          R$ {Number(plan.price).toFixed(2)}/mês
+                          R$ {Number(plan.price).toFixed(2)}{pricePeriodSuffix(plan.billing_interval_months || 1)}
                         </span>
-                        {plan.periodicity && plan.periodicity > 1 && (
+                        {(plan.billing_interval_months || 1) > 1 && (
                           <span className="mt-0.5 block text-xs text-slate-400">
-                            {plan.periodicity === 3 ? 'Trimestral' : plan.periodicity === 6 ? 'Semestral' : 'Anual'}
+                            {intervalLabel(plan.billing_interval_months || 1)}
                           </span>
                         )}
                       </button>
@@ -1043,14 +1048,19 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
                     </div>
                   )}
 
-                  {/* Monthly plan → recurrence info (no installment field) */}
-                  {isMonthlyPlan && pf.billing_mode === 'recorrente' && (
+                  {/* Recorrência: vale para qualquer intervalo. Antes o bloco
+                      só aparecia quando isMonthlyPlan — e como isMonthlyPlan
+                      era sempre true por causa do campo errado, um plano
+                      trimestral/anual era anunciado como mensal. */}
+                  {pf.billing_mode === 'recorrente' && (
                     <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 dark:border-blue-900/40 dark:bg-blue-950/30">
                       <p className="text-sm font-semibold text-blue-700 dark:text-blue-300">
-                        Cobrança recorrente mensal
+                        Cobrança recorrente {intervalLabel(planIntervalMonths).toLowerCase()}
                       </p>
                       <p className="mt-1 text-sm text-blue-600 dark:text-blue-400">
-                        Processada em lote entre os dias 1º e 2 de cada mês.
+                        {isMonthlyPlan
+                          ? 'Processada em lote entre os dias 1º e 2 de cada mês.'
+                          : `R$ ${selectedPlan ? Number(selectedPlan.price).toFixed(2) : '—'} a cada ${planIntervalMonths} meses, processada no fechamento do mês de vencimento.`}
                       </p>
                       <p className="mt-1 text-xs text-blue-500 dark:text-blue-500">
                         Estimativa da 1ª cobrança:{' '}
@@ -1179,7 +1189,9 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
                         </div>
                       </div>
                       <p className="mt-2 text-xs text-slate-400">
-                        A partir do mês seguinte: R$ {selectedPlan ? Number(selectedPlan.price).toFixed(2) : '—'}/mês
+                        {isMonthlyPlan ? 'A partir do mês seguinte' : 'Nas próximas cobranças'}:{' '}
+                        R$ {selectedPlan ? Number(selectedPlan.price).toFixed(2) : '—'}
+                        {pricePeriodSuffix(planIntervalMonths)}
                       </p>
                     </div>
                   )}

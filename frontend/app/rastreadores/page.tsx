@@ -18,7 +18,7 @@ import { ClientAutocomplete } from '@/components/ui/client-autocomplete';
 import { BillingDayInput, erroDiaVencimento } from '@/components/ui/billing-day-input';
 import { useDebouncedValue, useEffectSkipFirst } from '@/lib/use-debounced-value';
 import { apiFetch } from '@/lib/api';
-import { onlyDigits, formatCpfCnpj } from '@/lib/format';
+import { onlyDigits, formatCpfCnpj, pricePeriodSuffix } from '@/lib/format';
 import { useAuthGuard } from '@/lib/use-auth-guard';
 
 type TrackerStatus = 'instalado' | 'em_estoque' | 'em_manutencao' | 'extraviado' | 'descartado';
@@ -53,7 +53,7 @@ type Tracker = {
 type ClientOption = { id: number; name: string; cpf_cnpj: string; billing_day?: number | null };
 type VehicleOption = { id: number; client_id: number; plate: string; model?: string | null };
 type ManufacturerOption = { code: string; description: string };
-type PlanOption = { id: number; name: string; price: number };
+type PlanOption = { id: number; name: string; price: number; billing_interval_months?: number };
 
 type LoteItem = {
   imei: string;
@@ -885,7 +885,7 @@ export default function RastreadoresPage() {
               <div className="mt-4 grid gap-3 md:grid-cols-2">
                 <select className={fieldClass} value={form.link_plan_id} onChange={(e) => setForm((prev) => ({ ...prev, link_plan_id: e.target.value }))}>
                   <option value="">Sem contrato agora</option>
-                  {plans.map((p) => <option key={p.id} value={p.id}>{p.name} — R$ {Number(p.price ?? 0).toFixed(2)}/mês</option>)}
+                  {plans.map((p) => <option key={p.id} value={p.id}>{p.name} — R$ {Number(p.price ?? 0).toFixed(2)}{pricePeriodSuffix(p.billing_interval_months)}</option>)}
                 </select>
                 <label className="block">
                   <span className="mb-1 block text-xs font-semibold text-slate-500 dark:text-slate-400">Início do contrato</span>

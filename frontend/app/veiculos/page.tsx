@@ -21,7 +21,7 @@ import { Eye, DollarSign, ClipboardList, Pencil, CreditCard, Zap, Building2, Ban
 import { ExportButton } from '@/components/ui/export-button';
 import { apiFetch } from '@/lib/api';
 import { fetchAddressByCep } from '@/lib/cep';
-import { formatZipCode, onlyDigits } from '@/lib/format';
+import { formatZipCode, onlyDigits, pricePeriodSuffix } from '@/lib/format';
 import { useAuthGuard } from '@/lib/use-auth-guard';
 import { VehicleOnboardingWizard } from '@/components/vehicle-onboarding-wizard';
 
@@ -438,7 +438,7 @@ function LinkTrackerForm({
           <option value="">Sem plano agora</option>
           {plans.map((p) => (
             <option key={p.id} value={p.id}>
-              {p.name} — R$ {Number(p.price).toFixed(2)}/mês
+              {p.name} — R$ {Number(p.price).toFixed(2)}{pricePeriodSuffix(p.billing_interval_months)}
             </option>
           ))}
         </select>
@@ -591,7 +591,8 @@ function LinkTrackerForm({
                   </div>
                 </div>
                 <p className="mt-2.5 text-xs text-slate-400 dark:text-slate-500">
-                  A partir do mês seguinte: R$ {selectedPlan?.price?.toFixed(2)}/mês
+                  {isMonthlyPlan ? 'A partir do mês seguinte' : 'Nas próximas cobranças'}:{' '}
+                  R$ {selectedPlan?.price?.toFixed(2)}{pricePeriodSuffix(selectedPlan?.billing_interval_months)}
                 </p>
               </div>
             )}
