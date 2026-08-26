@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import case, extract, func, select
 from sqlalchemy.orm import Session
 
@@ -36,16 +36,39 @@ VIEW_ROLES = (UserRole.ADMIN, UserRole.FINANCIAL)
 @router.get('/revenue')
 def revenue_report(
     year: int = Query(default=None),
-    months: int = Query(default=12, ge=1, le=60),
+    date_from: date | None = Query(default=None, description='Início do período (inclusivo)'),
+    date_to: date | None = Query(default=None, description='Fim do período (inclusivo)'),
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*VIEW_ROLES)),
 ):
     """
-    Retorna receita mês a mês: billed (emitido), received (pago), outstanding (em aberto).
+    Receita mês a mês: emitido, recebido e em aberto.
+
+    Aceita um intervalo livre (``date_from``/``date_to``), que pode cruzar a
+    virada do ano. Antes só existia o filtro por ``year``, e a tela contornava
+    isso pedindo o ano da data inicial e descartando o resto no cliente — um
+    período como dez/2025→jan/2026 perdia janeiro inteiro.
+
+    Cobranças CANCELADAS ficam de fora de todos os totais: elas não são
+    receita. Incluí-las inflava o emitido e distorcia a taxa de recebimento —
+    especialmente porque a consolidação em boleto único cancela as cobranças
+    originais, de modo que cada cliente com boleto único era contado duas
+    vezes (as parcelas canceladas + o boleto que as substituiu).
     """
     today = date.today()
-    if not year:
-        year = today.year
+    if date_from is None and date_to is None:
+        year = year or today.year
+        date_from = date(year, 1, 1)
+        date_to = date(year, 12, 31)
+    else:
+        if date_from is None:
+            date_from = date(date_to.year, 1, 1)
+        if date_to is None:
+            date_to = date(date_from.year, 12, 31)
+        if date_from > date_to:
+            raise HTTPException(status_code=422, detail='date_from não pode ser posterior a date_to.')
+
+    nao_cancelada = Billing.status != BillingStatus.CANCELED
 
     results = (
         db.query(
@@ -65,7 +88,9 @@ def revenue_report(
         )
         .filter(
             Billing.is_deleted.is_(False),
-            extract('year', Billing.due_date) == year,
+            nao_cancelada,
+            Billing.due_date >= date_from,
+            Billing.due_date <= date_to,
         )
         .group_by('ano', 'mes')
         .order_by('ano', 'mes')
@@ -91,6 +116,7 @@ def revenue_report(
 
     return {
         'ano': year,
+        'periodo': {'de': date_from.isoformat(), 'ate': date_to.isoformat()},
         'meses': months_data,
         'totais': {
             'total_emitido': total_emitido,

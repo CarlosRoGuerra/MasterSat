@@ -117,12 +117,24 @@ export default function RelatoriosPage() {
   const [dateFrom, setDateFrom] = useState(isoFirstOfYear());
   const [dateTo, setDateTo] = useState(isoToday());
 
-  function applyPreset(p: Preset) {
+  /** Aplica o preset e DEVOLVE o intervalo resultante.
+   *
+   * Quem clica precisa recarregar com o período novo, mas setDateFrom/setDateTo
+   * só valem no próximo render — ler dateFrom/dateTo logo após chamar esta
+   * função devolve o período ANTERIOR. Era o que acontecia: cada clique
+   * carregava o relatório do preset anterior, e só um segundo clique mostrava
+   * o certo. Retornando o intervalo, o chamador usa o valor correto na hora.
+   */
+  function applyPreset(p: Preset): { from: string; to: string } {
     setPreset(p);
-    if (p === 'mes') { setDateFrom(isoFirstOfMonth()); setDateTo(isoToday()); }
-    else if (p === 'tri') { setDateFrom(isoMinus(90)); setDateTo(isoToday()); }
-    else if (p === 'ano') { setDateFrom(isoFirstOfYear()); setDateTo(isoToday()); }
-    // 'custom' leaves inputs intact
+    let from = dateFrom;
+    let to = dateTo;
+    if (p === 'mes') { from = isoFirstOfMonth(); to = isoToday(); }
+    else if (p === 'tri') { from = isoMinus(90); to = isoToday(); }
+    else if (p === 'ano') { from = isoFirstOfYear(); to = isoToday(); }
+    // 'custom' mantém o que estiver nos inputs
+    if (p !== 'custom') { setDateFrom(from); setDateTo(to); }
+    return { from, to };
   }
 
   /* ── Revenue state ── */
@@ -149,22 +161,18 @@ export default function RelatoriosPage() {
   const loadRevenue = useCallback(async (t: string, from: string, to: string) => {
     setRevenueLoading(true);
     try {
-      // Extract year from date range for the API (it groups by year)
-      const year = from.slice(0, 4);
+      // O período vai inteiro para a API. Antes só o ANO da data inicial era
+      // enviado e o recorte acontecia aqui — um intervalo que cruzasse a
+      // virada do ano (dez/2025→jan/2026) perdia os meses do segundo ano, que
+      // nunca chegavam a ser consultados.
+      const params = new URLSearchParams({ date_from: from, date_to: to });
       const data = await apiFetch<{ meses: RevenueMonth[]; totais: RevenueTotals }>(
-        `/reports/revenue?year=${year}`, {}, t,
+        `/reports/revenue?${params.toString()}`, {}, t,
       );
-      // Filter months within the selected range
-      const filtered = data.meses.filter(m => {
-        const d = `${m.ano}-${String(m.mes).padStart(2, '0')}-01`;
-        return d >= from.slice(0, 7) + '-01' && d <= to;
-      });
-      setRevenue(filtered);
-      // Recalculate totals from filtered data
-      const te = filtered.reduce((s, m) => s + m.total_emitido, 0);
-      const tr = filtered.reduce((s, m) => s + m.total_recebido, 0);
-      const ta = filtered.reduce((s, m) => s + m.total_aberto, 0);
-      setRevenueTotals({ total_emitido: te, total_recebido: tr, total_aberto: ta, taxa_recebimento: te ? Math.round(tr / te * 100 * 10) / 10 : 0 });
+      setRevenue(data.meses);
+      // Totais vêm calculados do backend, sobre o mesmo conjunto de dados —
+      // sem recontagem no cliente, que podia divergir do que a API somou.
+      setRevenueTotals(data.totais);
     } catch (e) {
       setError(friendlyError(e instanceof Error ? e.message : 'Erro ao carregar receita'));
     } finally {
@@ -333,7 +341,10 @@ export default function RelatoriosPage() {
               <button
                 key={p.key}
                 type="button"
-                onClick={() => { applyPreset(p.key); if (token) loadRevenue(token, dateFrom, dateTo); }}
+                onClick={() => {
+                  const { from, to } = applyPreset(p.key);
+                  if (token) loadRevenue(token, from, to);
+                }}
                 className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
                   preset === p.key
                     ? 'border-brand-500 bg-brand-500 text-black'
