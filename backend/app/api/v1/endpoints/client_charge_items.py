@@ -15,7 +15,11 @@ from app.models.service_product import ServiceProduct
 from app.models.tracker import Tracker
 from app.models.vehicle import Vehicle
 from app.schemas.client_charge_item import ClientChargeItemCreate, ClientChargeItemOut, ClientChargeItemUpdate
-from app.services.financial import decimal_to_float
+from app.services.financial import (
+    billing_ids_for_charge_item,
+    decimal_to_float,
+    effective_charge_item_billings,
+)
 
 router = APIRouter()
 
@@ -42,7 +46,18 @@ def serialize_item(db: Session, item: ClientChargeItem) -> ClientChargeItemOut:
     service_product = db.get(ServiceProduct, item.service_product_id) if item.service_product_id else None
     vehicle = db.get(Vehicle, item.vehicle_id) if getattr(item, 'vehicle_id', None) else None
     tracker = db.get(Tracker, item.tracker_id) if getattr(item, 'tracker_id', None) else None
-    open_installments = db.query(func.count(Billing.id)).filter(Billing.is_deleted == False, Billing.item_id == item.id, Billing.status.in_([BillingStatus.PENDING, BillingStatus.OVERDUE])).scalar() or 0
+    billing_ids = billing_ids_for_charge_item(db, item.id)
+    open_installments = (
+        db.query(func.count(Billing.id))
+        .filter(
+            Billing.id.in_(billing_ids),
+            Billing.is_deleted == False,
+            Billing.status.in_([BillingStatus.PENDING, BillingStatus.OVERDUE]),
+        )
+        .scalar()
+        or 0
+        if billing_ids else 0
+    )
     return ClientChargeItemOut(
         id=item.id,
         client_id=item.client_id,
@@ -66,6 +81,7 @@ def serialize_item(db: Session, item: ClientChargeItem) -> ClientChargeItemOut:
         tracker_identifier=(tracker.imei if tracker else None),
         service_product_name=service_product.name if service_product else None,
         open_installments=open_installments,
+        billing_ids=billing_ids,
     )
 
 
@@ -88,6 +104,10 @@ def create_item(payload: ClientChargeItemCreate, db: Session = Depends(get_db), 
         contract = db.get(Contract, payload.contract_id)
         if not contract or contract.is_deleted:
             raise HTTPException(status_code=404, detail='Contrato não encontrado')
+        if contract.client_id != payload.client_id:
+            raise HTTPException(status_code=400, detail='O contrato selecionado não pertence ao cliente informado.')
+        if payload.vehicle_id and contract.vehicle_id and contract.vehicle_id != payload.vehicle_id:
+            raise HTTPException(status_code=400, detail='O contrato selecionado pertence a outro veículo.')
     validate_links(db, payload.client_id, payload.vehicle_id, payload.tracker_id)
     service_product = db.get(ServiceProduct, payload.service_product_id) if payload.service_product_id else None
     if payload.service_product_id and (not service_product or service_product.is_deleted):
@@ -111,6 +131,21 @@ def update_item(item_id: int, payload: ClientChargeItemUpdate, db: Session = Dep
     if not obj or obj.is_deleted:
         raise HTTPException(status_code=404, detail='Lançamento não encontrado')
     data = payload.model_dump(exclude_unset=True)
+    server_managed_fields = {'active', 'status'}
+    if server_managed_fields.intersection(data):
+        raise HTTPException(
+            status_code=400,
+            detail='Situação e atividade do item são controladas pelas cobranças e não podem ser alteradas manualmente.',
+        )
+    protected_fields = {
+        'title', 'quantity', 'unit_price', 'installment_count', 'start_date',
+        'remove_after_payment',
+    }
+    if protected_fields.intersection(data) and effective_charge_item_billings(db, obj.id):
+        raise HTTPException(
+            status_code=409,
+            detail='Item já faturado não pode ter valor, parcelas, título ou vencimento alterados. Cancele a cobrança primeiro.',
+        )
     for key, value in data.items():
         setattr(obj, key, value)
     if 'quantity' in data or 'unit_price' in data:
@@ -125,6 +160,11 @@ def delete_item(item_id: int, db: Session = Depends(get_db), _: object = Depends
     obj = db.get(ClientChargeItem, item_id)
     if not obj or obj.is_deleted:
         raise HTTPException(status_code=404, detail='Lançamento não encontrado')
+    if effective_charge_item_billings(db, obj.id):
+        raise HTTPException(
+            status_code=409,
+            detail='Item vinculado a uma cobrança ativa não pode ser removido. Cancele a cobrança primeiro.',
+        )
     obj.is_deleted = True
     obj.active = False
     obj.status = 'removido'

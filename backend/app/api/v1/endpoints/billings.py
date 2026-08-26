@@ -21,6 +21,7 @@ from app.models.ailos_boleto import AilosBoleto
 from app.models.billing import Billing
 from app.models.billing_change_log import BillingChangeLog
 from app.models.client import Client
+from app.models.client_charge_item import ClientChargeItem
 from app.models.contract import Contract
 from app.models.enums import BillingStatus, UserRole
 from app.models.plan import Plan
@@ -47,11 +48,12 @@ from app.services.financial import (
     decimal_to_float,
     generate_receipt_number,
     marcar_billing_pago,
-    mark_charge_item_if_settled,
     normalize_due_date,
     period_bucket,
     plan_title,
     refresh_overdue_statuses,
+    refresh_charge_items_for_billing,
+    transfer_charge_items_to_billing,
     valor_com_juros,
 )
 
@@ -290,6 +292,11 @@ def list_items(search: str | None = None, status: str | None = None, client_id: 
 
 @router.post('/', response_model=BillingOut)
 def create_item(payload: BillingCreate, db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
+    if payload.status == BillingStatus.PAID and not payload.payment_date:
+        raise HTTPException(
+            status_code=400,
+            detail='Data de pagamento é obrigatória para criar uma cobrança paga.',
+        )
     client = db.get(Client, payload.client_id)
     if not client or client.is_deleted:
         raise HTTPException(status_code=404, detail='Cliente não encontrado')
@@ -297,19 +304,30 @@ def create_item(payload: BillingCreate, db: Session = Depends(get_db), _: object
         contract = db.get(Contract, payload.contract_id)
         if not contract or contract.is_deleted:
             raise HTTPException(status_code=404, detail='Contrato não encontrado')
+        if contract.client_id != payload.client_id:
+            raise HTTPException(status_code=400, detail='O contrato selecionado não pertence ao cliente informado.')
+    if payload.item_id:
+        charge_item = db.get(ClientChargeItem, payload.item_id)
+        if not charge_item or charge_item.is_deleted:
+            raise HTTPException(status_code=404, detail='Item de cobrança não encontrado')
+        if charge_item.client_id != payload.client_id:
+            raise HTTPException(status_code=400, detail='O item selecionado não pertence ao cliente informado.')
+        if payload.contract_id and charge_item.contract_id and charge_item.contract_id != payload.contract_id:
+            raise HTTPException(status_code=400, detail='O item selecionado pertence a outro contrato.')
     data = payload.model_dump()
     if not data.get('period_label'):
         data['period_label'] = payload.due_date.strftime('%m/%Y')
     obj = Billing(**data)
     db.add(obj)
-    db.commit()
-    db.refresh(obj)
+    db.flush()
     if obj.status == BillingStatus.PAID:
         obj.receipt_number = obj.receipt_number or generate_receipt_number(obj.id)
         obj.paid_amount = obj.paid_amount or obj.amount
-        db.commit()
-        db.refresh(obj)
-        mark_charge_item_if_settled(db, obj.item_id)
+        refresh_charge_items_for_billing(
+            db, obj, completion_date=obj.payment_date, commit=False,
+        )
+    db.commit()
+    db.refresh(obj)
     row = base_query(db).filter(Billing.id == obj.id).first()
     return serialize_billing(row)
 
@@ -401,7 +419,9 @@ def batch_status(payload: BillingBatchStatusIn, db: Session = Depends(get_db), c
             b.payment_date = payload.payment_date
             b.payment_method = payload.payment_method
             b.receipt_number = b.receipt_number or generate_receipt_number(b.id)
-            mark_charge_item_if_settled(db, b.item_id)
+            refresh_charge_items_for_billing(
+                db, b, completion_date=payload.payment_date, commit=False,
+            )
         else:
             b.status = BillingStatus.CANCELED
             marker = f'Cancelada em lote: {payload.reason}'
@@ -413,6 +433,7 @@ def batch_status(payload: BillingBatchStatusIn, db: Session = Depends(get_db), c
                     'segue ativo no banco — baixa manual pendente.'
                 )
             b.notes = f'{b.notes} | {marker}' if b.notes else marker
+            refresh_charge_items_for_billing(db, b, commit=False)
         processados.append(bid)
     db.commit()
     return {'processados': processados, 'ignorados': ignorados, 'boletos_ativos': boletos_ativos}
@@ -487,10 +508,12 @@ def unify_billings(payload: BillingUnify, db: Session = Depends(get_db), _: obje
     )
     db.add(nova)
     db.flush()
+    transfer_charge_items_to_billing(db, billings, nova)
     for b in billings:
         b.status = BillingStatus.CANCELED
         marker = f'Unificada na cobrança #{nova.id}.'
         b.notes = f'{b.notes} | {marker}' if b.notes else marker
+        refresh_charge_items_for_billing(db, b, commit=False)
     db.commit()
     row = base_query(db).filter(Billing.id == nova.id).first()
     return serialize_billing(row)
@@ -563,9 +586,9 @@ def cancel_billing(item_id: int, payload: BillingCancel, db: Session = Depends(g
             'segue ativo no banco — baixa manual pendente.'
         )
     billing.notes = f'{billing.notes or ""}\nCancelada: {payload.reason}{nota_extra}'.strip()
+    refresh_charge_items_for_billing(db, billing, commit=False)
     db.commit()
     db.refresh(billing)
-    mark_charge_item_if_settled(db, billing.item_id)
     row = base_query(db).filter(Billing.id == billing.id).first()
     return serialize_billing(row)
 
@@ -585,6 +608,13 @@ def update_item(item_id: int, payload: BillingUpdate, db: Session = Depends(get_
         )
     data = payload.model_dump(exclude_unset=True)
     justification = data.pop('justification', None)
+
+    immutable_links = {'client_id', 'contract_id', 'item_id', 'vehicle_id', 'tracker_id'}
+    if immutable_links.intersection(data):
+        raise HTTPException(
+            status_code=400,
+            detail='Cliente, contrato, item, veículo e rastreador da cobrança não podem ser alterados após a emissão.',
+        )
 
     # Transição de status tem fluxo próprio (Receber/Cancelar), com as travas da
     # máquina de estados e o aviso de boleto Ailos. O PUT genérico não muda status.
@@ -618,8 +648,6 @@ def update_item(item_id: int, payload: BillingUpdate, db: Session = Depends(get_
         billing.receipt_number = generate_receipt_number(billing.id)
     db.commit()
     db.refresh(billing)
-    if billing.status == BillingStatus.PAID:
-        mark_charge_item_if_settled(db, billing.item_id)
     row = base_query(db).filter(Billing.id == billing.id).first()
     return serialize_billing(row)
 
@@ -629,6 +657,12 @@ def delete_item(item_id: int, db: Session = Depends(get_db), _: object = Depends
     obj = db.get(Billing, item_id)
     if not obj or obj.is_deleted:
         raise HTTPException(status_code=404, detail='Cobrança não encontrada')
+    if obj.status == BillingStatus.PAID:
+        raise HTTPException(
+            status_code=400,
+            detail='Cobrança paga não pode ser removida; preserve o histórico financeiro.',
+        )
     obj.is_deleted = True
+    refresh_charge_items_for_billing(db, obj, commit=False)
     db.commit()
     return {'message': 'Cobrança removida com sucesso'}

@@ -6,6 +6,7 @@ from app.models.ailos_lote import AilosLote
 from app.models.ailos_retorno_arquivo import AilosRetornoArquivo
 from app.models.billing_change_log import BillingChangeLog
 from app.models.billing import Billing
+from app.models.billing_charge_item import BillingChargeItem
 from app.models.client import Client
 from app.models.client_charge_item import ClientChargeItem
 from app.models.contract import Contract

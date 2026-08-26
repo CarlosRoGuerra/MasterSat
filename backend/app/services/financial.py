@@ -5,10 +5,12 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Iterable
 
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.timezone import hoje
 from app.models.billing import Billing
+from app.models.billing_charge_item import BillingChargeItem
 from app.models.client_charge_item import ClientChargeItem
 from app.models.contract import Contract
 from app.models.enums import BillingStatus
@@ -317,6 +319,7 @@ def generate_item_billings(
                 Billing.is_deleted == False,
                 Billing.item_id == item.id,
                 Billing.installment_number == index + 1,
+                Billing.status != BillingStatus.CANCELED,
             )
             .first()
         )
@@ -353,6 +356,12 @@ def generate_item_billings(
         db.add(billing)
         created.append(billing)
 
+    # Emitir não significa receber. O item sai da fila de geração, mas só vira
+    # ``concluido`` quando todas as cobranças efetivas forem pagas.
+    item.active = False
+    item.status = 'faturado'
+    item.completed_at = None
+
     if commit:
         db.commit()
         for row in created:
@@ -386,29 +395,177 @@ def marcar_billing_pago(
     billing.paid_amount = paid_amount if paid_amount else billing.amount
     if not billing.receipt_number:
         billing.receipt_number = generate_receipt_number(billing.id)
+    refresh_charge_items_for_billing(db, billing, completion_date=payment_date, commit=False)
     db.commit()
     db.refresh(billing)
-    mark_charge_item_if_settled(db, billing.item_id)
     return billing
 
 
-def mark_charge_item_if_settled(db: Session, item_id: int | None) -> None:
-    if not item_id:
-        return
+def associate_billing_charge_item(
+    db: Session,
+    billing: Billing,
+    item: ClientChargeItem,
+    amount: Decimal | float,
+) -> BillingChargeItem:
+    """Associa um serviço a uma cobrança combinada sem encerrar a transação."""
+    existing = db.scalar(
+        select(BillingChargeItem).where(
+            BillingChargeItem.billing_id == billing.id,
+            BillingChargeItem.item_id == item.id,
+        )
+    )
+    if existing:
+        return existing
+    link = BillingChargeItem(
+        billing_id=billing.id,
+        item_id=item.id,
+        amount=_quantize_amount(amount),
+    )
+    db.add(link)
+    return link
+
+
+def charge_item_ids_for_billing(db: Session, billing: Billing) -> set[int]:
+    item_ids = set(
+        db.scalars(
+            select(BillingChargeItem.item_id).where(
+                BillingChargeItem.billing_id == billing.id,
+            )
+        ).all()
+    )
+    if billing.item_id:
+        item_ids.add(billing.item_id)
+    return item_ids
+
+
+def billing_ids_for_charge_item(db: Session, item_id: int) -> list[int]:
+    associated = select(BillingChargeItem.billing_id).where(
+        BillingChargeItem.item_id == item_id,
+    )
+    return list(
+        db.scalars(
+            select(Billing.id)
+            .where(
+                Billing.is_deleted.is_(False),
+                or_(Billing.item_id == item_id, Billing.id.in_(associated)),
+            )
+            .order_by(Billing.id.asc())
+        ).all()
+    )
+
+
+def effective_charge_item_billings(db: Session, item_id: int) -> list[Billing]:
+    associated = select(BillingChargeItem.billing_id).where(
+        BillingChargeItem.item_id == item_id,
+    )
+    return list(
+        db.scalars(
+            select(Billing).where(
+                Billing.is_deleted.is_(False),
+                Billing.status != BillingStatus.CANCELED,
+                or_(Billing.item_id == item_id, Billing.id.in_(associated)),
+            )
+        ).all()
+    )
+
+
+def charge_item_effective_billing_count(db: Session, item_id: int) -> int:
+    return len(effective_charge_item_billings(db, item_id))
+
+
+def refresh_charge_item_state(
+    db: Session,
+    item_id: int,
+    *,
+    completion_date: date | None = None,
+) -> None:
+    """Deriva o estado do item das cobranças, sem confundir emissão com pagamento."""
     item = db.get(ClientChargeItem, item_id)
     if not item or item.is_deleted:
         return
-    open_items = db.query(Billing).filter(
-        Billing.is_deleted == False,
-        Billing.item_id == item.id,
-        Billing.status.in_([BillingStatus.PENDING, BillingStatus.OVERDUE]),
-    ).count()
-    if open_items == 0 and item.remove_after_payment:
+
+    billings = effective_charge_item_billings(db, item_id)
+    abertas = [
+        billing for billing in billings
+        if billing.status in (BillingStatus.PENDING, BillingStatus.OVERDUE)
+    ]
+    pagas = [billing for billing in billings if billing.status == BillingStatus.PAID]
+    effective_ids = [billing.id for billing in billings]
+    embedded = bool(effective_ids) and db.scalar(
+        select(BillingChargeItem.id)
+        .where(
+            BillingChargeItem.item_id == item_id,
+            BillingChargeItem.billing_id.in_(effective_ids),
+        )
+        .limit(1)
+    ) is not None
+
+    if abertas:
+        item.active = False
+        item.status = 'faturado'
+        item.completed_at = None
+    elif pagas and (embedded or item.remove_after_payment):
         item.active = False
         item.status = 'concluido'
-        item.completed_at = hoje()
-        db.commit()
+        paid_dates = [billing.payment_date for billing in pagas if billing.payment_date]
+        item.completed_at = completion_date or (max(paid_dates) if paid_dates else hoje())
+    elif pagas:
+        # Mantém o histórico como faturado sem recolocá-lo na fila de cobrança.
+        item.active = False
+        item.status = 'faturado'
+        item.completed_at = None
+    else:
+        # Todas as cobranças foram canceladas/removidas: o serviço precisa voltar
+        # à fila, senão o cancelamento faria a receita desaparecer definitivamente.
+        item.active = True
+        item.status = 'ativo'
+        item.completed_at = None
 
+
+def refresh_charge_items_for_billing(
+    db: Session,
+    billing: Billing,
+    *,
+    completion_date: date | None = None,
+    commit: bool = True,
+) -> None:
+    for item_id in charge_item_ids_for_billing(db, billing):
+        refresh_charge_item_state(db, item_id, completion_date=completion_date)
+    if commit:
+        db.commit()
+    else:
+        db.flush()
+
+
+def transfer_charge_items_to_billing(
+    db: Session,
+    source_billings: list[Billing],
+    target: Billing,
+) -> None:
+    """Preserva os itens ao unificar cobranças em um novo título."""
+    amounts_by_item: dict[int, Decimal] = {}
+    for source in source_billings:
+        links = list(db.scalars(
+            select(BillingChargeItem).where(
+                BillingChargeItem.billing_id == source.id,
+            )
+        ).all())
+        linked_ids = {link.item_id for link in links}
+        for link in links:
+            amounts_by_item[link.item_id] = (
+                amounts_by_item.get(link.item_id, Decimal('0.00'))
+                + Decimal(str(link.amount))
+            )
+        if source.item_id and source.item_id not in linked_ids:
+            amounts_by_item[source.item_id] = (
+                amounts_by_item.get(source.item_id, Decimal('0.00'))
+                + Decimal(str(source.amount))
+            )
+
+    for item_id, amount in amounts_by_item.items():
+        item = db.get(ClientChargeItem, item_id)
+        if item:
+            associate_billing_charge_item(db, target, item, amount)
 
 def current_cycle_bounds(contract: Contract, plan: Plan, reference_date: date) -> tuple[date, date]:
     interval = max(int(getattr(plan, 'billing_interval_months', 1) or 1), 1)

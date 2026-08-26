@@ -23,6 +23,8 @@ from app.models.vehicle import Vehicle
 from app.services.financial import (
     _quantize_amount,
     add_months,
+    associate_billing_charge_item,
+    charge_item_effective_billing_count,
     decimal_to_float,
     generate_item_billings,
     normalize_due_date,
@@ -169,12 +171,12 @@ def _due_date_for_uninstall_event(event: UninstallEvent, db: Session) -> date:
 def _first_cycle_charge_items(
     db: Session,
     client_id: int,
-    vehicle_id: int | None,
+    contract_id: int,
     reference_month: date,
 ) -> list[dict]:
     """
     Retorna ChargeItems de parcela única (installment_count=1) que:
-    - Pertencem ao cliente/veículo do contrato
+    - Pertencem explicitamente ao contrato (itens genéricos ficam avulsos)
     - Têm start_date dentro do mês de referência (serviços do início do contrato)
     - Ainda não foram faturados (active=True e billing_count=0)
 
@@ -191,24 +193,14 @@ def _first_cycle_charge_items(
         ClientChargeItem.is_deleted.is_(False),
         ClientChargeItem.active.is_(True),
         ClientChargeItem.client_id == client_id,
+        ClientChargeItem.contract_id == contract_id,
         ClientChargeItem.installment_count == 1,
         ClientChargeItem.start_date >= month_start,
         ClientChargeItem.start_date < month_end,
     )
-    if vehicle_id:
-        q = q.filter(
-            or_(
-                ClientChargeItem.vehicle_id == vehicle_id,
-                ClientChargeItem.vehicle_id.is_(None),
-            )
-        )
-
     result = []
     for item in q.all():
-        billing_count = db.query(func.count(Billing.id)).filter(
-            Billing.is_deleted.is_(False),
-            Billing.item_id == item.id,
-        ).scalar() or 0
+        billing_count = charge_item_effective_billing_count(db, item.id)
         if billing_count > 0:
             continue  # já faturado por outro caminho
 
@@ -251,10 +243,7 @@ def _pending_charge_items(
         if exclude_ids and item.id in exclude_ids:
             continue
 
-        billing_count = db.query(func.count(Billing.id)).filter(
-            Billing.is_deleted.is_(False),
-            Billing.item_id == item.id,
-        ).scalar() or 0
+        billing_count = charge_item_effective_billing_count(db, item.id)
 
         installments = max(int(item.installment_count or 1), 1)
         if billing_count >= installments:
@@ -363,7 +352,7 @@ def simulate_closure(
             )
             # Charge items with start_date in the contract's start month are embedded
             first_charges = _first_cycle_charge_items(
-                db, client.id, vehicle.id if vehicle else None,
+                db, client.id, contract.id,
                 contract.start_date.replace(day=1),
             )
         else:
@@ -527,13 +516,15 @@ def execute_closure(
             db.flush()
             created_ids.append(billing.id)
 
-            # Marca cada serviço embutido como concluído (sem criar billing separado)
+            # Registra cada serviço no título combinado. A emissão apenas o marca
+            # como faturado; a conclusão é derivada da baixa do pagamento.
             for charge in first_charges:
                 charge_obj = db.get(ClientChargeItem, charge['item_id'])
                 if charge_obj:
+                    associate_billing_charge_item(db, billing, charge_obj, charge['amount'])
                     charge_obj.active = False
-                    charge_obj.completed_at = hoje()
-                    charge_obj.status = 'concluido'
+                    charge_obj.completed_at = None
+                    charge_obj.status = 'faturado'
 
         else:
             # Cobrança normal (mensalidade ou pró-rata sem serviços embutidos)

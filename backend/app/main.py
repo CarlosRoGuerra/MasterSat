@@ -17,7 +17,7 @@ from app.core.config import settings
 from app.core.limiter import limiter
 from app.core.security import get_password_hash
 from app.db.session import Base, SessionLocal, engine
-from app.models import ailos_api_log, ailos_boleto, ailos_client_token, ailos_integration, ailos_lote, ailos_retorno_arquivo, audit_log, billing, billing_change_log, client, client_charge_item, closure_job, contract, document, integration_log, multiportal_outbox, nfse_certificado, nfse_lote, nfse_nota, password_reset_token, payable, plan, service_order, service_order_status_log, service_product, system_setting, tracker, tracker_history, uninstall_event, user, vehicle  # noqa: F401 — side-effect imports that register models with SQLAlchemy Base
+from app.models import ailos_api_log, ailos_boleto, ailos_client_token, ailos_integration, ailos_lote, ailos_retorno_arquivo, audit_log, billing, billing_change_log, billing_charge_item, client, client_charge_item, closure_job, contract, document, integration_log, multiportal_outbox, nfse_certificado, nfse_lote, nfse_nota, password_reset_token, payable, plan, service_order, service_order_status_log, service_product, system_setting, tracker, tracker_history, uninstall_event, user, vehicle  # noqa: F401 — side-effect imports that register models with SQLAlchemy Base
 from app.core.audit import AuditMiddleware
 from app.core.body_limit import MaxBodySizeMiddleware
 from app.models.enums import UserRole

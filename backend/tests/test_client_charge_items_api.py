@@ -111,6 +111,10 @@ class TestCreateChargeItem:
         r = http_op.post(PREFIX + "/", json=_payload(cliente.id, contrato.id))
         assert r.status_code == 403
 
+    def test_rejects_contract_from_another_client(self, http, outro_cliente, contrato):
+        r = http.post(PREFIX + "/", json=_payload(outro_cliente.id, contrato.id))
+        assert r.status_code == 400
+
 
 # ---------------------------------------------------------------------------
 # PUT /{id}
@@ -130,6 +134,11 @@ class TestUpdateChargeItem:
     def test_update_nonexistent_returns_404(self, http):
         r = http.put(f"{PREFIX}/99999", json={"title": "X"})
         assert r.status_code == 404
+
+    def test_cannot_force_server_managed_status(self, http, cliente, contrato):
+        item_id = self._create(http, cliente, contrato)
+        r = http.put(f"{PREFIX}/{item_id}", json={"status": "concluido", "active": False})
+        assert r.status_code == 400
 
 
 # ---------------------------------------------------------------------------

@@ -148,6 +148,35 @@ class TestCreateBilling:
         })
         assert r.status_code == 403
 
+    def test_paid_creation_requires_payment_date(self, http, cliente):
+        r = http.post(PREFIX + "/", json={
+            "client_id": cliente.id,
+            "amount": 100.0,
+            "due_date": "2099-12-31",
+            "status": "paga",
+        })
+        assert r.status_code == 400
+
+    def test_rejects_charge_item_from_another_client(self, http, cliente, outro_cliente, contrato):
+        item_response = http.post('/api/v1/client-charge-items/', json={
+            "client_id": cliente.id,
+            "contract_id": contrato.id,
+            "title": "Serviço rastreável",
+            "quantity": 1,
+            "unit_price": 100.0,
+            "installment_count": 1,
+            "start_date": "2025-06-01",
+        })
+        assert item_response.status_code == 200
+
+        r = http.post(PREFIX + "/", json={
+            "client_id": outro_cliente.id,
+            "item_id": item_response.json()["id"],
+            "amount": 100.0,
+            "due_date": "2099-12-31",
+        })
+        assert r.status_code == 400
+
 
 # ---------------------------------------------------------------------------
 # GET /{id}
@@ -455,3 +484,13 @@ class TestDeleteBilling:
     def test_operational_cannot_delete(self, http_op, billing_pendente):
         r = http_op.delete(f"{PREFIX}/{billing_pendente.id}")
         assert r.status_code == 403
+
+    def test_paid_billing_cannot_be_deleted(self, http, db, billing_pendente):
+        billing_pendente.status = BillingStatus.PAID
+        billing_pendente.payment_date = date.today()
+        db.commit()
+
+        r = http.delete(f"{PREFIX}/{billing_pendente.id}")
+        assert r.status_code == 400
+        db.refresh(billing_pendente)
+        assert billing_pendente.is_deleted is False

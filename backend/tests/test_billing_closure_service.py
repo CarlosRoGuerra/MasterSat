@@ -18,8 +18,11 @@ from decimal import Decimal
 from io import BytesIO
 
 import pytest
+from sqlalchemy import select
 
 from app.models.billing import Billing
+from app.models.billing_charge_item import BillingChargeItem
+from app.models.client_charge_item import ClientChargeItem
 from app.models.contract import Contract
 from app.models.enums import BillingStatus
 from app.models.plan import Plan
@@ -29,6 +32,12 @@ from app.services.billing_closure import (
     execute_closure,
     generate_closure_pdf,
     simulate_closure,
+)
+from app.services.financial import (
+    generate_item_billings,
+    marcar_billing_pago,
+    refresh_charge_items_for_billing,
+    transfer_charge_items_to_billing,
 )
 
 # Mês de referência usado na maioria dos testes
@@ -800,6 +809,193 @@ class TestTaxaDesinstalacaoNaoDuplica:
         execute_closure(db, REF_MONTH)
         db.refresh(evento)
         assert db.get(Billing, evento.billing_id).title == produto_desinstalacao.name
+
+
+# ---------------------------------------------------------------------------
+# Rastreabilidade dos itens da primeira cobrança
+# ---------------------------------------------------------------------------
+
+class TestItensPrimeiraCobranca:
+    def _contract(self, db, cliente, plan, *, vehicle_id=None):
+        contract = Contract(
+            client_id=cliente.id,
+            plan_id=plan.id,
+            vehicle_id=vehicle_id,
+            start_date=date(2025, 5, 1),
+            status='ativo',
+            billing_day=15,
+        )
+        db.add(contract)
+        db.flush()
+        return contract
+
+    def _item(self, db, cliente, *, contract_id=None, vehicle_id=None, title='Instalação'):
+        item = ClientChargeItem(
+            client_id=cliente.id,
+            contract_id=contract_id,
+            vehicle_id=vehicle_id,
+            title=title,
+            quantity=1,
+            unit_price=Decimal('150.00'),
+            total_amount=Decimal('150.00'),
+            installment_count=1,
+            start_date=date(2025, 5, 1),
+            active=True,
+            remove_after_payment=True,
+            status='ativo',
+        )
+        db.add(item)
+        db.flush()
+        return item
+
+    def test_item_sem_contrato_nao_duplica_em_varios_contratos(self, db, cliente, plan):
+        self._contract(db, cliente, plan)
+        self._contract(db, cliente, plan)
+        item = self._item(db, cliente, contract_id=None, vehicle_id=None, title='Serviço global')
+        db.commit()
+
+        simulation = simulate_closure(db, REF_MONTH)
+
+        assert all(
+            item.id not in {charge['item_id'] for charge in row['first_month_charges']}
+            for row in simulation['items']
+        )
+        assert [row['item_id'] for row in simulation['charge_items']].count(item.id) == 1
+
+        execute_closure(db, REF_MONTH)
+        assert db.query(Billing).filter(Billing.item_id == item.id).count() == 1
+
+    def test_item_so_entra_no_contrato_ao_qual_foi_vinculado(self, db, cliente, plan):
+        first = self._contract(db, cliente, plan)
+        second = self._contract(db, cliente, plan)
+        item = self._item(db, cliente, contract_id=first.id)
+        db.commit()
+
+        simulation = simulate_closure(db, REF_MONTH)
+        by_contract = {row['contract_id']: row for row in simulation['items']}
+
+        assert [charge['item_id'] for charge in by_contract[first.id]['first_month_charges']] == [item.id]
+        assert by_contract[second.id]['first_month_charges'] == []
+
+    def test_emissao_fatura_mas_so_pagamento_conclui(self, db, cliente, plan, veiculo):
+        contract = self._contract(db, cliente, plan, vehicle_id=veiculo.id)
+        item = self._item(db, cliente, contract_id=contract.id, vehicle_id=veiculo.id)
+        db.commit()
+
+        result = execute_closure(db, REF_MONTH)
+        combined = db.scalar(
+            select(Billing).where(
+                Billing.id.in_(result['billing_ids']),
+                Billing.contract_id == contract.id,
+            )
+        )
+        db.refresh(item)
+
+        assert combined is not None
+        assert combined.item_id is None  # vários itens possíveis: usa tabela associativa
+        assert item.status == 'faturado'
+        assert item.active is False
+        assert item.completed_at is None
+        link = db.scalar(
+            select(BillingChargeItem).where(
+                BillingChargeItem.billing_id == combined.id,
+                BillingChargeItem.item_id == item.id,
+            )
+        )
+        assert link is not None
+        assert link.amount == Decimal('150.00')
+
+        marcar_billing_pago(
+            db,
+            combined,
+            payment_date=date(2025, 5, 20),
+            paid_amount=combined.amount,
+            payment_method='pix',
+        )
+        db.refresh(item)
+        assert item.status == 'concluido'
+        assert item.completed_at == date(2025, 5, 20)
+
+    def test_cancelamento_recoloca_item_na_fila(self, db, cliente, plan):
+        contract = self._contract(db, cliente, plan)
+        item = self._item(db, cliente, contract_id=contract.id)
+        db.commit()
+        result = execute_closure(db, REF_MONTH)
+        combined = db.get(Billing, result['billing_ids'][0])
+
+        combined.status = BillingStatus.CANCELED
+        refresh_charge_items_for_billing(db, combined, commit=False)
+        db.commit()
+        db.refresh(item)
+
+        assert item.status == 'ativo'
+        assert item.active is True
+        assert item.completed_at is None
+
+    def test_item_parcelado_conclui_somente_apos_quitar_todas_as_parcelas(self, db, cliente):
+        item = self._item(db, cliente, title='Serviço parcelado')
+        item.installment_count = 2
+        db.commit()
+
+        billings = generate_item_billings(db, item)
+        db.refresh(item)
+        assert len(billings) == 2
+        assert item.status == 'faturado'
+        assert item.completed_at is None
+
+        marcar_billing_pago(
+            db, billings[0], payment_date=date(2025, 5, 20),
+            paid_amount=billings[0].amount, payment_method='pix',
+        )
+        db.refresh(item)
+        assert item.status == 'faturado'
+        assert item.completed_at is None
+
+        marcar_billing_pago(
+            db, billings[1], payment_date=date(2025, 6, 20),
+            paid_amount=billings[1].amount, payment_method='pix',
+        )
+        db.refresh(item)
+        assert item.status == 'concluido'
+        assert item.completed_at == date(2025, 6, 20)
+
+    def test_unificacao_preserva_item_e_soma_valores_das_parcelas(self, db, cliente):
+        item = self._item(db, cliente, title='Serviço unificado')
+        item.installment_count = 2
+        db.commit()
+        sources = generate_item_billings(db, item)
+
+        target = Billing(
+            client_id=cliente.id,
+            title='Cobrança unificada',
+            billing_type='avulsa',
+            amount=sum(Decimal(str(row.amount)) for row in sources),
+            due_date=date(2025, 7, 15),
+            status=BillingStatus.PENDING,
+            period_label='07/2025',
+        )
+        db.add(target)
+        db.flush()
+        transfer_charge_items_to_billing(db, sources, target)
+        for source in sources:
+            source.status = BillingStatus.CANCELED
+        refresh_charge_items_for_billing(db, target, commit=False)
+        db.commit()
+
+        link = db.scalar(select(BillingChargeItem).where(
+            BillingChargeItem.billing_id == target.id,
+            BillingChargeItem.item_id == item.id,
+        ))
+        assert link is not None
+        assert link.amount == Decimal('150.00')
+
+        marcar_billing_pago(
+            db, target, payment_date=date(2025, 7, 10),
+            paid_amount=target.amount, payment_method='pix',
+        )
+        db.refresh(item)
+        assert item.status == 'concluido'
+        assert item.completed_at == date(2025, 7, 10)
 
 
 # ---------------------------------------------------------------------------

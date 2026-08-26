@@ -44,5 +44,6 @@ class ClientChargeItemOut(ClientChargeItemBase):
     tracker_identifier: str | None = None
     service_product_name: str | None = None
     open_installments: int = 0
+    billing_ids: list[int] = Field(default_factory=list)
 
     model_config = {'from_attributes': True}
