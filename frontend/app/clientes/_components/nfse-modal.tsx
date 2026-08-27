@@ -68,7 +68,7 @@ export function NfseModal({
                       <button
                         type="button"
                         onClick={() => onVerPdf(n.billing_id)}
-                        className="rounded-lg border border-brand-200 bg-brand-50 px-2.5 py-1 text-[11px] font-semibold text-brand-700 transition hover:bg-brand-100 dark:border-brand-900/40 dark:bg-brand-950/30 dark:text-brand-400"
+                        className="rounded-lg border border-brand-200 bg-brand-50 px-2.5 py-1 text-2xs font-semibold text-brand-700 transition hover:bg-brand-100 dark:border-brand-900/40 dark:bg-brand-950/30 dark:text-brand-400"
                       >
                         Ver PDF
                       </button>
@@ -79,7 +79,7 @@ export function NfseModal({
                         target="_blank"
                         rel="noreferrer"
                         title="Consulta publica no portal da NFS-e"
-                        className="rounded-lg border border-slate-200 px-2 py-1 text-[11px] font-medium text-slate-500 transition hover:bg-slate-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
+                        className="rounded-lg border border-slate-200 px-2 py-1 text-2xs font-medium text-slate-500 transition hover:bg-slate-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
                       >
                         Consulta
                       </a>
@@ -91,7 +91,7 @@ export function NfseModal({
           </TableBody>
         </Table>
       )}
-      <p className="mt-3 text-xs text-slate-400">
+      <p className="mt-3 text-xs text-slate-500">
         Mostrando {notas.length} registro(s)
       </p>
     </Modal>

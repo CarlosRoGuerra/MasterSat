@@ -105,7 +105,7 @@ export default function UsersPage() {
     >
       {/* Feedback */}
       {(guardError || error) && (
-        <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-400">
+        <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-900/40 dark:bg-rose-950/30 dark:text-rose-400">
           {guardError || error}
         </div>
       )}
@@ -161,7 +161,7 @@ export default function UsersPage() {
                   <Tr key={u.id} onClick={() => startEdit(u)} selected={selected?.id === u.id}>
                     <Td>
                       <p className="font-medium text-slate-900 dark:text-white">{u.name}</p>
-                      <p className="text-xs text-slate-400">{u.email}</p>
+                      <p className="text-xs text-slate-500">{u.email}</p>
                     </Td>
                     <Td>
                       <Badge variant="brand">{roleLabel[u.role] ?? u.role}</Badge>
@@ -175,14 +175,14 @@ export default function UsersPage() {
                       <div className="flex justify-end gap-1">
                         <button
                           onClick={(e) => { e.stopPropagation(); startEdit(u); }}
-                          className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800"
+                          className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800"
                           title="Editar"
                         >
                           <Pencil className="h-3.5 w-3.5" />
                         </button>
                         <button
                           onClick={(e) => { e.stopPropagation(); handleDelete(u.id); }}
-                          className="rounded-lg p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/40"
+                          className="rounded-lg p-1.5 text-slate-500 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-950/40"
                           title="Excluir"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
@@ -200,7 +200,7 @@ export default function UsersPage() {
         <Card>
           <div className="mb-5 flex items-center justify-between gap-3">
             <div>
-              <p className="text-[11px] font-semibold uppercase tracking-widest text-brand-500 dark:text-brand-400">
+              <p className="text-2xs font-semibold uppercase tracking-widest text-brand-500 dark:text-brand-400">
                 {selected ? 'Editar' : 'Novo'}
               </p>
               <h3 className="mt-1 text-base font-semibold text-slate-900 dark:text-white">

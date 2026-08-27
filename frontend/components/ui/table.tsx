@@ -25,7 +25,7 @@ export function Th({
   return (
     <th
       className={clsx(
-        'px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500',
+        'px-4 py-3 text-left text-2xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400',
         className,
       )}
       {...props}
@@ -85,7 +85,7 @@ export function Td({
 }: { children?: ReactNode } & TdHTMLAttributes<HTMLTableCellElement>) {
   return (
     <td
-      className={clsx('px-4 py-3 text-[13px] text-slate-700 dark:text-slate-300', className)}
+      className={clsx('px-4 py-3 text-body text-slate-700 dark:text-slate-300', className)}
       {...props}
     >
       {children}

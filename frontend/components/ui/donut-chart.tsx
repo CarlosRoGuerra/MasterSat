@@ -32,7 +32,7 @@ export function DonutChart({
     return (
       <div className="flex flex-col items-center justify-center gap-2 py-10 text-center" style={{ minHeight: size }}>
         <PieChart className="h-8 w-8 text-slate-300 dark:text-slate-600" />
-        <p className="text-sm font-medium text-slate-400 dark:text-slate-500">{emptyMessage}</p>
+        <p className="text-sm font-medium text-slate-500 dark:text-slate-400">{emptyMessage}</p>
       </div>
     );
   }
@@ -89,7 +89,7 @@ export function DonutChart({
               <span className="ml-auto pl-4 font-semibold tabular-nums text-slate-900 dark:text-white">
                 {slice.value}
               </span>
-              <span className="w-10 text-right text-xs tabular-nums text-slate-400">{pct}%</span>
+              <span className="w-10 text-right text-xs tabular-nums text-slate-500">{pct}%</span>
             </li>
           );
         })}

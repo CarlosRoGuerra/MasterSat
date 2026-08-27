@@ -159,12 +159,12 @@ function StepIndicator({ current }: { current: WizardStep }) {
             }`}>
               {current > s.n ? <CheckCircle2 className="h-4 w-4" /> : s.n}
             </div>
-            <span className={`mt-1 text-[11px] font-medium ${
+            <span className={`mt-1 text-2xs font-medium ${
               current === s.n
-                ? 'text-brand-600 dark:text-brand-400'
+                ? 'text-brand-700 dark:text-brand-400'
                 : current > s.n
                 ? 'text-emerald-600 dark:text-emerald-400'
-                : 'text-slate-400 dark:text-slate-500'
+                : 'text-slate-500 dark:text-slate-400'
             }`}>
               {s.label}
             </span>
@@ -468,7 +468,7 @@ export default function FechamentoPage() {
       {step === 2 && simulation && (
         <>
           {/* KPIs */}
-          <section className="mb-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+          <section className="mb-5 grid gap-5 sm:grid-cols-2 lg:grid-cols-5">
             <MetricCard
               label="Contratos no período"
               value={simulation.total_contracts}
@@ -548,7 +548,7 @@ export default function FechamentoPage() {
                   </label>
                 )}
               </div>
-              <span className="text-xs text-slate-400">
+              <span className="text-xs text-slate-500">
                 {selectedContractIds.size} de {pendingRec.length} selecionados
               </span>
             </div>
@@ -596,7 +596,7 @@ export default function FechamentoPage() {
                           <Td>
                             <p className="text-sm text-slate-700 dark:text-slate-300">{item.vehicle_plate ?? '—'}</p>
                             {item.tracker_imei && (
-                              <p className="text-[11px] text-slate-400">{item.tracker_imei}</p>
+                              <p className="text-2xs text-slate-500">{item.tracker_imei}</p>
                             )}
                           </Td>
                           <Td className="text-sm text-slate-700 dark:text-slate-300">{item.plan_name}</Td>
@@ -609,11 +609,11 @@ export default function FechamentoPage() {
                                 <span className="inline-flex items-center gap-1 rounded-md bg-violet-100 px-2 py-0.5 text-xs font-semibold text-violet-700 dark:bg-violet-950/40 dark:text-violet-400">
                                   1ª cobrança combinada
                                 </span>
-                                <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                                <span className="text-2xs text-slate-500 dark:text-slate-400">
                                   Mensalidade: {fmt(item.billing_amount)}
                                 </span>
                                 {item.first_month_charges.map((c) => (
-                                  <span key={c.item_id} className="inline-flex items-center gap-1 text-[11px] text-slate-500 dark:text-slate-400">
+                                  <span key={c.item_id} className="inline-flex items-center gap-1 text-2xs text-slate-500 dark:text-slate-400">
                                     + {c.title}: {fmt(c.amount)}
                                     <button
                                       type="button"
@@ -637,12 +637,12 @@ export default function FechamentoPage() {
                                 <span className="inline-flex items-center rounded-md bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700 dark:bg-amber-950/40 dark:text-amber-400">
                                   Pró-rata {item.prorated_days}/{item.days_in_month} dias
                                 </span>
-                                <span className="mt-0.5 text-[10px] text-slate-400 line-through">
+                                <span className="mt-0.5 text-3xs text-slate-500 line-through">
                                   {fmt(item.plan_price)}
                                 </span>
                               </span>
                             ) : (
-                              <span className="text-xs text-slate-400">Mensalidade integral</span>
+                              <span className="text-xs text-slate-500">Mensalidade integral</span>
                             )}
                           </Td>
                           <Td className="whitespace-nowrap text-sm font-semibold text-slate-900 dark:text-white">
@@ -802,7 +802,7 @@ export default function FechamentoPage() {
                           <Td className="text-sm text-slate-700 dark:text-slate-300">{item.vehicle_plate ?? '—'}</Td>
                           <Td>
                             <p className="text-sm font-medium text-slate-800 dark:text-slate-200">{item.title}</p>
-                            <p className="text-[11px] text-slate-400">
+                            <p className="text-2xs text-slate-500">
                               início {fmtDate(item.start_date)}
                             </p>
                           </Td>
@@ -881,7 +881,7 @@ export default function FechamentoPage() {
                 <p className="text-sm font-medium text-slate-700 dark:text-slate-200">
                   Gerando cobranças, aguarde...
                 </p>
-                <p className="text-xs text-slate-400">Este processo pode levar alguns segundos</p>
+                <p className="text-xs text-slate-500">Este processo pode levar alguns segundos</p>
               </div>
             </div>
           )}
@@ -893,7 +893,7 @@ export default function FechamentoPage() {
                 Fechamento concluído — {generateResult.reference_month_label || generateResult.reference_month}
               </span>
 
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
                 <MetricCard
                   label="Mensalidades geradas"
                   value={generateResult.generated}

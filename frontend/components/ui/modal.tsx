@@ -126,7 +126,7 @@ export function Modal({
         <div className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-100 px-6 py-4 dark:border-slate-800">
           <div className="min-w-0">
             {subtitle && (
-              <p className="mb-1 text-[11px] font-semibold uppercase tracking-widest text-brand-500 dark:text-brand-400">
+              <p className="mb-1 text-2xs font-semibold uppercase tracking-widest text-brand-500 dark:text-brand-400">
                 {subtitle}
               </p>
             )}
@@ -139,7 +139,7 @@ export function Modal({
             type="button"
             onClick={onClose}
             aria-label="Fechar"
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-200"
           >
             <X className="h-4 w-4" />
           </button>

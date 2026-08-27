@@ -64,7 +64,7 @@ export function ClientFormModal({
     >
       <form className="space-y-6" onSubmit={onSubmit}>
         {error && (
-          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-400">
+          <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-900/40 dark:bg-rose-950/30 dark:text-rose-400">
             {error}
           </div>
         )}
@@ -136,7 +136,7 @@ export function ClientFormModal({
 
         <FormSection title="Contatos adicionais">
           <div className="flex items-center justify-between">
-            <p className="text-xs text-slate-400 dark:text-slate-500">Responsáveis, técnicos ou gestores adicionais.</p>
+            <p className="text-xs text-slate-500 dark:text-slate-400">Responsáveis, técnicos ou gestores adicionais.</p>
             <Button type="button" variant="secondary" onClick={onAddContact} className="gap-1.5">
               <Plus className="h-3.5 w-3.5" /> Adicionar contato
             </Button>
@@ -283,7 +283,7 @@ export function ClientFormModal({
         <FormDivider />
 
         <FormSection title="Documentação inicial (opcional)">
-          <p className="text-xs text-slate-400 dark:text-slate-500">Arquivos enviados automaticamente após salvar o cliente.</p>
+          <p className="text-xs text-slate-500 dark:text-slate-400">Arquivos enviados automaticamente após salvar o cliente.</p>
           <FormGrid cols={2}>
             <FormField label="Categoria">
               <Select value={docCategory} onChange={(e) => onDocCategoryChange(e.target.value)}>

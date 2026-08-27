@@ -25,7 +25,7 @@ export function EmptyState({
   }[tone];
 
   const iconColor = {
-    neutral: 'text-slate-400 dark:text-slate-500',
+    neutral: 'text-slate-500 dark:text-slate-400',
     success: 'text-emerald-500 dark:text-emerald-400',
     warning: 'text-amber-500 dark:text-amber-400',
   }[tone];
@@ -38,9 +38,9 @@ export function EmptyState({
         </div>
       )}
       <div>
-        <p className="text-[13px] font-semibold text-slate-700 dark:text-slate-300">{title}</p>
+        <p className="text-body font-semibold text-slate-700 dark:text-slate-300">{title}</p>
         {description && (
-          <p className="mt-1 text-[12px] text-slate-400 dark:text-slate-500">{description}</p>
+          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{description}</p>
         )}
       </div>
       {action && <div className="mt-2">{action}</div>}

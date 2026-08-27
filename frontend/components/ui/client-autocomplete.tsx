@@ -102,7 +102,7 @@ export function ClientAutocomplete({
         </div>
       ) : (
         <div className="relative">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
           <input
             ref={inputRef}
             type="text"
@@ -124,10 +124,10 @@ export function ClientAutocomplete({
             }}
             className={clsx(
               'w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-9 pr-3.5 text-sm text-slate-900 outline-none transition',
-              'placeholder:text-slate-400',
+              'placeholder:text-slate-500',
               'focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20',
-              'disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400',
-              'dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-500',
+              'disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500',
+              'dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-400',
               'dark:focus:border-brand-400 dark:focus:ring-brand-400/20',
             )}
           />
@@ -138,7 +138,7 @@ export function ClientAutocomplete({
       {showDropdown && (
         <div className="absolute z-50 mt-1 max-h-60 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-elevated dark:border-slate-700 dark:bg-slate-900">
           {filtered.length === 0 ? (
-            <div className="px-4 py-3 text-sm text-slate-400 dark:text-slate-500">
+            <div className="px-4 py-3 text-sm text-slate-500 dark:text-slate-400">
               Nenhum cliente encontrado para &quot;{query}&quot;
             </div>
           ) : (
@@ -152,7 +152,7 @@ export function ClientAutocomplete({
                 <span className="font-medium text-slate-900 dark:text-white">
                   {highlight(client.name, query)}
                 </span>
-                <span className="shrink-0 text-xs text-slate-400">
+                <span className="shrink-0 text-xs text-slate-500">
                   {formatDoc(client.cpf_cnpj)}
                 </span>
               </button>

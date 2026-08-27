@@ -111,7 +111,7 @@ export function AuthShell({
             </div>
 
             <div className="mb-8">
-              <span className="inline-block rounded-full bg-brand-50 px-3 py-1 text-xs font-semibold uppercase tracking-widest text-brand-600 dark:bg-brand-900/40 dark:text-brand-300">
+              <span className="inline-block rounded-full bg-brand-50 px-3 py-1 text-xs font-semibold uppercase tracking-widest text-brand-700 dark:bg-brand-900/40 dark:text-brand-300">
                 {roleLabel}
               </span>
               <h2 className="mt-4 text-2xl font-bold tracking-tight text-slate-900 dark:text-white">{title}</h2>

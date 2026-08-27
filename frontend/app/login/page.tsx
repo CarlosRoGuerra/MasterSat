@@ -31,7 +31,7 @@ export default function LoginSelectorPage() {
               className="flex items-center gap-4 px-6 py-5 transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/60"
             >
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-50 dark:bg-brand-900/30">
-                <Radio className="h-5 w-5 text-brand-600 dark:text-brand-300" />
+                <Radio className="h-5 w-5 text-brand-700 dark:text-brand-300" />
               </div>
               <div className="min-w-0">
                 <p className="text-sm font-semibold text-slate-900 dark:text-white">Painel administrativo</p>

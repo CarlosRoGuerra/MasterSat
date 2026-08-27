@@ -56,7 +56,7 @@ export function Pagination({
 
   return (
     <div className={clsx('flex items-center justify-between gap-4 border-t border-slate-100 pt-3 dark:border-slate-800', className)}>
-      <p className="text-xs text-slate-400 dark:text-slate-500">
+      <p className="text-xs text-slate-500 dark:text-slate-400">
         {total === 0 ? '0 registros' : `${start}–${end} de ${total}`}
       </p>
       {totalPages > 1 && (
@@ -66,7 +66,7 @@ export function Pagination({
           </NavBtn>
           {pages.map((p, i) =>
             p === '...' ? (
-              <span key={`e-${i}`} className="px-1 text-xs text-slate-400">…</span>
+              <span key={`e-${i}`} className="px-1 text-xs text-slate-500">…</span>
             ) : (
               <NavBtn key={p} onClick={() => onPage(p as number)} active={p === page}>
                 {p}

@@ -101,7 +101,7 @@ export default function DashboardPage() {
     };
   }, [data]);
 
-  const labelClass = 'text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-400 dark:text-slate-500';
+  const labelClass = 'text-2xs font-semibold uppercase tracking-[0.06em] text-slate-500 dark:text-slate-400';
 
   return (
     <PageShell title="Dashboard" description="Visão executiva da operação — cadastros, campo e financeiro.">
@@ -129,7 +129,7 @@ export default function DashboardPage() {
       )}
 
       {/* ── KPI row ─────────────────────────────────────────────────────── */}
-      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <section className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
         {loading ? (
           Array.from({ length: 4 }).map((_, i) => (
             <div key={i} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-card dark:border-slate-800 dark:bg-slate-900">
@@ -233,20 +233,20 @@ export default function DashboardPage() {
                   {totals.clientHealthy !== null ? (
                     <span className="text-lg font-bold text-slate-900 dark:text-white">{totals.clientHealthy}%</span>
                   ) : (
-                    <span className="text-xs font-medium text-slate-400">{data?.clients.active ?? 0} total</span>
+                    <span className="text-xs font-medium text-slate-500">{data?.clients.active ?? 0} total</span>
                   )}
                 </div>
                 {totals.clientHealthy !== null ? (
                   <>
                     <div className="mt-3"><ProgressBar value={totals.clientHealthy} tone="success" /></div>
-                    <p className="mt-2 text-[12px] text-slate-400">{data?.clients.active ?? 0} de {totals.clientTotal}</p>
+                    <p className="mt-2 text-xs text-slate-500">{data?.clients.active ?? 0} de {totals.clientTotal}</p>
                   </>
                 ) : (
-                  <p className="mt-3 text-[12px] text-slate-400">
+                  <p className="mt-3 text-xs text-slate-500">
                     {data?.clients.active === 0 ? 'Nenhum cliente ativo ainda' : 'Todos ativos'}
                   </p>
                 )}
-                <Link href="/clientes" className="mt-3 flex items-center gap-1 text-[11px] font-semibold text-brand-600 hover:underline dark:text-brand-400">
+                <Link href="/clientes" className="mt-3 flex items-center gap-1 text-2xs font-semibold text-brand-700 hover:underline dark:text-brand-400">
                   Ver clientes <ArrowRight className="h-3 w-3" />
                 </Link>
               </div>
@@ -258,20 +258,20 @@ export default function DashboardPage() {
                   {totals.osCompletion !== null ? (
                     <span className="text-lg font-bold text-slate-900 dark:text-white">{totals.osCompletion}%</span>
                   ) : (
-                    <span className="text-xs font-medium text-slate-400">{totals.osTotal} total</span>
+                    <span className="text-xs font-medium text-slate-500">{totals.osTotal} total</span>
                   )}
                 </div>
                 {totals.osCompletion !== null ? (
                   <>
                     <div className="mt-3"><ProgressBar value={totals.osCompletion} tone="brand" /></div>
-                    <p className="mt-2 text-[12px] text-slate-400">{data?.service_orders.completed ?? 0} concluídas de {totals.osTotal}</p>
+                    <p className="mt-2 text-xs text-slate-500">{data?.service_orders.completed ?? 0} concluídas de {totals.osTotal}</p>
                   </>
                 ) : (
-                  <p className="mt-3 text-[12px] text-slate-400">
+                  <p className="mt-3 text-xs text-slate-500">
                     {totals.osTotal === 0 ? 'Nenhuma OS criada ainda' : `${data?.service_orders.completed ?? 0} concluída(s)`}
                   </p>
                 )}
-                <Link href="/ordens-servico" className="mt-3 flex items-center gap-1 text-[11px] font-semibold text-brand-600 hover:underline dark:text-brand-400">
+                <Link href="/ordens-servico" className="mt-3 flex items-center gap-1 text-2xs font-semibold text-brand-700 hover:underline dark:text-brand-400">
                   Ver ordens <ArrowRight className="h-3 w-3" />
                 </Link>
               </div>
@@ -293,14 +293,14 @@ export default function DashboardPage() {
                 {totals.financeRisk !== null ? (
                   <>
                     <div className="mt-3"><ProgressBar value={totals.financeRisk} tone={totals.financeRisk > 20 ? 'danger' : 'warning'} /></div>
-                    <p className="mt-2 text-[12px] text-slate-400">{data?.finance.overdue_count ?? 0} vencidas de {totals.finTotal}</p>
+                    <p className="mt-2 text-xs text-slate-500">{data?.finance.overdue_count ?? 0} vencidas de {totals.finTotal}</p>
                   </>
                 ) : (
-                  <p className="mt-3 text-[12px] text-slate-400">
+                  <p className="mt-3 text-xs text-slate-500">
                     {data?.finance.overdue_count === 0 ? 'Sem cobranças vencidas' : `${data?.finance.overdue_count} vencida(s)`}
                   </p>
                 )}
-                <Link href="/relatorios" className="mt-3 flex items-center gap-1 text-[11px] font-semibold text-brand-600 hover:underline dark:text-brand-400">
+                <Link href="/relatorios" className="mt-3 flex items-center gap-1 text-2xs font-semibold text-brand-700 hover:underline dark:text-brand-400">
                   Ver relatório <ArrowRight className="h-3 w-3" />
                 </Link>
               </div>
@@ -310,7 +310,7 @@ export default function DashboardPage() {
           {/* Indicadores por módulo */}
           <Card>
             <SectionHeader eyebrow="Módulos" title="Indicadores por módulo" />
-            <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               {[
                 { title: 'Clientes', href: '/clientes', rows: [
                     { label: 'Ativos',        v: data?.clients.active },
@@ -333,13 +333,13 @@ export default function DashboardPage() {
                     { label: 'Manutenção',  v: data?.trackers.maintenance, warn: (data?.trackers.maintenance ?? 0) > 0 },
                   ]},
               ].map((block) => (
-                <Link key={block.title} href={block.href} className="block rounded-xl border border-slate-100 bg-slate-50/80 p-4 transition-colors hover:border-brand-200 hover:bg-brand-50/30 dark:border-slate-800 dark:bg-slate-950/50 dark:hover:border-brand-900/50">
+                <Link key={block.title} href={block.href} className="block rounded-xl border border-slate-100 bg-slate-50/80 p-4 transition-all hover:border-brand-200 hover:bg-brand-50/30 hover:shadow-card dark:border-slate-800 dark:bg-slate-950/50 dark:hover:border-brand-900/50">
                   <p className={`mb-3 ${labelClass}`}>{block.title}</p>
                   <div className="space-y-2">
                     {block.rows.map((r) => (
                       <div key={r.label} className="flex items-center justify-between">
-                        <span className="text-[13px] text-slate-500 dark:text-slate-400">{r.label}</span>
-                        <strong className={`text-[13px] tabular-nums ${
+                        <span className="text-body text-slate-500 dark:text-slate-400">{r.label}</span>
+                        <strong className={`text-body tabular-nums ${
                           'danger' in r && r.danger ? 'text-rose-600 dark:text-rose-400' :
                           'warn' in r && r.warn ? 'text-amber-600 dark:text-amber-400' :
                           'text-slate-900 dark:text-white'
@@ -399,28 +399,28 @@ export default function DashboardPage() {
             <SectionHeader eyebrow="Financeiro" title="Resumo do mês" />
             <div className="mt-4 space-y-2">
               <div className="flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/50">
-                <div className="flex items-center gap-2 text-[13px] text-slate-600 dark:text-slate-400">
+                <div className="flex items-center gap-2 text-body text-slate-600 dark:text-slate-400">
                   <TrendingUp className="h-4 w-4" /> Recebido
                 </div>
-                <strong className="text-[13px] tabular-nums text-slate-900 dark:text-white">{currency(data?.finance.received_month)}</strong>
+                <strong className="text-body tabular-nums text-slate-900 dark:text-white">{currency(data?.finance.received_month)}</strong>
               </div>
               <div className="flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/50">
-                <div className="flex items-center gap-2 text-[13px] text-slate-600 dark:text-slate-400">
+                <div className="flex items-center gap-2 text-body text-slate-600 dark:text-slate-400">
                   <Wallet className="h-4 w-4" /> Pendentes
                 </div>
-                <strong className="text-[13px] tabular-nums text-slate-900 dark:text-white">{data?.finance.pending_count ?? '—'}</strong>
+                <strong className="text-body tabular-nums text-slate-900 dark:text-white">{data?.finance.pending_count ?? '—'}</strong>
               </div>
               <div className={`flex items-center justify-between rounded-xl border px-4 py-3 ${
                 (data?.finance.overdue_count ?? 0) > 0
                   ? 'border-rose-100 bg-rose-50/80 dark:border-rose-900/40 dark:bg-rose-950/30'
                   : 'border-slate-100 bg-slate-50 dark:border-slate-800 dark:bg-slate-950/50'
               }`}>
-                <div className={`flex items-center gap-2 text-[13px] ${
+                <div className={`flex items-center gap-2 text-body ${
                   (data?.finance.overdue_count ?? 0) > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-600 dark:text-slate-400'
                 }`}>
                   <AlertTriangle className="h-4 w-4" /> Vencidas
                 </div>
-                <strong className={`text-[13px] tabular-nums ${
+                <strong className={`text-body tabular-nums ${
                   (data?.finance.overdue_count ?? 0) > 0 ? 'text-rose-700 dark:text-rose-400' : 'text-slate-900 dark:text-white'
                 }`}>{data?.finance.overdue_count ?? '—'}</strong>
               </div>
@@ -442,7 +442,7 @@ export default function DashboardPage() {
                 // skeleton girando pra sempre quando a carga falhou de vez.
                 <div className="flex flex-col items-center gap-2 py-6">
                   <AlertTriangle className="h-8 w-8 text-amber-400 dark:text-amber-500" strokeWidth={1.5} />
-                  <p className="text-[13px] font-medium text-slate-500 dark:text-slate-400">Não foi possível carregar — veja o erro acima</p>
+                  <p className="text-body font-medium text-slate-500 dark:text-slate-400">Não foi possível carregar — veja o erro acima</p>
                 </div>
               ) : !data ? (
                 <div className="space-y-2">
@@ -451,7 +451,7 @@ export default function DashboardPage() {
               ) : data.upcoming_billings.length === 0 ? (
                 <div className="flex flex-col items-center gap-2 py-6">
                   <CheckCircle2 className="h-8 w-8 text-emerald-400 dark:text-emerald-500" strokeWidth={1.5} />
-                  <p className="text-[13px] font-medium text-slate-500 dark:text-slate-400">Nenhum vencimento nos próximos 7 dias</p>
+                  <p className="text-body font-medium text-slate-500 dark:text-slate-400">Nenhum vencimento nos próximos 7 dias</p>
                 </div>
               ) : (
                 <div className="space-y-2">
@@ -459,18 +459,18 @@ export default function DashboardPage() {
                     <div key={b.id} className="flex items-center gap-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5 dark:border-slate-800 dark:bg-slate-950/50">
                       <CalendarClock className={`h-4 w-4 shrink-0 ${b.days_until < 0 ? 'text-rose-500' : b.days_until === 0 ? 'text-amber-500' : 'text-sky-500'}`} />
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-[12px] font-medium text-slate-800 dark:text-slate-200">{b.client_name}</p>
-                        <p className="text-[11px] text-slate-400">
+                        <p className="truncate text-xs font-medium text-slate-800 dark:text-slate-200">{b.client_name}</p>
+                        <p className="text-2xs text-slate-500">
                           {fmtDate(b.due_date)} ·{' '}
                           {b.days_until < 0 ? <span className="text-rose-500">{Math.abs(b.days_until)}d atrasado</span>
                             : b.days_until === 0 ? <span className="text-amber-500">hoje</span>
                             : `${b.days_until}d`}
                         </p>
                       </div>
-                      <span className="text-[12px] font-semibold tabular-nums text-slate-700 dark:text-slate-300">{currency(b.amount)}</span>
+                      <span className="text-xs font-semibold tabular-nums text-slate-700 dark:text-slate-300">{currency(b.amount)}</span>
                     </div>
                   ))}
-                  <Link href="/financeiro" className="mt-1 flex items-center justify-center gap-1.5 rounded-lg py-2 text-[11px] font-semibold text-brand-600 hover:underline dark:text-brand-400">
+                  <Link href="/financeiro" className="mt-1 flex items-center justify-center gap-1.5 rounded-lg py-2 text-2xs font-semibold text-brand-700 hover:underline dark:text-brand-400">
                     Ver todos no financeiro <ArrowRight className="h-3 w-3" />
                   </Link>
                 </div>

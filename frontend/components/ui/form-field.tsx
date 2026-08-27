@@ -24,7 +24,7 @@ export function FormField({
       </label>
       {children}
       {hint && !error && (
-        <p className="text-xs text-slate-400 dark:text-slate-500">{hint}</p>
+        <p className="text-xs text-slate-500 dark:text-slate-400">{hint}</p>
       )}
       {error && (
         <p className="text-xs text-rose-500">{error}</p>
@@ -44,7 +44,7 @@ export function FormSection({
 }) {
   return (
     <div className={clsx('space-y-4', className)}>
-      <h4 className="text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">
+      <h4 className="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-600">
         {title}
       </h4>
       {children}

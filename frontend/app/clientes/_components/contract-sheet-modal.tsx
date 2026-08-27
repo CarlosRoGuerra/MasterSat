@@ -68,14 +68,14 @@ export function ContractSheetModal({
       <div className="mb-4">
         <p className="mb-2 text-sm font-semibold text-slate-700 dark:text-slate-200">Contratos vinculados ({items.length})</p>
         {loading ? (
-          <p className="text-xs text-slate-400">Carregando…</p>
+          <p className="text-xs text-slate-500">Carregando…</p>
         ) : items.length === 0 ? (
-          <p className="text-xs text-slate-400">Nenhum contrato vinculado a este cliente.</p>
+          <p className="text-xs text-slate-500">Nenhum contrato vinculado a este cliente.</p>
         ) : (
           <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-slate-200 bg-slate-50 text-left text-[11px] uppercase tracking-wider text-slate-500 dark:border-slate-700 dark:bg-slate-800/50">
+                <tr className="border-b border-slate-200 bg-slate-50 text-left text-2xs uppercase tracking-wider text-slate-500 dark:border-slate-700 dark:bg-slate-800/50">
                   <th className="px-3 py-2 font-semibold">Plano</th>
                   <th className="px-3 py-2 font-semibold">Vínculo</th>
                   <th className="px-3 py-2 font-semibold">Vigência</th>
@@ -88,7 +88,7 @@ export function ContractSheetModal({
                   const sit = contractSituacao(c);
                   return (
                     <tr key={c.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
-                      <td className="px-3 py-2"><span className="text-xs text-slate-400">#{c.id}</span> {c.plan_name ?? '—'}</td>
+                      <td className="px-3 py-2"><span className="text-xs text-slate-500">#{c.id}</span> {c.plan_name ?? '—'}</td>
                       <td className="px-3 py-2 text-xs text-slate-500">{c.vehicle_plate || c.tracker_identifier || 'Geral'}</td>
                       <td className="whitespace-nowrap px-3 py-2 text-xs">
                         {c.start_date ? new Date(c.start_date + 'T12:00:00').toLocaleDateString('pt-BR') : '—'}
@@ -98,9 +98,9 @@ export function ContractSheetModal({
                       <td className="px-3 py-2"><Badge variant={sit.variant}>{sit.label}</Badge></td>
                       <td className="px-3 py-2">
                         <div className="flex items-center justify-end gap-1.5">
-                          <button type="button" onClick={() => onView(c.id)} className="rounded-lg border border-brand-200 bg-brand-50 px-2.5 py-1 text-[11px] font-semibold text-brand-700 hover:bg-brand-100 dark:border-brand-900/40 dark:bg-brand-950/30 dark:text-brand-400">Ver</button>
+                          <button type="button" onClick={() => onView(c.id)} className="rounded-lg border border-brand-200 bg-brand-50 px-2.5 py-1 text-2xs font-semibold text-brand-700 hover:bg-brand-100 dark:border-brand-900/40 dark:bg-brand-950/30 dark:text-brand-400">Ver</button>
                           {canEdit && (
-                            <button type="button" onClick={() => onDeleteContract(c.id)} className="rounded-lg border border-rose-200 px-2 py-1 text-[11px] font-medium text-rose-600 hover:bg-rose-50 dark:border-rose-900/40 dark:text-rose-400 dark:hover:bg-rose-950/30">Excluir</button>
+                            <button type="button" onClick={() => onDeleteContract(c.id)} className="rounded-lg border border-rose-200 px-2 py-1 text-2xs font-medium text-rose-600 hover:bg-rose-50 dark:border-rose-900/40 dark:text-rose-400 dark:hover:bg-rose-950/30">Excluir</button>
                           )}
                         </div>
                       </td>
@@ -117,9 +117,9 @@ export function ContractSheetModal({
       <div className="mb-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/50">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Contrato assinado</p>
-          <span className="text-xs text-slate-400">{docs.length} arquivo(s)</span>
+          <span className="text-xs text-slate-500">{docs.length} arquivo(s)</span>
         </div>
-        <p className="mt-0.5 text-xs text-slate-400">Depois que o cliente devolver o contrato assinado, anexe o arquivo (PDF ou imagem) aqui. O sistema confere se ele foi preenchido antes de guardar.</p>
+        <p className="mt-0.5 text-xs text-slate-500">Depois que o cliente devolver o contrato assinado, anexe o arquivo (PDF ou imagem) aqui. O sistema confere se ele foi preenchido antes de guardar.</p>
 
         {canEdit && items.some((c) => c.status !== 'cancelado' && c.status !== 'encerrado') && (
           <div className="mt-3">
@@ -159,25 +159,25 @@ export function ContractSheetModal({
         )}
 
         {loading ? (
-          <p className="mt-3 text-xs text-slate-400">Carregando…</p>
+          <p className="mt-3 text-xs text-slate-500">Carregando…</p>
         ) : docs.length === 0 ? (
-          <p className="mt-3 text-xs text-slate-400">Nenhum contrato assinado enviado ainda.</p>
+          <p className="mt-3 text-xs text-slate-500">Nenhum contrato assinado enviado ainda.</p>
         ) : (
           <ul className="mt-3 space-y-2">
             {docs.map((doc) => (
               <li key={doc.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-800 dark:bg-slate-900">
                 <span className="flex items-start gap-2 text-sm text-slate-700 dark:text-slate-200">
-                  <FileText className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
+                  <FileText className="mt-0.5 h-4 w-4 shrink-0 text-slate-500" />
                   <span className="flex flex-col">
                     <span>{doc.file_name}</span>
-                    {envioMeta(doc) && <span className="text-[11px] text-slate-400">{envioMeta(doc)}</span>}
+                    {envioMeta(doc) && <span className="text-2xs text-slate-500">{envioMeta(doc)}</span>}
                   </span>
                 </span>
                 <span className="flex items-center gap-1.5">
-                  <a href={doc.url} target="_blank" rel="noreferrer" className="rounded-lg border border-slate-200 px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Visualizar</a>
-                  <a href={doc.download_url} target="_blank" rel="noreferrer" className="rounded-lg border border-slate-200 px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Baixar</a>
+                  <a href={doc.url} target="_blank" rel="noreferrer" className="rounded-lg border border-slate-200 px-2.5 py-1 text-2xs font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Visualizar</a>
+                  <a href={doc.download_url} target="_blank" rel="noreferrer" className="rounded-lg border border-slate-200 px-2.5 py-1 text-2xs font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Baixar</a>
                   {canEdit && (
-                    <button type="button" onClick={() => onDeleteDoc(doc.id)} className="rounded-lg border border-rose-200 px-2 py-1 text-[11px] font-medium text-rose-600 hover:bg-rose-50 dark:border-rose-900/40 dark:text-rose-400 dark:hover:bg-rose-950/30">Excluir</button>
+                    <button type="button" onClick={() => onDeleteDoc(doc.id)} className="rounded-lg border border-rose-200 px-2 py-1 text-2xs font-medium text-rose-600 hover:bg-rose-50 dark:border-rose-900/40 dark:text-rose-400 dark:hover:bg-rose-950/30">Excluir</button>
                   )}
                 </span>
               </li>

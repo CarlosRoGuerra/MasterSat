@@ -414,7 +414,7 @@ export default function NotasFiscaisPage() {
         }
       >
         {error && <ErrorBanner message={error} />}
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-5 sm:grid-cols-4">
           <MetricCard label="Situação" value={statusBadge(loteAberto.status)} />
           <MetricCard label="Notas" value={loteAberto.total_notas} icon={<Receipt className="h-4 w-4" />} />
           <MetricCard label="Autorizadas" value={loteAberto.total_autorizadas} icon={<CheckCircle2 className="h-4 w-4" />} />
@@ -516,7 +516,7 @@ export default function NotasFiscaisPage() {
       {/* ── PAINEL ── */}
       {aba === 'painel' && (
         <>
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <div className="grid grid-cols-2 gap-5 lg:grid-cols-4">
             <MetricCard label="Autorizadas no mês" value={resumo?.autorizadas ?? '—'}
                         icon={<CheckCircle2 className="h-4 w-4" />} />
             <MetricCard label="Negadas no mês" value={resumo?.negadas ?? '—'}
@@ -567,7 +567,7 @@ export default function NotasFiscaisPage() {
             <div className="flex items-center gap-2">
               <span className="text-sm text-slate-500">Pesquisar</span>
               <div className="relative">
-                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
                 <input
                   value={buscaNotas}
                   onChange={(e) => { setBuscaNotas(e.target.value); setPaginaNotas(1); }}
@@ -601,7 +601,7 @@ export default function NotasFiscaisPage() {
                       <Td className="font-semibold tabular-nums">{n.nota_id}</Td>
                       <Td className="font-medium">
                         {n.tomador}
-                        {n.cpf_cnpj && <span className="block text-xs text-slate-400">{n.cpf_cnpj}</span>}
+                        {n.cpf_cnpj && <span className="block text-xs text-slate-500">{n.cpf_cnpj}</span>}
                       </Td>
                       <Td className="text-right tabular-nums">{brl(n.valor)}</Td>
                       <Td className="tabular-nums text-slate-500">{n.nosso_numero ?? '—'}</Td>
@@ -736,7 +736,7 @@ export default function NotasFiscaisPage() {
             <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-200">Emitente</h2>
             <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
               MASTERSAT COMERCIO E SERVICO DE RASTREADORES LTDA
-              <span className="ml-2 text-xs text-slate-400">CNPJ 14.228.344/0001-67</span>
+              <span className="ml-2 text-xs text-slate-500">CNPJ 14.228.344/0001-67</span>
             </p>
           </Card>
 
@@ -886,19 +886,19 @@ export default function NotasFiscaisPage() {
               </div>
               <div className="mt-4 grid grid-cols-2 gap-4 border-t border-slate-100 pt-4 text-sm dark:border-slate-800 sm:grid-cols-4">
                 <div>
-                  <p className="text-xs text-slate-400">CNPJ</p>
+                  <p className="text-xs text-slate-500">CNPJ</p>
                   <p className="tabular-nums text-slate-700 dark:text-slate-200">{certificado.cnpj ?? '—'}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-slate-400">Válido de</p>
+                  <p className="text-xs text-slate-500">Válido de</p>
                   <p className="text-slate-700 dark:text-slate-200">{dataBR(certificado.valido_de)}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-slate-400">Vencimento</p>
+                  <p className="text-xs text-slate-500">Vencimento</p>
                   <p className="text-slate-700 dark:text-slate-200">{dataBR(certificado.valido_ate)}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-slate-400">Tempo para expirar</p>
+                  <p className="text-xs text-slate-500">Tempo para expirar</p>
                   <p className={`font-semibold ${
                     sevCert === 'vencido' ? 'text-rose-600 dark:text-rose-400'
                     : sevCert === 'alerta' ? 'text-amber-600 dark:text-amber-400'

@@ -57,7 +57,7 @@ type IntegrationLog = {
 
 type Tracker = { id: number; imei?: string | null; brand?: string | null; model?: string | null; client_name?: string | null; vehicle_plate?: string | null; integration_status?: string | null };
 
-const fieldClass = 'w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-brand-400';
+const fieldClass = 'w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-500 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-400 dark:focus:border-brand-400';
 
 function parseError(err: unknown) {
   return err instanceof Error ? err.message : 'Ocorreu um erro inesperado.';
@@ -204,12 +204,12 @@ export default function IntegracaoPage() {
     <PageShell title="Integração Multiportal" description="Sincronização de clientes, veículos e equipamentos com a plataforma Multiportal via Web Service.">
       {(error || feedback) && (
         <div className="mb-4 space-y-2">
-          {error && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
+          {error && <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</p>}
           {feedback && <p className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{feedback}</p>}
         </div>
       )}
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <section className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
         <StatCard
           label="Status da integração"
           value={status?.enabled ? 'Ativa' : 'Inativa'}
@@ -237,7 +237,7 @@ export default function IntegracaoPage() {
                     <p className="font-semibold text-slate-900 dark:text-white">{t.imei}</p>
                     <p className="mt-0.5 text-xs text-slate-500">{[t.brand, t.model].filter(Boolean).join(' · ') || '-'} · {t.client_name || 'Sem cliente'} · {t.vehicle_plate || 'Sem veículo'}</p>
                   </div>
-                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase ${t.integration_status === 'sincronizado' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : t.integration_status === 'erro' ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-slate-200 bg-white text-slate-500'}`}>
+                  <span className={`rounded-full border px-2 py-0.5 text-3xs font-bold uppercase ${t.integration_status === 'sincronizado' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : t.integration_status === 'erro' ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-slate-200 bg-white text-slate-500'}`}>
                     {t.integration_status || 'sem sync'}
                   </span>
                 </div>
@@ -255,7 +255,7 @@ export default function IntegracaoPage() {
                       type="button"
                       disabled={!!syncing}
                       onClick={() => syncEquipment(t.id)}
-                      className="rounded-2xl border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-600 dark:border-slate-700 dark:text-slate-200"
+                      className="rounded-2xl border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-700 dark:border-slate-700 dark:text-slate-200"
                     >
                       {syncing === `equip-${t.id}` ? 'Aguarde...' : 'Só equipamento'}
                     </button>
@@ -263,7 +263,7 @@ export default function IntegracaoPage() {
                       type="button"
                       disabled={!!syncing}
                       onClick={() => queryLink(t.id)}
-                      className="rounded-2xl border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-600 dark:border-slate-700 dark:text-slate-200"
+                      className="rounded-2xl border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-700 dark:border-slate-700 dark:text-slate-200"
                     >
                       {syncing === `query-${t.id}` ? 'Consultando...' : 'Consultar vínculo'}
                     </button>
@@ -334,12 +334,12 @@ export default function IntegracaoPage() {
                     key={f}
                     type="button"
                     onClick={() => setLogFilter(f)}
-                    className={`rounded-2xl border px-3 py-1.5 text-xs font-semibold transition ${logFilter === f ? 'border-brand-600 bg-brand-600 text-white' : 'border-slate-200 text-slate-600 hover:border-brand-500 hover:text-brand-600 dark:border-slate-700 dark:text-slate-300'}`}
+                    className={`rounded-2xl border px-3 py-1.5 text-xs font-semibold transition ${logFilter === f ? 'border-brand-600 bg-brand-600 text-white' : 'border-slate-200 text-slate-600 hover:border-brand-500 hover:text-brand-700 dark:border-slate-700 dark:text-slate-300'}`}
                   >
                     {f === 'all' ? 'Todos' : f === 'success' ? 'Sucesso' : 'Erros'}
                   </button>
                 ))}
-                <button type="button" onClick={() => token && loadAll(token)} className="rounded-2xl border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-brand-500 hover:text-brand-600 dark:border-slate-700 dark:text-slate-300">
+                <button type="button" onClick={() => token && loadAll(token)} className="rounded-2xl border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-brand-500 hover:text-brand-700 dark:border-slate-700 dark:text-slate-300">
                   Atualizar
                 </button>
               </div>
@@ -361,23 +361,23 @@ export default function IntegracaoPage() {
                   >
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase ${severityClass(entry.severity, entry.success)}`}>{entry.success ? 'OK' : 'ERRO'}</span>
+                        <span className={`rounded-full border px-2 py-0.5 text-3xs font-bold uppercase ${severityClass(entry.severity, entry.success)}`}>{entry.success ? 'OK' : 'ERRO'}</span>
                         <p className="text-sm font-semibold text-slate-900 dark:text-white"><OperationLabel op={entry.operation} /></p>
-                        <span className="text-xs text-slate-400">·</span>
+                        <span className="text-xs text-slate-500">·</span>
                         <p className="text-xs text-slate-500">{entry.entity_type} #{entry.entity_id ?? '-'}</p>
-                        {entry.response_code && <span className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-mono text-slate-500">{entry.response_code}</span>}
+                        {entry.response_code && <span className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-3xs font-mono text-slate-500">{entry.response_code}</span>}
                       </div>
                       <p className="mt-0.5 text-xs text-slate-500">{entry.friendly_title || entry.response_description || '-'}</p>
                     </div>
                     <div className="flex shrink-0 flex-col items-end gap-1">
-                      <p className="text-[10px] text-slate-400">{entry.created_at ? new Date(entry.created_at).toLocaleString('pt-BR') : '-'}</p>
-                      {expanded ? <ChevronUp className="h-3.5 w-3.5 text-slate-400" /> : <ChevronDown className="h-3.5 w-3.5 text-slate-400" />}
+                      <p className="text-3xs text-slate-500">{entry.created_at ? new Date(entry.created_at).toLocaleString('pt-BR') : '-'}</p>
+                      {expanded ? <ChevronUp className="h-3.5 w-3.5 text-slate-500" /> : <ChevronDown className="h-3.5 w-3.5 text-slate-500" />}
                     </div>
                   </button>
                   {expanded && (
                     <div className="border-t border-slate-200 px-4 py-3 dark:border-slate-700">
                       <p className="text-xs text-slate-600 dark:text-slate-300">{entry.friendly_message || entry.response_description || 'Sem mensagem adicional.'}</p>
-                      {entry.batch_id && <p className="mt-1 font-mono text-[10px] text-slate-400">batch: {entry.batch_id}</p>}
+                      {entry.batch_id && <p className="mt-1 font-mono text-3xs text-slate-500">batch: {entry.batch_id}</p>}
                     </div>
                   )}
                 </div>

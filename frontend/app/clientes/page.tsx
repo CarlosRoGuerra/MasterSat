@@ -974,7 +974,7 @@ export default function ClientesPage() {
     <PageShell title="Clientes" description="Gestão da base cadastral com formulário em modal, documentação centralizada e visão rápida dos veículos vinculados.">
       {(guardError || error || listError || feedback) && (
         <div className="mb-4 space-y-3">
-          {(guardError || error || listError) ? <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{guardError || error || listError}</p> : null}
+          {(guardError || error || listError) ? <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{guardError || error || listError}</p> : null}
           {feedback ? <p className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{feedback}</p> : null}
         </div>
       )}
@@ -1041,7 +1041,7 @@ export default function ClientesPage() {
             </Button>
 
             <div className="relative ml-auto w-full sm:w-80">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
               <Input
                 placeholder="Pesquisar por nome, CPF/CNPJ ou e-mail"
                 value={search}
@@ -1081,12 +1081,12 @@ export default function ClientesPage() {
                         <Td className="text-sm text-slate-500">{client.id}</Td>
                         <Td>
                           <p className="font-medium text-slate-900 dark:text-white">{client.name}</p>
-                          <p className="text-xs text-slate-400">{client.type === 'pj' ? 'Pessoa Jurídica' : 'Pessoa Física'} · {vehicles.length} veículo(s)</p>
+                          <p className="text-xs text-slate-500">{client.type === 'pj' ? 'Pessoa Jurídica' : 'Pessoa Física'} · {vehicles.length} veículo(s)</p>
                         </Td>
                         <Td className="text-sm">{client.trade_name || '—'}</Td>
                         <Td>
                           <p className="font-mono text-xs">{formatCpfCnpj(client.cpf_cnpj)}</p>
-                          <p className="text-xs text-slate-400">{client.email || (client.phone ? formatPhone(client.phone) : '')}</p>
+                          <p className="text-xs text-slate-500">{client.email || (client.phone ? formatPhone(client.phone) : '')}</p>
                         </Td>
                         <Td>
                           <Badge variant={statusVariant(client.status)}>{statusLabel(client.status)}</Badge>
@@ -1144,7 +1144,7 @@ export default function ClientesPage() {
       </section>
 
       {/* Indicadores da base (abaixo da tabela, conforme solicitado) */}
-      <section className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <section className="mt-6 grid gap-5 md:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Clientes cadastrados" value={stats.total}      hint="Base total disponível"           icon={<Users className="h-5 w-5" />} />
         <StatCard label="Clientes ativos"      value={stats.active}     hint="Cadastros em operação"  tone="success" icon={<CheckCircle2 className="h-5 w-5" />} />
         <StatCard label="Inadimplentes"        value={stats.delinquent} hint="Exigem ação do financeiro" tone="warning" icon={<AlertTriangle className="h-5 w-5" />} />

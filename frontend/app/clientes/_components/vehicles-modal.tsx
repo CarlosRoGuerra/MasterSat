@@ -58,7 +58,7 @@ export function VehiclesModal({
           </TableBody>
         </Table>
       )}
-      <p className="mt-3 text-xs text-slate-400">
+      <p className="mt-3 text-xs text-slate-500">
         Mostrando {vehicles.length} registro(s)
       </p>
     </Modal>

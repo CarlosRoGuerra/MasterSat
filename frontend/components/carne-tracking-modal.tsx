@@ -235,16 +235,16 @@ export function CarneTrackingModal({ carne }: { carne: ReturnType<typeof useCarn
         <div className="flex flex-col gap-4 py-2">
           {track.fase === 'registrando' && (
             <div className="flex flex-col items-center gap-4 py-4 text-center">
-              <Loader2 className="h-10 w-10 animate-spin text-brand-600" />
+              <Loader2 className="h-10 w-10 animate-spin text-brand-700" />
               <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Registrando o carnê na Ailos…</p>
             </div>
           )}
 
           {track.fase === 'erro-registro' && (
             <div className="flex flex-col items-center gap-4 py-4 text-center">
-              <AlertTriangle className="h-10 w-10 text-red-500" />
+              <AlertTriangle className="h-10 w-10 text-rose-500" />
               <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Não foi possível registrar o carnê</p>
-              <p className="text-xs text-red-600 dark:text-red-400">{track.erro}</p>
+              <p className="text-xs text-rose-600 dark:text-rose-400">{track.erro}</p>
               <div className="flex gap-2">
                 <Button onClick={() => iniciar(track.ids)} className="gap-2"><RefreshCw className="h-4 w-4" />Tentar novamente</Button>
                 <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200" onClick={fechar}>Fechar</button>
@@ -259,7 +259,7 @@ export function CarneTrackingModal({ carne }: { carne: ReturnType<typeof useCarn
                   <span className="font-semibold text-slate-600 dark:text-slate-300">
                     {track.prontas} de {track.total} parcela(s) confirmada(s) na Ailos
                   </span>
-                  {track.fase === 'acompanhando' && <Loader2 className="h-3.5 w-3.5 animate-spin text-brand-600" />}
+                  {track.fase === 'acompanhando' && <Loader2 className="h-3.5 w-3.5 animate-spin text-brand-700" />}
                 </div>
                 <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
                   <div
@@ -267,14 +267,14 @@ export function CarneTrackingModal({ carne }: { carne: ReturnType<typeof useCarn
                     style={{ width: `${track.total ? Math.round((track.prontas / track.total) * 100) : 0}%` }}
                   />
                 </div>
-                <p className="mt-1.5 text-xs text-slate-400">
+                <p className="mt-1.5 text-xs text-slate-500">
                   {track.fase === 'acompanhando'
                     ? 'Acompanhando automaticamente — isto pode levar alguns instantes.'
                     : track.fase === 'aguardando-manual'
                       ? 'Parou de tentar sozinha. Gere as pendentes manualmente ou tente uma parcela específica abaixo.'
                       : 'Carnê completo.'}
                 </p>
-                {track.erro && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{track.erro}</p>}
+                {track.erro && <p className="mt-1 text-xs text-rose-600 dark:text-rose-400">{track.erro}</p>}
               </div>
 
               {track.parcelas.length > 0 && (
@@ -301,7 +301,7 @@ export function CarneTrackingModal({ carne }: { carne: ReturnType<typeof useCarn
                             {p.status === 'processando' && (
                               <Badge variant="warning">{track.fase === 'acompanhando' ? 'Processando' : 'Não localizado'}</Badge>
                             )}
-                            {p.status === 'erro' && p.erro && <p className="mt-0.5 max-w-[16rem] truncate text-[11px] text-red-500" title={p.erro}>{p.erro}</p>}
+                            {p.status === 'erro' && p.erro && <p className="mt-0.5 max-w-[16rem] truncate text-2xs text-rose-500" title={p.erro}>{p.erro}</p>}
                           </td>
                           <td className="px-3 py-2 text-right">
                             {p.status !== 'registrado' && track.fase !== 'acompanhando' && (
@@ -367,7 +367,7 @@ export function CarneTrackingModal({ carne }: { carne: ReturnType<typeof useCarn
                   </>
                 )}
               </div>
-              {erroLocal && <p className="text-right text-xs text-red-600 dark:text-red-400">{erroLocal}</p>}
+              {erroLocal && <p className="text-right text-xs text-rose-600 dark:text-rose-400">{erroLocal}</p>}
             </>
           )}
         </div>

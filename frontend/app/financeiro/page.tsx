@@ -50,7 +50,7 @@ type ReceiveFormState = { paid_amount: string; payment_date: string; payment_met
 type AdjustFormState = { amount: string; due_date: string; justification: string };
 
 /* ── Constants ──────────────────────────────────────────────────────── */
-const fieldClass = 'w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-brand-400';
+const fieldClass = 'w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-500 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-400 dark:focus:border-brand-400';
 const areaClass = `${fieldClass} min-h-[88px] resize-y`;
 const initialPlanForm: PlanFormState = { name: '', price: '', description: '', active: true, billing_interval_months: '1', default_installation_fee: '', default_uninstall_fee: '', default_billing_day: '', default_duration_months: '' };
 const initialProductForm: ServiceProductFormState = { name: '', category: 'servico', default_price: '', description: '', active: true, allow_installments: true, remove_after_payment: false, auto_add_on_uninstall: false };
@@ -161,7 +161,7 @@ function RowMenu({
           <button
             type="button"
             onClick={() => { setOpen(false); onDelete(); }}
-            className="flex w-full items-center px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/30"
+            className="flex w-full items-center px-4 py-2 text-left text-sm text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/30"
           >
             Excluir
           </button>
@@ -253,7 +253,7 @@ function GroupedContractsTable({
                   className={[
                     'cursor-pointer transition-colors',
                     isDelinquent
-                      ? 'bg-red-50/60 hover:bg-red-50 dark:bg-red-950/20 dark:hover:bg-red-950/30'
+                      ? 'bg-rose-50/60 hover:bg-rose-50 dark:bg-rose-950/20 dark:hover:bg-rose-950/30'
                       : 'bg-slate-50 hover:bg-slate-100 dark:bg-slate-900/40 dark:hover:bg-slate-800/60',
                   ].join(' ')}
                   onClick={() => toggle(group.clientId)}
@@ -261,14 +261,14 @@ function GroupedContractsTable({
                   <td className="py-3 pl-4 pr-3" colSpan={5}>
                     <div className="flex items-center gap-2">
                       {isExpanded
-                        ? <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" />
-                        : <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />}
+                        ? <ChevronDown className="h-4 w-4 shrink-0 text-slate-500" />
+                        : <ChevronRight className="h-4 w-4 shrink-0 text-slate-500" />}
                       <span className="max-w-[320px] truncate font-semibold text-slate-800 dark:text-slate-100">{group.clientName}</span>
                       <span className="shrink-0 text-xs text-slate-500">
                         ({group.items.length} contrato{group.items.length !== 1 ? 's' : ''})
                       </span>
                       {isDelinquent && (
-                        <Badge variant="danger" className="ml-1 text-[10px]">inadimplente</Badge>
+                        <Badge variant="danger" className="ml-1 text-3xs">inadimplente</Badge>
                       )}
                     </div>
                   </td>
@@ -403,7 +403,7 @@ function BillingTableSection({
           {onBatchReceive && acoesLote.includes('receive') && <Button onClick={onBatchReceive} className="!py-1.5 text-xs">Receber em lote</Button>}
           {onBatchMaint && acoesLote.includes('maint') && <Button variant="secondary" onClick={onBatchMaint} className="!py-1.5 text-xs">Alterar venc./valor</Button>}
           {onBatchCancel && acoesLote.includes('cancel') && <Button variant="secondary" onClick={onBatchCancel} className="!py-1.5 text-xs">Cancelar em lote</Button>}
-          <button type="button" onClick={() => onBatchIdsChange?.([])} className="ml-auto text-xs text-slate-400 underline hover:text-slate-600 dark:hover:text-slate-200">
+          <button type="button" onClick={() => onBatchIdsChange?.([])} className="ml-auto text-xs text-slate-500 underline hover:text-slate-600 dark:hover:text-slate-200">
             Limpar seleção
           </button>
         </div>
@@ -464,7 +464,7 @@ function BillingTableSection({
                     )}
                     <Td>
                       <p className="font-medium">{b.payer_name ?? b.client_name ?? '—'}</p>
-                      <p className="text-xs text-slate-400">
+                      <p className="text-xs text-slate-500">
                         {b.payer_name && b.client_name && b.payer_name !== b.client_name
                           ? `Cliente atendido: ${b.client_name}${b.vehicle_plate ? ` • ${b.vehicle_plate}` : ''}`
                           : (b.vehicle_plate ?? '')}
@@ -1337,14 +1337,14 @@ export default function FinanceiroPage() {
 
       {/* ── 1. Inadimplência alert — aparece APENAS quando há cobranças vencidas ── */}
       {(summary?.overdue_billings ?? 0) > 0 && (
-        <div className="mb-6 flex flex-wrap items-start justify-between gap-4 rounded-2xl border border-red-200 bg-red-50 px-5 py-4 dark:border-red-900/40 dark:bg-red-950/30">
+        <div className="mb-6 flex flex-wrap items-start justify-between gap-4 rounded-2xl border border-rose-200 bg-rose-50 px-5 py-4 dark:border-rose-900/40 dark:bg-rose-950/30">
           <div className="flex items-start gap-3">
-            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-red-600 dark:text-red-400" />
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-rose-600 dark:text-rose-400" />
             <div>
-              <p className="font-semibold text-red-700 dark:text-red-300">
+              <p className="font-semibold text-rose-700 dark:text-rose-300">
                 {delinquents.length} cliente{delinquents.length !== 1 ? 's' : ''} com cobranças vencidas
               </p>
-              <p className="mt-0.5 text-sm text-red-600 dark:text-red-400">
+              <p className="mt-0.5 text-sm text-rose-600 dark:text-rose-400">
                 {summary?.overdue_billings ?? 0} cobrança{(summary?.overdue_billings ?? 0) !== 1 ? 's' : ''} em atraso
                 {' · '}Total: <strong>{formatCurrency(summary?.overdue_amount ?? 0)}</strong>
               </p>
@@ -1447,7 +1447,7 @@ export default function FinanceiroPage() {
             {/* CNAB export buttons */}
             {token && canEdit && (
               <div className="mb-3 flex flex-wrap items-center gap-2">
-                <span className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">Exportar remessa:</span>
+                <span className="text-2xs font-semibold uppercase tracking-widest text-slate-500">Exportar remessa:</span>
                 {(['cnab400', 'cnab240'] as const).map(fmt => (
                   <button
                     key={fmt}
@@ -1501,7 +1501,7 @@ export default function FinanceiroPage() {
             />
 
             {/* ── Indicadores + gráficos no rodapé ── */}
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
               <div>
                 <StatCard label="Recebido no mês" value={formatCurrency(summary?.paid_this_month ?? 0)} hint="Receita consolidada" tone="success" icon={<TrendingUp className="h-5 w-5" />} />
                 {monthlyVariation !== null ? (
@@ -1509,20 +1509,20 @@ export default function FinanceiroPage() {
                     {monthlyVariation >= 0 ? '↑' : '↓'} {Math.abs(monthlyVariation).toFixed(1)}% vs mês anterior
                   </p>
                 ) : (
-                  <p className="mt-1.5 text-xs text-slate-400">— vs mês anterior</p>
+                  <p className="mt-1.5 text-xs text-slate-500">— vs mês anterior</p>
                 )}
               </div>
               <div>
                 <StatCard label="Pendentes" value={summary?.pending_billings ?? 0} hint={formatCurrency(summary?.pending_amount ?? 0)} tone="brand" icon={<Clock className="h-5 w-5" />} />
-                <p className="mt-1.5 text-xs text-slate-400">— vs mês anterior</p>
+                <p className="mt-1.5 text-xs text-slate-500">— vs mês anterior</p>
               </div>
               <div>
                 <StatCard label="Vencidas" value={summary?.overdue_billings ?? 0} hint={formatCurrency(summary?.overdue_amount ?? 0)} tone="danger" icon={<AlertTriangle className="h-5 w-5" />} />
-                <p className="mt-1.5 text-xs text-slate-400">— vs mês anterior</p>
+                <p className="mt-1.5 text-xs text-slate-500">— vs mês anterior</p>
               </div>
               <div>
                 <StatCard label="Contratos ativos" value={summary?.active_contracts ?? 0} hint={`${summary?.active_plans ?? 0} plano(s) em uso`} icon={<FileText className="h-5 w-5" />} />
-                <p className="mt-1.5 text-xs text-slate-400">— vs mês anterior</p>
+                <p className="mt-1.5 text-xs text-slate-500">— vs mês anterior</p>
               </div>
             </div>
 
@@ -1530,7 +1530,7 @@ export default function FinanceiroPage() {
               <div className="grid gap-4 lg:grid-cols-2">
                 <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-5 dark:border-slate-800 dark:bg-slate-950/60">
                   <p className="mb-1 text-xs font-bold uppercase tracking-widest text-slate-500">Faturamento mensal</p>
-                  <p className="mb-3 text-xs text-slate-400">Receita recebida por mês · passe o mouse para detalhes</p>
+                  <p className="mb-3 text-xs text-slate-500">Receita recebida por mês · passe o mouse para detalhes</p>
                   <BarChart
                     items={revenue.slice(-8).map(r => ({ label: r.label, value: r.total_received, secondaryValue: r.total_billed }))}
                     formatValue={formatCurrency}
@@ -1563,7 +1563,7 @@ export default function FinanceiroPage() {
                       </div>
                     ))}
                     {delinquents.length > 5 && (
-                      <p className="text-xs text-slate-400">+ {delinquents.length - 5} outros clientes</p>
+                      <p className="text-xs text-slate-500">+ {delinquents.length - 5} outros clientes</p>
                     )}
                   </div>
                 </div>
@@ -1661,7 +1661,7 @@ export default function FinanceiroPage() {
                 <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">
                   Serviços e produtos ({serviceProducts.length})
                 </p>
-                <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                   Preço-base de cada serviço (instalação, desinstalação, visita técnica…). O valor pode ser ajustado no lançamento.
                 </p>
               </div>
@@ -1691,7 +1691,7 @@ export default function FinanceiroPage() {
                       <Tr key={sp.id}>
                         <Td>
                           <p className="font-medium">{sp.name}</p>
-                          {sp.description && <p className="text-xs text-slate-400">{sp.description}</p>}
+                          {sp.description && <p className="text-xs text-slate-500">{sp.description}</p>}
                         </Td>
                         <Td className="text-xs capitalize">{sp.category || '—'}</Td>
                         <Td className="font-mono font-semibold">{formatCurrency(sp.default_price)}</Td>
@@ -1881,7 +1881,7 @@ export default function FinanceiroPage() {
                 ...(selectedBilling.paid_amount != null ? [['Valor pago', formatCurrency(selectedBilling.paid_amount)] as [string, string]] : []),
               ] as [string, React.ReactNode][]).map(([label, value]) => (
                 <div key={String(label)} className="rounded-xl border border-slate-100 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/50">
-                  <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">{label}</p>
+                  <p className="text-2xs font-semibold uppercase tracking-widest text-slate-500">{label}</p>
                   <div className="mt-1 text-sm text-slate-800 dark:text-slate-200">{value}</div>
                 </div>
               ))}
@@ -1915,7 +1915,7 @@ export default function FinanceiroPage() {
             {/* ── NFS-e (Joinville) ── */}
             <div className="rounded-xl border border-slate-100 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/50">
               <div className="flex items-center justify-between gap-3">
-                <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">Nota Fiscal (NFS-e)</p>
+                <p className="text-2xs font-semibold uppercase tracking-widest text-slate-500">Nota Fiscal (NFS-e)</p>
                 {nfse?.status === 'emitida' && <Badge variant="success">Emitida</Badge>}
                 {nfse?.status === 'processing' && <Badge variant="warning">Processando</Badge>}
                 {nfse?.status === 'erro' && <Badge variant="danger">Erro</Badge>}
@@ -1961,7 +1961,7 @@ export default function FinanceiroPage() {
 
       <Modal open={planModal} onClose={() => { setPlanModal(false); setEditingPlanId(null); setPlanForm(initialPlanForm); setModalError(''); }} title={editingPlanId ? 'Editar plano' : 'Novo plano'} description="Cadastre planos com periodicidade mensal, trimestral, semestral ou anual." size="lg">
         <form className="space-y-5" onSubmit={submitPlan}>
-          {modalError && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>}
+          {modalError && <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{modalError}</p>}
           <div className="grid gap-4 md:grid-cols-2">
             <input className={fieldClass} placeholder="Nome do plano" value={planForm.name} onChange={e => setPlanForm(p => ({ ...p, name: e.target.value }))} required />
             <input className={fieldClass} placeholder="Valor base" value={planForm.price} onChange={e => setPlanForm(p => ({ ...p, price: e.target.value }))} required />
@@ -1987,7 +1987,7 @@ export default function FinanceiroPage() {
 
       <Modal open={productModal} onClose={() => { setProductModal(false); setEditingProductId(null); setServiceProductForm(initialProductForm); setModalError(''); }} title={editingProductId ? 'Editar serviço / produto' : 'Novo serviço / produto'} description="Cadastre taxas, acessórios, sensores e outros itens cobrados do cliente." size="lg">
         <form className="space-y-5" onSubmit={submitProduct}>
-          {modalError && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>}
+          {modalError && <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{modalError}</p>}
           <div className="grid gap-4 md:grid-cols-2">
             <input className={fieldClass} placeholder="Nome do item" value={serviceProductForm.name} onChange={e => setServiceProductForm(p => ({ ...p, name: e.target.value }))} required />
             <select className={fieldClass} value={serviceProductForm.category} onChange={e => setServiceProductForm(p => ({ ...p, category: e.target.value }))}><option value="servico">Serviço</option><option value="produto">Produto</option><option value="taxa">Taxa</option></select>
@@ -2007,7 +2007,7 @@ export default function FinanceiroPage() {
 
       <Modal open={contractModal} onClose={() => { setContractModal(false); setEditingContractId(null); setContractForm(initialContractForm); setModalError(''); }} title="Gerar contrato" description="Modelo em branco para o cliente preencher e assinar. Escolha o plano e a vigência — nada é salvo e os dados do cliente saem em branco." size="lg">
         <form className="space-y-5" onSubmit={submitContract}>
-          {modalError && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>}
+          {modalError && <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{modalError}</p>}
           <div className="grid gap-4 md:grid-cols-2">
             <label className="md:col-span-2 text-sm">
               <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Plano contratado</span>
@@ -2031,7 +2031,7 @@ export default function FinanceiroPage() {
               <input type="date" className={fieldClass} value={contractForm.start_date} onChange={e => setContractForm(p => ({ ...p, start_date: e.target.value }))} />
             </label>
             <label className="text-sm">
-              <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Fim da vigência <span className="font-normal text-slate-400">(se necessário)</span></span>
+              <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Fim da vigência <span className="font-normal text-slate-500">(se necessário)</span></span>
               <input type="date" className={fieldClass} value={contractForm.end_date} onChange={e => setContractForm(p => ({ ...p, end_date: e.target.value }))} />
             </label>
             <label className="text-sm">
@@ -2055,7 +2055,7 @@ export default function FinanceiroPage() {
       </Modal>
 
       <Modal open={carneModal} onClose={() => setCarneModal(false)} title="Gerar carnê" description="Gere o carnê a partir dos boletos em aberto do cliente, ou criando parcelas do plano do veículo. Um carnê é sempre de um único cliente." size="xl">
-        {modalError && <p className="mb-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>}
+        {modalError && <p className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{modalError}</p>}
         <div className="space-y-4">
           <div>
             <p className="mb-1 text-xs font-medium text-slate-500 dark:text-slate-400">Cliente</p>
@@ -2070,7 +2070,7 @@ export default function FinanceiroPage() {
                   <div key={cg.lote_id} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
                     <div className="min-w-0">
                       <span className="font-medium text-slate-700 dark:text-slate-200">{cg.parcelas_registradas} de {cg.parcelas} parcela(s)</span>
-                      <span className="ml-2 text-xs text-slate-400">{cg.criado_em ? formatDate(cg.criado_em) : ''} · {formatCurrency(cg.total)}</span>
+                      <span className="ml-2 text-xs text-slate-500">{cg.criado_em ? formatDate(cg.criado_em) : ''} · {formatCurrency(cg.total)}</span>
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
                       <Badge variant={cg.status === 'completed' ? 'success' : 'warning'}>{cg.status === 'completed' ? 'Completo' : 'Processando'}</Badge>
@@ -2113,7 +2113,7 @@ export default function FinanceiroPage() {
                 <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Boletos em aberto ({carneBillings.length})</p>
                 <div className="flex items-center gap-3 text-xs">
                   <button type="button" onClick={() => setCarneSelected(carneBillings.map(b => b.id))} className="font-semibold text-brand-700 hover:underline dark:text-brand-400">Selecionar todos</button>
-                  <button type="button" onClick={() => setCarneSelected([])} className="text-slate-400 hover:underline">Limpar</button>
+                  <button type="button" onClick={() => setCarneSelected([])} className="text-slate-500 hover:underline">Limpar</button>
                 </div>
               </div>
               <div className="max-h-72 overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-700">
@@ -2127,12 +2127,12 @@ export default function FinanceiroPage() {
                   </label>
                 ))}
               </div>
-              <p className="text-xs text-slate-400">{carneSelected.length} de {carneBillings.length} selecionado(s). O carnê registra <strong>1 boleto real por parcela</strong> na Ailos.</p>
+              <p className="text-xs text-slate-500">{carneSelected.length} de {carneBillings.length} selecionado(s). O carnê registra <strong>1 boleto real por parcela</strong> na Ailos.</p>
             </>
           ) : (
-            <p className="text-sm text-slate-400">Selecione um cliente para listar os boletos.</p>
+            <p className="text-sm text-slate-500">Selecione um cliente para listar os boletos.</p>
           )) : !carneClientId ? (
-            <p className="text-sm text-slate-400">Selecione um cliente para escolher o contrato.</p>
+            <p className="text-sm text-slate-500">Selecione um cliente para escolher o contrato.</p>
           ) : (
             <div className="grid gap-4 sm:grid-cols-2">
               <label className="sm:col-span-2 text-sm">
@@ -2160,10 +2160,10 @@ export default function FinanceiroPage() {
                 <input className={fieldClass} value={carneValor} onChange={e => setCarneValor(e.target.value)} placeholder="valor do plano" />
               </label>
               <label className="sm:col-span-2 text-sm">
-                <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Primeiro vencimento <span className="font-normal text-slate-400">(opcional — padrão: próximo vencimento do contrato)</span></span>
+                <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Primeiro vencimento <span className="font-normal text-slate-500">(opcional — padrão: próximo vencimento do contrato)</span></span>
                 <input type="date" className={fieldClass} value={carnePrimeiroVenc} onChange={e => setCarnePrimeiroVenc(e.target.value)} />
               </label>
-              <p className="sm:col-span-2 text-xs text-slate-400">Serão criadas {Number(carneNumParcelas) || 0} parcelas mensais do plano e registradas na Ailos como carnê (1 boleto por parcela).</p>
+              <p className="sm:col-span-2 text-xs text-slate-500">Serão criadas {Number(carneNumParcelas) || 0} parcelas mensais do plano e registradas na Ailos como carnê (1 boleto por parcela).</p>
             </div>
           )}
         </div>
@@ -2177,7 +2177,7 @@ export default function FinanceiroPage() {
 
       <Modal open={chargeModal} onClose={() => { setChargeModal(false); setModalError(''); }} title="Novo lançamento financeiro" description="Lance serviços, produtos e taxas com opção de parcelamento e remoção após pagamento." size="xl">
         <form className="space-y-5" onSubmit={submitChargeItem}>
-          {modalError && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>}
+          {modalError && <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{modalError}</p>}
           <div className="grid gap-4 md:grid-cols-2">
             <ClientAutocomplete
               clients={clients}
@@ -2207,7 +2207,7 @@ export default function FinanceiroPage() {
 
       <Modal open={receiveModal} onClose={() => { setReceiveModal(false); setModalError(''); }} title="Registrar pagamento" description="Confirme o recebimento da cobrança selecionada e gere o recibo em PDF após a baixa." size="lg">
         <div className="space-y-5">
-          {modalError && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>}
+          {modalError && <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{modalError}</p>}
           <div className="grid gap-4 md:grid-cols-2">
             <input className={fieldClass} placeholder="Valor pago" value={receiveForm.paid_amount} onChange={e => setReceiveForm(p => ({ ...p, paid_amount: e.target.value }))} />
             <input type="date" className={fieldClass} value={receiveForm.payment_date} onChange={e => setReceiveForm(p => ({ ...p, payment_date: e.target.value }))} />
@@ -2223,7 +2223,7 @@ export default function FinanceiroPage() {
 
       <Modal open={adjustModal} onClose={() => { setAdjustModal(false); setModalError(''); }} title="Ajustar cobrança" description="Atualize valor ou vencimento com justificativa obrigatória para manter rastreabilidade." size="lg">
         <div className="space-y-5">
-          {modalError && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>}
+          {modalError && <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{modalError}</p>}
           <div className="grid gap-4 md:grid-cols-2">
             <input className={fieldClass} placeholder="Novo valor" value={adjustForm.amount} onChange={e => setAdjustForm(p => ({ ...p, amount: e.target.value }))} />
             <input type="date" className={fieldClass} value={adjustForm.due_date} onChange={e => setAdjustForm(p => ({ ...p, due_date: e.target.value }))} />
@@ -2244,7 +2244,7 @@ export default function FinanceiroPage() {
         size="lg"
       >
         <div className="space-y-5">
-          {modalError && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>}
+          {modalError && <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{modalError}</p>}
           <div className="grid gap-4 md:grid-cols-2">
             <div className="md:col-span-2">
               <ClientAutocomplete
@@ -2269,7 +2269,7 @@ export default function FinanceiroPage() {
 
       <Modal open={payableModal} onClose={() => { setPayableModal(false); setModalError(''); }} title="Cadastrar conta a pagar" description="Despesas da empresa: fornecedores, aluguel, chips, impostos…" size="lg">
         <div className="space-y-5">
-          {modalError && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>}
+          {modalError && <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{modalError}</p>}
           <div className="grid gap-4 md:grid-cols-2">
             <input className={`${fieldClass} md:col-span-2`} placeholder="Descrição (ex.: Aluguel do galpão)" value={payableForm.description} onChange={e => setPayableForm(p => ({ ...p, description: e.target.value }))} />
             <input className={fieldClass} placeholder="Fornecedor (opcional)" value={payableForm.supplier} onChange={e => setPayableForm(p => ({ ...p, supplier: e.target.value }))} />
@@ -2324,7 +2324,7 @@ export default function FinanceiroPage() {
 
       <Modal open={batchMaintModal} onClose={() => { setBatchMaintModal(false); setModalError(''); }} title={`Manutenção de ${selectedBillingIds.length} título(s) em lote`} description="Aplica novo vencimento e/ou valor a todas as cobranças selecionadas, com justificativa no histórico de cada uma." size="lg">
         <div className="space-y-5">
-          {modalError && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>}
+          {modalError && <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{modalError}</p>}
           <div className="grid gap-4 md:grid-cols-2">
             <input type="date" className={fieldClass} value={batchMaintForm.due_date} onChange={e => setBatchMaintForm(p => ({ ...p, due_date: e.target.value }))} />
             <input className={fieldClass} placeholder="Novo valor (opcional)" value={batchMaintForm.amount} onChange={e => setBatchMaintForm(p => ({ ...p, amount: e.target.value }))} />

@@ -41,7 +41,7 @@ const METHOD_COLOR: Record<string, string> = {
   POST:   'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400',
   PUT:    'bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400',
   PATCH:  'bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400',
-  DELETE: 'bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-400',
+  DELETE: 'bg-rose-100 text-rose-700 dark:bg-rose-950/40 dark:text-rose-400',
 };
 
 const ENTITY_LABEL: Record<string, string> = {
@@ -180,7 +180,7 @@ export default function AuditoriaPage() {
 
       {/* ── KPIs ──────────────────────────────────────────────────────────── */}
       {logs.length > 0 && (
-        <section className="mb-6 grid gap-4 sm:grid-cols-3">
+        <section className="mb-6 grid gap-5 sm:grid-cols-3">
           <MetricCard
             label="Ações hoje"
             value={stats.todayCount}
@@ -195,7 +195,7 @@ export default function AuditoriaPage() {
           />
           <MetricCard
             label="Erros / Falhas"
-            value={<span className={stats.errorCount > 0 ? 'text-red-600 dark:text-red-400' : ''}>{stats.errorCount}</span>}
+            value={<span className={stats.errorCount > 0 ? 'text-rose-600 dark:text-rose-400' : ''}>{stats.errorCount}</span>}
             sub="respostas com erro (4xx / 5xx)"
             icon={<AlertTriangle className="h-5 w-5" />}
           />
@@ -289,23 +289,23 @@ export default function AuditoriaPage() {
                     <Tr
                       key={log.id}
                       className={[
-                        isZebra ? 'bg-[#f9f9f9] dark:bg-slate-900/40' : '',
+                        isZebra ? 'bg-slate-50 dark:bg-slate-900/40' : '',
                         isGroupSep ? 'border-t border-slate-200 dark:border-slate-700' : '',
                       ].join(' ')}
                     >
                       {/* Data / Hora */}
                       <Td className="whitespace-nowrap px-4 py-[14px]">
-                        <p className="text-[13px] font-medium text-slate-700 dark:text-slate-300">{dt.date}</p>
-                        <p className="text-xs tabular-nums text-slate-400 dark:text-slate-500">{dt.time}</p>
+                        <p className="text-body font-medium text-slate-700 dark:text-slate-300">{dt.date}</p>
+                        <p className="text-xs tabular-nums text-slate-500 dark:text-slate-400">{dt.time}</p>
                       </Td>
 
                       {/* Usuário + Perfil */}
                       <Td className="px-4 py-[14px]">
-                        <p className="text-[13px] font-medium leading-tight text-slate-900 dark:text-white">
+                        <p className="text-body font-medium leading-tight text-slate-900 dark:text-white">
                           {log.user_name ?? '—'}
                         </p>
                         {log.user_role && (
-                          <p className="mt-0.5 text-[11px] text-slate-400">
+                          <p className="mt-0.5 text-2xs text-slate-500">
                             {ROLE_LABEL[log.user_role] ?? log.user_role}
                           </p>
                         )}
@@ -313,11 +313,11 @@ export default function AuditoriaPage() {
 
                       {/* Operação: descrição + tag do tipo */}
                       <Td className="px-4 py-[14px]">
-                        <p className="text-[13px] leading-snug text-slate-700 dark:text-slate-300">
+                        <p className="text-body leading-snug text-slate-700 dark:text-slate-300">
                           {log.description ?? log.path}
                         </p>
                         {log.method && (
-                          <span className={`mt-1 inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${METHOD_COLOR[log.method] ?? 'bg-slate-100 text-slate-500'}`}>
+                          <span className={`mt-1 inline-flex items-center rounded-md px-1.5 py-0.5 text-3xs font-semibold ${METHOD_COLOR[log.method] ?? 'bg-slate-100 text-slate-500'}`}>
                             {METHOD_LABEL[log.method] ?? log.method}
                           </span>
                         )}
@@ -327,11 +327,11 @@ export default function AuditoriaPage() {
                       <Td className="px-4 py-[14px]">
                         {log.entity_type ? (
                           <div>
-                            <p className="text-[13px] text-slate-700 dark:text-slate-300">
+                            <p className="text-body text-slate-700 dark:text-slate-300">
                               {friendlyEntity(log.entity_type)}
                             </p>
                             {log.entity_id && (
-                              <p className="text-[11px] text-slate-400">#{log.entity_id}</p>
+                              <p className="text-2xs text-slate-500">#{log.entity_id}</p>
                             )}
                           </div>
                         ) : (
@@ -345,7 +345,7 @@ export default function AuditoriaPage() {
                       </Td>
 
                       {/* IP */}
-                      <Td className="whitespace-nowrap px-4 py-[14px] text-[13px] tabular-nums text-slate-400">
+                      <Td className="whitespace-nowrap px-4 py-[14px] text-body tabular-nums text-slate-500">
                         {log.ip_address ?? '—'}
                       </Td>
                     </Tr>

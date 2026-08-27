@@ -7,6 +7,7 @@ import { AuthShell } from '@/components/auth-shell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
+import { ErrorBanner } from '@/components/ui/error-banner';
 import { apiFetch } from '@/lib/api';
 import { AuthUser, redirectByRole, saveSession } from '@/lib/auth';
 
@@ -73,23 +74,19 @@ export default function AdminLoginPage() {
               onClick={() => setShowPassword((v) => !v)}
               aria-label={showPassword ? 'Ocultar senha' : 'Mostrar senha'}
               tabIndex={-1}
-              className="absolute inset-y-0 right-0 flex items-center px-3 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+              className="absolute inset-y-0 right-0 flex items-center px-3 text-slate-500 hover:text-slate-600 dark:hover:text-slate-200"
             >
               {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
             </button>
           </div>
         </FormField>
 
-        {error && (
-          <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-400">
-            {error}
-          </p>
-        )}
+        {error && <ErrorBanner message={error} />}
 
         <div className="flex items-center justify-between gap-3 pt-1">
           <a
             href="/esqueci-senha"
-            className="text-sm text-slate-500 hover:text-brand-600 dark:text-slate-400 dark:hover:text-brand-400"
+            className="text-sm text-slate-500 hover:text-brand-700 dark:text-slate-400 dark:hover:text-brand-400"
           >
             Esqueci minha senha
           </a>

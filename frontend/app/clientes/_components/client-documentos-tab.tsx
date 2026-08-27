@@ -50,9 +50,9 @@ export function ClientDocumentosTab({
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <p className="font-medium text-slate-900 dark:text-white">{doc.file_name}</p>
-                  <p className="mt-0.5 text-xs text-slate-400">Categoria: {doc.category}</p>
-                  {envioMeta(doc) && <p className="mt-0.5 text-xs text-slate-400">{envioMeta(doc)}</p>}
-                  {doc.review_notes && <p className="mt-0.5 text-xs text-slate-400">Obs.: {doc.review_notes}</p>}
+                  <p className="mt-0.5 text-xs text-slate-500">Categoria: {doc.category}</p>
+                  {envioMeta(doc) && <p className="mt-0.5 text-xs text-slate-500">{envioMeta(doc)}</p>}
+                  {doc.review_notes && <p className="mt-0.5 text-xs text-slate-500">Obs.: {doc.review_notes}</p>}
                 </div>
                 <Badge variant={statusVariant(doc.review_status)}>{statusLabel(doc.review_status)}</Badge>
               </div>

@@ -43,7 +43,7 @@ function renderTemplate(tpl: string, vars: Record<string, string>) {
   return tpl.replace(/\{(\w+)\}/g, (_, k: string) => vars[k] ?? `{${k}}`);
 }
 
-const fieldClass = 'w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-500';
+const fieldClass = 'w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-500 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-400';
 
 export default function ConfiguracoesPage() {
   const { token, loading: guardLoading, error: guardError } = useAuthGuard(ROUTE_ROLES['/configuracoes'], '/login/admin');
@@ -145,7 +145,7 @@ export default function ConfiguracoesPage() {
             />
             <div className="mt-4 space-y-4">
               <div>
-                <p className="mb-1.5 text-xs font-semibold uppercase tracking-widest text-slate-400">Assunto do e-mail</p>
+                <p className="mb-1.5 text-xs font-semibold uppercase tracking-widest text-slate-500">Assunto do e-mail</p>
                 <input
                   className={fieldClass}
                   value={form.msg_boleto_assunto}
@@ -153,15 +153,15 @@ export default function ConfiguracoesPage() {
                 />
               </div>
               <div>
-                <p className="mb-1.5 text-xs font-semibold uppercase tracking-widest text-slate-400">Mensagem (WhatsApp e corpo do e-mail)</p>
+                <p className="mb-1.5 text-xs font-semibold uppercase tracking-widest text-slate-500">Mensagem (WhatsApp e corpo do e-mail)</p>
                 <textarea
-                  className={`${fieldClass} min-h-[280px] font-mono text-[13px] leading-relaxed`}
+                  className={`${fieldClass} min-h-[280px] font-mono text-body leading-relaxed`}
                   value={form.msg_boleto}
                   onChange={(e) => setForm((p) => ({ ...p, msg_boleto: e.target.value }))}
                 />
               </div>
               <div>
-                <p className="mb-2 text-xs font-semibold uppercase tracking-widest text-slate-400">Variáveis disponíveis (clique para inserir)</p>
+                <p className="mb-2 text-xs font-semibold uppercase tracking-widest text-slate-500">Variáveis disponíveis (clique para inserir)</p>
                 <div className="flex flex-wrap gap-2">
                   {VARIAVEIS.map(({ tag, desc }) => (
                     <button
@@ -187,7 +187,7 @@ export default function ConfiguracoesPage() {
               </div>
               <pre className="whitespace-pre-wrap break-words font-sans text-sm text-slate-800 dark:text-slate-200">{preview}</pre>
             </div>
-            <p className="mt-3 text-xs text-slate-400">
+            <p className="mt-3 text-xs text-slate-500">
               Assunto do e-mail: <span className="font-medium text-slate-600 dark:text-slate-300">{renderTemplate(form.msg_boleto_assunto, EXEMPLO)}</span>
             </p>
           </Card>
@@ -216,16 +216,16 @@ export default function ConfiguracoesPage() {
             </label>
 
             <div className="md:col-span-2">
-              <p className="mb-1.5 text-xs font-semibold uppercase tracking-widest text-slate-400">Servidor SMTP</p>
+              <p className="mb-1.5 text-xs font-semibold uppercase tracking-widest text-slate-500">Servidor SMTP</p>
               <input className={fieldClass} placeholder="smtp.seudominio.com.br" value={email.host} onChange={(e) => setEmail((p) => ({ ...p, host: e.target.value }))} />
             </div>
 
             <div>
-              <p className="mb-1.5 text-xs font-semibold uppercase tracking-widest text-slate-400">Porta</p>
+              <p className="mb-1.5 text-xs font-semibold uppercase tracking-widest text-slate-500">Porta</p>
               <input className={fieldClass} inputMode="numeric" value={email.port} onChange={(e) => setEmail((p) => ({ ...p, port: Number(e.target.value.replace(/\D/g, '')) || 0 }))} />
             </div>
             <div>
-              <p className="mb-1.5 text-xs font-semibold uppercase tracking-widest text-slate-400">Segurança</p>
+              <p className="mb-1.5 text-xs font-semibold uppercase tracking-widest text-slate-500">Segurança</p>
               <select className={fieldClass} value={email.security} onChange={(e) => setEmail((p) => ({ ...p, security: e.target.value }))}>
                 <option value="tls">STARTTLS (porta 587)</option>
                 <option value="ssl">SSL/TLS (porta 465)</option>
@@ -234,11 +234,11 @@ export default function ConfiguracoesPage() {
             </div>
 
             <div>
-              <p className="mb-1.5 text-xs font-semibold uppercase tracking-widest text-slate-400">Usuário</p>
+              <p className="mb-1.5 text-xs font-semibold uppercase tracking-widest text-slate-500">Usuário</p>
               <input className={fieldClass} placeholder="contato@seudominio.com.br" value={email.username} onChange={(e) => setEmail((p) => ({ ...p, username: e.target.value }))} autoComplete="off" />
             </div>
             <div>
-              <p className="mb-1.5 text-xs font-semibold uppercase tracking-widest text-slate-400">Senha</p>
+              <p className="mb-1.5 text-xs font-semibold uppercase tracking-widest text-slate-500">Senha</p>
               <input
                 type="password"
                 className={fieldClass}
@@ -250,15 +250,15 @@ export default function ConfiguracoesPage() {
             </div>
 
             <div>
-              <p className="mb-1.5 text-xs font-semibold uppercase tracking-widest text-slate-400">E-mail remetente</p>
+              <p className="mb-1.5 text-xs font-semibold uppercase tracking-widest text-slate-500">E-mail remetente</p>
               <input className={fieldClass} placeholder="contato@seudominio.com.br" value={email.from_email} onChange={(e) => setEmail((p) => ({ ...p, from_email: e.target.value }))} />
             </div>
             <div>
-              <p className="mb-1.5 text-xs font-semibold uppercase tracking-widest text-slate-400">Nome do remetente</p>
+              <p className="mb-1.5 text-xs font-semibold uppercase tracking-widest text-slate-500">Nome do remetente</p>
               <input className={fieldClass} placeholder="MasterSat Rastreamento" value={email.from_name} onChange={(e) => setEmail((p) => ({ ...p, from_name: e.target.value }))} />
             </div>
           </div>
-          <p className="mt-3 text-xs text-slate-400">
+          <p className="mt-3 text-xs text-slate-500">
             A senha é guardada criptografada e nunca é exibida. O teste usa a configuração <strong>salva</strong> — salve antes de enviar o teste.
           </p>
         </Card>

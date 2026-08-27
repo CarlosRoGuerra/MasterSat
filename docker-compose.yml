@@ -51,6 +51,13 @@ services:
   frontend:
     build: { context: ./frontend, target: dev }
     env_file: [.env]
+    environment:
+      # Bind mount passa pela pasta sincronizada do OneDrive no Windows — os
+      # eventos inotify não atravessam esse caminho de forma confiável, então
+      # o hot-reload do `next dev` não pegava alterações sem reiniciar o
+      # container. Polling força o watchpack a checar os arquivos por
+      # intervalo em vez de depender desses eventos.
+      WATCHPACK_POLLING: "true"
     ports: ["127.0.0.1:3000:3000"]
     depends_on: [backend]
     volumes: ["./frontend:/app", "/app/node_modules"]

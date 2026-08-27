@@ -70,13 +70,9 @@ export function BillingsModal({
       <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-900/50">
         <div className="flex items-center justify-between px-4 py-3">
           <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">Resumo financeiro</p>
-          <button
-            type="button"
-            onClick={onToggleSummary}
-            className="rounded-lg bg-purple-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-purple-700"
-          >
+          <Button type="button" variant="secondary" onClick={onToggleSummary} className="px-4 py-1.5 text-xs">
             {summaryExpanded ? 'Ocultar' : 'Exibir'}
-          </button>
+          </Button>
         </div>
         {summaryExpanded && !loading && (
           <div className="grid gap-3 px-4 pb-4 sm:grid-cols-3">
@@ -86,7 +82,7 @@ export function BillingsModal({
               { label: 'Pendente / vencido', value: billings.filter((b) => ['pendente', 'vencida'].includes(b.status)).reduce((s, b) => s + b.amount, 0) },
             ].map(({ label, value }) => (
               <div key={label} className="rounded-lg border border-slate-200 bg-white p-3 text-center dark:border-slate-700 dark:bg-slate-800">
-                <p className="text-xs text-slate-400">{label}</p>
+                <p className="text-xs text-slate-500">{label}</p>
                 <p className="mt-1 text-base font-bold text-slate-900 dark:text-white">
                   {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value)}
                 </p>
@@ -125,7 +121,7 @@ export function BillingsModal({
             <button
               type="button"
               onClick={() => onSelectedIdsChange([])}
-              className="ml-auto text-xs text-slate-400 underline hover:text-slate-600 dark:hover:text-slate-200"
+              className="ml-auto text-xs text-slate-500 underline hover:text-slate-600 dark:hover:text-slate-200"
             >
               Limpar seleção
             </button>
@@ -156,7 +152,7 @@ export function BillingsModal({
                       Carnê #{c.lote_id}
                     </button>
                     <span className="text-slate-500 dark:text-slate-400">{c.parcelas} parcela(s) · {fmt(c.total)}</span>
-                    {c.criado_em && <span className="text-xs text-slate-400">{new Date(c.criado_em).toLocaleDateString('pt-BR')}</span>}
+                    {c.criado_em && <span className="text-xs text-slate-500">{new Date(c.criado_em).toLocaleDateString('pt-BR')}</span>}
                     <Badge variant={quitado ? 'success' : c.parcelas_pagas > 0 ? 'info' : 'default'}>
                       {c.parcelas_pagas}/{c.parcelas} paga(s)
                     </Badge>
@@ -170,7 +166,7 @@ export function BillingsModal({
                   {aberto && (
                     <div className="border-t border-slate-100 bg-slate-50/60 px-4 py-2 dark:border-slate-800 dark:bg-slate-900/40">
                       <table className="w-full text-xs">
-                        <thead className="text-slate-400">
+                        <thead className="text-slate-500">
                           <tr>
                             <th className="py-1 text-left font-medium">Parcela</th>
                             <th className="py-1 text-left font-medium">Vencimento</th>
@@ -293,7 +289,7 @@ export function BillingsModal({
           </TableBody>
         </Table>
       )}
-      <p className="mt-3 text-xs text-slate-400">
+      <p className="mt-3 text-xs text-slate-500">
         Mostrando {billings.length} registro(s)
       </p>
     </Modal>

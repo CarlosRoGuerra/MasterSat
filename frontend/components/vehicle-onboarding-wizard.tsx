@@ -103,8 +103,8 @@ const INITIAL_VF: VehicleFormState = {
 
 const fieldClass =
   'w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition ' +
-  'placeholder:text-slate-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 disabled:bg-slate-50 ' +
-  'dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-brand-400';
+  'placeholder:text-slate-500 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 disabled:bg-slate-50 ' +
+  'dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-400 dark:focus:border-brand-400';
 
 const typeOpts = [
   'Automóvel', 'Ambulância', 'Avião', 'Barco', 'Basculante', 'Bau', 'Bi-trem', 'Bicicleta', 'Caixa',
@@ -496,7 +496,7 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
         <div className="sticky top-0 z-10 rounded-t-2xl border-b border-slate-100 bg-white px-6 py-5 dark:border-slate-800 dark:bg-slate-900">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <p className="text-[11px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">
+              <p className="text-2xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400">
                 Novo veículo — etapa {step} de 3
               </p>
               <h2 className="mt-0.5 text-lg font-bold text-slate-900 dark:text-white">
@@ -505,7 +505,7 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
             </div>
             <button
               onClick={handleClose}
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-slate-400 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800"
             >
               <X className="h-4 w-4" />
             </button>
@@ -523,19 +523,19 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
                         ? 'bg-emerald-500 text-white'
                         : step === s.n
                         ? 'bg-brand-700 text-white ring-4 ring-brand-200 dark:ring-brand-900/60'
-                        : 'bg-slate-100 text-slate-400 dark:bg-slate-800 dark:text-slate-500',
+                        : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400',
                     ].join(' ')}
                   >
                     {step > s.n ? <Check className="h-4 w-4" /> : s.n}
                   </div>
                   <span
                     className={[
-                      'whitespace-nowrap text-[11px] font-semibold',
+                      'whitespace-nowrap text-2xs font-semibold',
                       step === s.n
                         ? 'text-brand-700 dark:text-brand-300'
                         : step > s.n
                         ? 'text-emerald-600 dark:text-emerald-400'
-                        : 'text-slate-400 dark:text-slate-500',
+                        : 'text-slate-500 dark:text-slate-400',
                     ].join(' ')}
                   >
                     {s.label}
@@ -577,7 +577,7 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
         {/* ── Body ── */}
         <div className="p-6">
           {error && (
-            <p className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-400">
+            <p className="mb-5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-900/40 dark:bg-rose-950/30 dark:text-rose-400">
               {error}
             </p>
           )}
@@ -591,7 +591,7 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
               <div className="grid gap-4 md:grid-cols-2">
                 <div>
                   <label className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-200">
-                    Cliente <span className="text-red-500">*</span>
+                    Cliente <span className="text-rose-500">*</span>
                   </label>
                   <ClientAutocomplete
                     clients={clients}
@@ -619,13 +619,13 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
 
               {/* Vehicle identification */}
               <div>
-                <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">
+                <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-600">
                   Identificação do veículo
                 </p>
                 <div className="grid gap-4 md:grid-cols-3">
                   <div>
                     <label className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-200">
-                      Placa <span className="text-red-500">*</span>
+                      Placa <span className="text-rose-500">*</span>
                     </label>
                     <input
                       className={fieldClass}
@@ -740,14 +740,14 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
               {/* Address */}
               <div>
                 <div className="mb-3 flex items-center justify-between">
-                  <p className="text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">
+                  <p className="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-600">
                     Endereço
                   </p>
                   {vf.client_id && (
                     <button
                       type="button"
                       onClick={fillFromClient}
-                      className="text-xs text-brand-600 hover:underline dark:text-brand-400"
+                      className="text-xs text-brand-700 hover:underline dark:text-brand-400"
                     >
                       Usar endereço do cliente
                     </button>
@@ -763,7 +763,7 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
                       onBlur={e => lookupCep(e.target.value)}
                     />
                     {cepLoading && (
-                      <span className="mt-2.5 text-xs text-slate-400">…</span>
+                      <span className="mt-2.5 text-xs text-slate-500">…</span>
                     )}
                   </div>
                   <input
@@ -789,7 +789,7 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
               {/* Documentation */}
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/50">
                 <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Documentação inicial</p>
-                <p className="mt-0.5 text-xs text-slate-400">Opcional. Envie agora ou anexe depois na aba de documentos.</p>
+                <p className="mt-0.5 text-xs text-slate-500">Opcional. Envie agora ou anexe depois na aba de documentos.</p>
                 <div className="mt-3 space-y-3">
                   {docEntries.map((entry, idx) => (
                     <div key={idx} className="grid gap-3 sm:grid-cols-[200px_1fr_auto]">
@@ -810,7 +810,7 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
                         <button
                           type="button"
                           onClick={() => removeDocEntry(idx)}
-                          className="flex h-10 w-10 shrink-0 items-center justify-center justify-self-start rounded-xl border border-slate-200 text-slate-400 hover:bg-slate-100 hover:text-red-500 dark:border-slate-700 dark:hover:bg-slate-800"
+                          className="flex h-10 w-10 shrink-0 items-center justify-center justify-self-start rounded-xl border border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-rose-500 dark:border-slate-700 dark:hover:bg-slate-800"
                           aria-label="Remover documento"
                         >
                           <X className="h-4 w-4" />
@@ -822,7 +822,7 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
                 <button
                   type="button"
                   onClick={addDocEntry}
-                  className="mt-3 text-xs font-semibold text-brand-600 hover:underline dark:text-brand-400"
+                  className="mt-3 text-xs font-semibold text-brand-700 hover:underline dark:text-brand-400"
                 >
                   + Adicionar outro documento
                 </button>
@@ -850,7 +850,7 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
                   <label className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-200">
-                    Equipamento em estoque <span className="text-red-500">*</span>
+                    Equipamento em estoque <span className="text-rose-500">*</span>
                   </label>
                   {stockTrackers.length === 0 ? (
                     <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-400">
@@ -880,7 +880,7 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
               {/* Selected tracker summary card */}
               {selectedTracker && (
                 <div className="rounded-xl border border-brand-200 bg-brand-50/70 p-4 dark:border-brand-800/40 dark:bg-brand-950/30">
-                  <p className="mb-2 text-xs font-bold uppercase tracking-widest text-brand-600 dark:text-brand-400">
+                  <p className="mb-2 text-xs font-bold uppercase tracking-widest text-brand-700 dark:text-brand-400">
                     Equipamento selecionado
                   </p>
                   <p className="font-mono text-base font-semibold text-slate-900 dark:text-white">
@@ -913,11 +913,11 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
 
               {/* Plan selection */}
               <div>
-                <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">
+                <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-600">
                   Plano de rastreamento
                 </p>
                 {plans.length === 0 ? (
-                  <p className="text-sm text-slate-400">Nenhum plano cadastrado no sistema.</p>
+                  <p className="text-sm text-slate-500">Nenhum plano cadastrado no sistema.</p>
                 ) : (
                   <div className="grid gap-2 sm:grid-cols-2">
                     {/* "No plan" option */}
@@ -932,7 +932,7 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
                       ].join(' ')}
                     >
                       <span className="block font-semibold">Sem plano</span>
-                      <span className="mt-0.5 block text-xs text-slate-400">Vincular sem contratação agora</span>
+                      <span className="mt-0.5 block text-xs text-slate-500">Vincular sem contratação agora</span>
                     </button>
 
                     {plans.map(plan => (
@@ -950,11 +950,11 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
                         <span className={`block font-semibold ${pf.plan_id === String(plan.id) ? 'text-brand-700 dark:text-brand-300' : ''}`}>
                           {plan.name}
                         </span>
-                        <span className="mt-0.5 block font-mono text-sm text-brand-600 dark:text-brand-400">
+                        <span className="mt-0.5 block font-mono text-sm text-brand-700 dark:text-brand-400">
                           R$ {Number(plan.price).toFixed(2)}{pricePeriodSuffix(plan.billing_interval_months || 1)}
                         </span>
                         {(plan.billing_interval_months || 1) > 1 && (
-                          <span className="mt-0.5 block text-xs text-slate-400">
+                          <span className="mt-0.5 block text-xs text-slate-500">
                             {intervalLabel(plan.billing_interval_months || 1)}
                           </span>
                         )}
@@ -969,7 +969,7 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
                 <>
                   {/* Payment method */}
                   <div>
-                    <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">
+                    <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-600">
                       Forma de pagamento
                     </p>
                     <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
@@ -999,7 +999,7 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
                   {/* Billing mode: recorrente mensal x carnê (só faz sentido com boleto) */}
                   {pf.payment_method === 'boleto' && (
                     <div>
-                      <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">
+                      <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-600">
                         Modalidade de cobrança
                       </p>
                       <div className="grid grid-cols-2 gap-2">
@@ -1014,7 +1014,7 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
                           ].join(' ')}
                         >
                           <span className="block font-semibold">Recorrente mensal</span>
-                          <span className="mt-0.5 block text-xs text-slate-400">Um boleto por mês, gerado no fechamento</span>
+                          <span className="mt-0.5 block text-xs text-slate-500">Um boleto por mês, gerado no fechamento</span>
                         </button>
                         <button
                           type="button"
@@ -1027,7 +1027,7 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
                           ].join(' ')}
                         >
                           <span className="block font-semibold">Carnê</span>
-                          <span className="mt-0.5 block text-xs text-slate-400">N parcelas já criadas de uma vez</span>
+                          <span className="mt-0.5 block text-xs text-slate-500">N parcelas já criadas de uma vez</span>
                         </button>
                       </div>
 
@@ -1100,7 +1100,7 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
                             Não configurado no cadastro do cliente
                           </p>
                         )}
-                        <p className="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
+                        <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
                           Definido no cadastro do cliente · unifica todos os veículos
                         </p>
                       </div>
@@ -1118,10 +1118,10 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
                   {/* Additional services */}
                   {serviceProducts.length > 0 && (
                     <div>
-                      <p className="mb-1.5 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">
+                      <p className="mb-1.5 text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-600">
                         Serviços adicionais
                       </p>
-                      <p className="mb-3 text-xs text-slate-400 dark:text-slate-500">
+                      <p className="mb-3 text-xs text-slate-500 dark:text-slate-400">
                         Cobrados na 1ª fatura junto com a instalação.
                       </p>
                       <div className="grid gap-2 sm:grid-cols-2">
@@ -1151,7 +1151,7 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
                               />
                               <div className="min-w-0 flex-1">
                                 <p className="truncate font-medium text-slate-800 dark:text-slate-200">{prod.name}</p>
-                                <p className="text-xs text-slate-400">R$ {Number(prod.default_price).toFixed(2)}</p>
+                                <p className="text-xs text-slate-500">R$ {Number(prod.default_price).toFixed(2)}</p>
                               </div>
                             </label>
                           );
@@ -1163,7 +1163,7 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
                   {/* Invoice preview (pro-rata) */}
                   {invoicePreview && (
                     <div className="rounded-xl border border-brand-200 bg-brand-50/60 p-4 dark:border-brand-800/60 dark:bg-brand-950/30">
-                      <p className="mb-2 text-xs font-bold uppercase tracking-widest text-brand-600 dark:text-brand-400">
+                      <p className="mb-2 text-xs font-bold uppercase tracking-widest text-brand-700 dark:text-brand-400">
                         Prévia da 1ª fatura — pró-rata ({invoicePreview.remaining}/{invoicePreview.daysInMonth} dias)
                       </p>
                       <div className="space-y-1 text-sm text-slate-700 dark:text-slate-300">
@@ -1188,7 +1188,7 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
                           </span>
                         </div>
                       </div>
-                      <p className="mt-2 text-xs text-slate-400">
+                      <p className="mt-2 text-xs text-slate-500">
                         {isMonthlyPlan ? 'A partir do mês seguinte' : 'Nas próximas cobranças'}:{' '}
                         R$ {selectedPlan ? Number(selectedPlan.price).toFixed(2) : '—'}
                         {pricePeriodSuffix(planIntervalMonths)}

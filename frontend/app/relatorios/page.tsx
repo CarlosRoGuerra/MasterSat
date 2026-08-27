@@ -240,8 +240,8 @@ export default function RelatoriosPage() {
   ];
 
   /* ── Typography helpers ── */
-  const labelClass = 'text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-400 dark:text-slate-500';
-  const kpiValueClass = 'mt-1.5 text-[28px] font-medium leading-none tabular-nums';
+  const labelClass = 'text-2xs font-semibold uppercase tracking-[0.06em] text-slate-500 dark:text-slate-400';
+  const kpiValueClass = 'mt-1.5 text-stat font-semibold leading-none tabular-nums';
 
   return (
     <PageShell title="Relatórios" description="Receita por período, inadimplência e exportações.">
@@ -281,7 +281,7 @@ export default function RelatoriosPage() {
             </div>
           </div>
         ) : (
-          <section className="mb-6 grid gap-4 sm:grid-cols-3">
+          <section className="mb-6 grid gap-5 sm:grid-cols-3">
             <Card>
               <div className="flex items-center justify-between">
                 <div>
@@ -290,7 +290,7 @@ export default function RelatoriosPage() {
                     {delinquencyStatus.clientes_inadimplentes}
                   </p>
                 </div>
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-rose-50 dark:bg-rose-950/30">
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-rose-50 dark:bg-rose-950/30">
                   <Users className="h-5 w-5 text-rose-500" />
                 </div>
               </div>
@@ -303,7 +303,7 @@ export default function RelatoriosPage() {
                     {delinquencyStatus.cobrancas_vencidas}
                   </p>
                 </div>
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50 dark:bg-amber-950/30">
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-amber-50 dark:bg-amber-950/30">
                   <AlertTriangle className="h-5 w-5 text-amber-500" />
                 </div>
               </div>
@@ -316,12 +316,12 @@ export default function RelatoriosPage() {
                     {fmt(delinquencyStatus.valor_total_vencido)}
                   </p>
                   {delinquencyStatus.cobrancas_vencidas > 0 && (
-                    <p className="mt-1 text-[11px] text-rose-500 dark:text-rose-400">
+                    <p className="mt-1 text-2xs text-rose-500 dark:text-rose-400">
                       {delinquencyStatus.cobrancas_vencidas} cobranças vencidas
                     </p>
                   )}
                 </div>
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-rose-50 dark:bg-rose-950/30">
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-rose-50 dark:bg-rose-950/30">
                   <DollarSign className="h-5 w-5 text-rose-500" />
                 </div>
               </div>
@@ -333,7 +333,7 @@ export default function RelatoriosPage() {
       {/* ── Date range filter ────────────────────────────────────────────── */}
       <Card className="mb-6">
         <div className="flex flex-wrap items-center gap-3">
-          <CalendarDays className="h-4 w-4 text-brand-600 shrink-0" />
+          <CalendarDays className="h-4 w-4 text-brand-700 shrink-0" />
           <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">Período</p>
 
           {/* Preset buttons */}
@@ -360,7 +360,7 @@ export default function RelatoriosPage() {
           {/* Date inputs (always visible for precision) */}
           <div className="flex items-center gap-2 ml-auto">
             <label className="flex items-center gap-1.5">
-              <span className="text-[11px] text-slate-400">De</span>
+              <span className="text-2xs text-slate-500">De</span>
               <input
                 type="date"
                 value={dateFrom}
@@ -369,7 +369,7 @@ export default function RelatoriosPage() {
               />
             </label>
             <label className="flex items-center gap-1.5">
-              <span className="text-[11px] text-slate-400">Até</span>
+              <span className="text-2xs text-slate-500">Até</span>
               <input
                 type="date"
                 value={dateTo}
@@ -388,7 +388,7 @@ export default function RelatoriosPage() {
 
         {/* Active period badge */}
         <div className="mt-3 flex items-center gap-2">
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400">
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-2xs font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400">
             <CalendarDays className="h-3 w-3" />
             Exibindo: {fmtDate(dateFrom)} – {fmtDate(dateTo)}
           </span>
@@ -429,7 +429,7 @@ export default function RelatoriosPage() {
               <option value="vencimento">Data de vencimento</option>
             </select>
           </label>
-          <p className="pb-2 text-xs text-slate-400">
+          <p className="pb-2 text-xs text-slate-500">
             Período: {fmtDate(dateFrom)} – {fmtDate(dateTo)}
           </p>
           <div className="ml-auto flex items-center gap-2">
@@ -460,7 +460,7 @@ export default function RelatoriosPage() {
         <div className="mb-4 flex items-center gap-2">
           <Download className="h-4 w-4 text-slate-500" />
           <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Exportar dados</h3>
-          <span className="ml-1 text-[11px] text-slate-400 dark:text-slate-500">
+          <span className="ml-1 text-2xs text-slate-500 dark:text-slate-400">
             período: {fmtDate(dateFrom)} – {fmtDate(dateTo)}
           </span>
         </div>
@@ -468,7 +468,7 @@ export default function RelatoriosPage() {
           {[
             { label: 'Clientes',      path: 'exports/clients',    basename: 'clientes',     icon: Users,          color: 'bg-blue-50 text-blue-600 dark:bg-blue-950/30 dark:text-blue-400' },
             { label: 'Veículos',      path: 'exports/vehicles',   basename: 'veiculos',     icon: FileText,       color: 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/30 dark:text-emerald-400' },
-            { label: 'Rastreadores',  path: 'exports/trackers',   basename: 'rastreadores', icon: TrendingUp,     color: 'bg-brand-50 text-brand-600 dark:bg-brand-950/30 dark:text-brand-400' },
+            { label: 'Rastreadores',  path: 'exports/trackers',   basename: 'rastreadores', icon: TrendingUp,     color: 'bg-brand-50 text-brand-700 dark:bg-brand-950/30 dark:text-brand-400' },
             { label: 'Inadimplentes', path: 'exports/delinquents',basename: 'inadimplentes',icon: AlertTriangle,  color: 'bg-rose-50 text-rose-600 dark:bg-rose-950/30 dark:text-rose-400' },
           ].map(({ label, path, basename, icon: Icon, color }) =>
             token ? (
@@ -479,7 +479,7 @@ export default function RelatoriosPage() {
                   </div>
                   <div>
                     <p className="text-sm font-medium text-slate-700 dark:text-slate-300">{label}</p>
-                    <p className="text-[11px] text-slate-400">{label === 'Inadimplentes' ? 'CSV · Excel · PDF' : 'CSV · Excel'}</p>
+                    <p className="text-2xs text-slate-500">{label === 'Inadimplentes' ? 'CSV · Excel · PDF' : 'CSV · Excel'}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-1.5">
@@ -488,7 +488,7 @@ export default function RelatoriosPage() {
                       type="button"
                       title="Imprimir em PDF"
                       onClick={() => abrirPdfInadimplentes(token, dateFrom, dateTo).catch(e => setError(e instanceof Error ? e.message : 'Erro ao gerar PDF'))}
-                      className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-semibold text-rose-700 transition hover:bg-rose-100 dark:border-rose-900/40 dark:bg-rose-950/30 dark:text-rose-400"
+                      className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-2xs font-semibold text-rose-700 transition hover:bg-rose-100 dark:border-rose-900/40 dark:bg-rose-950/30 dark:text-rose-400"
                     >
                       PDF
                     </button>
@@ -507,7 +507,7 @@ export default function RelatoriosPage() {
         <Card>
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
-              <BarChart2 className="h-4 w-4 text-brand-600" />
+              <BarChart2 className="h-4 w-4 text-brand-700" />
               <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Receita por período</h3>
             </div>
             {token && (
@@ -547,7 +547,7 @@ export default function RelatoriosPage() {
           {/* Table (collapsible detail) */}
           {!revenueLoading && revenue.length > 0 && (
             <details className="mt-4 group">
-              <summary className="cursor-pointer select-none text-[11px] font-semibold uppercase tracking-widest text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 list-none flex items-center gap-1">
+              <summary className="cursor-pointer select-none text-2xs font-semibold uppercase tracking-widest text-slate-500 hover:text-slate-600 dark:hover:text-slate-200 list-none flex items-center gap-1">
                 <span className="group-open:hidden">▶</span>
                 <span className="hidden group-open:inline">▼</span>
                 Ver tabela detalhada
@@ -555,20 +555,20 @@ export default function RelatoriosPage() {
               <div className="mt-3 overflow-x-auto">
                 <Table>
                   <TableHead>
-                    <Th className="text-[11px] uppercase tracking-[0.04em]">Mês</Th>
-                    <Th className="text-[11px] uppercase tracking-[0.04em]">Cobranças</Th>
-                    <Th className="text-[11px] uppercase tracking-[0.04em]">Emitido</Th>
-                    <Th className="text-[11px] uppercase tracking-[0.04em]">Recebido</Th>
-                    <Th className="text-[11px] uppercase tracking-[0.04em]">Em aberto</Th>
+                    <Th className="text-2xs uppercase tracking-[0.04em]">Mês</Th>
+                    <Th className="text-2xs uppercase tracking-[0.04em]">Cobranças</Th>
+                    <Th className="text-2xs uppercase tracking-[0.04em]">Emitido</Th>
+                    <Th className="text-2xs uppercase tracking-[0.04em]">Recebido</Th>
+                    <Th className="text-2xs uppercase tracking-[0.04em]">Em aberto</Th>
                   </TableHead>
                   <TableBody>
                     {revenue.map((m) => (
                       <Tr key={m.label}>
-                        <Td className="text-[13px] font-medium">{m.label}</Td>
-                        <Td className="text-center text-[13px]">{m.total_cobrancas}</Td>
-                        <Td className="font-mono text-[13px]">{fmt(m.total_emitido)}</Td>
-                        <Td className="font-mono text-[13px] text-emerald-700 dark:text-emerald-400">{fmt(m.total_recebido)}</Td>
-                        <Td className={`font-mono text-[13px] ${m.total_aberto > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-400'}`}>
+                        <Td className="text-body font-medium">{m.label}</Td>
+                        <Td className="text-center text-body">{m.total_cobrancas}</Td>
+                        <Td className="font-mono text-body">{fmt(m.total_emitido)}</Td>
+                        <Td className="font-mono text-body text-emerald-700 dark:text-emerald-400">{fmt(m.total_recebido)}</Td>
+                        <Td className={`font-mono text-body ${m.total_aberto > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-500'}`}>
                           {fmt(m.total_aberto)}
                         </Td>
                       </Tr>
@@ -590,7 +590,7 @@ export default function RelatoriosPage() {
             <div className="flex items-center gap-2">
               {/* Timestamp */}
               {lastRefresh && (
-                <span className="flex items-center gap-1 text-[11px] text-slate-400 dark:text-slate-500">
+                <span className="flex items-center gap-1 text-2xs text-slate-500 dark:text-slate-400">
                   <Clock className="h-3 w-3" />
                   {relativeTime(lastRefresh)}
                 </span>
@@ -635,18 +635,18 @@ export default function RelatoriosPage() {
               <div className="flex flex-col items-center gap-2 py-10">
                 <AlertTriangle className="h-10 w-10 text-amber-400 dark:text-amber-500" strokeWidth={1.5} />
                 <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Não foi possível carregar a inadimplência</p>
-                <p className="text-xs text-slate-400">Veja o erro acima e tente novamente.</p>
+                <p className="text-xs text-slate-500">Veja o erro acima e tente novamente.</p>
               </div>
             ) : delinquents.length === 0 ? (
               /* ── All-clear empty state ── */
               <div className="flex flex-col items-center gap-2 py-10">
                 <CheckCircle2 className="h-10 w-10 text-emerald-400 dark:text-emerald-500" strokeWidth={1.5} />
                 <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Nenhuma inadimplência</p>
-                <p className="text-xs text-slate-400 dark:text-slate-500">
+                <p className="text-xs text-slate-500 dark:text-slate-400">
                   Todos os clientes estão com pagamentos em dia
                 </p>
                 {lastRefresh && (
-                  <p className="mt-1 text-[11px] text-slate-300 dark:text-slate-600">
+                  <p className="mt-1 text-2xs text-slate-300 dark:text-slate-600">
                     Última verificação: {lastRefresh.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
                   </p>
                 )}
@@ -655,24 +655,24 @@ export default function RelatoriosPage() {
               <>
                 <Table>
                   <TableHead>
-                    <Th className="text-[11px] uppercase tracking-[0.04em]">Cliente</Th>
-                    <Th className="text-[11px] uppercase tracking-[0.04em]">Cobranças</Th>
-                    <Th className="text-[11px] uppercase tracking-[0.04em]">Valor vencido</Th>
-                    <Th className="text-[11px] uppercase tracking-[0.04em]">Atraso</Th>
+                    <Th className="text-2xs uppercase tracking-[0.04em]">Cliente</Th>
+                    <Th className="text-2xs uppercase tracking-[0.04em]">Cobranças</Th>
+                    <Th className="text-2xs uppercase tracking-[0.04em]">Valor vencido</Th>
+                    <Th className="text-2xs uppercase tracking-[0.04em]">Atraso</Th>
                   </TableHead>
                   <TableBody>
                     {visibleDelinquents.map((d) => (
                       <Tr key={d.client_id}>
                         <Td>
-                          <p className="text-[13px] font-medium text-slate-900 dark:text-white">{d.nome}</p>
-                          <p className="text-[11px] text-slate-400">{d.cpf_cnpj}</p>
+                          <p className="text-body font-medium text-slate-900 dark:text-white">{d.nome}</p>
+                          <p className="text-2xs text-slate-500">{d.cpf_cnpj}</p>
                         </Td>
-                        <Td className="text-center text-[13px]">{d.qtd_cobrancas_vencidas}</Td>
-                        <Td className="font-mono text-[13px] font-semibold text-rose-600 dark:text-rose-400">
+                        <Td className="text-center text-body">{d.qtd_cobrancas_vencidas}</Td>
+                        <Td className="font-mono text-body font-semibold text-rose-600 dark:text-rose-400">
                           {fmt(d.valor_total_vencido)}
                         </Td>
                         <Td className="text-center">
-                          <span className={`text-[13px] font-semibold ${d.dias_atraso_max > 30 ? 'text-rose-600 dark:text-rose-400' : 'text-amber-600 dark:text-amber-400'}`}>
+                          <span className={`text-body font-semibold ${d.dias_atraso_max > 30 ? 'text-rose-600 dark:text-rose-400' : 'text-amber-600 dark:text-amber-400'}`}>
                             {d.dias_atraso_max}d
                           </span>
                         </Td>

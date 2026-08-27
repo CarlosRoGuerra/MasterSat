@@ -17,7 +17,7 @@ import { EmptyState, TableSkeleton } from '@/components/ui/empty-state';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { FormField, FormGrid } from '@/components/ui/form-field';
-import { Eye, DollarSign, ClipboardList, Pencil, CreditCard, Zap, Building2, Banknote, FileText as FileBillet, Search, X, AlertTriangle } from 'lucide-react';
+import { Eye, DollarSign, ClipboardList, Pencil, CreditCard, Zap, Building2, Banknote, FileText as FileBillet, Search, X, AlertTriangle, Car, CheckCircle2, MapPin, Undo2 } from 'lucide-react';
 import { ExportButton } from '@/components/ui/export-button';
 import { apiFetch } from '@/lib/api';
 import { fetchAddressByCep } from '@/lib/cep';
@@ -129,7 +129,7 @@ const initialForm: VehicleFormState = {
   status: 'ativo',
 };
 
-const fieldClass = 'w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-brand-400';
+const fieldClass = 'w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-500 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-400 dark:focus:border-brand-400';
 const areaClass = `${fieldClass} min-h-[88px] resize-y`;
 const salesPointOptions = ['MASTERSAT RASTREAMENTO'];
 const classificationOptions = ['NAO INFORMADO', 'LEVE', 'UTILITARIO', 'PESADO'];
@@ -227,7 +227,7 @@ function TrackerAutocomplete({
         <div className="flex items-center gap-2 rounded-xl border border-brand-300 bg-brand-50 px-3.5 py-2.5 dark:border-brand-700 dark:bg-brand-950/30">
           <div className="min-w-0 flex-1">
             <p className="font-mono text-sm font-semibold text-brand-800 dark:text-brand-200">{selected.imei}</p>
-            {label(selected) && <p className="text-xs text-brand-600 dark:text-brand-400">{label(selected)}</p>}
+            {label(selected) && <p className="text-xs text-brand-700 dark:text-brand-400">{label(selected)}</p>}
           </div>
           <button
             type="button"
@@ -240,7 +240,7 @@ function TrackerAutocomplete({
         </div>
       ) : (
         <div className="relative">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
           <input
             ref={inputRef}
             type="text"
@@ -257,7 +257,7 @@ function TrackerAutocomplete({
                 }
               }, 150);
             }}
-            className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-9 pr-3.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-brand-400"
+            className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-9 pr-3.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-500 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-400 dark:focus:border-brand-400"
           />
         </div>
       )}
@@ -266,7 +266,7 @@ function TrackerAutocomplete({
       {open && focused && (
         <div className="absolute z-50 mt-1 max-h-64 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-900">
           {filtered.length === 0 ? (
-            <div className="px-4 py-3 text-sm text-slate-400">
+            <div className="px-4 py-3 text-sm text-slate-500">
               {query.trim() ? `Nenhum rastreador encontrado para "${query}"` : 'Nenhum rastreador em estoque'}
             </div>
           ) : (
@@ -279,7 +279,7 @@ function TrackerAutocomplete({
               >
                 <div className="min-w-0 flex-1">
                   <p className="font-mono font-semibold text-slate-900 dark:text-white">{t.imei}</p>
-                  {label(t) && <p className="text-xs text-slate-400">{label(t)}</p>}
+                  {label(t) && <p className="text-xs text-slate-500">{label(t)}</p>}
                 </div>
               </button>
             ))
@@ -359,7 +359,7 @@ function LinkTrackerForm({
     <div className="space-y-6">
       {/* ── Equipamento ──────────────────────────────────────────────────── */}
       <div>
-        <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">Equipamento</p>
+        <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-600">Equipamento</p>
         <div className="grid gap-4 sm:grid-cols-2">
           <FormField label="Rastreador disponível" required>
             <TrackerAutocomplete
@@ -377,7 +377,7 @@ function LinkTrackerForm({
 
       {/* ── Interveniente financeiro ─────────────────────────────────────── */}
       <div>
-        <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">Interveniente financeiro</p>
+        <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-600">Interveniente financeiro</p>
         <div className="grid gap-4 sm:grid-cols-2">
           <FormField label="Utilizar cliente como interveniente?">
             <select
@@ -402,7 +402,7 @@ function LinkTrackerForm({
           )}
         </div>
         {form.use_client_as_interveniente === 'nao' && (
-          <p className="mt-2 text-xs text-slate-400 dark:text-slate-500">
+          <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
             O interveniente precisa estar cadastrado como cliente — as cobranças deste contrato ficam vinculadas a ele, sem duplicar cadastro.
           </p>
         )}
@@ -410,7 +410,7 @@ function LinkTrackerForm({
 
       {/* ── Plano de monitoramento ───────────────────────────────────────── */}
       <div>
-        <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">Plano de monitoramento</p>
+        <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-600">Plano de monitoramento</p>
         <select className={fieldClass} value={form.plan_id} onChange={set('plan_id')}>
           <option value="">Sem plano agora</option>
           {plans.map((p) => (
@@ -424,8 +424,8 @@ function LinkTrackerForm({
       {/* ── Produtos / Serviços adicionais ────────────────────────────────── */}
       {serviceProducts.length > 0 && (
         <div>
-          <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">Serviços adicionais</p>
-          <p className="mb-3 text-xs text-slate-400 dark:text-slate-500">
+          <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-600">Serviços adicionais</p>
+          <p className="mb-3 text-xs text-slate-500 dark:text-slate-400">
             Serviços cobrados uma única vez junto à primeira fatura.
           </p>
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
@@ -449,7 +449,7 @@ function LinkTrackerForm({
                   />
                   <div className="min-w-0 flex-1">
                     <p className="truncate font-medium text-slate-800 dark:text-slate-200">{prod.name}</p>
-                    <p className="text-xs text-slate-400">R$ {Number(prod.default_price).toFixed(2)}</p>
+                    <p className="text-xs text-slate-500">R$ {Number(prod.default_price).toFixed(2)}</p>
                   </div>
                 </label>
               );
@@ -460,14 +460,14 @@ function LinkTrackerForm({
 
       {/* ── Cobrança: banco emissor + dia do vencimento ─────────────────── */}
       <div>
-        <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">Cobrança</p>
+        <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-600">Cobrança</p>
         <FormField label="Banco (emissão do boleto)">
           <select className={fieldClass} value={form.bank} onChange={set('bank')}>
             <option value="ailos">Ailos (Viacredi) — 085</option>
             <option value="outro">Outro banco (emissão manual)</option>
           </select>
         </FormField>
-        <p className="mb-3 mt-3 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">Dia do vencimento</p>
+        <p className="mb-3 mt-3 text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-600">Dia do vencimento</p>
         <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-700 dark:bg-slate-900/50">
           <div className="flex items-center justify-between gap-4">
             <div>
@@ -480,7 +480,7 @@ function LinkTrackerForm({
                   Não configurado no cadastro do cliente
                 </p>
               )}
-              <p className="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
+              <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
                 Definido no cadastro do cliente · unifica todos os veículos
               </p>
             </div>
@@ -499,7 +499,7 @@ function LinkTrackerForm({
       {/* ── Forma de pagamento ───────────────────────────────────────────── */}
       {form.plan_id && (
         <div>
-          <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600">Como o cliente vai pagar?</p>
+          <p className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-600">Como o cliente vai pagar?</p>
           <div className="space-y-4">
             {/* Opções de pagamento */}
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
@@ -515,9 +515,9 @@ function LinkTrackerForm({
                       : 'border-slate-200 text-slate-600 hover:border-slate-300 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800',
                   ].join(' ')}
                 >
-                  <Icon className={`h-5 w-5 ${form.payment_method === value ? 'text-brand-600 dark:text-brand-400' : 'text-slate-400 dark:text-slate-500'}`} />
+                  <Icon className={`h-5 w-5 ${form.payment_method === value ? 'text-brand-700 dark:text-brand-400' : 'text-slate-500 dark:text-slate-400'}`} />
                   <span className="text-xs font-semibold leading-tight">{label}</span>
-                  <span className="text-[10px] text-slate-400 dark:text-slate-500 leading-tight">{desc}</span>
+                  <span className="text-3xs text-slate-500 dark:text-slate-400 leading-tight">{desc}</span>
                 </button>
               ))}
             </div>
@@ -533,7 +533,7 @@ function LinkTrackerForm({
                   <p className="mt-0.5 text-slate-600 dark:text-slate-400">
                     1ª cobrança estimada: <strong className="text-slate-800 dark:text-slate-200">{firstBillingDate}</strong>
                   </p>
-                  <p className="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
+                  <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
                     A cobrança se repete automaticamente todo mês nessa data.
                   </p>
                 </div>
@@ -544,7 +544,7 @@ function LinkTrackerForm({
             {/* Pré-visualização da 1ª fatura (pró-rata) */}
             {preview && (
               <div className="rounded-xl border border-brand-200 bg-brand-50/60 p-4 text-sm dark:border-brand-800/60 dark:bg-brand-950/30">
-                <p className="mb-3 text-xs font-bold uppercase tracking-widest text-brand-600 dark:text-brand-400">
+                <p className="mb-3 text-xs font-bold uppercase tracking-widest text-brand-700 dark:text-brand-400">
                   1ª fatura — pró-rata ({preview.remaining} de {preview.daysInMonth} dias)
                 </p>
                 <div className="space-y-1.5 text-slate-700 dark:text-slate-300">
@@ -567,7 +567,7 @@ function LinkTrackerForm({
                     <span className="font-mono text-brand-700 dark:text-brand-300">R$ {preview.total.toFixed(2)}</span>
                   </div>
                 </div>
-                <p className="mt-2.5 text-xs text-slate-400 dark:text-slate-500">
+                <p className="mt-2.5 text-xs text-slate-500 dark:text-slate-400">
                   {isMonthlyPlan ? 'A partir do mês seguinte' : 'Nas próximas cobranças'}:{' '}
                   R$ {selectedPlan?.price?.toFixed(2)}{pricePeriodSuffix(selectedPlan?.billing_interval_months)}
                 </p>
@@ -1090,7 +1090,7 @@ export default function VeiculosPage() {
     <PageShell title="Veículos" description="Gestão dos ativos da frota com cadastro em modal, documentação, desinstalação e visão consolidada por cliente.">
       {(guardError || error || feedback) && (
         <div className="mb-4 space-y-3">
-          {(guardError || error) ? <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{guardError || error}</p> : null}
+          {(guardError || error) ? <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{guardError || error}</p> : null}
           {feedback ? <p className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{feedback}</p> : null}
         </div>
       )}
@@ -1155,7 +1155,7 @@ export default function VeiculosPage() {
                         <Td className="font-mono font-semibold">{vehicle.plate}</Td>
                         <Td>
                           <p>{[vehicle.brand, vehicle.model].filter(Boolean).join(' ')}</p>
-                          <p className="text-xs text-slate-400">{vehicle.model_year ?? vehicle.manufacture_year ?? '—'} · {vehicle.type ?? '—'}</p>
+                          <p className="text-xs text-slate-500">{vehicle.model_year ?? vehicle.manufacture_year ?? '—'} · {vehicle.type ?? '—'}</p>
                         </Td>
                         <Td>{client?.name ?? '—'}</Td>
                         <Td><Badge variant={statusVariant(vehicle.status)}>{statusLabel(vehicle.status)}</Badge></Td>
@@ -1208,11 +1208,11 @@ export default function VeiculosPage() {
       </section>
 
       {/* Indicadores abaixo do cadastro (padrão de todas as telas) */}
-      <section className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="Veículos cadastrados" value={stats.total} hint="Base total de ativos" icon="🚗" />
-        <StatCard label="Em operação" value={stats.active} hint="Status ativo/aprovado" tone="success" icon="✅" />
-        <StatCard label="Sem rastreador" value={stats.withoutTracker} hint="Exigem ação técnica" tone="warning" icon="📍" />
-        <StatCard label="Retirados" value={stats.removed} hint="Veículos desinstalados" tone="danger" icon="↩️" />
+      <section className="mt-6 grid gap-5 md:grid-cols-2 xl:grid-cols-4">
+        <StatCard label="Veículos cadastrados" value={stats.total} hint="Base total de ativos" icon={<Car className="h-5 w-5" />} />
+        <StatCard label="Em operação" value={stats.active} hint="Status ativo/aprovado" tone="success" icon={<CheckCircle2 className="h-5 w-5" />} />
+        <StatCard label="Sem rastreador" value={stats.withoutTracker} hint="Exigem ação técnica" tone="warning" icon={<MapPin className="h-5 w-5" />} />
+        <StatCard label="Retirados" value={stats.removed} hint="Veículos desinstalados" tone="danger" icon={<Undo2 className="h-5 w-5" />} />
       </section>
 
       {/* Modal de detalhes */}
@@ -1251,7 +1251,7 @@ export default function VeiculosPage() {
                   ['Endereço', [selectedVehicle.address_line, selectedVehicle.address_number, selectedVehicle.city, selectedVehicle.state].filter(Boolean).join(', ') || '—'],
                 ].map(([label, value]) => (
                   <div key={label} className="rounded-xl border border-slate-100 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/50">
-                    <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">{label}</p>
+                    <p className="text-2xs font-semibold uppercase tracking-widest text-slate-500">{label}</p>
                     <p className="mt-1 text-sm text-slate-800 dark:text-slate-200">{value}</p>
                   </div>
                 ))}
@@ -1314,7 +1314,7 @@ export default function VeiculosPage() {
                         <div className="flex flex-wrap items-start justify-between gap-2">
                           <div>
                             <p className="text-sm font-medium text-slate-900 dark:text-white">{doc.file_name}</p>
-                            <p className="text-xs text-slate-400">{doc.category}{doc.review_notes ? ` · ${doc.review_notes}` : ''}</p>
+                            <p className="text-xs text-slate-500">{doc.category}{doc.review_notes ? ` · ${doc.review_notes}` : ''}</p>
                           </div>
                           <Badge variant={statusVariant(doc.review_status ?? 'enviado')}>{statusLabel(doc.review_status ?? 'enviado')}</Badge>
                         </div>
@@ -1399,7 +1399,7 @@ export default function VeiculosPage() {
                         {t.active_plan_name ? (
                           <span className="font-medium text-slate-700 dark:text-slate-300">{t.active_plan_name}</span>
                         ) : (
-                          <span className="text-slate-400">Sem plano</span>
+                          <span className="text-slate-500">Sem plano</span>
                         )}
                       </Td>
                       <Td className="text-sm">{[t.brand, t.model].filter(Boolean).join(' ') || '—'}</Td>
@@ -1472,7 +1472,7 @@ export default function VeiculosPage() {
         size="lg"
       >
         {vehicleBillings.length === 0 ? (
-          <p className="py-8 text-center text-sm text-slate-400">Nenhuma cobrança encontrada para este veículo.</p>
+          <p className="py-8 text-center text-sm text-slate-500">Nenhuma cobrança encontrada para este veículo.</p>
         ) : (
           <Table>
             <TableHead>
@@ -1506,7 +1506,7 @@ export default function VeiculosPage() {
         size="lg"
       >
         {vehicleOrders.length === 0 ? (
-          <p className="py-8 text-center text-sm text-slate-400">Nenhuma ordem de serviço encontrada para este veículo.</p>
+          <p className="py-8 text-center text-sm text-slate-500">Nenhuma ordem de serviço encontrada para este veículo.</p>
         ) : (
           <Table>
             <TableHead>
@@ -1531,7 +1531,7 @@ export default function VeiculosPage() {
 
       <Modal open={modalOpen} onClose={() => { setModalOpen(false); resetForm(); setModalError(''); }} title={isEditing ? 'Editar veículo' : 'Novo veículo'} description="Mantenha o cadastro técnico e documental do veículo em um fluxo de preenchimento mais limpo." size="2xl">
         <form className="space-y-6" onSubmit={submitVehicle}>
-          {modalError && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>}
+          {modalError && <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{modalError}</p>}
           <div className="grid gap-4 md:grid-cols-3">
             <ClientAutocomplete
               clients={clients}
@@ -1570,7 +1570,7 @@ export default function VeiculosPage() {
               </div>
               {lookingUpCep ? <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">Buscando endereço...</p> : null}
             </div>
-            <input className="md:col-span-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-brand-500 dark:border-slate-700 dark:bg-slate-950/70 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-cyan-400" placeholder="Logradouro" value={form.address_line} onChange={(e) => setForm((prev) => ({ ...prev, address_line: e.target.value }))} />
+            <input className="md:col-span-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-500 focus:border-brand-500 dark:border-slate-700 dark:bg-slate-950/70 dark:text-white dark:placeholder:text-slate-400 dark:focus:border-cyan-400" placeholder="Logradouro" value={form.address_line} onChange={(e) => setForm((prev) => ({ ...prev, address_line: e.target.value }))} />
             <input className={fieldClass} placeholder="Número" value={form.address_number} onChange={(e) => setForm((prev) => ({ ...prev, address_number: e.target.value }))} />
             <input className={fieldClass} placeholder="Complemento" value={form.address_complement} onChange={(e) => setForm((prev) => ({ ...prev, address_complement: e.target.value }))} />
             <input className={fieldClass} placeholder="Bairro" value={form.neighborhood} onChange={(e) => setForm((prev) => ({ ...prev, neighborhood: e.target.value }))} />
@@ -1586,7 +1586,7 @@ export default function VeiculosPage() {
             </div>
           </div>
           <div className="flex justify-end gap-3">
-            <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-600 dark:border-slate-700 dark:text-slate-200 dark:hover:border-cyan-400 dark:hover:text-cyan-300" onClick={() => { setModalOpen(false); resetForm(); }}>Cancelar</button>
+            <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-700 dark:border-slate-700 dark:text-slate-200 dark:hover:border-cyan-400 dark:hover:text-cyan-300" onClick={() => { setModalOpen(false); resetForm(); }}>Cancelar</button>
             <Button type="submit" disabled={!canEdit || saving}>{saving ? 'Salvando...' : isEditing ? 'Atualizar veículo' : 'Cadastrar veículo'}</Button>
           </div>
         </form>
@@ -1609,14 +1609,14 @@ export default function VeiculosPage() {
 
       <Modal open={uninstallOpen} onClose={() => { setUninstallOpen(false); setModalError(''); setUninstallFee(''); setUninstallServiceProductId(''); }} title="Registrar desinstalação" description="Registre a retirada do rastreador. A taxa de desinstalação (se houver) será incluída no próximo fechamento." size="lg">
         <div className="space-y-5">
-          {modalError && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>}
+          {modalError && <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{modalError}</p>}
           <div className="grid gap-4 md:grid-cols-2">
             <label className="block">
               <span className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-200">Data da desinstalação</span>
               <input type="date" className={`${fieldClass} w-full`} value={uninstallDate} onChange={(e) => setUninstallDate(e.target.value)} />
             </label>
             <label className="block">
-              <span className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-200">Valor a cobrar (R$) <span className="font-normal text-slate-400">opcional</span></span>
+              <span className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-200">Valor a cobrar (R$) <span className="font-normal text-slate-500">opcional</span></span>
               <input
                 type="number"
                 min="0"
@@ -1628,7 +1628,7 @@ export default function VeiculosPage() {
               />
             </label>
             <label className="block md:col-span-2">
-              <span className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-200">Serviço de desinstalação <span className="font-normal text-slate-400">opcional</span></span>
+              <span className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-200">Serviço de desinstalação <span className="font-normal text-slate-500">opcional</span></span>
               <select
                 className={`${fieldClass} w-full`}
                 value={uninstallServiceProductId}
@@ -1653,7 +1653,7 @@ export default function VeiculosPage() {
             )}
           </div>
           <div className="flex justify-end gap-3">
-            <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-600 dark:border-slate-700 dark:text-slate-200 dark:hover:border-cyan-400 dark:hover:text-cyan-300" onClick={() => { setUninstallOpen(false); setUninstallFee(''); }}>Cancelar</button>
+            <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-700 dark:border-slate-700 dark:text-slate-200 dark:hover:border-cyan-400 dark:hover:text-cyan-300" onClick={() => { setUninstallOpen(false); setUninstallFee(''); }}>Cancelar</button>
             <Button type="button" onClick={confirmUninstall}>Confirmar desinstalação</Button>
           </div>
         </div>

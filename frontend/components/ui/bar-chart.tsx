@@ -41,14 +41,14 @@ export function BarChart({
     return (
       <div className="flex flex-col items-center justify-center gap-2 py-8 text-center" style={{ minHeight: height }}>
         <BarChart2 className="h-8 w-8 text-slate-300 dark:text-slate-600" />
-        <p className="text-sm font-medium text-slate-400 dark:text-slate-500">
+        <p className="text-sm font-medium text-slate-500 dark:text-slate-400">
           {emptyMessage ?? 'Nenhum dado no período'}
         </p>
         {onSelectPeriod && (
           <button
             type="button"
             onClick={onSelectPeriod}
-            className="mt-1 text-xs font-medium text-brand-600 hover:underline dark:text-brand-400"
+            className="mt-1 text-xs font-medium text-brand-700 hover:underline dark:text-brand-400"
           >
             Selecionar outro período
           </button>

@@ -13,8 +13,8 @@ const variants: Record<Variant, string> = {
     'dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 ' +
     'disabled:opacity-60',
   danger:
-    'bg-red-600 text-white hover:bg-red-700 ' +
-    'dark:bg-red-700 dark:hover:bg-red-600 ' +
+    'bg-rose-600 text-white hover:bg-rose-700 ' +
+    'dark:bg-rose-700 dark:hover:bg-rose-600 ' +
     'disabled:opacity-60',
   ghost:
     'text-slate-600 hover:bg-slate-100 hover:text-slate-900 ' +

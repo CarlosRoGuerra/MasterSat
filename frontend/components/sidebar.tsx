@@ -21,6 +21,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Settings,
+  X,
 } from 'lucide-react';
 
 import { logout } from '@/lib/api';
@@ -82,10 +83,20 @@ function NavTooltip({ label, children }: { label: string; children: React.ReactN
   );
 }
 
-export function Sidebar() {
+export function Sidebar({
+  mobileOpen = false,
+  onMobileClose,
+}: {
+  mobileOpen?: boolean;
+  onMobileClose?: () => void;
+}) {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
   const { data: user } = useCurrentUser();
+  // O modo "compacto" (só ícone + tooltip no hover) é um recurso de desktop —
+  // no drawer mobile o tooltip não funciona no toque, então força expandido
+  // sempre que o drawer está aberto, mesmo com collapsed=true salvo do desktop.
+  const showCompact = collapsed && !mobileOpen;
 
   // Enquanto o role ainda não chegou (ou não achamos restrição para a rota),
   // o item fica visível — quem realmente barra é o backend (require_roles);
@@ -115,23 +126,44 @@ export function Sidebar() {
   }
 
   return (
-    <aside
-      className={clsx(
-        'hidden h-full shrink-0 flex-col border-r border-slate-100 bg-white lg:flex dark:border-slate-800 dark:bg-slate-950',
-        'transition-[width] duration-200 ease-in-out',
-        collapsed ? 'w-[52px]' : 'w-[240px]',
+    <>
+      {/* Backdrop — mobile only, closes the drawer on tap outside */}
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-slate-950/40 backdrop-blur-sm lg:hidden"
+          onClick={onMobileClose}
+          aria-hidden="true"
+        />
       )}
-    >
+
+      <aside
+        className={clsx(
+          'fixed inset-y-0 left-0 z-50 flex w-[240px] shrink-0 flex-col border-r border-slate-100 bg-white dark:border-slate-800 dark:bg-slate-950',
+          'transition-transform duration-200 ease-in-out',
+          mobileOpen ? 'translate-x-0' : '-translate-x-full',
+          'lg:static lg:z-auto lg:flex lg:translate-x-0 lg:transition-[width]',
+          collapsed ? 'lg:w-[52px]' : 'lg:w-[240px]',
+        )}
+      >
       {/* Brand */}
       <div className={clsx(
         'flex h-14 items-center border-b border-slate-100 dark:border-slate-800',
-        collapsed ? 'justify-center px-0' : 'px-4',
+        collapsed ? 'px-4 lg:justify-center lg:px-0' : 'px-4',
       )}>
         {collapsed ? (
-          /* Icon mark — yellow square with M when collapsed */
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-500">
-            <span className="text-sm font-black leading-none text-black">M</span>
-          </div>
+          <>
+            {/* Full logo on mobile even when "collapsed" (desktop-only concept) */}
+            <img
+              src="/logo.png"
+              alt="MasterSat"
+              className="h-9 w-auto object-contain lg:hidden"
+              draggable={false}
+            />
+            {/* Icon mark — yellow square with M when collapsed on desktop */}
+            <div className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-500 lg:flex">
+              <span className="text-sm font-black leading-none text-black">M</span>
+            </div>
+          </>
         ) : (
           /* Full logo image — place the logo file at frontend/public/logo.png */
           <img
@@ -141,9 +173,17 @@ export function Sidebar() {
             draggable={false}
           />
         )}
-        {!collapsed && (
-          <ThemeToggle className="ml-auto shrink-0" />
-        )}
+        <div className="ml-auto flex shrink-0 items-center gap-1">
+          {!showCompact && <ThemeToggle />}
+          <button
+            type="button"
+            onClick={onMobileClose}
+            aria-label="Fechar menu"
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-200 lg:hidden"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
       </div>
 
       {/* Nav */}
@@ -152,15 +192,15 @@ export function Sidebar() {
           {visibleGroups.map((group, gi) => (
             <div key={group.label}>
               {/* Group separator + label (expanded only) */}
-              {gi > 0 && !collapsed && (
+              {gi > 0 && !showCompact && (
                 <div className="mb-2 mt-1 border-t border-slate-100 dark:border-slate-800" />
               )}
-              {!collapsed && (
-                <p className="mb-1 px-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400 dark:text-slate-600">
+              {!showCompact && (
+                <p className="mb-1 px-3 text-3xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-600">
                   {group.label}
                 </p>
               )}
-              {gi > 0 && collapsed && (
+              {gi > 0 && showCompact && (
                 <div className="mb-1 border-t border-slate-100 dark:border-slate-800" />
               )}
 
@@ -170,28 +210,29 @@ export function Sidebar() {
                   const linkContent = (
                     <Link
                       href={href}
+                      onClick={onMobileClose}
                       className={clsx(
                         'flex items-center rounded-xl text-sm font-medium transition-colors',
-                        collapsed
+                        showCompact
                           ? 'h-9 w-9 justify-center'
                           : 'gap-3 pl-3 pr-3 py-2',
                         active
                           ? 'bg-brand-500/10 text-brand-700 dark:bg-brand-500/20 dark:text-brand-300'
                           : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/70 dark:hover:text-white',
                       )}
-                      style={active && !collapsed ? { borderLeft: '3px solid #F0A500', paddingLeft: '10px' } : undefined}
+                      style={active && !showCompact ? { borderLeft: '3px solid #F0A500', paddingLeft: '10px' } : undefined}
                     >
                       <Icon
                         className={clsx(
                           'h-4 w-4 shrink-0',
-                          active ? 'text-brand-600 dark:text-brand-400' : 'text-slate-400 dark:text-slate-500',
+                          active ? 'text-brand-700 dark:text-brand-400' : 'text-slate-500 dark:text-slate-400',
                         )}
                       />
-                      {!collapsed && <span className={active ? 'font-semibold' : ''}>{label}</span>}
+                      {!showCompact && <span className={active ? 'font-semibold' : ''}>{label}</span>}
                     </Link>
                   );
 
-                  return collapsed ? (
+                  return showCompact ? (
                     <NavTooltip key={href} label={label}>
                       {linkContent}
                     </NavTooltip>
@@ -207,11 +248,11 @@ export function Sidebar() {
 
       {/* Footer */}
       <div className="border-t border-slate-100 px-2 pb-2 pt-3 dark:border-slate-800">
-        {collapsed ? (
+        {showCompact ? (
           <NavTooltip label="Sair">
             <button
               onClick={() => { logout('/login/admin'); }}
-              className="flex h-9 w-9 items-center justify-center rounded-xl text-slate-500 transition-colors hover:bg-red-50 hover:text-red-600 dark:text-slate-500 dark:hover:bg-red-950/40 dark:hover:text-red-400"
+              className="flex h-9 w-9 items-center justify-center rounded-xl text-slate-500 transition-colors hover:bg-rose-50 hover:text-rose-600 dark:text-slate-400 dark:hover:bg-rose-950/40 dark:hover:text-rose-400"
             >
               <LogOut className="h-4 w-4 shrink-0" />
             </button>
@@ -219,18 +260,18 @@ export function Sidebar() {
         ) : (
           <button
             onClick={() => { logout('/login/admin'); }}
-            className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium text-slate-500 transition-colors hover:bg-red-50 hover:text-red-600 dark:text-slate-500 dark:hover:bg-red-950/40 dark:hover:text-red-400"
+            className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium text-slate-500 transition-colors hover:bg-rose-50 hover:text-rose-600 dark:text-slate-400 dark:hover:bg-rose-950/40 dark:hover:text-rose-400"
           >
             <LogOut className="h-4 w-4 shrink-0" />
             Sair
           </button>
         )}
 
-        {/* Collapse toggle */}
+        {/* Collapse toggle — recurso de desktop, não faz sentido no drawer mobile */}
         <button
           onClick={toggle}
           className={clsx(
-            'mt-1 flex items-center rounded-xl text-xs font-medium text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-400',
+            'mt-1 hidden items-center rounded-xl text-xs font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-400 lg:flex',
             collapsed ? 'h-9 w-9 justify-center' : 'w-full gap-2 px-3 py-2',
           )}
           title={collapsed ? 'Expandir menu' : 'Recolher menu'}
@@ -245,6 +286,7 @@ export function Sidebar() {
           )}
         </button>
       </div>
-    </aside>
+      </aside>
+    </>
   );
 }

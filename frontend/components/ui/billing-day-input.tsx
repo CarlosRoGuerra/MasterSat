@@ -43,8 +43,8 @@ export function BillingDayInput({
       onChange={(e) => onChange(e.target.value.replace(/\D/g, '').slice(0, 2))}
       className={clsx(
         'rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition',
-        'placeholder:text-slate-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20',
-        'dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-500',
+        'placeholder:text-slate-500 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20',
+        'dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-400',
         className,
       )}
     />

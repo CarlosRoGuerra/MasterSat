@@ -27,12 +27,9 @@ function comLinks(message: string) {
 
 export function ErrorBanner({ message }: { message: string }) {
   return (
-    <div
-      className="flex items-start gap-3 rounded-md px-4 py-3 text-sm"
-      style={{ background: '#FCEBEB', borderLeft: '3px solid #E24B4A' }}
-    >
-      <AlertTriangle className="mt-0.5 h-[18px] w-[18px] shrink-0" style={{ color: '#A32D2D' }} />
-      <p style={{ color: '#A32D2D' }}>{comLinks(message)}</p>
+    <div className="flex items-start gap-3 rounded-xl border-l-[3px] border-rose-500 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-500 dark:bg-rose-950/30 dark:text-rose-400">
+      <AlertTriangle className="mt-0.5 h-[18px] w-[18px] shrink-0" />
+      <p>{comLinks(message)}</p>
     </div>
   );
 }

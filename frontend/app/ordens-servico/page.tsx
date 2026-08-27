@@ -1,7 +1,7 @@
 'use client';
 
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, ClipboardList, Clock, Wrench, CheckCircle2 } from 'lucide-react';
 
 import { ClientAutocomplete } from '@/components/ui/client-autocomplete';
 import { PageShell } from '@/components/page-shell';
@@ -95,7 +95,7 @@ const initialForm: OrderFormState = {
   checklistItems: [''],
 };
 
-const fieldClass = 'w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-brand-400';
+const fieldClass = 'w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-500 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-400 dark:focus:border-brand-400';
 const areaClass = `${fieldClass} min-h-[88px] resize-y`;
 
 const orderTypeOptions: { value: OrderType; label: string }[] = [
@@ -193,7 +193,7 @@ function OSTable({
               <Td><span className="text-sm">{orderTypeOptions.find((x) => x.value === order.type)?.label ?? order.type}</span></Td>
               <Td>
                 <p className="text-sm">{order.client_name ?? '—'}</p>
-                <p className="text-xs text-slate-400">{order.vehicle_plate ?? ''}</p>
+                <p className="text-xs text-slate-500">{order.vehicle_plate ?? ''}</p>
               </Td>
               <Td className="text-sm">{order.technician_name ?? '—'}</Td>
               <Td><Badge variant={statusVariant(order.status)}>{statusOptions.find((x) => x.value === order.status)?.label ?? order.status}</Badge></Td>
@@ -490,7 +490,7 @@ export default function ServiceOrdersPage() {
     <PageShell title="Ordens de Serviço" description="Módulo operacional com abertura via modal, checklist por tipo, histórico por etapas e documentos integrados ao padrão do sistema.">
       {(guardError || error || feedback) && (
         <div className="mb-4 space-y-3">
-          {(guardError || error) ? <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{guardError || error}</p> : null}
+          {(guardError || error) ? <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{guardError || error}</p> : null}
           {feedback ? <p className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{feedback}</p> : null}
         </div>
       )}
@@ -556,11 +556,11 @@ export default function ServiceOrdersPage() {
       </section>
 
       {/* Indicadores abaixo do cadastro (padrão de todas as telas) */}
-      <section className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="Ordens registradas" value={stats.total} hint="Base operacional total" icon="🧾" />
-        <StatCard label="Abertas" value={stats.open} hint="Pendentes de início" tone="warning" icon="📌" />
-        <StatCard label="Em andamento" value={stats.inProgress} hint="Execução em campo" tone="brand" icon="🛠️" />
-        <StatCard label="Concluídas" value={stats.completed} hint="Prontas para auditoria" tone="success" icon="✅" />
+      <section className="mt-6 grid gap-5 md:grid-cols-2 xl:grid-cols-4">
+        <StatCard label="Ordens registradas" value={stats.total} hint="Base operacional total" icon={<ClipboardList className="h-5 w-5" />} />
+        <StatCard label="Abertas" value={stats.open} hint="Pendentes de início" tone="warning" icon={<Clock className="h-5 w-5" />} />
+        <StatCard label="Em andamento" value={stats.inProgress} hint="Execução em campo" tone="brand" icon={<Wrench className="h-5 w-5" />} />
+        <StatCard label="Concluídas" value={stats.completed} hint="Prontas para auditoria" tone="success" icon={<CheckCircle2 className="h-5 w-5" />} />
       </section>
 
       {/* Modal de detalhes */}
@@ -597,22 +597,22 @@ export default function ServiceOrdersPage() {
                     ['Executado', formatDateTimeLabel(selectedOrder.executed_at)],
                   ].map(([label, value]) => (
                     <div key={String(label)} className="rounded-xl border border-slate-100 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/50">
-                      <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">{label}</p>
+                      <p className="text-2xs font-semibold uppercase tracking-widest text-slate-500">{label}</p>
                       <div className="mt-1 text-sm text-slate-800 dark:text-slate-200">{value}</div>
                     </div>
                   ))}
                 </div>
                 <div className="rounded-xl border border-slate-100 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/50">
-                  <p className="mb-2 text-[11px] font-semibold uppercase tracking-widest text-slate-400">Checklist</p>
+                  <p className="mb-2 text-2xs font-semibold uppercase tracking-widest text-slate-500">Checklist</p>
                   <ul className="space-y-1 text-sm text-slate-600 dark:text-slate-300">
                     {(selectedOrder.checklist?.items ?? []).map((item, i) => <li key={i} className="flex gap-2"><span className="text-brand-500">✓</span>{item}</li>)}
-                    {!(selectedOrder.checklist?.items?.length) && <li className="text-slate-400">Sem checklist configurado.</li>}
+                    {!(selectedOrder.checklist?.items?.length) && <li className="text-slate-500">Sem checklist configurado.</li>}
                   </ul>
                   {selectedOrder.observations && <p className="mt-3 text-sm text-slate-500">{selectedOrder.observations}</p>}
                 </div>
                 {canEdit && (
                   <div>
-                    <p className="mb-2 text-[11px] font-semibold uppercase tracking-widest text-slate-400">Alterar status</p>
+                    <p className="mb-2 text-2xs font-semibold uppercase tracking-widest text-slate-500">Alterar status</p>
                     <div className="flex flex-wrap gap-2">
                       {statusOptions.map((opt) => (
                         <button key={opt.value} type="button" onClick={() => updateStatus(opt.value)}
@@ -649,7 +649,7 @@ export default function ServiceOrdersPage() {
                         <div className="flex flex-wrap items-start justify-between gap-2">
                           <div>
                             <p className="text-sm font-medium text-slate-900 dark:text-white">{doc.file_name}</p>
-                            <p className="text-xs text-slate-400">{doc.category}</p>
+                            <p className="text-xs text-slate-500">{doc.category}</p>
                           </div>
                           <Badge variant={statusVariant(doc.review_status)}>{statusLabel(doc.review_status)}</Badge>
                         </div>
@@ -688,7 +688,7 @@ export default function ServiceOrdersPage() {
                             {log.previous_status && <><Badge variant={statusVariant(log.previous_status)}>{statusOptions.find((x) => x.value === log.previous_status)?.label}</Badge>{' → '}</>}
                             <Badge variant={statusVariant(log.new_status)}>{statusOptions.find((x) => x.value === log.new_status)?.label}</Badge>
                           </p>
-                          <time className="mt-0.5 block text-[10px] text-slate-400">{formatDateTimeLabel(log.created_at)} · {log.changed_by_name ?? 'Sistema'}</time>
+                          <time className="mt-0.5 block text-3xs text-slate-500">{formatDateTimeLabel(log.created_at)} · {log.changed_by_name ?? 'Sistema'}</time>
                           {log.notes && <p className="mt-1 text-xs text-slate-500">{log.notes}</p>}
                         </div>
                       </li>
@@ -704,7 +704,7 @@ export default function ServiceOrdersPage() {
       <Modal open={modalOpen} onClose={() => { setModalOpen(false); resetForm(); setModalError(''); }} title={isEditing ? 'Editar ordem de serviço' : 'Nova ordem de serviço'} description="Abra a ordem via modal, selecione o tipo de atendimento e configure o checklist conforme o serviço.">
         <form className="space-y-6" onSubmit={handleSubmit}>
           {modalError && (
-            <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>
+            <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{modalError}</p>
           )}
           <div className="grid gap-4 md:grid-cols-2">
             <select className={fieldClass} value={form.type} onChange={(e) => applyTemplate(e.target.value as OrderType)}>
@@ -742,7 +742,7 @@ export default function ServiceOrdersPage() {
                 <p className="text-sm font-semibold text-slate-900 dark:text-white">Checklist por tipo de serviço</p>
                 <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Use o template do tipo selecionado e ajuste os itens conforme a operação.</p>
               </div>
-              <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-600 dark:border-slate-700 dark:text-slate-200 dark:hover:border-cyan-400 dark:hover:text-cyan-300" onClick={() => setForm((prev) => ({ ...prev, checklistItems: [...prev.checklistItems, ''] }))}>Adicionar item</button>
+              <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-700 dark:border-slate-700 dark:text-slate-200 dark:hover:border-cyan-400 dark:hover:text-cyan-300" onClick={() => setForm((prev) => ({ ...prev, checklistItems: [...prev.checklistItems, ''] }))}>Adicionar item</button>
             </div>
             <div className="mt-4 space-y-3">
               {/* key só pelo índice: com o texto na key, cada letra digitada
@@ -759,7 +759,7 @@ export default function ServiceOrdersPage() {
           <textarea className={areaClass} placeholder="Observações da ordem de serviço" value={form.observations} onChange={(e) => setForm((prev) => ({ ...prev, observations: e.target.value }))} />
 
           <div className="flex justify-end gap-3">
-            <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-600 dark:border-slate-700 dark:text-slate-200 dark:hover:border-cyan-400 dark:hover:text-cyan-300" onClick={() => { setModalOpen(false); resetForm(); }}>Cancelar</button>
+            <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-700 dark:border-slate-700 dark:text-slate-200 dark:hover:border-cyan-400 dark:hover:text-cyan-300" onClick={() => { setModalOpen(false); resetForm(); }}>Cancelar</button>
             <Button type="submit" disabled={!canEdit || saving}>{saving ? 'Salvando...' : isEditing ? 'Atualizar ordem' : 'Criar ordem de serviço'}</Button>
           </div>
         </form>

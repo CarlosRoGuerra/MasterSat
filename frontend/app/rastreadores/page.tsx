@@ -1,7 +1,7 @@
 'use client';
 
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, Radio, CheckCircle2, Package, Wrench } from 'lucide-react';
 
 import { PageShell } from '@/components/page-shell';
 import { Card } from '@/components/ui/card';
@@ -117,7 +117,7 @@ const initialForm: TrackerFormState = {
   link_billing_cycles: '12',
 };
 
-const fieldClass = 'w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-brand-400';
+const fieldClass = 'w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-500 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-400 dark:focus:border-brand-400';
 const areaClass = `${fieldClass} min-h-[88px] resize-y`;
 const statusOptions: TrackerStatus[] = ['em_estoque', 'instalado', 'em_manutencao', 'extraviado', 'descartado'];
 
@@ -125,10 +125,21 @@ function parseError(error: unknown) {
   return error instanceof Error ? error.message : 'Ocorreu um erro inesperado.';
 }
 
-function integrationVariant(status?: string | null): 'success' | 'danger' | 'default' {
+function integrationVariant(status?: string | null): 'success' | 'danger' | 'warning' | 'default' {
   if (status === 'sincronizado') return 'success';
   if (status === 'erro') return 'danger';
+  if (status === 'pendente') return 'warning';
   return 'default';
+}
+
+function integrationLabel(status?: string | null): string {
+  const map: Record<string, string> = {
+    sincronizado: 'Sincronizado',
+    erro: 'Erro de sync',
+    pendente: 'Sync pendente',
+    sem_vinculo_externo: 'Sem vínculo externo',
+  };
+  return (status && map[status]) || 'Sem sync';
 }
 
 function friendlyAction(value: string) {
@@ -185,17 +196,17 @@ function RastreadoresTableContent({
               <Td className="font-mono text-sm">{tracker.imei}</Td>
               <Td>
                 <p>{[tracker.brand, tracker.model].filter(Boolean).join(' ') || '—'}</p>
-                {tracker.active_plan_name && <p className="text-xs text-brand-600 dark:text-brand-400">{tracker.active_plan_name}</p>}
+                {tracker.active_plan_name && <p className="text-xs text-brand-700 dark:text-brand-400">{tracker.active_plan_name}</p>}
               </Td>
               <Td>
                 <p className="text-sm">{tracker.client_name ?? '—'}</p>
-                <p className="text-xs text-slate-400">{tracker.vehicle_plate ? `Placa ${tracker.vehicle_plate}` : ''}</p>
+                <p className="text-xs text-slate-500">{tracker.vehicle_plate ? `Placa ${tracker.vehicle_plate}` : ''}</p>
               </Td>
               <Td>
                 <div className="flex flex-wrap gap-1">
                   <Badge variant={statusVariant(tracker.status)}>{statusLabel(tracker.status)}</Badge>
                   {tracker.integration_status && (
-                    <Badge variant={integrationVariant(tracker.integration_status)}>{tracker.integration_status}</Badge>
+                    <Badge variant={integrationVariant(tracker.integration_status)}>{integrationLabel(tracker.integration_status)}</Badge>
                   )}
                 </div>
               </Td>
@@ -547,7 +558,7 @@ export default function RastreadoresPage() {
     <PageShell title="Rastreadores" description="Base técnica dos dispositivos com cadastro em modal, busca por cliente e visão consolidada do vínculo operacional.">
       {(guardError || error || feedback) && (
         <div className="mb-4 space-y-3">
-          {(guardError || error) ? <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{guardError || error}</p> : null}
+          {(guardError || error) ? <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{guardError || error}</p> : null}
           {feedback ? <p className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{feedback}</p> : null}
         </div>
       )}
@@ -598,11 +609,11 @@ export default function RastreadoresPage() {
       </section>
 
       {/* Indicadores abaixo do cadastro (padrão de todas as telas) */}
-      <section className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="Rastreadores cadastrados" value={stats.total} hint="Base técnica disponível" icon="📡" />
-        <StatCard label="Instalados" value={stats.installed} hint="Equipamentos em produção" tone="success" icon="✅" />
-        <StatCard label="Em estoque" value={stats.stock} hint="Prontos para reutilização" tone="brand" icon="📦" />
-        <StatCard label="Em manutenção" value={stats.maintenance} hint="Exigem acompanhamento" tone="warning" icon="🛠️" />
+      <section className="mt-6 grid gap-5 md:grid-cols-2 xl:grid-cols-4">
+        <StatCard label="Rastreadores cadastrados" value={stats.total} hint="Base técnica disponível" icon={<Radio className="h-5 w-5" />} />
+        <StatCard label="Instalados" value={stats.installed} hint="Equipamentos em produção" tone="success" icon={<CheckCircle2 className="h-5 w-5" />} />
+        <StatCard label="Em estoque" value={stats.stock} hint="Prontos para reutilização" tone="brand" icon={<Package className="h-5 w-5" />} />
+        <StatCard label="Em manutenção" value={stats.maintenance} hint="Exigem acompanhamento" tone="warning" icon={<Wrench className="h-5 w-5" />} />
       </section>
 
       {/* Modal de detalhes */}
@@ -636,7 +647,7 @@ export default function RastreadoresPage() {
               <div className="grid gap-3 sm:grid-cols-2">
                 {[
                   ['Status', <Badge key="s" variant={statusVariant(selectedTracker.status)}>{statusLabel(selectedTracker.status)}</Badge>],
-                  ['Integração', <Badge key="i" variant={integrationVariant(selectedTracker.integration_status)}>{selectedTracker.integration_status ?? 'sem sync'}</Badge>],
+                  ['Integração', <Badge key="i" variant={integrationVariant(selectedTracker.integration_status)}>{integrationLabel(selectedTracker.integration_status)}</Badge>],
                   ['Marca / Modelo', [selectedTracker.brand, selectedTracker.model].filter(Boolean).join(' ') || '—'],
                   ['Fabricante', selectedTracker.external_manufacturer_label ?? selectedTracker.brand ?? '—'],
                   ['Cliente', selectedTracker.client_name ?? '—'],
@@ -649,23 +660,23 @@ export default function RastreadoresPage() {
                   ['Aquisição', selectedTracker.acquisition_date ?? '—'],
                 ].map(([label, value]) => (
                   <div key={String(label)} className="rounded-xl border border-slate-100 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/50">
-                    <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">{label}</p>
+                    <p className="text-2xs font-semibold uppercase tracking-widest text-slate-500">{label}</p>
                     <div className="mt-1 text-sm text-slate-800 dark:text-slate-200">{value}</div>
                   </div>
                 ))}
                 {selectedTracker.notes && (
                   <div className="col-span-2 rounded-xl border border-slate-100 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/50">
-                    <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">Observações</p>
+                    <p className="text-2xs font-semibold uppercase tracking-widest text-slate-500">Observações</p>
                     <p className="mt-1 text-sm text-slate-700 dark:text-slate-300">{selectedTracker.notes}</p>
                   </div>
                 )}
                 {vehicleTrackers.length > 0 && (
                   <div className="col-span-2 space-y-1.5">
-                    <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">Outros rastreadores neste veículo</p>
+                    <p className="text-2xs font-semibold uppercase tracking-widest text-slate-500">Outros rastreadores neste veículo</p>
                     {vehicleTrackers.map((t) => (
                       <div key={t.id} className="flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 dark:border-slate-800 dark:bg-slate-900/50">
                         <span className="font-mono text-sm">{t.imei}</span>
-                        <span className="text-xs text-slate-400">{t.active_plan_name ?? 'sem plano'}</span>
+                        <span className="text-xs text-slate-500">{t.active_plan_name ?? 'sem plano'}</span>
                       </div>
                     ))}
                   </div>
@@ -689,7 +700,7 @@ export default function RastreadoresPage() {
                             <p className="text-xs font-semibold text-slate-900 dark:text-white">{friendlyAction(entry.action)}</p>
                             {entry.new_status && <Badge variant={statusVariant(entry.new_status)}>{statusLabel(entry.new_status)}</Badge>}
                           </div>
-                          <time className="mt-0.5 block text-[10px] text-slate-400">{entry.created_at ? new Date(entry.created_at).toLocaleString('pt-BR') : entry.event_date ?? '—'}</time>
+                          <time className="mt-0.5 block text-3xs text-slate-500">{entry.created_at ? new Date(entry.created_at).toLocaleString('pt-BR') : entry.event_date ?? '—'}</time>
                           {entry.notes && <p className="mt-1 text-xs text-slate-500">{entry.notes}</p>}
                         </div>
                       </li>
@@ -730,7 +741,7 @@ export default function RastreadoresPage() {
       >
         <div className="space-y-5">
           {loteError && (
-            <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{loteError}</p>
+            <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{loteError}</p>
           )}
 
           <div>
@@ -744,7 +755,7 @@ export default function RastreadoresPage() {
               value={loteImeis}
               onChange={(e) => { setLoteImeis(e.target.value); setLoteResultado(null); }}
             />
-            <p className="mt-1 text-xs text-slate-400">
+            <p className="mt-1 text-xs text-slate-500">
               {imeisDaCaixa().length} número(s) na lista · aceita quebra de linha, vírgula, ponto e vírgula ou tabulação (colar da planilha funciona)
             </p>
           </div>
@@ -796,7 +807,7 @@ export default function RastreadoresPage() {
                 {loteResultado.ignorados > 0 && (
                   <span className="text-amber-600 dark:text-amber-400">{loteResultado.ignorados} ignorado(s)</span>
                 )}
-                <span className="text-slate-400">de {loteResultado.total_enviados} enviado(s)</span>
+                <span className="text-slate-500">de {loteResultado.total_enviados} enviado(s)</span>
               </div>
               <div className="max-h-56 overflow-y-auto">
                 {loteResultado.itens.filter((i) => i.situacao !== 'criado').length === 0 ? (
@@ -833,7 +844,7 @@ export default function RastreadoresPage() {
 
       <Modal open={modalOpen} onClose={() => { setModalOpen(false); resetForm(); setModalError(''); }} title={isEditing ? 'Editar rastreador' : 'Novo rastreador'} description="Cadastre o equipamento em um fluxo mais limpo, com foco no identificador técnico, vínculo e dados essenciais." size="xl">
         <form className="space-y-6" onSubmit={submitTracker}>
-          {modalError && <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>}
+          {modalError && <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{modalError}</p>}
           <div className="grid gap-4 md:grid-cols-2">
             <input className={fieldClass} placeholder="Número de série / ID" value={form.imei} onChange={(e) => setForm((prev) => ({ ...prev, imei: onlyDigits(e.target.value).slice(0, 20) }))} required />
             <select className={fieldClass} value={form.status} onChange={(e) => setForm((prev) => ({ ...prev, status: e.target.value as TrackerStatus }))}>{statusOptions.map((option) => <option key={option} value={option}>{option.replace(/_/g, ' ')}</option>)}</select>
@@ -938,7 +949,7 @@ export default function RastreadoresPage() {
               {manufacturerError && (
                 <div className="flex items-center gap-2">
                   <p className="text-xs text-rose-600 dark:text-rose-400">{manufacturerError}</p>
-                  <button type="button" onClick={() => token && loadBaseData(token)} className="text-xs font-semibold text-brand-600 underline dark:text-cyan-400">Recarregar</button>
+                  <button type="button" onClick={() => token && loadBaseData(token)} className="text-xs font-semibold text-brand-700 underline dark:text-cyan-400">Recarregar</button>
                 </div>
               )}
             </div>
@@ -952,7 +963,7 @@ export default function RastreadoresPage() {
           </div>
 
           <div className="flex justify-end gap-3">
-            <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-600 dark:border-slate-700 dark:text-slate-200 dark:hover:border-cyan-400 dark:hover:text-cyan-300" onClick={() => { setModalOpen(false); resetForm(); }}>Cancelar</button>
+            <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-700 dark:border-slate-700 dark:text-slate-200 dark:hover:border-cyan-400 dark:hover:text-cyan-300" onClick={() => { setModalOpen(false); resetForm(); }}>Cancelar</button>
             <Button type="submit" disabled={!canEdit || saving}>{saving ? 'Salvando...' : isEditing ? 'Atualizar rastreador' : 'Cadastrar rastreador'}</Button>
           </div>
         </form>

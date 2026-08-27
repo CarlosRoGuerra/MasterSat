@@ -51,7 +51,7 @@ function Tooltip({ month, x, y, chartWidth }: {
       className="pointer-events-none absolute z-50 rounded-xl border border-slate-200 bg-white px-3.5 py-3 shadow-elevated dark:border-slate-700 dark:bg-slate-900"
       style={{ top: y, left, minWidth: W }}
     >
-      <p className="mb-2 text-[11px] font-semibold uppercase tracking-widest text-slate-400">
+      <p className="mb-2 text-2xs font-semibold uppercase tracking-widest text-slate-500">
         {month.label}
       </p>
       {SERIES.map(s => (
@@ -116,7 +116,7 @@ export function RevenueChart({ data }: { data: RevenueMonth[] }) {
           <rect x="10" y="7" width="4" height="14" rx="1" />
           <rect x="17" y="3" width="4" height="18" rx="1" />
         </svg>
-        <p className="text-sm font-medium text-slate-400">Sem dados para o período</p>
+        <p className="text-sm font-medium text-slate-500">Sem dados para o período</p>
         <p className="text-xs text-slate-300 dark:text-slate-600">Selecione outro intervalo ou aguarde cobranças serem geradas</p>
       </div>
     );
@@ -127,7 +127,7 @@ export function RevenueChart({ data }: { data: RevenueMonth[] }) {
       {/* Legend */}
       <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1">
         {SERIES.map(s => (
-          <span key={s.key} className="flex items-center gap-1.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">
+          <span key={s.key} className="flex items-center gap-1.5 text-2xs font-medium text-slate-500 dark:text-slate-400">
             <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: s.color }} />
             {s.label}
           </span>
