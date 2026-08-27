@@ -560,11 +560,17 @@ def unify_billings(payload: BillingUnify, db: Session = Depends(get_db), _: obje
 
     total = sum(float(b.amount) for b in billings)
     refs = ', '.join(f'#{b.id}' for b in billings)
+    # Título vai pro boleto/recibo — o cliente vê isso, não os IDs internos.
+    # "#12, #13" não diz nada pra quem recebe; quantidade + período de
+    # referência é o que de fato identifica a negociação.
+    periodos = sorted({b.period_label for b in billings if b.period_label})
+    faixa = f'{periodos[0]} A {periodos[-1]}' if len(periodos) >= 2 else (periodos[0] if periodos else '')
+    titulo = f'NEGOCIAÇÃO — {len(billings)} PARCELA(S) EM ABERTO' + (f' (REF. {faixa})' if faixa else '')
     nova = Billing(
         client_id=billings[0].client_id,
         payer_client_id=next(iter(payer_ids)),
         billing_type='avulsa',
-        title=f'BOLETO ÚNICO — UNIFICAÇÃO ({refs})',
+        title=titulo,
         amount=payload.amount or total,
         due_date=payload.due_date,
         status=BillingStatus.PENDING,

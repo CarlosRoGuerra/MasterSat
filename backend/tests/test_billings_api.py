@@ -286,6 +286,17 @@ class TestUnificarBoletos:
             assert rr.json()["status"] == "cancelada"
             assert f'#{nova["id"]}' in (rr.json()["notes"] or "")
 
+    def test_titulo_referencia_quantidade_e_periodo_sem_expor_ids_internos(self, http, billing_pendente, billing_vencida):
+        r = http.post(f"{PREFIX}/unificar", json={
+            "billing_ids": [billing_pendente.id, billing_vencida.id],
+            "due_date": "2099-01-15",
+        })
+        assert r.status_code == 200
+        titulo = r.json()["title"]
+        assert "2 PARCELA" in titulo
+        assert f'#{billing_pendente.id}' not in titulo
+        assert f'#{billing_vencida.id}' not in titulo
+
     def test_valor_negociado_sobrepoe_a_soma(self, http, billing_pendente, billing_vencida):
         r = http.post(f"{PREFIX}/unificar", json={
             "billing_ids": [billing_pendente.id, billing_vencida.id],

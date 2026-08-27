@@ -669,8 +669,11 @@ export default function ClientesPage() {
 
   function openUnifyModal() {
     const sel = clientBillings.filter((b) => selectedBillingIds.includes(b.id));
-    const soma = sel.reduce((s, b) => s + b.amount, 0);
-    setUnifyForm({ due_date: '', amount: soma.toFixed(2), notes: '' });
+    // Ponto de partida da negociação é o valor JÁ atualizado com juros (o
+    // mesmo "Total com juros" mostrado na barra de seleção) — o operador
+    // ajusta a partir dele pra dar desconto ou arredondar, não da soma nominal.
+    const somaComJuros = sel.reduce((s, b) => s + (valorComJuros(b) ?? b.amount), 0);
+    setUnifyForm({ due_date: '', amount: somaComJuros.toFixed(2), notes: '' });
     setUnifyOpen(true);
   }
 
@@ -2464,7 +2467,7 @@ export default function ClientesPage() {
                 onChange={(e) => setUnifyForm((p) => ({ ...p, due_date: e.target.value }))}
               />
             </FormField>
-            <FormField label="Valor (R$)" hint="Pré-preenchido com a soma — ajuste se houve negociação">
+            <FormField label="Valor (R$)" hint="Pré-preenchido com o total atualizado (com juros) — ajuste para dar desconto ou arredondar">
               <Input
                 type="number"
                 step="0.01"
