@@ -45,6 +45,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.crypto import decrypt_token, encrypt_token, mask_token
+from app.db import session as db_session
 from app.models.ailos_api_log import AilosApiLog
 from app.models.ailos_client_token import AilosClientToken
 from app.models.ailos_integration import AilosIntegration
@@ -159,7 +160,6 @@ def _mask_payload(value):
 
 
 def _log_call(
-    db: Session,
     method: str,
     path: str,
     request_payload,
@@ -170,18 +170,39 @@ def _log_call(
     correlation_id: str | None,
     billing_id: int | None,
 ) -> None:
-    db.add(AilosApiLog(
-        endpoint=path,
-        method=method.upper(),
-        request_payload=_mask_payload(request_payload) if request_payload is not None else None,
-        response_payload=_mask_payload(response_payload) if response_payload is not None else None,
-        status_code=status_code,
-        success=success,
-        error_message=error_message,
-        correlation_id=correlation_id,
-        billing_id=billing_id,
-    ))
-    db.commit()
+    """Grava o log em ``ailos_api_logs`` numa sessão própria e independente da
+    sessão do chamador (mesmo padrão de ``app.main._run_locked``).
+
+    Antes, este commit rodava na sessão do chamador (``db.commit()``) — como
+    ``commit()`` finaliza a transação inteira, não só o objeto de log, ele
+    comitava também qualquer alteração de negócio que o chamador ainda
+    tivesse pendente na mesma sessão antes de invocar ``request()``. Usando
+    uma sessão dedicada: o log persiste imediatamente (inclusive quando a
+    chamada à Ailos falha e o restante do fluxo do chamador nunca chega a dar
+    commit) sem nunca finalizar a transação de negócio do chamador cedo
+    demais.
+
+    ``billing_id``, quando informado, deve sempre apontar para um ``Billing``
+    já commitado — a FK é validada nesta transação separada, então um
+    ``Billing`` ainda pendente (não commitado) na sessão do chamador não
+    seria visível aqui.
+    """
+    log_db = db_session.SessionLocal()
+    try:
+        log_db.add(AilosApiLog(
+            endpoint=path,
+            method=method.upper(),
+            request_payload=_mask_payload(request_payload) if request_payload is not None else None,
+            response_payload=_mask_payload(response_payload) if response_payload is not None else None,
+            status_code=status_code,
+            success=success,
+            error_message=error_message,
+            correlation_id=correlation_id,
+            billing_id=billing_id,
+        ))
+        log_db.commit()
+    finally:
+        log_db.close()
 
 
 def _get_or_create_integration(db: Session) -> AilosIntegration:
@@ -699,7 +720,7 @@ def request(
                 timeout=settings.ailos_timeout_seconds,
             )
         except requests.RequestException as exc:
-            _log_call(db, method, path, json_body, None, None, False, str(exc), None, billing_id)
+            _log_call(method, path, json_body, None, None, False, str(exc), None, billing_id)
             raise AilosError(f'Falha de conexão com a API Ailos ({path}): {exc}') from exc
 
         if resp.status_code == 401:
@@ -750,7 +771,7 @@ def request(
     error_message = None if success else (_extract_message(body_json) or resp.text[:500])
 
     _log_call(
-        db, method, path, json_body, body_json, resp.status_code, success,
+        method, path, json_body, body_json, resp.status_code, success,
         error_message, correlation_id, billing_id,
     )
 

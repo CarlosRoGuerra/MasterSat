@@ -293,3 +293,4 @@ Ordem sugerida dentro de BE:
   5. BE-02 (médio risco, contrato de API muda)
   6. BE-01 (médio risco, extenso)
   7. BE-03 (baixo risco, mas grande — split mecânico)
+ 

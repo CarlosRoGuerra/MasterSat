@@ -33,6 +33,7 @@ from sqlalchemy.pool import StaticPool  # noqa: E402
 from app.main import app  # noqa: F401, E402 (side-effect import)
 from app.api.deps import get_current_user  # noqa: E402
 from app.core.limiter import limiter  # noqa: E402
+import app.db.session as db_session_module  # noqa: E402
 from app.db.session import Base, get_db  # noqa: E402
 from app.models.billing import Billing
 from app.models.client import Client
@@ -91,10 +92,16 @@ def _make_engine():
 
 
 @pytest.fixture()
-def db():
+def db(monkeypatch):
     """Fresh in-memory SQLite session per test."""
     engine = _make_engine()
     Session = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    # Código que abre sua PRÓPRIA sessão via app.db.session.SessionLocal (ex.:
+    # a sessão dedicada de log em ailos_client._log_call, ou os jobs de
+    # background em main._run_locked) precisa cair no MESMO banco :memory:
+    # isolado deste teste — senão escreveria silenciosamente num banco
+    # desconectado (o engine "real", montado a partir de DATABASE_URL).
+    monkeypatch.setattr(db_session_module, 'SessionLocal', Session)
     session = Session()
     yield session
     session.close()
