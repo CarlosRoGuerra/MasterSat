@@ -51,32 +51,47 @@ VIEW_ROLES = (UserRole.ADMIN, UserRole.OPERATIONAL, UserRole.FINANCIAL)
 EDIT_ROLES = (UserRole.ADMIN, UserRole.OPERATIONAL)
 
 
-def _tracker_to_out(tracker: Tracker, db: Session) -> TrackerOut:
+def _tracker_to_out(
+    tracker: Tracker,
+    db: Session,
+    *,
+    client_map: dict[int, Client] | None = None,
+    vehicle_map: dict[int, Vehicle] | None = None,
+    active_contract_map: dict[int, Contract] | None = None,
+    plan_map: dict[int, Plan] | None = None,
+) -> TrackerOut:
+    # Mapas opcionais: quem lista várias trackers de uma vez (list_items) monta
+    # tudo antes com queries em lote (IN) e passa aqui — evita N+1. Chamadas com
+    # uma única tracker (create/update/get) seguem sem mapa e fazem o db.get()
+    # avulso de sempre.
     client_name = None
     vehicle_plate = None
     vehicle_model = None
     active_plan_id = None
     active_plan_name = None
     if tracker.client_id:
-        client = db.get(Client, tracker.client_id)
+        client = client_map.get(tracker.client_id) if client_map is not None else db.get(Client, tracker.client_id)
         if client and not client.is_deleted:
             client_name = client.name
     if tracker.vehicle_id:
-        vehicle = db.get(Vehicle, tracker.vehicle_id)
+        vehicle = vehicle_map.get(tracker.vehicle_id) if vehicle_map is not None else db.get(Vehicle, tracker.vehicle_id)
         if vehicle and not vehicle.is_deleted:
             vehicle_plate = vehicle.plate
             vehicle_model = vehicle.model
-    active_contract = db.scalar(
-        select(Contract)
-        .where(
-            Contract.tracker_id == tracker.id,
-            Contract.is_deleted.is_(False),
-            Contract.status == 'ativo',
+    if active_contract_map is not None:
+        active_contract = active_contract_map.get(tracker.id)
+    else:
+        active_contract = db.scalar(
+            select(Contract)
+            .where(
+                Contract.tracker_id == tracker.id,
+                Contract.is_deleted.is_(False),
+                Contract.status == 'ativo',
+            )
+            .order_by(Contract.id.desc())
         )
-        .order_by(Contract.id.desc())
-    )
     if active_contract:
-        plan = db.get(Plan, active_contract.plan_id)
+        plan = plan_map.get(active_contract.plan_id) if plan_map is not None else db.get(Plan, active_contract.plan_id)
         if plan and not plan.is_deleted:
             active_plan_id = plan.id
             active_plan_name = plan.name
@@ -246,7 +261,50 @@ def list_items(
     if vehicle_id:
         stmt = stmt.where(Tracker.vehicle_id == vehicle_id)
     trackers = db.scalars(stmt.order_by(Tracker.id.desc()).offset(skip).limit(limit)).all()
-    return [_tracker_to_out(item, db) for item in trackers]
+
+    client_ids = {t.client_id for t in trackers if t.client_id}
+    vehicle_ids = {t.vehicle_id for t in trackers if t.vehicle_id}
+    tracker_ids = [t.id for t in trackers]
+
+    client_map = {
+        c.id: c for c in db.scalars(select(Client).where(Client.id.in_(client_ids))).all()
+    } if client_ids else {}
+    vehicle_map = {
+        v.id: v for v in db.scalars(select(Vehicle).where(Vehicle.id.in_(vehicle_ids))).all()
+    } if vehicle_ids else {}
+
+    active_contract_map: dict[int, Contract] = {}
+    if tracker_ids:
+        # Ordenado por tracker_id, id desc: o primeiro contrato visto por
+        # tracker_id (via setdefault) é o de maior id — mesmo "mais recente
+        # ativo" que a versão original buscava um por um.
+        contracts = db.scalars(
+            select(Contract)
+            .where(
+                Contract.tracker_id.in_(tracker_ids),
+                Contract.is_deleted.is_(False),
+                Contract.status == 'ativo',
+            )
+            .order_by(Contract.tracker_id, Contract.id.desc())
+        ).all()
+        for contract in contracts:
+            active_contract_map.setdefault(contract.tracker_id, contract)
+
+    plan_ids = {c.plan_id for c in active_contract_map.values()}
+    plan_map = {
+        p.id: p for p in db.scalars(select(Plan).where(Plan.id.in_(plan_ids))).all()
+    } if plan_ids else {}
+
+    return [
+        _tracker_to_out(
+            item, db,
+            client_map=client_map,
+            vehicle_map=vehicle_map,
+            active_contract_map=active_contract_map,
+            plan_map=plan_map,
+        )
+        for item in trackers
+    ]
 
 
 @router.post('/', response_model=TrackerOut)

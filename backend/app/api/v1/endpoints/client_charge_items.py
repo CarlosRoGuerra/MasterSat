@@ -110,8 +110,8 @@ def create_item(payload: ClientChargeItemCreate, db: Session = Depends(get_db), 
             raise HTTPException(status_code=400, detail='O contrato selecionado pertence a outro veículo.')
     validate_links(db, payload.client_id, payload.vehicle_id, payload.tracker_id)
     service_product = db.get(ServiceProduct, payload.service_product_id) if payload.service_product_id else None
-    if payload.service_product_id and (not service_product or service_product.is_deleted):
-        raise HTTPException(status_code=404, detail='Serviço/produto não encontrado')
+    if payload.service_product_id and (not service_product or service_product.is_deleted or not service_product.active):
+        raise HTTPException(status_code=404, detail='Serviço/produto não encontrado ou inativo')
     remove_after_payment = payload.remove_after_payment or (service_product.remove_after_payment if service_product else False)
     total_amount = payload.quantity * payload.unit_price
     obj = ClientChargeItem(

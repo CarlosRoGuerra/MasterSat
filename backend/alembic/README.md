@@ -27,11 +27,30 @@ histórico do que já existia antes do Alembic).
 
 ## Banco novo (setup local ou ambiente novo)
 
-`alembic upgrade head` sozinho já cria o schema completo — não precisa mais
-rodar a aplicação primeiro. `Base.metadata.create_all()` e
-`ensure_schema_updates()` continuam no `on_startup` só por compatibilidade com
-ambientes que ainda não foram carimbados (`alembic stamp head`); em um banco
-vazio + já migrado pelo Alembic, ambos são no-op.
+O próprio `on_startup` (`app/main.py::_apply_database_migrations`) já aplica
+o Alembic no boot — não precisa rodar `alembic upgrade head` manualmente nem
+chamar a aplicação duas vezes. `Base.metadata.create_all()` e
+`ensure_schema_updates()` SAÍRAM do `on_startup`; `ensure_schema_updates` continua
+no arquivo só como registro histórico (não é mais chamada por ninguém).
+
+`_apply_database_migrations()` decide sozinho entre `upgrade` e `stamp` a cada
+boot:
+- **Banco vazio de verdade** (sem `alembic_version` e sem a tabela `users`):
+  roda `alembic upgrade head` — cria o schema inteiro a partir das migrations.
+- **Banco pré-Alembic** (sem `alembic_version`, mas com o schema já criado
+  pelo antigo `create_all`/`ensure_schema_updates`): roda `alembic stamp head`
+  — só grava a revisão atual, sem tentar recriar tabela nenhuma (senão falharia
+  com "relation already exists"). É o caso da produção até o primeiro deploy
+  com esta mudança.
+- **Banco já carimbado**: roda `alembic upgrade head` normalmente, aplicando
+  só o que houver de novo.
+
+Isso cobre o cutover automático de QUALQUER ambiente na primeira vez que subir
+com esta versão — não precisa de um `alembic stamp head` manual antes do
+deploy. (Se algum banco ficar com o `alembic_version` desatualizado por ter
+rodado `create_all` em paralelo por um tempo — como aconteceu no banco de dev
+durante o desenvolvimento desta migração — corrija com um `alembic stamp head`
+manual uma única vez; o boot seguinte já roda `upgrade head` normalmente.)
 
 ## Se importa modelos fora do FastAPI (scripts standalone)
 

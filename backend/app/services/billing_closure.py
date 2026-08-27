@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, aliased
 
 from app.core.timezone import hoje
 from app.models.billing import Billing
+from app.models.billing_charge_item import BillingChargeItem
 from app.models.client import Client
 from app.models.client_charge_item import ClientChargeItem
 from app.models.contract import Contract
@@ -258,6 +259,37 @@ def _first_cycle_charge_items(
     return result
 
 
+def _effective_billing_counts_bulk(db: Session, item_ids: list[int]) -> dict[int, int]:
+    """Mesma regra de `charge_item_effective_billing_count` (financial.py), mas
+    para vários itens de uma vez — evita 1 query por item nos loops de
+    fechamento (`_pending_charge_items`), que rodam sobre todos os serviços
+    avulsos pendentes do mês.
+    """
+    if not item_ids:
+        return {}
+    billing_ids_by_item: dict[int, set[int]] = defaultdict(set)
+    direct_rows = db.query(Billing.item_id, Billing.id).filter(
+        Billing.is_deleted.is_(False),
+        Billing.status != BillingStatus.CANCELED,
+        Billing.item_id.in_(item_ids),
+    ).all()
+    for item_id, billing_id in direct_rows:
+        billing_ids_by_item[item_id].add(billing_id)
+    assoc_rows = (
+        db.query(BillingChargeItem.item_id, BillingChargeItem.billing_id)
+        .join(Billing, Billing.id == BillingChargeItem.billing_id)
+        .filter(
+            BillingChargeItem.item_id.in_(item_ids),
+            Billing.is_deleted.is_(False),
+            Billing.status != BillingStatus.CANCELED,
+        )
+        .all()
+    )
+    for item_id, billing_id in assoc_rows:
+        billing_ids_by_item[item_id].add(billing_id)
+    return {item_id: len(ids) for item_id, ids in billing_ids_by_item.items()}
+
+
 def _pending_charge_items(
     db: Session,
     reference_month: date,
@@ -287,19 +319,30 @@ def _pending_charge_items(
         query, ClientChargeItem.client_id, filter_type, client_id,
     ).order_by(ClientChargeItem.id.asc()).all()
 
-    result = []
-    for item in items:
-        if exclude_ids and item.id in exclude_ids:
-            continue
+    candidate_items = [
+        item for item in items if not (exclude_ids and item.id in exclude_ids)
+    ]
+    billing_counts = _effective_billing_counts_bulk(db, [item.id for item in candidate_items])
 
-        billing_count = charge_item_effective_billing_count(db, item.id)
+    client_ids = {item.client_id for item in candidate_items}
+    vehicle_ids = {item.vehicle_id for item in candidate_items if item.vehicle_id}
+    client_map = {
+        c.id: c for c in db.scalars(select(Client).where(Client.id.in_(client_ids))).all()
+    } if client_ids else {}
+    vehicle_map = {
+        v.id: v for v in db.scalars(select(Vehicle).where(Vehicle.id.in_(vehicle_ids))).all()
+    } if vehicle_ids else {}
+
+    result = []
+    for item in candidate_items:
+        billing_count = billing_counts.get(item.id, 0)
 
         installments = max(int(item.installment_count or 1), 1)
         if billing_count >= installments:
             continue
 
-        client = db.get(Client, item.client_id)
-        vehicle = db.get(Vehicle, item.vehicle_id) if item.vehicle_id else None
+        client = client_map.get(item.client_id)
+        vehicle = vehicle_map.get(item.vehicle_id) if item.vehicle_id else None
         remaining = installments - billing_count
         total = Decimal(str(item.total_amount))
         per_installment = (total / installments).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
@@ -591,10 +634,10 @@ def execute_closure(
     created_ids = []
     for item in to_generate:
         contract = db.get(Contract, item['contract_id'])
-        if not contract:
+        if not contract or contract.is_deleted:
             continue
         plan = db.get(Plan, contract.plan_id)
-        if not plan:
+        if not plan or plan.is_deleted:
             continue
 
         billing_amount = _quantize_amount(item['billing_amount'])

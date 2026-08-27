@@ -3,6 +3,7 @@ import secrets
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,10 +18,11 @@ from app.api.v1.api import api_router
 from app.core.config import settings
 from app.core.limiter import limiter
 from app.core.security import get_password_hash
-from app.db.session import Base, SessionLocal, engine
+from app.db.session import SessionLocal, engine
 from app.models import ailos_api_log, ailos_boleto, ailos_client_token, ailos_integration, ailos_lote, ailos_retorno_arquivo, audit_log, billing, billing_change_log, billing_charge_item, client, client_charge_item, closure_job, contract, document, integration_log, multiportal_outbox, nfse_certificado, nfse_lote, nfse_nota, password_reset_token, payable, plan, refresh_token, service_order, service_order_status_log, service_product, system_setting, tracker, tracker_history, uninstall_event, user, vehicle  # noqa: F401 — side-effect imports that register models with SQLAlchemy Base
 from app.core.audit import AuditMiddleware
 from app.core.body_limit import MaxBodySizeMiddleware
+from app.core.forwarded_proto import ForwardedProtoMiddleware
 from app.models.enums import UserRole
 from app.models.user import User
 from app.services.storage import ensure_bucket
@@ -33,6 +35,11 @@ app = FastAPI(
     redoc_url='/redoc' if settings.enable_docs else None,
     openapi_url='/openapi.json' if settings.enable_docs else None,
 )
+
+# ── Scheme real (atrás do nginx) ────────────────────────────────────────────
+# Precisa vir antes de qualquer coisa que gere URL absoluta (ex.: o redirect
+# automático de trailing slash do Starlette) — ver core/forwarded_proto.py.
+app.add_middleware(ForwardedProtoMiddleware)
 
 # ── Rate limiting ─────────────────────────────────────────────────────────────
 app.state.limiter = limiter
@@ -59,6 +66,42 @@ app.add_middleware(MaxBodySizeMiddleware, max_bytes=settings.max_upload_bytes)
 app.add_middleware(AuditMiddleware)
 
 app.include_router(api_router, prefix=settings.api_v1_prefix)
+
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+
+
+def _apply_database_migrations() -> None:
+    """Aplica o schema via Alembic no boot — substitui `create_all` +
+    `ensure_schema_updates` (ver backend/alembic/README.md).
+
+    Bancos que já existiam ANTES do Alembic (criados por `create_all` +
+    `ensure_schema_updates`) não têm a tabela `alembic_version`: rodar
+    `upgrade head` neles direto falha com "relation already exists", porque
+    as tabelas da baseline já estão lá. Por isso: sem `alembic_version` E com
+    o schema já existente (checa a tabela `users`), só CARIMBA como já
+    migrado (stamp), sem tentar recriar nada. Um banco vazio de verdade builda
+    o schema inteiro a partir das migrations (upgrade). Um banco já carimbado
+    só aplica o que houver de novo.
+    """
+    from alembic import command
+    from alembic.config import Config
+    from alembic.runtime.migration import MigrationContext
+
+    cfg = Config(str(BACKEND_DIR / 'alembic.ini'))
+    cfg.set_main_option('script_location', str(BACKEND_DIR / 'alembic'))
+
+    with engine.connect() as conn:
+        current_rev = MigrationContext.configure(conn).get_current_revision()
+        schema_already_exists = inspect(conn).has_table('users')
+
+    if current_rev is None and schema_already_exists:
+        command.stamp(cfg, 'head')
+        logging.getLogger('uvicorn.error').warning(
+            'Alembic: banco pré-existente (sem alembic_version) carimbado como head — '
+            'nenhuma tabela foi recriada.'
+        )
+    else:
+        command.upgrade(cfg, 'head')
 
 
 def ensure_schema_updates():
@@ -487,9 +530,24 @@ def _seed_admin() -> None:
     db = SessionLocal()
     try:
         email = settings.initial_admin_email
-        if db.query(User).filter(User.email == email).first():
+        existing = db.query(User).filter(User.email == email).first()
+        if existing and not existing.is_deleted:
             return
         senha = settings.initial_admin_password or secrets.token_urlsafe(16)
+        if existing and existing.is_deleted:
+            # O e-mail é UNIQUE: se o admin inicial foi soft-deletado, o registro
+            # apagado continua ocupando o e-mail e um INSERT novo nunca passaria
+            # (cai no IntegrityError abaixo e o bootstrap trava pra sempre).
+            # Reativa em vez de tentar recriar.
+            existing.is_deleted = False
+            existing.active = True
+            existing.password_hash = get_password_hash(senha)
+            db.commit()
+            logging.getLogger('uvicorn.error').warning(
+                'ADMIN INICIAL estava soft-deletado — reativado: %s — senha gerada: %s — TROQUE no primeiro acesso.',
+                email, senha,
+            )
+            return
         db.add(User(
             name='Administrador',
             email=email,
@@ -758,8 +816,7 @@ def on_startup():
     lock_conn = engine.connect()
     try:
         lock_conn.exec_driver_sql('SELECT pg_advisory_lock(918273645)')
-        Base.metadata.create_all(bind=engine)
-        ensure_schema_updates()
+        _apply_database_migrations()
         _seed_admin()
         # Recupera notas NFS-e presas em 'pending'/'processing' de um reinício
         # anterior (o worker é thread daemon; um restart mata a emissão em voo).

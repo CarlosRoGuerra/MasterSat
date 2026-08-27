@@ -21,31 +21,56 @@ from app.services.financial import refresh_overdue_statuses
 router = APIRouter()
 
 
-def serialize_contract(db: Session, contract: Contract) -> ContractOut:
-    client = db.get(Client, contract.client_id)
-    plan = db.get(Plan, contract.plan_id)
-    vehicle = db.get(Vehicle, contract.vehicle_id) if getattr(contract, 'vehicle_id', None) else None
-    tracker = db.get(Tracker, contract.tracker_id) if getattr(contract, 'tracker_id', None) else None
-    open_billings = (
-        db.query(func.count(Billing.id))
-        .filter(
-            Billing.is_deleted == False,
-            Billing.contract_id == contract.id,
-            Billing.status.in_([BillingStatus.PENDING, BillingStatus.OVERDUE]),
+def serialize_contract(
+    db: Session,
+    contract: Contract,
+    *,
+    client_map: dict[int, Client] | None = None,
+    plan_map: dict[int, Plan] | None = None,
+    vehicle_map: dict[int, Vehicle] | None = None,
+    tracker_map: dict[int, Tracker] | None = None,
+    billing_agg_map: dict[int, tuple[int, date | None]] | None = None,
+) -> ContractOut:
+    # Mapas opcionais: quem lista vários contratos de uma vez (list_items) monta
+    # tudo antes com queries em lote (IN/GROUP BY) e passa aqui — evita N+1.
+    # Chamadas com um único contrato (create/update/get) seguem sem mapa e
+    # fazem as queries avulsas de sempre.
+    vehicle_id = getattr(contract, 'vehicle_id', None)
+    tracker_id = getattr(contract, 'tracker_id', None)
+    client = client_map.get(contract.client_id) if client_map is not None else db.get(Client, contract.client_id)
+    plan = plan_map.get(contract.plan_id) if plan_map is not None else db.get(Plan, contract.plan_id)
+    if vehicle_id:
+        vehicle = vehicle_map.get(vehicle_id) if vehicle_map is not None else db.get(Vehicle, vehicle_id)
+    else:
+        vehicle = None
+    if tracker_id:
+        tracker = tracker_map.get(tracker_id) if tracker_map is not None else db.get(Tracker, tracker_id)
+    else:
+        tracker = None
+    if billing_agg_map is not None:
+        open_billings, next_due_date = billing_agg_map.get(contract.id, (0, None))
+    else:
+        open_billings = (
+            db.query(func.count(Billing.id))
+            .filter(
+                Billing.is_deleted == False,
+                Billing.contract_id == contract.id,
+                Billing.status.in_([BillingStatus.PENDING, BillingStatus.OVERDUE]),
+            )
+            .scalar()
+            or 0
         )
-        .scalar()
-        or 0
-    )
-    next_due = (
-        db.query(Billing.due_date)
-        .filter(
-            Billing.is_deleted == False,
-            Billing.contract_id == contract.id,
-            Billing.status.in_([BillingStatus.PENDING, BillingStatus.OVERDUE]),
+        next_due = (
+            db.query(Billing.due_date)
+            .filter(
+                Billing.is_deleted == False,
+                Billing.contract_id == contract.id,
+                Billing.status.in_([BillingStatus.PENDING, BillingStatus.OVERDUE]),
+            )
+            .order_by(Billing.due_date.asc())
+            .first()
         )
-        .order_by(Billing.due_date.asc())
-        .first()
-    )
+        next_due_date = next_due[0] if next_due else None
     return ContractOut(
         id=contract.id,
         client_id=contract.client_id,
@@ -70,7 +95,7 @@ def serialize_contract(db: Session, contract: Contract) -> ContractOut:
         tracker_identifier=(tracker.imei if (tracker and not tracker.is_deleted) else None),
         monthly_value=float(plan.price) if (plan and not plan.is_deleted) else None,
         open_billings=open_billings,
-        next_due_date=next_due[0] if next_due else None,
+        next_due_date=next_due_date,
     )
 
 
@@ -134,7 +159,43 @@ def list_items(
             )
         )
     items = query.order_by(Contract.created_at.desc()).limit(limit).all()
-    return [serialize_contract(db, item) for item in items]
+
+    client_ids = {c.client_id for c in items if c.client_id}
+    plan_ids = {c.plan_id for c in items if c.plan_id}
+    vehicle_ids = {c.vehicle_id for c in items if getattr(c, 'vehicle_id', None)}
+    tracker_ids = {c.tracker_id for c in items if getattr(c, 'tracker_id', None)}
+    contract_ids = [c.id for c in items]
+
+    client_map = {o.id: o for o in db.scalars(select(Client).where(Client.id.in_(client_ids))).all()} if client_ids else {}
+    plan_map = {o.id: o for o in db.scalars(select(Plan).where(Plan.id.in_(plan_ids))).all()} if plan_ids else {}
+    vehicle_map = {o.id: o for o in db.scalars(select(Vehicle).where(Vehicle.id.in_(vehicle_ids))).all()} if vehicle_ids else {}
+    tracker_map = {o.id: o for o in db.scalars(select(Tracker).where(Tracker.id.in_(tracker_ids))).all()} if tracker_ids else {}
+
+    billing_agg_map: dict[int, tuple[int, date | None]] = {}
+    if contract_ids:
+        rows = (
+            db.query(Billing.contract_id, func.count(Billing.id), func.min(Billing.due_date))
+            .filter(
+                Billing.is_deleted == False,
+                Billing.contract_id.in_(contract_ids),
+                Billing.status.in_([BillingStatus.PENDING, BillingStatus.OVERDUE]),
+            )
+            .group_by(Billing.contract_id)
+            .all()
+        )
+        billing_agg_map = {contract_id: (count, min_due) for contract_id, count, min_due in rows}
+
+    return [
+        serialize_contract(
+            db, item,
+            client_map=client_map,
+            plan_map=plan_map,
+            vehicle_map=vehicle_map,
+            tracker_map=tracker_map,
+            billing_agg_map=billing_agg_map,
+        )
+        for item in items
+    ]
 
 
 @router.post('/', response_model=ContractOut)
@@ -143,8 +204,8 @@ def create_item(payload: ContractCreate, db: Session = Depends(get_db), _: objec
     if not client or client.is_deleted:
         raise HTTPException(status_code=404, detail='Cliente não encontrado')
     plan = db.get(Plan, payload.plan_id)
-    if not plan or plan.is_deleted:
-        raise HTTPException(status_code=404, detail='Plano não encontrado')
+    if not plan or plan.is_deleted or not plan.active:
+        raise HTTPException(status_code=404, detail='Plano não encontrado ou inativo')
     validate_links(db, payload.client_id, payload.vehicle_id, payload.tracker_id)
     data = payload.model_dump()
     if not data.get('billing_day'):
@@ -174,8 +235,8 @@ def generate_contract_pdf(
     """Gera o TERMO/CONTRATO em branco (só plano, vigência e taxas) para o
     cliente preencher e assinar. NÃO salva contrato nem preenche dados do cliente."""
     plan = db.get(Plan, payload.plan_id)
-    if not plan or plan.is_deleted:
-        raise HTTPException(status_code=404, detail='Plano não encontrado')
+    if not plan or plan.is_deleted or not plan.active:
+        raise HTTPException(status_code=404, detail='Plano não encontrado ou inativo')
     contrato = SimpleNamespace(
         id='', start_date=payload.start_date, end_date=payload.end_date,
         billing_day=None, installation_fee=payload.installation_fee,
@@ -235,8 +296,8 @@ def update_item(item_id: int, payload: ContractUpdate, db: Session = Depends(get
             raise HTTPException(status_code=404, detail='Cliente não encontrado')
     if 'plan_id' in data:
         plan = db.get(Plan, data['plan_id'])
-        if not plan or plan.is_deleted:
-            raise HTTPException(status_code=404, detail='Plano não encontrado')
+        if not plan or plan.is_deleted or not plan.active:
+            raise HTTPException(status_code=404, detail='Plano não encontrado ou inativo')
     validate_links(db, client_id, data.get('vehicle_id', getattr(obj, 'vehicle_id', None)), data.get('tracker_id', getattr(obj, 'tracker_id', None)))
     # Marcar como assinado sem informar a data carimba hoje; desmarcar limpa a
     # data, senão fica um contrato "não assinado" com data de assinatura.
