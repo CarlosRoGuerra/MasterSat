@@ -20,8 +20,8 @@ import { useDebouncedValue, useEffectSkipFirst } from '@/lib/use-debounced-value
 import { apiFetch } from '@/lib/api';
 import { onlyDigits, formatCpfCnpj, pricePeriodSuffix } from '@/lib/format';
 import { useAuthGuard } from '@/lib/use-auth-guard';
-
-type TrackerStatus = 'instalado' | 'em_estoque' | 'em_manutencao' | 'extraviado' | 'descartado';
+import { ROUTE_ROLES } from '@/lib/route-roles';
+import type { TrackerStatus, ClientOption, VehicleOption } from '@/lib/domain-types';
 
 type Tracker = {
   id: number;
@@ -50,8 +50,6 @@ type Tracker = {
   integration_last_description?: string | null;
 };
 
-type ClientOption = { id: number; name: string; cpf_cnpj: string; billing_day?: number | null };
-type VehicleOption = { id: number; client_id: number; plate: string; model?: string | null };
 type ManufacturerOption = { code: string; description: string };
 type PlanOption = { id: number; name: string; price: number; billing_interval_months?: number };
 
@@ -217,7 +215,7 @@ function RastreadoresTableContent({
 }
 
 export default function RastreadoresPage() {
-  const { token, user, loading: guardLoading, error: guardError } = useAuthGuard(['admin', 'operacional', 'financeiro'], '/login/admin');
+  const { token, user, loading: guardLoading, error: guardError } = useAuthGuard(ROUTE_ROLES['/rastreadores'], '/login/admin');
   const canEdit = !!user && user.role !== 'financeiro';
 
   const [trackers, setTrackers] = useState<Tracker[]>([]);

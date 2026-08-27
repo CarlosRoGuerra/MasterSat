@@ -11,6 +11,7 @@ import { SectionHeader } from '@/components/ui/section-header';
 import { TrackerAutocomplete } from '@/components/ui/tracker-autocomplete';
 import { apiFetch } from '@/lib/api';
 import { useAuthGuard } from '@/lib/use-auth-guard';
+import { ROUTE_ROLES } from '@/lib/route-roles';
 
 type IntegrationStatus = {
   enabled: boolean;
@@ -97,7 +98,7 @@ function StepCard({ step }: { step: StepResult }) {
 }
 
 export default function IntegracaoPage() {
-  const { token, user } = useAuthGuard(['admin', 'operacional', 'financeiro'], '/login/admin');
+  const { token, user } = useAuthGuard(ROUTE_ROLES['/integracao'], '/login/admin');
   const canEdit = !!user && user.role !== 'financeiro';
 
   const [status, setStatus] = useState<IntegrationStatus | null>(null);

@@ -15,6 +15,7 @@ import { Skeleton } from '@/components/ui/empty-state';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { apiFetch } from '@/lib/api';
 import { useAuthGuard } from '@/lib/use-auth-guard';
+import { ROUTE_ROLES } from '@/lib/route-roles';
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
 type UpcomingBilling = {
@@ -70,7 +71,7 @@ export default function DashboardPage() {
   const [delinquency, setDelinquency] = useState<DelinquencyStatus | null>(null);
   const [error, setError] = useState('');
   const { token, loading, error: guardError } = useAuthGuard(
-    ['admin', 'operacional', 'financeiro'],
+    ROUTE_ROLES['/dashboard'],
     '/login/admin',
   );
 
@@ -339,8 +340,8 @@ export default function DashboardPage() {
                       <div key={r.label} className="flex items-center justify-between">
                         <span className="text-[13px] text-slate-500 dark:text-slate-400">{r.label}</span>
                         <strong className={`text-[13px] tabular-nums ${
-                          (r as any).danger ? 'text-rose-600 dark:text-rose-400' :
-                          (r as any).warn ? 'text-amber-600 dark:text-amber-400' :
+                          'danger' in r && r.danger ? 'text-rose-600 dark:text-rose-400' :
+                          'warn' in r && r.warn ? 'text-amber-600 dark:text-amber-400' :
                           'text-slate-900 dark:text-white'
                         }`}>{r.v ?? '—'}</strong>
                       </div>

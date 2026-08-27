@@ -21,19 +21,17 @@ import { API_URL, apiFetch } from '@/lib/api';
 import { entregarArquivo, nomeArquivoCliente } from '@/lib/arquivo';
 import { enviarBoletoEmail, enviarBoletoWhats } from '@/lib/boleto-mensagem';
 import { useAuthGuard } from '@/lib/use-auth-guard';
+import { ROUTE_ROLES } from '@/lib/route-roles';
 import { useDebouncedValue, useEffectSkipFirst } from '@/lib/use-debounced-value';
+import type { BillingStatus, ClientOption, VehicleOption, TrackerOption } from '@/lib/domain-types';
 
 /* ── Types ──────────────────────────────────────────────────────────── */
 const TAB_ORDER = ['menu', 'overview', 'management', 'payables'] as const;
 type FinanceiroTab = (typeof TAB_ORDER)[number];
 
 type BillingInterval = 1 | 3 | 6 | 12;
-type BillingStatus = 'pendente' | 'paga' | 'vencida' | 'cancelada';
 
-type ClientOption = { id: number; name: string; cpf_cnpj: string };
 type Payable = { id: number; description: string; supplier?: string | null; category?: string | null; amount: number; due_date: string; status: string; payment_date?: string | null; payment_method?: string | null; notes?: string | null; overdue_days: number };
-type VehicleOption = { id: number; client_id: number; plate: string; model?: string | null };
-type TrackerOption = { id: number; client_id?: number | null; vehicle_id?: number | null; imei: string; model?: string | null; brand?: string | null };
 type Plan = { id: number; name: string; price: number; description?: string | null; active: boolean; billing_interval_months: BillingInterval; default_installation_fee?: number | null; default_uninstall_fee?: number | null; default_billing_day?: number | null; default_duration_months?: number | null; active_contracts: number };
 type ServiceProduct = { id: number; name: string; category: string; default_price: number; description?: string | null; active: boolean; allow_installments: boolean; remove_after_payment: boolean; auto_add_on_uninstall: boolean };
 type Contract = { id: number; client_id: number; plan_id: number; vehicle_id?: number | null; tracker_id?: number | null; start_date: string; end_date?: string | null; status: string; billing_day?: number | null; payment_method?: string | null; notes?: string | null; installation_fee?: number | null; uninstall_fee?: number | null; signed?: boolean | null; signed_at?: string | null; client_name?: string | null; plan_name?: string | null; vehicle_plate?: string | null; tracker_identifier?: string | null; monthly_value?: number | null; open_billings: number; next_due_date?: string | null };
@@ -498,7 +496,7 @@ function BillingTableSection({
 
 /* ── Page ────────────────────────────────────────────────────────────── */
 export default function FinanceiroPage() {
-  const { token, user, loading: guardLoading, error: guardError } = useAuthGuard(['admin', 'financeiro'], '/login/admin');
+  const { token, user, loading: guardLoading, error: guardError } = useAuthGuard(ROUTE_ROLES['/financeiro'], '/login/admin');
   const canEdit = !!user && (user.role === 'admin' || user.role === 'financeiro');
 
   const [plans, setPlans] = useState<Plan[]>([]);

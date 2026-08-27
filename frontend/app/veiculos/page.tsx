@@ -23,36 +23,13 @@ import { apiFetch } from '@/lib/api';
 import { fetchAddressByCep } from '@/lib/cep';
 import { formatZipCode, onlyDigits, pricePeriodSuffix } from '@/lib/format';
 import { useAuthGuard } from '@/lib/use-auth-guard';
+import { ROUTE_ROLES } from '@/lib/route-roles';
 import { VehicleOnboardingWizard } from '@/components/vehicle-onboarding-wizard';
-
-type ClientOption = {
-  id: number;
-  name: string;
-  cpf_cnpj: string;
-  billing_day?: number | null;  // dia de vencimento preferido do cliente
-  address_zip_code?: string | null;
-  address_line?: string | null;
-  address_number?: string | null;
-  address_complement?: string | null;
-  neighborhood?: string | null;
-  city?: string | null;
-  state?: string | null;
-};
+import type { ClientOption, TrackerOption, VehicleStatus } from '@/lib/domain-types';
 
 type ServiceProductOption = { id: number; name: string; default_price: number; auto_add_on_uninstall?: boolean };
 type ContractOption = { id: number; client_id: number; plan_name?: string | null; status: string };
-type TrackerOption = {
-  id: number;
-  imei: string;
-  brand?: string | null;
-  model?: string | null;
-  status: string;
-  install_date?: string | null;
-  active_plan_name?: string | null;
-  active_plan_id?: number | null;
-};
 type PlanOption = { id: number; name: string; price: number; billing_interval_months?: number };
-type VehicleStatus = 'pendente_validacao' | 'em_analise' | 'aprovado' | 'reprovado' | 'correcao_solicitada' | 'ativo' | 'sem_rastreador' | 'retirado' | 'bloqueado';
 
 type Vehicle = {
   id: number;
@@ -614,7 +591,7 @@ function LinkTrackerForm({
 }
 
 export default function VeiculosPage() {
-  const { token, user, loading: guardLoading, error: guardError } = useAuthGuard(['admin', 'operacional', 'financeiro'], '/login/admin');
+  const { token, user, loading: guardLoading, error: guardError } = useAuthGuard(ROUTE_ROLES['/veiculos'], '/login/admin');
   const canEdit = !!user && user.role !== 'financeiro';
 
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
@@ -891,7 +868,12 @@ export default function VeiculosPage() {
     if (!selectedClient || !useAddress) return;
     setForm((prev) => ({
       ...prev,
-      address_zip_code: selectedClient.address_zip_code ? formatZipCode(selectedClient.address_zip_code) : prev.address_zip_code,
+      // Client.zip_code (não "address_zip_code" — só o formulário do veículo
+      // usa esse nome; o cliente vem de ClientOut, que chama o campo de
+      // zip_code). Antes disso o CEP nunca era pré-preenchido ao marcar
+      // "usar endereço do cliente" — os demais campos de endereço funcionavam
+      // normalmente porque os nomes já coincidiam.
+      address_zip_code: selectedClient.zip_code ? formatZipCode(selectedClient.zip_code) : prev.address_zip_code,
       address_line: selectedClient.address_line || prev.address_line,
       address_number: selectedClient.address_number || prev.address_number,
       address_complement: selectedClient.address_complement || prev.address_complement,

@@ -13,6 +13,7 @@ import { MetricCard } from '@/components/ui/metric-card';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { apiFetch } from '@/lib/api';
 import { useAuthGuard } from '@/lib/use-auth-guard';
+import { ROUTE_ROLES } from '@/lib/route-roles';
 
 type AuditLog = {
   id: number;
@@ -105,7 +106,7 @@ const fieldClass = 'rounded-xl border border-slate-200 bg-white px-3 py-2 text-s
 /* ── Page ─────────────────────────────────────────────────────────────────── */
 
 export default function AuditoriaPage() {
-  const { token, loading: guardLoading, error: guardError } = useAuthGuard(['admin'], '/login/admin');
+  const { token, loading: guardLoading, error: guardError } = useAuthGuard(ROUTE_ROLES['/auditoria'], '/login/admin');
 
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(false);

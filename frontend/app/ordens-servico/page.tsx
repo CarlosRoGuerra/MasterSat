@@ -16,17 +16,17 @@ import { EmptyState, TableSkeleton } from '@/components/ui/empty-state';
 import { usePagination, Pagination } from '@/components/ui/pagination';
 import { apiFetch } from '@/lib/api';
 import { useAuthGuard } from '@/lib/use-auth-guard';
+import { ROUTE_ROLES } from '@/lib/route-roles';
 import { useDebouncedValue, useEffectSkipFirst } from '@/lib/use-debounced-value';
-
-
-type OrderType = 'instalacao' | 'manutencao' | 'retirada' | 'visita_tecnica';
-type OrderStatus = 'aberta' | 'em_andamento' | 'concluida' | 'cancelada';
-type ReviewStatus = 'enviado' | 'em_analise' | 'aprovado' | 'rejeitado' | 'reenvio_solicitado';
-
-type ClientOption = { id: number; name: string };
-type VehicleOption = { id: number; client_id: number; plate: string; model?: string | null };
-type TrackerOption = { id: number; imei: string; client_id?: number | null; vehicle_id?: number | null; status: string };
-type UserOption = { id: number; name: string; role: string };
+import type {
+  OrderType,
+  OrderStatus,
+  DocumentReviewStatus as ReviewStatus,
+  ClientOption,
+  VehicleOption,
+  TrackerOption,
+  UserOption,
+} from '@/lib/domain-types';
 
 type ServiceOrder = {
   id: number;
@@ -213,7 +213,7 @@ function OSTable({
 }
 
 export default function ServiceOrdersPage() {
-  const { token, user, loading: guardLoading, error: guardError } = useAuthGuard(['admin', 'operacional', 'financeiro'], '/login/admin');
+  const { token, user, loading: guardLoading, error: guardError } = useAuthGuard(ROUTE_ROLES['/ordens-servico'], '/login/admin');
   const canEdit = !!user && user.role !== 'financeiro';
 
   const [orders, setOrders] = useState<ServiceOrder[]>([]);
@@ -379,7 +379,7 @@ export default function ServiceOrdersPage() {
     }));
   }
 
-  function useTemplate(type: OrderType) {
+  function applyTemplate(type: OrderType) {
     setForm((prev) => ({ ...prev, type, checklistItems: checklistTemplates[type] }));
   }
 
@@ -707,7 +707,7 @@ export default function ServiceOrdersPage() {
             <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{modalError}</p>
           )}
           <div className="grid gap-4 md:grid-cols-2">
-            <select className={fieldClass} value={form.type} onChange={(e) => useTemplate(e.target.value as OrderType)}>
+            <select className={fieldClass} value={form.type} onChange={(e) => applyTemplate(e.target.value as OrderType)}>
               {orderTypeOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
             </select>
             <select className={fieldClass} value={form.status} onChange={(e) => setForm((prev) => ({ ...prev, status: e.target.value as OrderStatus }))}>

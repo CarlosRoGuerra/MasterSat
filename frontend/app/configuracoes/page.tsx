@@ -10,6 +10,7 @@ import { SectionHeader } from '@/components/ui/section-header';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { apiFetch } from '@/lib/api';
 import { useAuthGuard } from '@/lib/use-auth-guard';
+import { ROUTE_ROLES } from '@/lib/route-roles';
 
 type Mensagens = { msg_boleto: string; msg_boleto_assunto: string };
 type EmailConfig = {
@@ -45,7 +46,7 @@ function renderTemplate(tpl: string, vars: Record<string, string>) {
 const fieldClass = 'w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-500';
 
 export default function ConfiguracoesPage() {
-  const { token, loading: guardLoading, error: guardError } = useAuthGuard(['admin'], '/login/admin');
+  const { token, loading: guardLoading, error: guardError } = useAuthGuard(ROUTE_ROLES['/configuracoes'], '/login/admin');
 
   const [form, setForm] = useState<Mensagens>({ msg_boleto: '', msg_boleto_assunto: '' });
   const [loading, setLoading] = useState(true);

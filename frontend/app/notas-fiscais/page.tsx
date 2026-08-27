@@ -20,6 +20,7 @@ import { Pagination } from '@/components/ui/pagination';
 import { apiFetch, API_URL } from '@/lib/api';
 import { entregarArquivo } from '@/lib/arquivo';
 import { useAuthGuard } from '@/lib/use-auth-guard';
+import { ROUTE_ROLES } from '@/lib/route-roles';
 import { useDebouncedValue } from '@/lib/use-debounced-value';
 
 /* ── Tipos ─────────────────────────────────────────────────────────────── */
@@ -193,7 +194,7 @@ function AcaoIcone({
 
 /* ── Página ────────────────────────────────────────────────────────────── */
 export default function NotasFiscaisPage() {
-  const { token, loading: authLoading } = useAuthGuard(['admin', 'financeiro'], '/login/admin');
+  const { token, loading: authLoading } = useAuthGuard(ROUTE_ROLES['/notas-fiscais'], '/login/admin');
 
   const [aba, setAba] = useState<Aba>('painel');
   const [error, setError] = useState('');

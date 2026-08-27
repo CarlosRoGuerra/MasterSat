@@ -14,6 +14,7 @@ import { Table, TableHead, Th, TableBody, Tr, Td } from '@/components/ui/table';
 import { EmptyState, TableSkeleton } from '@/components/ui/empty-state';
 import { apiFetch } from '@/lib/api';
 import { useAuthGuard } from '@/lib/use-auth-guard';
+import { ROUTE_ROLES } from '@/lib/route-roles';
 
 type InternalRole = 'admin' | 'operacional' | 'financeiro';
 type UserItem = { id: number; name: string; email: string; role: InternalRole | 'cliente'; active: boolean };
@@ -26,7 +27,7 @@ function parseError(e: unknown) { return e instanceof Error ? e.message : 'Erro 
 const roleLabel: Record<string, string> = { admin: 'Administrador', operacional: 'Operacional', financeiro: 'Financeiro' };
 
 export default function UsersPage() {
-  const { token, loading: guardLoading, error: guardError } = useAuthGuard(['admin'], '/login/admin');
+  const { token, loading: guardLoading, error: guardError } = useAuthGuard(ROUTE_ROLES['/usuarios'], '/login/admin');
   const [users, setUsers] = useState<UserItem[]>([]);
   const [selected, setSelected] = useState<UserItem | null>(null);
   const [form, setForm] = useState<UserForm>(initialForm);

@@ -17,9 +17,10 @@ import { MetricCard } from '@/components/ui/metric-card';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { apiFetch, API_URL } from '@/lib/api';
 import { useAuthGuard } from '@/lib/use-auth-guard';
+import { ROUTE_ROLES } from '@/lib/route-roles';
+import type { ClientOption } from '@/lib/domain-types';
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
-type ClientOption = { id: number; name: string; cpf_cnpj: string };
 type FilterType = 'all' | 'pf' | 'pj' | 'client';
 
 type FirstMonthCharge = { item_id: number; title: string; amount: number };
@@ -182,7 +183,7 @@ function StepIndicator({ current }: { current: WizardStep }) {
 /* ── Main page ─────────────────────────────────────────────────────────── */
 export default function FechamentoPage() {
   const { token, loading: guardLoading, error: guardError } = useAuthGuard(
-    ['admin', 'financeiro'],
+    ROUTE_ROLES['/fechamento'],
     '/login/admin',
   );
 

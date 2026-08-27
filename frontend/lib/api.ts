@@ -1,3 +1,5 @@
+import { clearSession } from './auth';
+
 export const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
 
 function buildApiUrl(path: string) {
@@ -60,7 +62,7 @@ export async function logout(loginPath: string = '/login/admin'): Promise<void> 
     // Falha de rede não pode travar o logout local — a sessão local é
     // limpa de qualquer forma; o refresh token expira sozinho no pior caso.
   }
-  localStorage.removeItem('access_token');
+  clearSession();
   window.location.href = loginPath;
 }
 
@@ -105,7 +107,7 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}, token
     // para o login nem sobrescrever a mensagem de erro do backend.
     if (response.status === 401 && effectiveToken && typeof window !== 'undefined') {
       // Refresh indisponível ou também expirado → sessão realmente encerrada
-      localStorage.removeItem('access_token');
+      clearSession();
       window.location.href = loginPathForCurrentPage();
       throw new Error('Sessão expirada.');
     }
@@ -118,7 +120,9 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}, token
       if (typeof data?.detail === 'string') {
         message = data.detail;
       } else if (Array.isArray(data?.detail)) {
-        message = data.detail.map((item: any) => item?.msg || JSON.stringify(item)).join(' | ');
+        message = data.detail
+          .map((item: unknown) => (item as { msg?: string })?.msg || JSON.stringify(item))
+          .join(' | ');
       } else if (data?.detail && typeof data.detail === 'object' && typeof data.detail.message === 'string') {
         // detail estruturado ({code, message, ...}) — mostra a mensagem legível
         message = data.detail.message;

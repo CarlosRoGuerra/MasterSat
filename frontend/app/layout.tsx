@@ -1,5 +1,6 @@
 import './globals.css';
 import type { Metadata, Viewport } from 'next';
+import { QueryProvider } from '@/components/query-provider';
 import { ThemeProvider } from '@/components/theme-provider';
 import { FloatingThemeToggle } from '@/components/theme-toggle';
 
@@ -31,10 +32,12 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   return (
     <html lang="pt-BR" suppressHydrationWarning>
       <body>
-        <ThemeProvider>
-          <FloatingThemeToggle />
-          {children}
-        </ThemeProvider>
+        <QueryProvider>
+          <ThemeProvider>
+            <FloatingThemeToggle />
+            {children}
+          </ThemeProvider>
+        </QueryProvider>
       </body>
     </html>
   );

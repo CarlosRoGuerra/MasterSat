@@ -18,6 +18,7 @@ import { ErrorBanner } from '@/components/ui/error-banner';
 import { RevenueChart } from '@/components/ui/revenue-chart';
 import { apiFetch, API_URL } from '@/lib/api';
 import { useAuthGuard } from '@/lib/use-auth-guard';
+import { ROUTE_ROLES } from '@/lib/route-roles';
 
 /** Abre um export protegido em nova aba (PDF) ou baixa (CSV/Excel). */
 async function abrirExport(token: string, path: string, baixarComo?: string) {
@@ -108,7 +109,7 @@ function isoMinus(days: number) {
 /* ── Componente ────────────────────────────────────────────────────────── */
 export default function RelatoriosPage() {
   const { token, loading: guardLoading, error: guardError } = useAuthGuard(
-    ['admin', 'financeiro'],
+    ROUTE_ROLES['/relatorios'],
     '/login/admin',
   );
 

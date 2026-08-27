@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import clsx from 'clsx';
 import {
   LayoutDashboard,
@@ -25,6 +25,8 @@ import {
 
 import { logout } from '@/lib/api';
 import { ThemeToggle } from '@/components/theme-toggle';
+import { ROUTE_ROLES } from '@/lib/route-roles';
+import { useCurrentUser } from '@/lib/use-current-user';
 
 type NavItem = { href: string; label: string; icon: React.ComponentType<{ className?: string }> };
 type NavGroup = { label: string; items: NavItem[] };
@@ -83,6 +85,21 @@ function NavTooltip({ label, children }: { label: string; children: React.ReactN
 export function Sidebar() {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
+  const { data: user } = useCurrentUser();
+
+  // Enquanto o role ainda não chegou (ou não achamos restrição para a rota),
+  // o item fica visível — quem realmente barra é o backend (require_roles);
+  // aqui é só organização de menu, então o lado seguro é mostrar de mais, não
+  // esconder uma tela que o usuário tem acesso.
+  const visibleGroups = useMemo(() => {
+    return NAV_GROUPS.map((group) => ({
+      ...group,
+      items: group.items.filter((item) => {
+        const allowed = ROUTE_ROLES[item.href];
+        return !allowed || !user || allowed.includes(user.role);
+      }),
+    })).filter((group) => group.items.length > 0);
+  }, [user]);
 
   // Persist collapsed state
   useEffect(() => {
@@ -132,7 +149,7 @@ export function Sidebar() {
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto overflow-x-hidden px-2 py-3">
         <div className="space-y-4">
-          {NAV_GROUPS.map((group, gi) => (
+          {visibleGroups.map((group, gi) => (
             <div key={group.label}>
               {/* Group separator + label (expanded only) */}
               {gi > 0 && !collapsed && (
