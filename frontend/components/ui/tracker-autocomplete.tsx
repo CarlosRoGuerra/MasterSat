@@ -138,7 +138,7 @@ export function TrackerAutocomplete({
         <div className="absolute z-50 mt-1 max-h-60 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-elevated dark:border-slate-700 dark:bg-slate-900">
           {filtered.length === 0 ? (
             <div className="px-4 py-3 text-sm text-slate-400 dark:text-slate-500">
-              Nenhum equipamento encontrado para "{query}"
+              Nenhum equipamento encontrado para &quot;{query}&quot;
             </div>
           ) : (
             filtered.slice(0, 20).map((tracker) => (

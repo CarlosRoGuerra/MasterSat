@@ -53,9 +53,12 @@ export function ClientAutocomplete({
   const filtered = query.trim()
     ? clients.filter((c) => {
         const q = query.trim().toLowerCase();
+        const qDigits = q.replace(/\D/g, '');
         return (
           c.name.toLowerCase().includes(q) ||
-          (c.cpf_cnpj ?? '').replace(/\D/g, '').includes(q.replace(/\D/g, ''))
+          // "".includes("") é sempre true — sem o length>0, buscar um texto
+          // sem nenhum dígito (ex.: "zzz") batia com QUALQUER cliente aqui.
+          (qDigits.length > 0 && (c.cpf_cnpj ?? '').replace(/\D/g, '').includes(qDigits))
         );
       })
     : [];
@@ -136,7 +139,7 @@ export function ClientAutocomplete({
         <div className="absolute z-50 mt-1 max-h-60 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-elevated dark:border-slate-700 dark:bg-slate-900">
           {filtered.length === 0 ? (
             <div className="px-4 py-3 text-sm text-slate-400 dark:text-slate-500">
-              Nenhum cliente encontrado para "{query}"
+              Nenhum cliente encontrado para &quot;{query}&quot;
             </div>
           ) : (
             filtered.slice(0, 20).map((client) => (
