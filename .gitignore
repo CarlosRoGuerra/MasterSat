@@ -2,8 +2,12 @@
 frontend/node_modules/
 frontend/.next/
 frontend/.env*.local
+frontend/coverage/
 
 # ─── Backend ────────────────────────────────────────────────────────────────
+# Artefato intermediário do generate_openapi.py — só o TS gerado a partir
+# dele (frontend/lib/api-types.generated.ts) é versionado.
+backend/openapi.json
 backend/__pycache__/
 backend/**/__pycache__/
 **/__pycache__/
