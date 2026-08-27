@@ -168,8 +168,24 @@ def retry_queue_item(
     item = db.get(MultiportalOutbox, item_id)
     if item is None:
         raise HTTPException(status_code=404, detail='Item da fila não encontrado.')
-    if item.status == 'done':
-        raise HTTPException(status_code=400, detail='Este item já foi concluído.')
+    if item.status != 'failed':
+        raise HTTPException(
+            status_code=409,
+            detail='Somente uma falha terminal pode ser reenfileirada manualmente.',
+        )
+    active_item = db.scalar(
+        select(MultiportalOutbox.id).where(
+            MultiportalOutbox.tracker_id == item.tracker_id,
+            MultiportalOutbox.operation == item.operation,
+            MultiportalOutbox.status.in_(('pending', 'processing')),
+            MultiportalOutbox.id != item.id,
+        )
+    )
+    if active_item is not None:
+        raise HTTPException(
+            status_code=409,
+            detail='Este rastreador já possui uma sincronização ativa na fila.',
+        )
 
     item.status = 'pending'
     item.attempts = 0
@@ -247,10 +263,7 @@ def reprocess_last_failed(tracker_id: int, db: Session = Depends(get_db), _: obj
         if failed_log.operation == 'sincronizaCliente':
             if not local_client:
                 raise HTTPException(status_code=400, detail='Rastreador sem cliente vinculado para reprocessar cliente.')
-            steps = [multiportal_service.sync_client(
-                local_client, linked_user,
-                contract=active_contract_for(db, vehicle_id=vehicle.id if vehicle else None, client_id=local_client.id),
-            )]
+            steps = [multiportal_service.sync_client(local_client, linked_user)]
         elif failed_log.operation == 'sincronizaUsuario':
             if not local_client or not linked_user:
                 raise HTTPException(status_code=400, detail='Cliente sem usuário de portal vinculado para reprocessar.')
@@ -299,10 +312,7 @@ def sync_client(client_id: int, db: Session = Depends(get_db), _: object = Depen
     linked_user = _linked_client_user(local_client.id, db)
     batch_id = uuid4().hex
     try:
-        result = multiportal_service.sync_client(
-            local_client, linked_user,
-            contract=active_contract_for(db, client_id=local_client.id),
-        )
+        result = multiportal_service.sync_client(local_client, linked_user)
     except MultiportalError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     _save_log(db=db, batch_id=batch_id, entity_type='client', entity_id=local_client.id, result=result)
@@ -352,7 +362,6 @@ def sync_flow(tracker_id: int, db: Session = Depends(get_db), _: object = Depend
     try:
         steps = multiportal_service.full_sync_for_tracker(
             tracker=tracker, vehicle=vehicle, local_client=local_client, linked_user=linked_user,
-            contract=active_contract_for(db, vehicle_id=vehicle.id, client_id=local_client.id),
         )
     except MultiportalError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -830,6 +830,63 @@ class TestLinkVeiculo:
         assert rastreador_instalado.vehicle_id == veiculo.id
         assert contrato.status == 'ativo'
 
+    def test_transfer_nao_cria_destino_se_desvinculo_antigo_nao_for_confirmado(
+        self, http, db, cliente, veiculo, rastreador_instalado, contrato, monkeypatch,
+    ):
+        from app.models.vehicle import Vehicle
+        from app.services.multiportal import multiportal_service
+
+        destination = Vehicle(
+            client_id=cliente.id,
+            plate='NEW8H90',
+            type='passeio',
+            chassis='9BWZZZ377VT000328',
+        )
+        db.add(destination)
+        rastreador_instalado.integration_status = 'sincronizado'
+        db.commit()
+        db.refresh(destination)
+        _enable_multiportal(monkeypatch)
+        calls = []
+
+        def unlink(tracker, vehicle, when=None):
+            calls.append(('unlink', vehicle.id))
+            return _multiportal_result(
+                'vinculoEquipamentoVeiculo',
+                success=vehicle.id != veiculo.id,
+            )
+
+        def relink(tracker, vehicle, when=None):
+            calls.append(('relink', vehicle.id))
+            return _multiportal_result('vinculoEquipamentoVeiculo')
+
+        monkeypatch.setattr(multiportal_service, 'unlink_equipment_vehicle', unlink)
+        monkeypatch.setattr(multiportal_service, 'link_equipment_vehicle', relink)
+        monkeypatch.setattr(
+            multiportal_service,
+            'sync_client',
+            lambda *args, **kwargs: pytest.fail('destino não pode ser criado antes de encerrar o vínculo antigo'),
+        )
+
+        r = http.post(
+            f'{PREFIX}/{rastreador_instalado.id}/link-vehicle',
+            json={'vehicle_id': destination.id, 'confirm_transfer': True},
+        )
+
+        assert r.status_code == 502
+        assert r.json()['detail']['reconciliation_required'] is False
+        # A limpeza do destino é idempotente para cobrir resposta perdida; em
+        # seguida o estado antigo é restaurado antes de devolver o erro.
+        assert calls == [
+            ('unlink', veiculo.id),
+            ('unlink', destination.id),
+            ('relink', veiculo.id),
+        ]
+        db.refresh(rastreador_instalado)
+        db.refresh(contrato)
+        assert rastreador_instalado.vehicle_id == veiculo.id
+        assert contrato.status == 'ativo'
+
     def test_synced_transfer_is_blocked_when_multiportal_is_disabled(
         self, http, db, cliente, veiculo, rastreador_instalado, contrato,
     ):

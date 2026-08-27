@@ -1,5 +1,8 @@
 fastapi==0.115.0
 slowapi==0.1.9
+# Backend de storage do slowapi/limits (rate limit compartilhado entre workers
+# uvicorn via Redis — ver app/core/limiter.py).
+redis==5.0.8
 uvicorn[standard]==0.30.6
 sqlalchemy==2.0.35
 psycopg[binary]==3.2.1

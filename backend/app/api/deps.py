@@ -7,6 +7,7 @@ from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.security import token_revogado
 from app.db.session import get_db
 from app.models.enums import UserRole
 from app.models.user import User
@@ -31,6 +32,10 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
 
     user = db.get(User, int(user_id))
     if not user or not user.active or user.is_deleted:
+        raise credentials_exception
+    # Sessao revogada (troca de senha) — o token e valido criptograficamente,
+    # mas foi emitido antes do corte.
+    if token_revogado(payload, user.tokens_valid_from):
         raise credentials_exception
     return user
 

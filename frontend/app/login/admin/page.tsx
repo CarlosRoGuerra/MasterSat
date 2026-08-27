@@ -12,7 +12,6 @@ import { AuthUser, redirectByRole, saveSession } from '@/lib/auth';
 
 type LoginResponse = {
   access_token: string;
-  refresh_token: string;
   token_type: string;
 };
 
@@ -32,7 +31,7 @@ export default function AdminLoginPage() {
         method: 'POST',
         body: JSON.stringify({ email, password }),
       });
-      saveSession(result.access_token, result.refresh_token);
+      saveSession(result.access_token);
       const me = await apiFetch<AuthUser>('/auth/me', {}, result.access_token);
       redirectByRole(me);
     } catch (err) {

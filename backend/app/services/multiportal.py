@@ -19,7 +19,10 @@ from app.models.vehicle import Vehicle as LocalVehicle
 
 
 SUCCESS_CODES = {'0', '200'}
-IDEMPOTENT_CODES = {'20', '21', '22', '40', '56', '59'}
+# O provedor usa estes códigos para informar que o estado desejado já existe.
+# Eles são sucesso idempotente, não falha: em especial 55/58 confirmam que o
+# desvínculo solicitado já estava concluído.
+IDEMPOTENT_CODES = {'11', '20', '21', '22', '40', '55', '56', '58', '59', '64'}
 SOFT_SUCCESS_CODES = SUCCESS_CODES | IDEMPOTENT_CODES
 
 VEHICLE_TYPE_MAP = {
@@ -180,9 +183,8 @@ class MultiportalService:
         linked_user: LocalUser | None = None,
         *,
         operation_code: int = 1,
-        contract: Any | None = None,
     ) -> CallResult:
-        payload = self._build_client_payload(local_client, linked_user, contract)
+        payload = self._build_client_payload(local_client, linked_user)
         result = self._call(
             'sincronizaCliente',
             id=settings.multiportal_id,
@@ -191,11 +193,18 @@ class MultiportalService:
             cliente=payload,
         )
         if result.status_code == '20' and operation_code == 1:
-            return self.sync_client(local_client, linked_user, operation_code=4, contract=contract)
+            return self.sync_client(local_client, linked_user, operation_code=4)
         return result
 
     def sync_user(self, local_client: LocalClient, linked_user: LocalUser, *, operation_code: int = 1) -> CallResult:
-        payload = self._build_user_payload(local_client, linked_user)
+        # A senha só pertence ao cadastro inicial. Reenviá-la numa alteração
+        # comum (cliente, veículo, contrato ou rastreador) redefine o acesso do
+        # cliente e pode disparar vários e-mails de boas-vindas durante retries.
+        payload = self._build_user_payload(
+            local_client,
+            linked_user,
+            provision_credentials=operation_code == 1,
+        )
         result = self._call(
             'sincronizaUsuario',
             id=settings.multiportal_id,
@@ -346,11 +355,13 @@ class MultiportalService:
         vehicle: LocalVehicle,
         local_client: LocalClient,
         linked_user: LocalUser | None,
-        contract: Any | None = None,
+        sync_portal_user: bool = True,
     ) -> list[CallResult]:
         results: list[CallResult] = []
-        results.append(self.sync_client(local_client, linked_user, contract=contract))
-        if linked_user and settings.multiportal_group_codes:
+        # Usuário é sincronizado numa chamada própria. Embuti-lo também em
+        # sincronizaCliente duplicava o provisionamento e gerava outra senha.
+        results.append(self.sync_client(local_client, None))
+        if sync_portal_user and linked_user and settings.multiportal_group_codes:
             results.append(self.sync_user(local_client, linked_user))
         results.append(self.sync_vehicle(vehicle))
         results.append(self.sync_equipment(tracker))
@@ -374,12 +385,10 @@ class MultiportalService:
         self,
         local_client: LocalClient,
         linked_user: LocalUser | None,
-        contract: Any | None = None,
     ) -> dict[str, Any]:
         payload = self._build_client_reference(local_client)
-        payload.update(self._build_contract_fields(contract))
         if local_client.type == 'pj':
-            payload['nomeFantasia'] = local_client.name
+            payload['nomeFantasia'] = (getattr(local_client, 'trade_name', None) or local_client.name)
 
         addresses = self._build_addresses(local_client)
         if addresses:
@@ -387,8 +396,6 @@ class MultiportalService:
         contacts = self._build_contacts(local_client)
         if contacts:
             payload['listaContatos'] = contacts
-        if linked_user and settings.multiportal_group_codes:
-            payload['usuario'] = self._build_user_payload(local_client, linked_user)
         return payload
 
     def _build_vehicle_payload(self, vehicle: LocalVehicle) -> dict[str, Any]:
@@ -473,88 +480,32 @@ class MultiportalService:
         alfabeto = string.ascii_letters + string.digits
         return ''.join(secrets.choice(alfabeto) for _ in range(tamanho))
 
-    def _build_user_payload(self, local_client: LocalClient, linked_user: LocalUser) -> dict[str, Any]:
+    def _build_user_payload(
+        self,
+        local_client: LocalClient,
+        linked_user: LocalUser,
+        *,
+        provision_credentials: bool = True,
+    ) -> dict[str, Any]:
         login = (linked_user.email or local_client.email or self._digits(local_client.cpf_cnpj)).strip().lower()
         if not login:
             raise MultiportalError('Cliente sem login/e-mail válido para criação do usuário no portal Multiportal.')
-        return {
+        payload: dict[str, Any] = {
             'codigoIntegracao': linked_user.id,
             'login': login,
-            'senha': self._gerar_senha_portal(),
             'nome': linked_user.name or local_client.name,
             'tipoUsuario': 'C',
             'codigosGrupo': settings.multiportal_group_codes,
             'documentoCliente': self._digits(local_client.cpf_cnpj),
             'email': local_client.email,
-            # Senha aleatória PRECISA chegar ao cliente — força o e-mail de
-            # boas-vindas do portal (senão o cliente ficaria sem saber a senha).
-            'enviarEmail': True,
         }
-
-    # Códigos de formaPagamento aceitos pelo provedor. O WSDL declara o campo
-    # como xs:int sem enumeração, e o servidor valida códigos (já recusou
-    # 'relacao 9' em contatos), então um palpite quebraria a sincronização de
-    # todos os clientes. Fica vazio até o fornecedor confirmar a tabela: com o
-    # dicionário vazio, o campo simplesmente não é enviado — mesmo
-    # comportamento de hoje, sem risco.
-    _FORMA_PAGAMENTO_CODES: dict[str, int] = {}
-
-    def _build_contract_fields(self, contract: Any | None) -> dict[str, Any]:
-        """Dados contratuais do cliente para o provedor.
-
-        Estes quatro campos eram enviados fixos como None, então o cliente
-        chegava ao sistema que efetivamente entrega o rastreamento sem número
-        de contrato, sem dia de vencimento e sem duração — informação que o
-        provedor usa para cobrança e vigência.
-
-        Só é enviado o que tem significado inequívoco no WSDL. formaPagamento
-        depende de uma tabela de códigos que ainda não temos (ver
-        _FORMA_PAGAMENTO_CODES).
-        """
-        campos: dict[str, Any] = {
-            'numeroContrato': None,
-            'diaVencimentoFatura': None,
-            'tempoContrato': None,
-            'formaPagamento': None,
-        }
-        if contract is None:
-            return campos
-
-        numero = getattr(contract, 'contract_number', None) or getattr(contract, 'id', None)
-        if numero is not None:
-            campos['numeroContrato'] = str(numero)
-
-        billing_day = getattr(contract, 'billing_day', None)
-        if billing_day:
-            campos['diaVencimentoFatura'] = int(billing_day)
-
-        meses = self._contract_duration_months(contract)
-        if meses:
-            campos['tempoContrato'] = meses
-
-        metodo = (getattr(contract, 'payment_method', None) or '').strip().lower()
-        codigo = self._FORMA_PAGAMENTO_CODES.get(metodo)
-        if codigo is not None:
-            campos['formaPagamento'] = codigo
-
-        return campos
-
-    @staticmethod
-    def _contract_duration_months(contract: Any) -> int | None:
-        """Vigência do contrato em meses (tempoContrato é xs:int).
-
-        Preferimos a vigência real (início → fim). Sem data de término, o
-        contrato é por prazo indeterminado e nada é enviado — melhor omitir do
-        que informar uma duração inventada.
-        """
-        inicio = getattr(contract, 'start_date', None)
-        fim = getattr(contract, 'end_date', None)
-        if not inicio or not fim:
-            return None
-        meses = (fim.year - inicio.year) * 12 + (fim.month - inicio.month)
-        if fim.day < inicio.day:
-            meses -= 1
-        return meses if meses > 0 else None
+        if provision_credentials:
+            payload['senha'] = self._gerar_senha_portal()
+            # A senha não é persistida localmente; no cadastro inicial ela
+            # precisa chegar ao cliente. Em alterações, senha e enviarEmail são
+            # omitidos (ambos minOccurs=0 no WSDL).
+            payload['enviarEmail'] = True
+        return payload
 
     def _build_addresses(self, local_client: LocalClient) -> list[dict[str, Any]]:
         """Endereço do cliente — hoje sempre vazio, por limitação do provedor.
@@ -590,7 +541,6 @@ class MultiportalService:
         for idx, c in enumerate(extra_contacts, start=1):
             if isinstance(c, dict):
                 phone = (c.get('phone') or '').strip()
-                email = (c.get('email') or '').strip()
                 name = (c.get('name') or local_client.name).strip()
                 if phone:
                     contacts.append({
@@ -599,14 +549,6 @@ class MultiportalService:
                         'tipoContato': 2,
                         'relacao': 7,  # Proprietário — relacao 9 rejeitado pelo servidor
                         'valor': phone,
-                    })
-                if email:
-                    contacts.append({
-                        'codigoIntegracao': int(f'{local_client.id}9{idx}2'),
-                        'nome': name,
-                        'tipoContato': 5,
-                        'relacao': 7,  # Proprietário
-                        'valor': email,
                     })
         # tipoContato 5 (E-mail) rejeitado por esta versão do servidor.
         # E-mails são enviados no campo `email` do cliente, não como contato separado.

@@ -1,0 +1,46 @@
+# =============================================================================
+# Contexto de build do backend.
+#
+# ATENÇÃO: o .gitignore NÃO tem efeito sobre o Docker. Sem este arquivo, o
+# "COPY . ." do Dockerfile leva para dentro da imagem o certificado ICP-Brasil
+# (backend/certs/*.pfx) e os tokens da Ailos (backend/scripts/*.json) — que a
+# senha do .pfx acompanha via env_file. Qualquer um com a imagem passaria a
+# poder assinar NFS-e em nome da empresa.
+#
+# Ao adicionar um segredo novo ao repositório, adicione-o AQUI e no .gitignore.
+# =============================================================================
+
+# ── Segredos ─────────────────────────────────────────────────────────────────
+certs/
+*.pfx
+*.p12
+*.PFX
+*.P12
+*.pem
+*.key
+.env
+.env.*
+scripts/ailos_cooperado_jwt.json
+scripts/ailos_login_gerado.json
+
+# ── Artefatos gerados / material de referência ───────────────────────────────
+scripts/nfse_saida/
+*.pdf
+nfse_rps_teste.xml
+scripts/nfse_rps_teste.xml
+scripts/*.postman_collection.json
+
+# ── Testes e caches (não pertencem à imagem de runtime) ──────────────────────
+tests/
+.pytest_cache/
+htmlcov/
+.coverage
+requirements-test.txt
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+
+# ── Build ────────────────────────────────────────────────────────────────────
+dist/
+build/

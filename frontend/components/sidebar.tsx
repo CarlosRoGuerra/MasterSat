@@ -23,7 +23,7 @@ import {
   Settings,
 } from 'lucide-react';
 
-import { clearSession } from '@/lib/auth';
+import { logout } from '@/lib/api';
 import { ThemeToggle } from '@/components/theme-toggle';
 
 type NavItem = { href: string; label: string; icon: React.ComponentType<{ className?: string }> };
@@ -193,7 +193,7 @@ export function Sidebar() {
         {collapsed ? (
           <NavTooltip label="Sair">
             <button
-              onClick={() => { clearSession(); window.location.href = '/login/admin'; }}
+              onClick={() => { logout('/login/admin'); }}
               className="flex h-9 w-9 items-center justify-center rounded-xl text-slate-500 transition-colors hover:bg-red-50 hover:text-red-600 dark:text-slate-500 dark:hover:bg-red-950/40 dark:hover:text-red-400"
             >
               <LogOut className="h-4 w-4 shrink-0" />
@@ -201,7 +201,7 @@ export function Sidebar() {
           </NavTooltip>
         ) : (
           <button
-            onClick={() => { clearSession(); window.location.href = '/login/admin'; }}
+            onClick={() => { logout('/login/admin'); }}
             className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium text-slate-500 transition-colors hover:bg-red-50 hover:text-red-600 dark:text-slate-500 dark:hover:bg-red-950/40 dark:hover:text-red-400"
           >
             <LogOut className="h-4 w-4 shrink-0" />

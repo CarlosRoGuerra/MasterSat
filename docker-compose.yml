@@ -20,8 +20,12 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     # Sem porta publicada: acessível apenas pela rede interna do Docker
     # (backend usa "redis:6379"). Nunca exponha Redis sem senha à internet.
+    # restart: o rate limiter (app/core/limiter.py) agora depende do Redis em
+    # toda requisição — sem auto-restart, uma queda do container derrubava o
+    # rate limiting da aplicação inteira até alguém perceber e subir na mão.
 
   minio:
     image: minio/minio:latest

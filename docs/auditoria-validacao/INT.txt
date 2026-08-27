@@ -1,0 +1,170 @@
+VALIDAÇÃO DA AUDITORIA MASTERSAT — INTEGRAÇÕES EXTERNAS (INT-01 a INT-03)
+================================================================
+Verificação feita contra o código real do repositório em 27/08/2026.
+Nenhum arquivo do projeto foi alterado durante esta verificação.
+
+
+INT-01 — Redis provisionado mas nunca referenciado pelo código
+-----------------------------------------------------------------
+STATUS: CONFIRMADO + achado adicional relevante
+SEVERIDADE ORIGINAL: Baixa (mas prioridade P2 no roadmap — inconsistência
+do próprio relatório)  →  SEVERIDADE REAL: Baixa como custo de infra
+isolado / Média se avaliado junto com a eficácia do rate limit
+
+Evidência verificada:
+- grep -ri "redis" em backend/app/**/*.py: ZERO ocorrências —
+  confirmado, inclusive case-insensitive.
+- Nem sequer o pacote cliente "redis" está em backend/requirements.txt
+  (grep vazio) — não é uma dependência instalada sem uso, é ausência
+  total.
+- Serviço redis presente e ativo como depends_on em TODOS os 3
+  compose files: docker-compose.yml:21-24 (define redis:7-alpine),
+  docker-compose.prod.yml:83, docker-compose.caddy.yml:45.
+- Os diffs não commitados de docker-compose.prod.yml e
+  docker-compose.caddy.yml são sobre outra coisa (correção do
+  X-Forwarded-For/--proxy-headers para o rate limiter) — a linha do
+  serviço redis permanece intocada.
+
+ACHADO ADICIONAL: backend/app/core/limiter.py (também tocado pelo
+hardening recente) usa slowapi.Limiter(key_func=client_ip,
+default_limits=['200/minute']) SEM storage_uri — armazenamento em
+memória do processo. Combinado com docker-compose.prod.yml usando
+--workers 3, isso é exatamente o cenário para o qual o Redis
+provisionado deveria servir (estado compartilhado entre workers) e
+nunca foi conectado. Ver SEC.txt (SEC-03) para os detalhes completos
+desse lado do problema.
+
+Avaliação: a severidade intrínseca de "Redis órfão" é Baixa (custo de
+infra ocioso), mas vale desmembrar em dois achados distintos:
+  (a) Redis órfão — Baixa/limpeza.
+  (b) rate limiter sem storage compartilhado entre workers — Média/
+      segurança (= SEC-03).
+A prioridade P2 atribuída pelo relatório original só faz sentido sob
+a leitura (b).
+
+Correção recomendada: conectar o Limiter ao Redis já provisionado
+(storage_uri="redis://redis:6379/0") — resolve os dois achados (INT-01
+e SEC-03) com custo de infra ZERO adicional, já que o serviço já está
+de pé. ATENÇÃO ao efeito colateral: checar timeout/retry do slowapi se
+o Redis cair (decidir entre falha aberta ou fechada no rate limit).
+Se a decisão for remover o Redis em vez de usá-lo, checar antes se não
+há uso futuro planejado (cache de sessão, filas).
+Risco da mudança: baixo.
+
+Dependências: mesmo fix de SEC-03 (ver SEC.txt).
+
+
+INT-02 — Threads daemon no processo web para keepalive/conciliação/outbox
+-----------------------------------------------------------------
+STATUS: CONFIRMADO, RISCO MITIGADO (mais baixo do que a leitura
+superficial sugere)
+SEVERIDADE ORIGINAL: Baixa  →  SEVERIDADE REAL: Baixa (mantida)
+
+Evidência verificada:
+- backend/app/main.py: _cooperado_token_keepalive (linha 552),
+  _ailos_baixa_automatica (linha 599), _multiportal_outbox_worker
+  (linha 653) existem exatamente como descrito.
+- Disparo via threading.Thread(..., daemon=True).start() nas linhas
+  756, 757 e 763, dentro do hook @app.on_event('startup').
+- IMPORTANTE — ADVISORY LOCKS EXISTEM E COORDENAM MÚLTIPLOS WORKERS:
+  há um helper _run_locked(lock_key, fn) (linha 511) que usa
+  pg_try_advisory_lock/pg_advisory_unlock numa CONEXÃO DEDICADA
+  (separada da sessão de trabalho, com comentário explícito sobre um
+  bug anterior de commit descartado, já corrigido).
+  _cooperado_token_keepalive usa a chave 918273646,
+  _ailos_baixa_automatica usa 918273647. O boot também serializa
+  schema/seed com pg_advisory_lock(918273645) (linhas 723/746). O
+  outbox do Multiportal usa pg_advisory_xact_lock(namespace,
+  tracker_id) por item (multiportal_outbox.py:85), não um lock único
+  global.
+
+Avaliação: a alegação "sem separação de worker" está parcialmente
+correta apenas no sentido de PROCESSO (não há um worker dedicado tipo
+Celery/RQ separado do processo web) — mas a alegação implícita de
+risco de corrida entre múltiplos workers uvicorn NÃO É UM RISCO REAL
+HOJE, porque o advisory lock do Postgres já impede duplo-
+processamento com --workers 3 em produção.
+
+Correção recomendada: NÃO é urgente na escala atual. Se o crescimento
+exigir múltiplas instâncias/máquinas, migrar para scheduler dedicado
+(APScheduler standalone, Celery beat, cron chamando endpoints
+internos) é o caminho natural. ATENÇÃO: extrair para worker separado
+exige reproduzir a lógica de alerta (_alerta_admin, _alerta_fila) e
+os hooks de graceful shutdown; e as threads hoje importam módulos de
+forma lazy para evitar import circular no boot — isso precisaria ser
+revisitado na migração.
+Risco da mudança: baixo — não fazer nada agora é opção legítima;
+documentar o limite de escala é suficiente por ora.
+
+Dependências: reforça o mesmo padrão de BE-05 (lógica de
+reconciliação acoplada ao processo de request/boot em vez de
+infraestrutura de jobs dedicada).
+
+
+INT-03 — CNAB 240/400 e Multiportal SOAP sem teste de contrato real
+-----------------------------------------------------------------
+STATUS: CONFIRMADO, SEVERIDADE DEVE SUBIR PARA A PARTE DE CNAB
+SEVERIDADE ORIGINAL: Baixa  →  SEVERIDADE REAL: Média para CNAB
+(SUBIR), Baixa mantida para Multiportal
+
+Evidência verificada:
+- services/cnab240.py (480 linhas) e services/cnab400.py (310 linhas)
+  existem, mas NÃO TÊM NENHUM TESTE — nem unitário, nem de contrato
+  (grep e glob em backend/tests/ por "cnab240"/"cnab400"/"*cnab*"
+  retornam vazio). Isso é MAIS GRAVE do que "falta contrato contra
+  parceiro real" — falta teste de QUALQUER TIPO para 790 linhas de
+  geração de arquivo de remessa bancária.
+- services/multiportal.py TEM cobertura de testes unitários robusta:
+  test_multiportal_service.py (67 testes) e test_multiportal_outbox.py
+  (34 testes) — mas o próprio docstring do arquivo de teste declara
+  explicitamente que NENHUMA chamada SOAP real é feita — tudo mockado
+  via pytest-mock/unittest.mock. Confirma exatamente o que o achado
+  diz: há testes unitários, mas nenhum "circuito de contrato" contra
+  o WSDL real do Multiportal.
+- backend/scripts/ailos_homologacao.py EXISTE, mas é de uma
+  INTEGRAÇÃO DIFERENTE: testa a API de cobrança bancária Ailos
+  (boletos), não CNAB 240/400 nem o SOAP do Multiportal. Se o
+  relatório original o citou como "prova de padrão replicável", isso
+  é IMPRECISO — é evidência de um padrão para uma integração
+  diferente, não fecha a lacuna real de CNAB/Multiportal.
+
+Avaliação: recomendo desmembrar o achado — CNAB (zero cobertura de
+teste em gerador de arquivo bancário, risco operacional real: um bug
+pode gerar remessa rejeitada pelo banco só descoberto em produção)
+merece Média; Multiportal (já tem 101 testes unitários, só falta o
+"contract test" fino) permanece Baixa.
+
+Correção recomendada: PRIORIDADE MAIOR — testes unitários/snapshot
+para CNAB 240/400 (comparando saída com arquivo de referência
+homologado pelo banco), mais urgente que um "smoke test de
+homologação" para o Multiportal. Para o Multiportal, formalizar os
+scripts manuais como smoke test sob demanda (não em CI, consome
+ambiente externo real) — mas ATENÇÃO: não há evidência de ambiente
+sandbox do Multiportal disponível (multiportal_wsdl_url aponta só
+para produção em config.py), então "testar contra o parceiro real"
+pode não ser operacionalmente viável sem acordo com o fornecedor.
+Risco da mudança: baixo — adicionar testes é estritamente aditivo;
+risco maior seria testar contra o ambiente real do Multiportal sem
+sandbox dedicado (poderia gerar cadastros de teste no sistema do
+parceiro).
+
+Dependências: toca BE-06 (boleto_ailos.py, usado por CNAB) — corrigir
+a duplicação de constantes ali deveria vir acompanhada de testes de
+CNAB para não regredir silenciosamente.
+
+
+RESUMO INT
+-----------------------------------------------------------------
+Os 3 achados são reais. INT-01 tem um achado adicional importante
+(rate limiter sem storage compartilhado — mesmo problema de SEC-03).
+INT-02 tem seu risco de corrida real MITIGADO pelos advisory locks já
+existentes — o problema é só arquitetural/de escala futura, não uma
+falha ativa. INT-03 subestima a gravidade do lado CNAB (zero testes,
+não só "falta contrato real") e cita incorretamente
+ailos_homologacao.py como evidência de um padrão que na verdade é de
+outra integração.
+
+Ordem sugerida dentro de INT:
+  1. INT-01 (junto com SEC-03 — mesmo fix, resolve os dois)
+  2. INT-03 — CNAB primeiro (junto com BE-06)
+  3. INT-02 (não urgente — só documentar limite de escala por ora)

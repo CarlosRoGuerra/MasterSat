@@ -69,7 +69,15 @@ services:
     volumes: !override
       - ${NFSE_CERT_DIR:-/opt/mastersat/certs}:/certs:ro
     # Sem --reload em produção; múltiplos workers para usar os núcleos da VPS.
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "3", "--proxy-headers", "--forwarded-allow-ips=*"]
+    # SEM --proxy-headers/--forwarded-allow-ips=*: com "*" a uvicorn confia
+    # cegamente no X-Forwarded-For e usa a entrada MAIS A ESQUERDA — escrita
+    # pelo cliente — como request.client.host. Isso tornava o rate limit de
+    # login contornavel (basta variar o header) e a auditoria forjavel.
+    # O IP real e resolvido em app/core/client_ip.py, que le a ULTIMA entrada
+    # do XFF (a que o nginx anexa). Nao troque por um CIDR: a uvicorn 0.30.6
+    # fixada no requirements.txt e anterior ao suporte a CIDR e a mascara
+    # nunca casaria — todas as requisicoes cairiam no mesmo balde.
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "3"]
     depends_on:
       db: { condition: service_healthy }
       redis: { condition: service_started }

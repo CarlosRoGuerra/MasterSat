@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import require_roles
 from app.core.config import settings
 from app.core.security import create_file_access_token
+from app.core.uploads import read_limited, safe_object_name, validate_content_type
 from app.db.session import get_db
 from app.models.billing import Billing
 from app.models.client import Client
@@ -249,7 +250,8 @@ def uninstall_vehicle(
     if vehicle.status == VehicleStatus.REMOVED:
         raise HTTPException(status_code=400, detail='Este veículo já está desinstalado.')
 
-    if uninstall_date > date.today():
+    from app.core.timezone import hoje
+    if uninstall_date > hoje():
         raise HTTPException(status_code=422, detail='A data de desinstalação não pode estar no futuro.')
 
     trackers = list(
@@ -514,16 +516,17 @@ async def upload_vehicle_document(
 
     normalized_category = category.strip().lower() or 'geral'
     for file in files:
-        content = await file.read()
+        content_type = validate_content_type(file)
+        content = await read_limited(file)
         if not content:
             continue
-        object_key = f'vehicles/{item_id}/{uuid4()}-{file.filename}'
-        upload_bytes(object_name=object_key, content=content, content_type=file.content_type or 'application/octet-stream')
+        object_key = f'vehicles/{item_id}/{uuid4()}-{safe_object_name(file.filename)}'
+        upload_bytes(object_name=object_key, content=content, content_type=content_type)
 
         document = Document(
             file_name=file.filename,
             object_key=object_key,
-            content_type=file.content_type or 'application/octet-stream',
+            content_type=content_type,
             size_bytes=len(content),
             reference_type='vehicle',
             reference_id=item_id,

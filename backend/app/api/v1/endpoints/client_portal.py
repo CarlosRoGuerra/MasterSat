@@ -31,6 +31,7 @@ from app.services.multiportal_sync_state import (
     has_relevant_changes,
     invalidate_client_trackers,
 )
+from app.core.uploads import read_limited, safe_object_name, validate_content_type
 from app.services.storage import remove_object, upload_bytes
 
 router = APIRouter()
@@ -350,23 +351,23 @@ async def upload_my_document(
     if category not in ALLOWED_CLIENT_DOC_CATEGORIES:
         raise HTTPException(status_code=400, detail='Categoria de documento do cliente inválida')
 
-    # Leitura limitada (o perfil CLIENTE não é confiável): não deixa um upload
-    # gigante estourar a memória mesmo sem Content-Length correto.
-    content = await file.read(settings.max_upload_bytes + 1)
+    # Allowlist de tipo ANTES de ler o corpo: o perfil CLIENTE nao e confiavel
+    # e o content_type declarado aqui e o mesmo devolvido no /documents/{id}/view.
+    content_type = validate_content_type(file)
+
+    # Leitura limitada: não deixa um upload gigante estourar a memória mesmo
+    # sem Content-Length correto.
+    content = await read_limited(file)
     if not content:
         raise HTTPException(status_code=400, detail='Arquivo vazio')
-    if len(content) > settings.max_upload_bytes:
-        raise HTTPException(status_code=413, detail='Arquivo excede o tamanho máximo permitido.')
 
-    # Nome seguro para a chave do objeto (sem separadores de caminho).
-    safe_name = (file.filename or 'arquivo').replace('/', '_').replace('\\', '_').strip() or 'arquivo'
-    object_key = f'clients/{client.id}/documents/{date.today().isoformat()}-{safe_name}'
-    upload_bytes(object_name=object_key, content=content, content_type=file.content_type or 'application/octet-stream')
+    object_key = f'clients/{client.id}/documents/{date.today().isoformat()}-{safe_object_name(file.filename)}'
+    upload_bytes(object_name=object_key, content=content, content_type=content_type)
 
     document = Document(
         file_name=file.filename,
         object_key=object_key,
-        content_type=file.content_type or 'application/octet-stream',
+        content_type=content_type,
         size_bytes=len(content),
         reference_type='client',
         reference_id=client.id,

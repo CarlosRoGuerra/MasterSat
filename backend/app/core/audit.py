@@ -20,6 +20,7 @@ import logging
 from jose import JWTError, jwt
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from app.core.client_ip import client_ip_from_scope
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -231,12 +232,12 @@ class AuditMiddleware:
         entity_type, entity_id = _extract_entity(path)
         description = _build_description(method, entity_type, entity_id, path)
 
-        # IP do cliente
-        client = scope.get('client')
-        ip_address: str | None = client[0] if client else None
-        xff = raw_headers.get(b'x-forwarded-for', b'').decode('latin-1', errors='replace')
-        if xff:
-            ip_address = xff.split(',')[0].strip()
+        # IP do cliente — ULTIMA entrada do X-Forwarded-For, nao a primeira.
+        # O nginx ANEXA o IP real no fim ($proxy_add_x_forwarded_for), entao a
+        # ultima entrada e a unica que o cliente nao controla. Pegar [0] pegava
+        # exatamente o que o cliente escreveu: bastava mandar
+        # "X-Forwarded-For: 8.8.8.8" para gravar 8.8.8.8 na trilha de auditoria.
+        ip_address: str | None = client_ip_from_scope(scope)
 
         # A resposta já foi enviada ao cliente no await acima.
         # Rodamos o log em thread pool (asyncio.to_thread) sem bloquear o event loop

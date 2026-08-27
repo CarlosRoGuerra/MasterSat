@@ -1,0 +1,184 @@
+VALIDAÇÃO DA AUDITORIA MASTERSAT — BANCO DE DADOS / SCHEMA (DB-01 a DB-03)
+================================================================
+Verificação feita contra o código real do repositório em 27/08/2026.
+Nenhum arquivo do projeto foi alterado durante esta verificação.
+
+
+DB-01 — Sem Alembic: schema evolui via ALTER TABLE condicional no startup
+-----------------------------------------------------------------
+STATUS: PARCIALMENTE CONFIRMADO — o relatório está desatualizado, a
+correção JÁ COMEÇOU (não commitada)
+SEVERIDADE ORIGINAL: Crítica  →  SEVERIDADE REAL: Crítica (mantida,
+mas em andamento)
+
+Evidência verificada (checado diretamente, não pelo agente):
+- backend/app/main.py:63-435 ainda tem ensure_schema_updates() com
+  dezenas de ALTER TABLE condicionais — confirmado como descrito.
+- NOVIDADE não capturada pelo relatório original: já existe
+  backend/alembic/ (não commitado — aparece como "??" no git status)
+  com uma migração baseline: alembic/versions/
+  96f61a589162_baseline_schema.py.
+- main.py:63-75 já tem um docstring novo dizendo explicitamente:
+  "HISTÓRICO E CONGELADO — não adicione novos ALTER TABLE aqui. A
+  partir desta versão, toda mudança de schema é uma migration do
+  Alembic (...). Esta função continua rodando no startup (é
+  idempotente e vira no-op em qualquer banco já migrado) só para não
+  quebrar ambientes antigos que ainda não passaram pela migration
+  baseline (96f61a589162)."
+- LACUNA REAL: não existe `alembic upgrade head` automatizado em
+  lugar nenhum — nem no Dockerfile, nem em docker-compose.prod.yml,
+  nem em nenhum script de entrypoint (busca ampla por "alembic
+  upgrade", "command.upgrade", "alembic_version" retornou só os dois
+  comentários dentro do próprio main.py). Ou seja, aplicar a
+  migração em produção ainda depende de alguém rodar o comando
+  manualmente — não é um processo de deploy confiável ainda.
+- Verificação de drift: as mudanças de modelo atualmente não
+  commitadas (models/user.py: tokens_valid_from) são consistentes com
+  o que ensure_schema_updates() já cria via ALTER TABLE — não há
+  coluna nova que devesse ter migration e não tem.
+
+Avaliação: a essência do achado (schema sem versionamento confiável,
+sem rollback limpo) segue verdadeira na prática de deploy, mas o
+relatório original ("Sem Alembic") já não reflete o estado do
+repositório — a adoção começou. O risco crítico real hoje é
+específico: falta wiring de deploy, não falta de decisão/ferramenta.
+
+Correção recomendada:
+  1. Commitar backend/alembic.ini e backend/alembic/ (incluindo a
+     baseline).
+  2. Automatizar `alembic upgrade head` no entrypoint/CMD do container
+     backend, ANTES do uvicorn subir — com cuidado para não tentar
+     recriar tabelas existentes num banco de produção não "stampado".
+  3. Testar cuidadosamente o "baseline stamp" (alembic stamp head)
+     no banco de produção existente antes de rodar upgrade real.
+  4. Congelar de vez ensure_schema_updates() — nenhuma nova coluna
+     deve ser adicionada ali a partir de agora, só em migrations.
+Risco da mudança: alto — mexe na inicialização da aplicação em
+produção; requer janela de manutenção e teste cuidadoso.
+
+Dependências: PRÉ-REQUISITO para DB-02 e DB-03, e para qualquer
+mudança futura de schema com segurança de rollback.
+
+
+DB-02 — Zero relationship() no ORM, N+1 sistemático
+-----------------------------------------------------------------
+STATUS: PARCIALMENTE CONFIRMADO — número de evidência inflado
+SEVERIDADE ORIGINAL: Alta  →  SEVERIDADE REAL: Alta (mantida)
+
+Evidência verificada:
+- relationship( em backend/app/models/*.py: 0 ocorrências —
+  confirmado, é verdade.
+- ForeignKey( em backend/app/models/*.py: 45 ocorrências reais em 17
+  arquivos, NÃO 96 como o relatório afirma (superestimativa de ~113%).
+  Não há FKs "escondidas" em registry_all.py/enums.py (esses são só
+  agregadores de import para o Alembic).
+- Pool de conexão em backend/app/db/session.py:14-15: pool_size=5,
+  max_overflow=10 — EXATAMENTE como o relatório descreve. Confirmado.
+- N+1 real e literal: trackers.py, função _tracker_to_out (linhas
+  54-121, não 54-115 como citado) faz 4 queries por tracker
+  (db.get(Client), db.get(Vehicle), db.scalar(select(Contract)),
+  db.get(Plan)). O endpoint de listagem (list_items, linha 218,
+  corpo 229-249) chama isso para cada item da lista — N+1 confirmado
+  literalmente. Limite padrão de até 500 registros por página, ou
+  seja, pior caso realista é ~2.000 queries numa única resposta HTTP.
+- O mesmo padrão se repete em contracts.py:24-28, trackers.py:508-513,
+  service_orders.py:157-160.
+
+Avaliação: a tese central está correta e é grave (mesmo com a
+contagem de FKs incorreta, a conclusão qualitativa não muda). O
+relatório deveria corrigir 96→45 FKs para não minar sua própria
+credibilidade com números fáceis de conferir e errados.
+
+Correção recomendada: introduzir relationship() nos modelos mais
+consultados em listagem (Tracker↔Client↔Vehicle↔Contract↔Plan) com
+selectinload nos endpoints de listagem — não precisa ser nos 45
+modelos de uma vez, priorizar pelos endpoints de maior tráfego.
+ATENÇÃO: como não há filtro automático de is_deleted (ver DB-03),
+qualquer relationship() adicionado precisa de primaryjoin explícito
+considerando isso, ou os call sites continuam tendo que checar
+is_deleted manualmente após o eager load — as duas issues são
+acopladas, não independentes.
+Risco da mudança: médio — aditivo (relationship não quebra os
+db.get() existentes), mas exige testar carregamento em cada endpoint
+tocado. Pool de 5+10 conexões sob N+1 de até ~2.000 queries por
+request é candidato real a esgotamento sob carga concorrente —
+reforça a severidade Alta.
+
+Dependências: acoplado a DB-03 (escopo de is_deleted no eager load).
+Requer DB-01 completo antes de qualquer alteração de schema
+relacionada (índices, constraints).
+
+
+DB-03 — Soft delete sem escopo automático — 118 chamadas db.get() quebradas
+-----------------------------------------------------------------
+STATUS: PARCIALMENTE CONFIRMADO — EVIDÊNCIA CITADA ESTÁ INCORRETA
+SEVERIDADE ORIGINAL: Alta  →  SEVERIDADE REAL: Média (REBAIXAR)
+
+Evidência verificada:
+- SoftDeleteMixin real (base.py:8-9): apenas
+  `is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)`,
+  sem qualquer hook de query. Estruturalmente correto: db.get() é
+  lookup por PK e NÃO aceita WHERE/filtro adicional em SQLAlchemy —
+  essa parte da tese é tecnicamente válida.
+- Contagem real de db.get(Client|Vehicle|Tracker|Contract|Plan: 98
+  ocorrências, NÃO 118 (overstatement de ~20%).
+- A EVIDÊNCIA CITADA NO RELATÓRIO ESTÁ ERRADA: billings.py:322 hoje é:
+      client = db.get(Client, payload.client_id)
+      if not client or client.is_deleted:
+          raise HTTPException(status_code=404, detail='Cliente não encontrado')
+  Ou seja, a linha seguinte JÁ CHECA is_deleted. billings.py não está
+  na lista de arquivos alterados pelo hardening recente, então isso
+  não é uma correção posterior ao relatório — a citação já estava
+  incorreta na origem da auditoria.
+- Amostragem de ~90 dos 98 casos: a GRANDE MAIORIA (~75-80%) já checa
+  is_deleted manualmente logo após o db.get() (padrão
+  "if not X or X.is_deleted: raise/continue"), em billings.py,
+  contracts.py, client_charge_items.py, plans.py, service_orders.py,
+  financial.py, billing_closure.py, ailos_boletos.py,
+  multiportal_outbox.py, trackers.py:61-81, etc.
+- CASOS REAIS SEM CHECAGEM (confirmados por leitura direta):
+    contracts.py:25-28 (serialize_contract) — Client/Plan/Vehicle
+    sem checar is_deleted antes de expor nome/placa/plano.
+    trackers.py:510-513 (_serialize_contract) — mesmo padrão.
+    billing_closure.py:179-180, :301-302, :475-478
+    clients.py:419-429 (cache de nomes para relatório)
+    integration_multiportal.py:224
+
+Avaliação: o risco estrutural é real, mas o impacto prático hoje é
+majoritariamente "vazamento de nome/dado de exibição" em telas de
+detalhe — não quebra de regra de negócio nem bypass de autorização (a
+maior parte dos fluxos de escrita/validação já protege corretamente).
+Isso justifica rebaixar de Alta para Média.
+
+Correção recomendada: corrigir os casos reais identificados acima
+(pontual, não sistemático). NÃO implementar with_loader_criteria
+global agora: um filtro automático cego quebraria funcionalidade
+existente que depende de acessar registros soft-deletados
+intencionalmente (ex.: exibir "veículo removido" em
+billing_closure.py:792, ou histórico/auditoria). O relatório não
+menciona esse efeito colateral.
+Risco da mudança: médio para a versão global (with_loader_criteria);
+baixo para as correções pontuais nos casos reais identificados.
+
+Dependências: acoplado a DB-02 — se DB-02 implementar relationship()
+com eager loading, o mesmo problema de escopo de is_deleted se
+propaga para os relacionamentos.
+
+
+RESUMO DB
+-----------------------------------------------------------------
+Os 3 achados são qualitativamente reais, mas com dois problemas de
+precisão sérios: DB-02 infla FKs em mais de 100% (96 vs. 45 real) e
+DB-03 cita uma evidência que está factualmente errada no código atual
+(billings.py:322 já está corrigida), além de inflar a contagem em 20%
+(118 vs. 98). Isso levou à recalibração de severidade de DB-03 de
+Alta para Média.
+
+DB-01 é o único achado Crítico da categoria e já está em execução —
+a prioridade real não é "decidir adotar Alembic" (já decidido), é
+"terminar de automatizar a aplicação da migração no deploy".
+
+Ordem sugerida dentro de DB:
+  1. DB-01 (crítico, pré-requisito dos outros dois)
+  2. DB-03 — só os casos pontuais identificados (baixo risco)
+  3. DB-02 (médio risco, depende de DB-01 e DB-03 resolvidos)

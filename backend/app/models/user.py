@@ -1,4 +1,6 @@
-from sqlalchemy import Boolean, Enum, ForeignKey, String
+from datetime import datetime
+
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -16,3 +18,11 @@ class User(Base, TimestampMixin, SoftDeleteMixin):
     role: Mapped[UserRole] = mapped_column(Enum(UserRole), default=UserRole.ADMIN)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     client_id: Mapped[int | None] = mapped_column(ForeignKey('clients.id'), nullable=True)
+    # Corte de revogacao de sessao. Todo access/refresh token emitido ANTES
+    # deste instante e recusado. Sem isto, trocar a senha nao derrubava nada:
+    # o refresh token e um JWT stateless de 7 dias, entao quem tivesse roubado
+    # um seguia dentro por ate uma semana DEPOIS da troca. Gravado no
+    # /reset-password. NULL = nunca revogado.
+    tokens_valid_from: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )

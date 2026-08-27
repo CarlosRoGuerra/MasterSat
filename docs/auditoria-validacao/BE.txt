@@ -1,0 +1,295 @@
+VALIDAÇÃO DA AUDITORIA MASTERSAT — BACKEND / REGRAS DE NEGÓCIO (BE-01 a BE-07)
+================================================================
+Verificação feita contra o código real do repositório em 27/08/2026.
+Nenhum arquivo do projeto foi alterado durante esta verificação.
+
+
+BE-01 — Sem camada de repositório: regra, SQL e serialização no mesmo arquivo
+-----------------------------------------------------------------
+STATUS: CONFIRMADO (números batem exatamente)
+SEVERIDADE ORIGINAL: Média  →  SEVERIDADE REAL: Média (mantida)
+
+Evidência verificada:
+- wc -l: trackers.py = 835, billings.py = 724, vehicles.py = 599 —
+  os três números do relatório conferem EXATAMENTE.
+- backend/app/repositories/ não existe (0 arquivos) — confirmado.
+- backend/app/services/financial.py existe e concentra ~25 funções de
+  regra de negócio financeira — funciona de fato como camada de
+  serviço, como o relatório afirma.
+- backend/app/services/multiportal_outbox.py existe e implementa o
+  padrão outbox corretamente, com docstring explicando a motivação —
+  bom exemplo real de separação de camada.
+
+Avaliação: correto e verificável. A recomendação do relatório é
+equilibrada (não pede reescrita total, só extração dos maiores).
+
+Correção recomendada: extrair consultas e regras dos 3-4 endpoints
+maiores (trackers, billings, vehicles, contracts) para funções de
+serviço puras, seguindo o padrão já usado em financial.py e
+multiportal_outbox.py. Uma camada de repositório genérica para todo o
+projeto seria over-engineering — focar nesses arquivos específicos.
+Risco da mudança: médio — refatoração mecânica mas extensa; fazer
+arquivo por arquivo, com testes de regressão antes/depois.
+
+Dependências: nenhuma.
+
+
+BE-02 — Nenhum endpoint de listagem devolve contagem total
+-----------------------------------------------------------------
+STATUS: CONFIRMADO, e a situação real é PIOR do que descrita
+SEVERIDADE ORIGINAL: Média  →  SEVERIDADE REAL: Média-Alta (SUBIR)
+
+Evidência verificada:
+- response_model=list[ em endpoints/*.py: 31 ocorrências em 15
+  arquivos — bate exatamente com o relatório.
+- Não existe envelope de paginação genérico ({items, total},
+  PaginatedResponse) em lugar nenhum. Os únicos campos "total*"
+  encontrados são métricas de negócio (total_billed, total_received),
+  não metadados de paginação.
+- ACHADO NÃO CAPTURADO PELO RELATÓRIO ORIGINAL: nem todos os
+  endpoints de listagem têm skip/offset. Apenas clients.py,
+  trackers.py e vehicles.py têm skip: int = 0. billings.py,
+  contracts.py, integration_multiportal.py, integrations.py,
+  payables.py, service_orders.py têm SOMENTE limit, sem skip/offset —
+  ou seja, para 7 dos 15 arquivos a paginação não é "sem total", é
+  LITERALMENTE IMPOSSÍVEL pedir a página 2. nfse.py é o único com
+  offset explícito.
+
+Avaliação: o relatório subestimou o problema ao focar só na ausência
+de "total"; a ausência de skip/offset em quase metade dos arquivos é
+mais grave para o frontend do que a falta de contagem.
+
+Correção recomendada: padronizar um envelope {items, total} PARA os
+endpoints de maior volume, mas cobrindo os dois problemas juntos —
+adicionar total sozinho não resolve nada nos endpoints que nem
+aceitam skip.
+Risco da mudança: médio — muda o contrato de resposta; frontend e
+backend precisam ser atualizados juntos por endpoint.
+
+Dependências: nenhuma direta, mas qualquer correção deve ser
+coordenada com o frontend (páginas de listagem).
+
+
+BE-03 — billing_closure.py concentra simulação, execução e geração de
+relatório (XLSX/PDF) em um único arquivo de 1.429 linhas
+-----------------------------------------------------------------
+STATUS: CONFIRMADO (verificado com precisão exata)
+SEVERIDADE ORIGINAL: Média  →  SEVERIDADE REAL: Média (mantida)
+
+Evidência verificada:
+- backend/app/services/billing_closure.py tem EXATAMENTE 1.429
+  linhas — confere com o relatório.
+- 31 funções no arquivo (relatório citou 28 — próximo, diferença
+  provável de metodologia de contagem, não relevante).
+- Confirmado: simulate_closure (linha 330) e execute_closure (linha
+  534) — regra de negócio financeira — coexistem no mesmo arquivo com
+  generate_closure_xlsx (linha 1230), generate_closure_pdf (linha
+  1394), _mes_extenso (linha 946), _painel_totais (linha 970) —
+  formatação/apresentação.
+- Suíte de teste do módulo: backend/tests/test_billing_closure_service.py
+  tem EXATAMENTE 1.309 linhas — confere com o relatório
+  ("suíte de 1.309 linhas de teste cobre bem a regressão").
+
+Avaliação: achado confirmado com alta precisão, sem ressalvas.
+
+Correção recomendada: separar em billing_closure.py (regra),
+billing_closure_report_xlsx.py e billing_closure_report_pdf.py
+(apresentação) — divisão mecânica, sem mudar comportamento.
+Risco da mudança: baixo — split de arquivo preservando assinaturas
+públicas; a suíte de teste existente cobre bem a regressão.
+
+Dependências: nenhuma.
+
+
+BE-04 — Log de chamada à Ailos comita a transação do chamador
+-----------------------------------------------------------------
+STATUS: CONFIRMADO ESTRUTURALMENTE, impacto prático hoje é hipotético
+SEVERIDADE ORIGINAL: Média  →  SEVERIDADE REAL: Média (mantida)
+
+Evidência verificada:
+- _log_call (ailos_client.py:161-184) faz db.commit() na linha 184
+  (não flush()), confirmado literalmente. Chamado dentro de request()
+  em dois pontos: linha 702 (branch de exceção de conexão) e linha
+  752 (fluxo normal).
+- Busca em TODOS os call sites de ailos_client.request(...) (em
+  ailos_boletos.py, ailos_pagadores.py, ailos_retorno.py): o padrão
+  predominante hoje é "ler dados → chamar Ailos → só então mutar/
+  persistir o resultado" (gerar_boleto, verificar_pagamento,
+  solicitar_arquivo_retorno, cadastrar_pagador). NÃO foi encontrado
+  nenhum call site onde mudanças pendentes relevantes já estivessem
+  na sessão ANTES da chamada, dentro do mesmo fluxo de negócio. Ou
+  seja: o cenário é estruturalmente possível, mas não foi observado
+  em nenhum caminho atual do código — é dívida técnica latente, não
+  um bug ativo comprovado.
+- A COMPARAÇÃO COM _run_locked (main.py:511-534) FEITA PELO RELATÓRIO
+  ORIGINAL NÃO SE SUSTENTA: _run_locked usa uma SessionLocal()
+  separada e dedicada para o job de background (não a sessão de um
+  request HTTP), e resolve um bug OPOSTO — antes, usar Session(bind=
+  conn) na mesma conexão do advisory lock fazia o commit ser
+  DESCARTADO silenciosamente (perda de dado), não "comitar cedo
+  demais" nada de terceiros. São categorias de bug diferentes em
+  contextos de ciclo de vida de sessão diferentes. A analogia do
+  relatório deveria ser removida/reformulada.
+
+Correção recomendada: trocar o db.commit() de _log_call por uma
+SESSÃO PRÓPRIA e independente para o log — não simplesmente por
+db.flush(). ATENÇÃO: se apenas trocar commit por flush sem mudar a
+arquitetura, um rollback posterior no mesmo db apagaria o registro de
+auditoria de uma chamada HTTP que DE FATO ocorreu — efeito colateral
+que o relatório não menciona. A correção correta é replicar o padrão
+que _run_locked já demonstra ser certo no projeto (sessão dedicada).
+Risco da mudança: médio — muda semântica de commit em caminho
+crítico (emissão de boleto); precisa de teste de integração cobrindo
+falha no meio do fluxo.
+
+Dependências: nenhuma.
+
+
+BE-05 — Efeito colateral de escrita em rotas GET / rota com API key externa
+-----------------------------------------------------------------
+STATUS: CONFIRMADO, contagem SUBESTIMADA pelo relatório original
+SEVERIDADE ORIGINAL: Baixa  →  SEVERIDADE REAL: Baixa (mantida, com
+destaque para um ponto)
+
+Evidência verificada — todos os call sites de refresh_overdue_statuses:
+    endpoints/integrations.py:132  — dentro de listar_cobrancas,
+        GET /cobrancas, protegida só por API key (X-API-Key), chamada
+        pelo CobraZap. Nenhuma sessão de usuário.
+    endpoints/billings.py:66   — dentro de base_query(), helper
+        reusado por 5 rotas GET e 6 rotas POST/PUT.
+    endpoints/billings.py:169  — dentro de financial_summary, GET /summary.
+    endpoints/billings.py:518  — dentro de POST /lote/manutencao (aqui
+        o efeito colateral é redundante, não "escondido em GET").
+    endpoints/contracts.py:107 — dentro de list_items, GET /.
+    + 6 locais de serviço: ailos_boletos.py:790, billing_closure.py:342,
+      841, financial.py:140, 327, 408.
+TOTAL REAL: 11 call sites não-teste, contra os "pelo menos 6" do
+relatório original — o relatório SUBESTIMOU, não inflou.
+
+refresh_overdue_statuses (financial.py:103-124): faz dois UPDATE em
+massa via db.query(Billing).filter(...).update(..., synchronize_
+session=False) e, por padrão, db.commit() — confirma o "UPDATE em
+massa dentro de um GET".
+
+Avaliação: a instância mais grave é integrations.py:132, por rodar em
+toda chamada de um serviço externo (potencialmente de alta
+frequência) sem transação isolada do restante do handler.
+
+Correção recomendada: mover para um job agendado único (mesmo padrão
+dos workers já existentes em main.py) e remover as chamadas ad-hoc.
+ATENÇÃO: billings.py:66 é um helper compartilhado por leitura E
+escrita — extrair o refresh dali exige garantir que as rotas de
+escrita continuem vendo o status correto após a operação, não é uma
+remoção trivial de uma linha.
+Risco da mudança: baixo.
+
+Dependências: reforça o mesmo padrão de INT-02 (lógica de
+reconciliação acoplada ao processo de request em vez de
+infraestrutura de jobs dedicada).
+
+
+BE-06 — Identidade fiscal duplicada como constantes em múltiplos arquivos
+-----------------------------------------------------------------
+STATUS: CONFIRMADO + achado adicional relevante
+SEVERIDADE ORIGINAL: Baixa  →  SEVERIDADE REAL: Baixa-Média (SUBIR)
+
+Evidência verificada:
+- boleto_ailos.py:27-41 declara constantes de módulo hardcoded (zero
+  ocorrências de "settings" no arquivo): CONVENIO="102004",
+  CEDENTE_CNPJ="14228344000167", CEDENTE_NOME, CEDENTE_COD,
+  CEDENTE_COD_DIG.
+- core/config.py já expõe os equivalentes como settings configuráveis
+  via .env: ailos_numero_convenio='102004', nfse_cnpj=
+  '14228344000167'.
+- ACHADO ADICIONAL NÃO CAPTURADO PELO RELATÓRIO: existe um OUTRO
+  arquivo, ailos_boletos.py (nome quase idêntico — singular/plural
+  trocado), que é o cliente real da API Ailos e LÊ CORRETAMENTE
+  settings.ailos_numero_convenio em ~10 pontos. Ou seja, há dois
+  módulos paralelos — um íntegro (lê settings) e um divergente
+  (hardcoded) — e o hardcoded (boleto_ailos.py) NÃO é código morto:
+  é importado ativamente por cnab240.py, cnab400.py, ailos_boletos.py,
+  boleto_pdf.py, endpoints/integrations.py, endpoints/boletos.py.
+
+Avaliação: isso não é só estética. Se o convênio/cedente mudar (troca
+de cooperativa, renegociação) e alguém atualizar apenas
+settings.ailos_numero_convenio via variável de ambiente, o cliente
+API (ailos_boletos.py) passa a usar o novo convênio nas chamadas
+HTTP, mas boleto_ailos.py continua gerando linha digitável/código de
+barras/registro CNAB com o convênio ANTIGO — boletos com dados
+divergentes do que está registrado, silenciosamente. Isso justifica
+subir de Baixa para Baixa-Média.
+
+Correção recomendada: fazer boleto_ailos.py ler
+settings.ailos_numero_convenio etc. em vez de reconstantizar. Também
+adicionar à config.py os campos que hoje não têm equivalente
+(CEDENTE_NOME, CEDENTE_COD, CEDENTE_COD_DIG, AGENCIA, BANCO_CODIGO).
+FAZER JUNTO com a criação de testes de CNAB (ver INT-03) para não
+regredir silenciosamente — CNAB depende de boleto_ailos.py.
+Risco da mudança: baixo — não exige migração de dado, mas testes que
+dependem dos valores fixos (test_ailos_pdf_override.py,
+test_boleto_layout.py, scripts/ailos_homologacao.py) precisam
+continuar funcionando com o valor vindo de settings/env de teste.
+
+Dependências: toca INT-03 (CNAB usa boleto_ailos.py).
+
+
+BE-07 — 55 blocos except Exception genéricos, 16 silenciosos (pass)
+-----------------------------------------------------------------
+STATUS: CONFIRMADO COM PRECISÃO EXATA (contagem via AST, não só grep)
+SEVERIDADE ORIGINAL: Baixa  →  SEVERIDADE REAL: Baixa (mantida)
+
+Evidência verificada (contagem AST independente, restrita a
+backend/app/**):
+- Total: 55 except Exception — bate exatamente.
+- Pass-only (corpo é só pass): 16 — bate exatamente.
+- Por arquivo: boleto_pdf.py = 10 (4 pass-only), multiportal_
+  lifecycle.py = 8, main.py = 7 (2 pass-only) — todos batem
+  EXATAMENTE com o relatório.
+- Fora de backend/app (scripts + seed.py, fora do escopo do
+  relatório) há mais 5 except Exception — mas o relatório claramente
+  escopou para backend/app, e ali os números batem perfeitamente.
+- Localizações pass-only confirmadas: main.py:532,773;
+  boleto_pdf.py:181,188,213,223; endpoints/boletos.py:400;
+  endpoints/clients.py:377; endpoints/client_portal.py:404;
+  endpoints/documents.py:27; endpoints/service_orders.py:462;
+  endpoints/vehicles.py:595; core/audit.py:156;
+  services/email_smtp.py:139; services/nfse_certificado.py:47;
+  services/nfse_danfse.py:1175.
+
+Avaliação: muitos têm comentário "# noqa: BLE001" justificando a
+decisão (ex.: "nunca pode derrubar o worker/boot") — padrão
+defensável em jobs de background de longa duração. Mas em
+boleto_pdf.py (4 pass-only) e especialmente core/audit.py (auditoria
+engolindo exceção silenciosamente) o risco é maior — perda de
+rastreabilidade sem log.
+
+Correção recomendada: revisar os 16 pass-only sem justificativa
+documentada; priorizar boleto_pdf.py e core/audit.py, onde silenciar
+tem custo mais alto. Estreitar tipo de exceção ou adicionar log nos
+demais. ATENÇÃO: trocar pass por logging em paths de alta frequência
+(ex.: loop de geração de PDF em lote) pode gerar volume de log
+inesperado se a causa for sistêmica — considerar throttling de log,
+não só adicionar logger.exception.
+Risco da mudança: baixo.
+
+Dependências: nenhuma.
+
+
+RESUMO BE
+-----------------------------------------------------------------
+5 dos 7 achados foram confirmados com precisão alta a exata (BE-01,
+BE-03, BE-06 em essência, BE-07 com contagem AST perfeita). Dois
+merecem recalibração: BE-02 é PIOR do que descrito (subir para
+Média-Alta) e BE-06 também deveria subir levemente (Baixa-Média) por
+causa do achado adicional do arquivo duplicado íntegro. BE-04 tem uma
+comparação técnica equivocada no relatório original (com _run_locked)
+que deve ser descartada, embora o achado em si permaneça válido.
+
+Ordem sugerida dentro de BE:
+  1. BE-07 (baixo risco, revisão pontual)
+  2. BE-06 (baixo risco, fazer com testes de CNAB — ver INT.txt)
+  3. BE-04 (médio risco, caminho crítico de boleto)
+  4. BE-05 (baixo risco)
+  5. BE-02 (médio risco, contrato de API muda)
+  6. BE-01 (médio risco, extenso)
+  7. BE-03 (baixo risco, mas grande — split mecânico)

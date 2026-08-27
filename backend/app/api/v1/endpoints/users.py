@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -30,6 +32,9 @@ def update_item(item_id: int, payload: UserUpdate, db: Session = Depends(get_db)
     data = payload.model_dump(exclude_unset=True)
     if 'password' in data:
         data['password_hash'] = get_password_hash(data.pop('password'))
+        # Mesma intencao do /reset-password: a senha nova tem de expulsar quem
+        # ja estava dentro com um token antigo.
+        data['tokens_valid_from'] = datetime.now(timezone.utc)
 
     for key, value in data.items(): setattr(obj, key, value)
     db.commit(); db.refresh(obj); return obj

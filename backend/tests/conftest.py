@@ -53,9 +53,16 @@ from app.models.vehicle import Vehicle
 
 @pytest.fixture(autouse=True)
 def _disable_rate_limiter():
-    limiter._enabled = False
+    # O atributo real que o slowapi checa é "enabled" (sem underscore) — ver
+    # extension.py: "if not _endpoint_key or not self.enabled". Com o nome
+    # errado, isto era um no-op silencioso: os testes de auth continuavam
+    # sujeitos ao limite de 5/minute do login, só não estourava porque o
+    # storage era em memória de processo e cada suíte de teste tinha poucos
+    # POSTs em /login. Com storage_uri=redis (SEC-03/INT-01), o contador
+    # passou a persistir entre execuções do pytest e o bug ficou visível.
+    limiter.enabled = False
     yield
-    limiter._enabled = True
+    limiter.enabled = True
 
 
 @pytest.fixture(autouse=True)

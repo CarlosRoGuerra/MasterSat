@@ -44,10 +44,19 @@ Projeto full-stack com:
 
 ## Como subir
 ```bash
-docker compose down -v
 docker compose build --no-cache
 docker compose up
 ```
+Schema do banco é gerenciado por Alembic (`backend/alembic/`) — não é mais
+necessário `down -v` para aplicar mudança de schema, veja
+[`backend/alembic/README.md`](backend/alembic/README.md).
+
+## Hooks de git (uma vez por clone)
+```bash
+git config core.hooksPath .githooks
+```
+Bloqueia commit acidental de `.env`, certificados (`.pfx`/`.p12`/`.pem`) e
+chaves privadas — defesa extra além do `.gitignore`.
 
 ## URLs
 - Frontend: http://localhost:3000
@@ -56,7 +65,6 @@ docker compose up
 - MinIO Console: http://localhost:9001
 
 ## Observações
-- Como houve mudança de schema, use `docker compose down -v` antes de subir para recriar o banco local.
 - Os arquivos são servidos pelo backend, então o portal não depende de abrir URL direta do MinIO no navegador.
 - Em ambiente local, mantenha `MINIO_ENDPOINT=minio:9000` e `MINIO_PUBLIC_URL=http://localhost:9000` no `.env` / `.env.example`.
 - O backend desta versão foi validado com `python -m compileall`.

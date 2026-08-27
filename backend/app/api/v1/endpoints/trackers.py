@@ -657,7 +657,8 @@ def link_vehicle(
                 'contract_ids': [contract.id for contract in active_contracts],
             },
         )
-    if is_transfer and payload.start_date > date.today():
+    from app.core.timezone import hoje
+    if is_transfer and payload.start_date > hoje():
         raise HTTPException(
             status_code=422,
             detail='A data da transferência não pode estar no futuro.',

@@ -1,0 +1,137 @@
+VALIDAÇÃO DA AUDITORIA ARQUITETURAL MASTERSAT — RESUMO GERAL
+================================================================
+Data da verificação: 27/08/2026
+Auditoria original: "MasterSat — Diagnóstico de Arquitetura" (27
+achados: 6 SEC, 3 DB, 7 BE, 6 FE, 3 INT, 2 MAINT)
+Metodologia: para cada achado, o código real foi localizado e lido,
+a evidência foi conferida, a interpretação/impacto/severidade foram
+reavaliados e a solução proposta foi checada quanto a lacunas e
+efeitos colaterais. Nenhum arquivo do projeto foi alterado durante
+esta verificação — é auditoria de auditoria, somente leitura.
+
+Arquivos desta pasta:
+  SEC.txt    — Segurança (SEC-01 a SEC-06)
+  DB.txt     — Banco de dados / schema (DB-01 a DB-03)
+  BE.txt     — Backend / regras de negócio (BE-01 a BE-07)
+  FE.txt     — Frontend (FE-01 a FE-06)
+  INT.txt    — Integrações externas (INT-01 a INT-03)
+  MAINT.txt  — Manutenibilidade (MAINT-01, MAINT-02)
+
+
+PADRÃO GERAL ENCONTRADO
+-----------------------------------------------------------------
+Os 27 achados são qualitativamente reais — nenhum foi classificado
+como NÃO CONFIRMADO ou INCORRETO. Mas o relatório original tem um
+padrão sistemático de números "prova" imprecisos, e o repositório
+está em movimento (hardening de segurança não commitado em
+andamento). Os pontos mais importantes a ter em mente:
+
+1. EVIDÊNCIA CITADA ERRADA: DB-03 cita billings.py:322 como exemplo
+   de db.get() sem checar is_deleted — mas essa linha JÁ CHECA
+   is_deleted no código atual. A tese do achado continua válida (há
+   casos reais em outros arquivos), mas o exemplo dado está incorreto
+   e a severidade foi rebaixada de Alta para Média por causa disso.
+
+2. CONTAGENS INFLADAS: DB-02 diz 96 ForeignKeys (real: 45); DB-03 diz
+   118 ocorrências de db.get() (real: 98, ~75-80% já protegidas);
+   FE-05 diz 39 ocorrências (real: 30); FE-03 diz 143 tipos (real:
+   117-155, dependendo do escopo contado).
+
+3. COMPARAÇÃO TÉCNICA EQUIVOCADA: BE-04 compara _log_call com
+   _run_locked em main.py, mas este último resolve um bug OPOSTO
+   (commit descartado, não prematuro) — a analogia não se sustenta e
+   deve ser descartada, embora o achado em si permaneça válido.
+
+4. SCRIPT CITADO POR ENGANO: INT-03 cita ailos_homologacao.py como
+   prova de padrão replicável para CNAB/Multiportal, mas esse script
+   testa a API de boletos Ailos — uma integração diferente. Não fecha
+   a lacuna real de CNAB.
+
+5. DB-01 JÁ ESTÁ EM ANDAMENTO: existe backend/alembic/ com migração
+   baseline (não commitada) e main.py já documenta ensure_schema_
+   updates() como "histórico e congelado". Falta só automatizar
+   `alembic upgrade head` no deploy — a decisão já foi tomada, só
+   falta terminar a execução.
+
+6. SEC-04 TEM RISCO REAL MENOR QUE O DESCRITO: o frontend
+   (/login/cliente, /cliente/dashboard, /cadastro/cliente) já foi
+   reduzido a stubs que redirecionam — não há mais UI órfã apontando
+   para o portal do cliente morto. O risco é de reativação futura sem
+   revisão, não de exposição hoje.
+
+7. ACHADOS ADICIONAIS ENCONTRADOS QUE O RELATÓRIO NÃO CAPTUROU:
+   - BE-02: 7 dos 15 endpoints de listagem nem têm skip/offset — não
+     é só "sem total", é "sem página 2" (severidade sobe).
+   - BE-06: existe um segundo arquivo (ailos_boletos.py) que já lê
+     settings corretamente — a divergência entre os dois é um risco
+     real de boleto com convênio errado, não só duplicação estética
+     (severidade sobe).
+   - INT-01: o rate limiter (SEC-03) é o consumidor óbvio do Redis
+     ocioso — os dois achados têm o mesmo fix.
+   - FE-04: Sidebar() nem recebe prop de usuário — não é filtro que
+     falha, é informação que nunca chega ao componente.
+   - SEC-05: o mesmo padrão de "logout total" também existe no catch
+     de erro 401/403 genérico de qualquer chamada de API, não só no
+     clique de menu errado.
+
+
+RECALIBRAÇÕES DE SEVERIDADE (desta verificação vs. relatório original)
+-----------------------------------------------------------------
+  SUBIR:
+    BE-02   Média      → Média-Alta  (pior que descrito)
+    BE-06   Baixa      → Baixa-Média (achado adicional relevante)
+    INT-03  Baixa      → Média (só para a parte CNAB)
+  REBAIXAR:
+    DB-03   Alta       → Média (evidência citada estava errada)
+  MANTIDAS (confirmadas como estão): todos os outros 23 achados.
+
+
+ORDEM SEGURA DE IMPLEMENTAÇÃO (visão consolidada)
+-----------------------------------------------------------------
+Onda 0 — imediato, risco zero, sem tocar código de produção
+  1. SEC-01  — mover .env/.pfx para cofre de segredos, girar credenciais
+  2. MAINT-02 — remover integration_stub.py
+  3. MAINT-01 — remover/realocar scripts da raiz (ts.py em especial)
+
+Onda 1 — baixo risco, alto valor, independentes entre si
+  4. SEC-03 + INT-01 — ligar o rate limiter ao Redis já provisionado
+  5. FE-02 — ESLint + Vitest (puramente aditivo)
+  6. BE-07 — revisar os except Exception: pass sem justificativa
+
+Onda 2 — fechar trabalho já em andamento
+  7. DB-01 — commitar baseline Alembic, automatizar alembic upgrade
+     head no deploy, congelar de vez ensure_schema_updates
+
+Onda 3 — correções pontuais confirmadas, risco baixo-médio
+  8.  DB-03 — corrigir os casos reais sem checagem de is_deleted
+      (não implementar filtro global ainda)
+  9.  BE-04 — sessão própria para _log_call
+  10. BE-06 — boleto_ailos.py ler settings (fazer junto com item 14)
+  11. SEC-04 — decidir e remover client_portal.py
+  12. SEC-05 + FE-04 — sidebar filtrar por role + revisar guard, juntos
+  13. BE-05 — mover refresh_overdue_statuses para job agendado
+  14. INT-03 (CNAB) — testes unitários/snapshot para CNAB 240/400
+  15. SEC-06 — job de retenção (checar FK billing_id antes)
+
+Onda 4 — mudanças estruturais maiores, exigem plano e testes de regressão
+  16. DB-02 — relationship()+selectinload (só depois de DB-01 e DB-03)
+  17. BE-02 — envelope de paginação + skip/offset (contrato de API muda)
+  18. BE-01 — extrair regra de negócio dos endpoints maiores
+  19. BE-03 — split de billing_closure.py
+  20. FE-01 — TanStack Query + quebra das páginas monolíticas (só
+      depois de FE-02 estar no lugar)
+  21. FE-03 — tipos gerados do OpenAPI
+
+Onda 5 — mudança de arquitetura de autenticação, maior risco
+  22. SEC-02 — cookie httpOnly + rotação de refresh token
+  23. FE-06 — Next.js Middleware (depende inteiramente do item 22)
+
+Onda 6 — baixo risco, quando sobrar tempo
+  24. FE-05 — criar formatCurrency/formatDate e migrar as ocorrências
+  25. INT-02 — só documentar o limite de escala; nenhuma ação de
+      código necessária agora
+
+Nenhum achado foi classificado como NÃO CONFIRMADO ou INCORRETO —
+todos os 27 refletem problemas reais no código atual. As divergências
+encontradas foram em precisão de evidência/números, não na existência
+dos problemas.

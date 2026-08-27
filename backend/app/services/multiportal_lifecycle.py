@@ -126,7 +126,7 @@ def _restore_equipment_links(
                 operation=lambda tracker=tracker: multiportal_service.link_equipment_vehicle(tracker, vehicle),
             )
             compensation_failed = compensation_failed or not result.success
-        except LifecycleSyncError:
+        except Exception:
             # Continua tentando restaurar os demais equipamentos; o chamador
             # receberá a indicação inequívoca de que reconciliação é necessária.
             compensation_failed = True
@@ -144,7 +144,6 @@ def unlink_vehicle_assignments(
         return LifecycleResult()
 
     calls: list[LifecycleCall] = []
-    unlinked: list[Tracker] = []
     try:
         for tracker in managed_trackers:
             result = _call(
@@ -156,15 +155,10 @@ def unlink_vehicle_assignments(
                 operation=lambda tracker=tracker: multiportal_service.unlink_equipment_vehicle(tracker, vehicle),
             )
             if not result.success:
-                compensation_failed = _restore_equipment_links(
-                    calls, unlinked, vehicle, phase='compensate_relink_equipment'
-                )
                 raise LifecycleSyncError(
                     'O Multiportal não confirmou o desvínculo do equipamento.',
                     calls=calls,
-                    compensation_failed=compensation_failed,
                 )
-            unlinked.append(tracker)
 
         vehicle_result = _call(
             calls,
@@ -175,24 +169,33 @@ def unlink_vehicle_assignments(
             operation=lambda: multiportal_service.unlink_vehicle_client(vehicle, client),
         )
         if not vehicle_result.success:
-            compensation_failed = _restore_equipment_links(
-                calls, unlinked, vehicle, phase='compensate_relink_equipment'
-            )
             raise LifecycleSyncError(
                 'O Multiportal não confirmou o desvínculo entre veículo e cliente.',
                 calls=calls,
-                compensation_failed=compensation_failed,
             )
-    except LifecycleSyncError:
-        raise
     except Exception as exc:
-        compensation_failed = _restore_equipment_links(
-            calls, unlinked, vehicle, phase='compensate_relink_equipment'
+        # Uma resposta de erro/timeout não prova que o provedor deixou de
+        # executar a mutação. Reconstituímos o estado original inteiro de modo
+        # idempotente: veículo-cliente e TODOS os equipamentos. Assim o banco
+        # local pode permanecer instalado sem divergir silenciosamente.
+        compensation_calls, compensation_failed = compensate_successful_uninstall(
+            trackers=managed_trackers,
+            vehicle=vehicle,
+            client=client,
         )
+        calls.extend(compensation_calls)
+        if isinstance(exc, LifecycleSyncError):
+            message = str(exc)
+            http_status = exc.http_status
+            compensation_failed = compensation_failed or exc.compensation_failed
+        else:
+            message = 'Falha inesperada ao remover o vínculo no Multiportal.'
+            http_status = 502
         raise LifecycleSyncError(
-            'Falha inesperada ao remover o vínculo no Multiportal.',
+            message,
             calls=calls,
             compensation_failed=compensation_failed,
+            http_status=http_status,
         ) from exc
 
     return LifecycleResult(managed_externally=True, calls=calls)
@@ -204,14 +207,16 @@ def transfer_tracker_assignment(
     old_vehicle: Vehicle,
     new_vehicle: Vehicle,
     new_client: Client,
-    new_contract=None,
 ) -> LifecycleResult:
     if not _ensure_available([tracker]):
         return LifecycleResult()
 
     calls: list[LifecycleCall] = []
-    old_unlinked = False
+    unlink_attempted = False
     try:
+        # Marcado antes da chamada: se a resposta se perder, o provedor pode
+        # ter removido o vínculo mesmo que recebamos erro 99/timeout.
+        unlink_attempted = True
         unlink_result = _call(
             calls,
             entity_type='tracker',
@@ -225,14 +230,12 @@ def transfer_tracker_assignment(
                 'O Multiportal não confirmou o desvínculo do veículo anterior.',
                 calls=calls,
             )
-        old_unlinked = True
-
         # Não usamos full_sync_for_tracker aqui: ele também sincroniza a conta
         # de usuário e pode gerar nova senha/e-mail de boas-vindas. Transferir
         # equipamento não tem autorização para alterar credenciais do cliente.
         destination_steps = (
             ('client', new_client.id, 'sync_new_client',
-             lambda: multiportal_service.sync_client(new_client, None, contract=new_contract)),
+             lambda: multiportal_service.sync_client(new_client, None)),
             ('vehicle', new_vehicle.id, 'sync_new_vehicle', lambda: multiportal_service.sync_vehicle(new_vehicle)),
             ('tracker', tracker.id, 'sync_new_equipment', lambda: multiportal_service.sync_equipment(tracker)),
             (
@@ -258,9 +261,13 @@ def transfer_tracker_assignment(
                     'O Multiportal não confirmou todas as etapas do novo vínculo.',
                     calls=calls,
                 )
-    except LifecycleSyncError as exc:
-        compensation_failed = exc.compensation_failed
-        if old_unlinked:
+    except Exception as exc:
+        lifecycle_error = exc if isinstance(exc, LifecycleSyncError) else LifecycleSyncError(
+            'Falha inesperada ao transferir o vínculo no Multiportal.',
+            calls=calls,
+        )
+        compensation_failed = lifecycle_error.compensation_failed
+        if unlink_attempted:
             try:
                 # A remoção no destino é idempotente e evita manter dois vínculos
                 # caso a resposta da última etapa tenha se perdido na rede.
@@ -273,7 +280,7 @@ def transfer_tracker_assignment(
                     operation=lambda: multiportal_service.unlink_equipment_vehicle(tracker, new_vehicle),
                 )
                 compensation_failed = compensation_failed or not cleanup.success
-            except LifecycleSyncError:
+            except Exception:
                 compensation_failed = True
             try:
                 restore = _call(
@@ -285,13 +292,13 @@ def transfer_tracker_assignment(
                     operation=lambda: multiportal_service.link_equipment_vehicle(tracker, old_vehicle),
                 )
                 compensation_failed = compensation_failed or not restore.success
-            except LifecycleSyncError:
+            except Exception:
                 compensation_failed = True
         raise LifecycleSyncError(
-            str(exc),
+            str(lifecycle_error),
             calls=calls,
             compensation_failed=compensation_failed,
-            http_status=exc.http_status,
+            http_status=lifecycle_error.http_status,
         ) from exc
 
     return LifecycleResult(managed_externally=True, calls=calls)
@@ -315,7 +322,7 @@ def compensate_successful_uninstall(
             operation=lambda: multiportal_service.link_vehicle_client(vehicle, client),
         )
         compensation_failed = not result.success
-    except LifecycleSyncError:
+    except Exception:
         compensation_failed = True
     compensation_failed = (
         _restore_equipment_links(calls, trackers, vehicle, phase='rollback_relink_equipment')
@@ -342,7 +349,7 @@ def compensate_successful_transfer(
             operation=lambda: multiportal_service.unlink_equipment_vehicle(tracker, new_vehicle),
         )
         compensation_failed = not result.success
-    except LifecycleSyncError:
+    except Exception:
         compensation_failed = True
     try:
         result = _call(
@@ -354,7 +361,7 @@ def compensate_successful_transfer(
             operation=lambda: multiportal_service.link_equipment_vehicle(tracker, old_vehicle),
         )
         compensation_failed = compensation_failed or not result.success
-    except LifecycleSyncError:
+    except Exception:
         compensation_failed = True
     return calls, compensation_failed
 

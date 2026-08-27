@@ -2,6 +2,7 @@ import logging
 import secrets
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,7 +18,7 @@ from app.core.config import settings
 from app.core.limiter import limiter
 from app.core.security import get_password_hash
 from app.db.session import Base, SessionLocal, engine
-from app.models import ailos_api_log, ailos_boleto, ailos_client_token, ailos_integration, ailos_lote, ailos_retorno_arquivo, audit_log, billing, billing_change_log, billing_charge_item, client, client_charge_item, closure_job, contract, document, integration_log, multiportal_outbox, nfse_certificado, nfse_lote, nfse_nota, password_reset_token, payable, plan, service_order, service_order_status_log, service_product, system_setting, tracker, tracker_history, uninstall_event, user, vehicle  # noqa: F401 — side-effect imports that register models with SQLAlchemy Base
+from app.models import ailos_api_log, ailos_boleto, ailos_client_token, ailos_integration, ailos_lote, ailos_retorno_arquivo, audit_log, billing, billing_change_log, billing_charge_item, client, client_charge_item, closure_job, contract, document, integration_log, multiportal_outbox, nfse_certificado, nfse_lote, nfse_nota, password_reset_token, payable, plan, refresh_token, service_order, service_order_status_log, service_product, system_setting, tracker, tracker_history, uninstall_event, user, vehicle  # noqa: F401 — side-effect imports that register models with SQLAlchemy Base
 from app.core.audit import AuditMiddleware
 from app.core.body_limit import MaxBodySizeMiddleware
 from app.models.enums import UserRole
@@ -61,8 +62,27 @@ app.include_router(api_router, prefix=settings.api_v1_prefix)
 
 
 def ensure_schema_updates():
+    """HISTÓRICO E CONGELADO — não adicione novos ALTER TABLE aqui.
+
+    A partir desta versão, toda mudança de schema é uma migration do Alembic
+    (backend/alembic/versions/), gerada com
+    ``alembic revision --autogenerate -m "..."`` e aplicada com
+    ``alembic upgrade head``. Esta função continua rodando no startup (é
+    idempotente e vira no-op em qualquer banco já migrado) só para não quebrar
+    ambientes antigos que ainda não passaram pela migration baseline
+    (96f61a589162) — ela é o registro congelado de como o schema evoluiu antes
+    do Alembic existir. Bancos novos: `alembic upgrade head` já cria o schema
+    completo e esta função não terá nada a fazer.
+    """
     with engine.begin() as conn:
         inspector = inspect(conn)
+
+        if inspector.has_table('users'):
+            user_columns = {column['name'] for column in inspector.get_columns('users')}
+            if 'tokens_valid_from' not in user_columns:
+                conn.execute(text(
+                    'ALTER TABLE users ADD COLUMN tokens_valid_from TIMESTAMP WITH TIME ZONE'
+                ))
 
         if inspector.has_table('clients'):
             client_columns = {column['name'] for column in inspector.get_columns('clients')}
@@ -663,7 +683,8 @@ def _multiportal_outbox_worker():
             if isinstance(res, dict):
                 if res.get('processados') or res.get('reconciliados'):
                     logger.info(
-                        'Outbox Multiportal: %s processado(s), %s falha(s), %s reenfileirado(s), %s reconciliado(s).',
+                        'Outbox Multiportal: %s processado(s), %s falha(s), %s reenfileirado(s) '
+                        'e %s pendência(s) reconciliada(s).',
                         res.get('processados', 0), res.get('falhas', 0),
                         res.get('reenfileirados', 0), res.get('reconciliados', 0),
                     )
@@ -691,6 +712,42 @@ def _alerta_fila(logger, ja_alertado: bool, limite: int) -> bool:
         logger,
     )
     return True
+
+
+def _ailos_log_retention_worker():
+    """Purga ailos_api_logs mais velhos que AILOS_LOG_RETENTION_MONTHS.
+
+    request_payload/response_payload mascaram só chaves sensíveis (token,
+    senha, etc. — ver _mask_payload em ailos_client.py); CPF/CNPJ, endereço e
+    valores ficam em texto claro. Sem purga, esses registros cresciam pra
+    sempre. Roda 1x/dia com advisory lock (só 1 worker purga por vez).
+    """
+    from app.models.ailos_api_log import AilosApiLog
+    logger = logging.getLogger('uvicorn.error')
+
+    def _job(db):
+        cutoff = datetime.now(timezone.utc) - timedelta(days=30.44 * settings.ailos_log_retention_months)
+        deleted = (
+            db.query(AilosApiLog)
+            .filter(AilosApiLog.created_at < cutoff)
+            .delete(synchronize_session=False)
+        )
+        db.commit()
+        return deleted
+
+    espera = 300  # primeira purga 5 min após o boot (não compete com o resto do startup)
+    while True:
+        time.sleep(espera)
+        espera = 86400  # 24h
+        try:
+            deleted = _run_locked(918273649, _job)
+            if deleted:
+                logger.info(
+                    'Retenção ailos_api_logs: %s registro(s) com mais de %s meses purgado(s).',
+                    deleted, settings.ailos_log_retention_months,
+                )
+        except Exception as exc:  # noqa: BLE001 — purga nunca pode derrubar o worker
+            logger.warning('Purga de ailos_api_logs falhou (tentará novamente no próximo ciclo): %s', exc)
 
 
 @app.on_event('startup')
@@ -741,6 +798,11 @@ def on_startup():
     # à mão.
     if settings.multiportal_enabled:
         threading.Thread(target=_multiportal_outbox_worker, daemon=True).start()
+
+    # Purga periódica de ailos_api_logs (retenção — SEC-06). Sempre ligado,
+    # independente da integração Ailos estar configurada: se já existirem
+    # registros antigos de uma configuração anterior, continuam sendo purgados.
+    threading.Thread(target=_ailos_log_retention_worker, daemon=True).start()
 
     # Verificação inicial de inadimplência (idempotente; não bloqueia o startup)
     try:

@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.security import decode_file_access_token
+from app.core.uploads import serving_content_type
 from app.db.session import SessionLocal
 from app.models.document import Document
 from app.services.storage import get_object_stream
@@ -45,14 +46,24 @@ def view_document(document_id: int, token: str = Query(...), download: bool = Fa
 
         obj = get_object_stream(document.object_key)
         filename = quote(document.file_name)
-        disposition = 'attachment' if download else 'inline'
+        # Rede de seguranca para documentos salvos ANTES da allowlist existir:
+        # so PDF/imagem sao servidos "inline"; qualquer outro tipo vira
+        # attachment com octet-stream, para o navegador BAIXAR em vez de
+        # interpretar. Sem isso um .html declarado text/html executava nesta
+        # origem (api.mastersat.com.br) — e o nosniff nao ajuda, porque o tipo
+        # estava declarado, nao sendo inferido.
+        media_type, disposition_padrao = serving_content_type(document.content_type)
+        disposition = 'attachment' if download else disposition_padrao
         headers = {
             'Content-Disposition': f"{disposition}; filename*=UTF-8''{filename}",
             'Cache-Control': 'private, max-age=300',
+            # Defesa em profundidade caso o header global do nginx nao chegue.
+            'X-Content-Type-Options': 'nosniff',
+            'Content-Security-Policy': "default-src 'none'; sandbox",
         }
         return StreamingResponse(
             _object_iterator(obj),
-            media_type=document.content_type or 'application/octet-stream',
+            media_type=media_type,
             headers=headers,
         )
     finally:

@@ -14,24 +14,25 @@ function loginPathForCurrentPage() {
 // Single-flight: vários 401 simultâneos disparam UM refresh só; os demais aguardam.
 let refreshPromise: Promise<string | null> | null = null;
 
+// O refresh token não passa mais por aqui: vive num cookie httpOnly (setado
+// pelo backend via Set-Cookie em /auth/login e /auth/refresh), então o
+// próprio navegador o envia com credentials:'include' — o JS nunca lê nem
+// grava esse valor. Sem isto o refresh token era só localStorage: XSS
+// exfiltrava e um invasor ficava com acesso válido por até 7 dias.
 async function refreshAccessToken(): Promise<string | null> {
   if (typeof window === 'undefined') return null;
-  const refreshToken = localStorage.getItem('refresh_token');
-  if (!refreshToken) return null;
   if (!refreshPromise) {
     refreshPromise = (async () => {
       try {
         const resp = await fetch(buildApiUrl('/auth/refresh'), {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refresh_token: refreshToken }),
+          credentials: 'include',
           cache: 'no-store',
         });
         if (!resp.ok) return null;
         const data = await resp.json();
         if (!data?.access_token) return null;
         localStorage.setItem('access_token', data.access_token);
-        if (data.refresh_token) localStorage.setItem('refresh_token', data.refresh_token);
         return data.access_token as string;
       } catch {
         return null;
@@ -42,6 +43,25 @@ async function refreshAccessToken(): Promise<string | null> {
     })();
   }
   return refreshPromise;
+}
+
+// Logout de verdade: revoga o refresh token no servidor (não só limpa o
+// access token local) — sem isto, um cookie vazado antes do clique em "Sair"
+// continuava válido normalmente até expirar sozinho.
+export async function logout(loginPath: string = '/login/admin'): Promise<void> {
+  if (typeof window === 'undefined') return;
+  try {
+    await fetch(buildApiUrl('/auth/logout'), {
+      method: 'POST',
+      credentials: 'include',
+      cache: 'no-store',
+    });
+  } catch {
+    // Falha de rede não pode travar o logout local — a sessão local é
+    // limpa de qualquer forma; o refresh token expira sozinho no pior caso.
+  }
+  localStorage.removeItem('access_token');
+  window.location.href = loginPath;
 }
 
 export async function apiFetch<T>(path: string, options: RequestInit = {}, token?: string): Promise<T> {
@@ -62,6 +82,10 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}, token
         ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
         ...(options.headers || {}),
       },
+      // O cookie httpOnly do refresh token é escopado a /auth (ver backend) —
+      // incluir credentials aqui não expõe nada a mais nas outras rotas, só
+      // garante que o cookie vai junto quando o caminho for de fato /auth/*.
+      credentials: 'include',
       cache: 'no-store',
     });
 
@@ -78,7 +102,6 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}, token
     if (response.status === 401 && typeof window !== 'undefined') {
       // Refresh indisponível ou também expirado → sessão realmente encerrada
       localStorage.removeItem('access_token');
-      localStorage.removeItem('refresh_token');
       window.location.href = loginPathForCurrentPage();
       throw new Error('Sessão expirada.');
     }

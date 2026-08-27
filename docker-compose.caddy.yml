@@ -38,7 +38,8 @@ services:
     ports: !reset []
     expose: ["8000"]
     volumes: !reset []
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips=*"]
+    # Ver nota em docker-compose.prod.yml: o IP real vem de app/core/client_ip.py.
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
     depends_on:
       db: { condition: service_healthy }
       redis: { condition: service_started }

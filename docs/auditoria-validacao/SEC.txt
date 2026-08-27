@@ -1,0 +1,243 @@
+VALIDAÇÃO DA AUDITORIA MASTERSAT — SEGURANÇA (SEC-01 a SEC-06)
+================================================================
+Verificação feita contra o código real do repositório em 27/08/2026.
+Metodologia: para cada achado do relatório original, foi localizado o
+código citado, conferida a evidência, avaliada a interpretação, o
+impacto, a severidade e a solução proposta, e procurados efeitos
+colaterais não considerados. Nenhum arquivo do projeto foi alterado
+durante esta verificação.
+
+
+SEC-01 — Segredos de produção versionados no diretório do repositório
+-----------------------------------------------------------------
+STATUS: CONFIRMADO
+SEVERIDADE ORIGINAL: Crítica  →  SEVERIDADE REAL: Crítica (mantida)
+
+Evidência verificada:
+- `.env` existe na raiz do projeto.
+- Dois arquivos .pfx existem (o relatório só citou um):
+    MASTERSAT_COMERCIO_E_SERVICO_DE_RASTREADORES_LTDA14228344000167.pfx (raiz)
+    backend/certs/ecnpj.pfx
+- `.gitignore` cobre os três (`*.env`, `.env`, `*.pfx`/`*.PFX`,
+  `backend/certs/`) — confirmado com `git check-ignore -v`.
+- `git log --all --diff-filter=A` para esses caminhos não retorna
+  nenhum commit — confirmado que NUNCA entraram no histórico do git.
+
+Avaliação: a interpretação do auditor está correta e o ponto positivo
+que ele credita (gitignore correto, nunca commitado) também está
+correto. O risco real é o arquivo viver solto numa pasta OneDrive
+(sincronização na nuvem, backup automático do SO, git add -f
+acidental de qualquer colaborador).
+
+Correção recomendada: mover para um gerenciador de segredos (Vault,
+Doppler, ou um cofre do SO fora da pasta sincronizada) e girar
+SECRET_KEY, AILOS_TOKEN_ENCRYPTION_KEY e senha do banco como
+precaução. Risco da mudança: baixo — não toca em código.
+
+Dependências: nenhuma.
+
+
+SEC-02 — Tokens de sessão em localStorage, refresh sem rotação
+-----------------------------------------------------------------
+STATUS: CONFIRMADO
+SEVERIDADE ORIGINAL: Alta  →  SEVERIDADE REAL: Alta (mantida)
+
+Evidência verificada:
+- frontend/lib/auth.ts: saveSession() grava access_token E
+  refresh_token em localStorage. IMPORTANTE: o access token também
+  fica em localStorage (não só em memória) — agravante que a
+  evidência original do relatório não deixa claro.
+- frontend/lib/api.ts:70-71 (comentário do próprio código): access
+  token expira em 30 min, refresh token em 7 dias.
+- backend/app/core/config.py: access_token_expire_minutes=30,
+  refresh_token_expire_days=7 — confirma os prazos.
+- backend/app/api/v1/endpoints/auth.py:76-98 (/auth/refresh): emite
+  um par novo de tokens SEM invalidar o refresh token apresentado.
+  Não existe tabela de refresh tokens, jti, family, nem detecção de
+  reuso em lugar nenhum do backend (busca ampla, zero resultados).
+  create_refresh_token() é um JWT stateless comum.
+
+Mitigação parcial já existente (hardening não commitado): foi
+adicionado tokens_valid_from + token_revogado() (security.py, deps.py,
+e agora também usado dentro do próprio /refresh). Isso derruba TODAS
+as sessões de um usuário quando a senha é trocada — mitiga "atacante
+troca a senha e mantém acesso", mas NÃO resolve o problema central:
+um refresh token roubado via XSS continua válido por até 7 dias, e
+múltiplos refresh tokens continuam válidos ao mesmo tempo sem rotação
+com detecção de reuso.
+
+Correção recomendada: migrar refresh token para cookie httpOnly +
+Secure + SameSite=Strict; implementar rotação com detecção de reuso.
+ATENÇÃO — a migração é mais profunda do que "trocar onde salva":
+  - Precisa CORS com `credentials: 'include'` e o backend fixando o
+    cookie no domínio certo (cuidado se front e API estão em
+    subdomínios diferentes — SameSite=Strict pode quebrar).
+  - O single-flight de refresh manual em api.ts deixa de fazer
+    sentido com cookie httpOnly (o browser passa o cookie sozinho) —
+    é reescrita do fluxo de refresh do frontend, não só um patch.
+  - Rotação com detecção de reuso exige estado no servidor (tabela
+    de refresh tokens/família) — hoje é 100% stateless, é mudança de
+    arquitetura.
+Risco da mudança: médio-alto.
+
+Dependências: bloqueia FE-06 (Next.js Middleware só funciona bem com
+token em cookie, não em localStorage).
+
+
+SEC-03 — Rate limiter em memória de processo, ineficaz com múltiplos workers
+-----------------------------------------------------------------
+STATUS: CONFIRMADO
+SEVERIDADE ORIGINAL: Alta  →  SEVERIDADE REAL: Alta (mantida)
+
+Evidência verificada (checado diretamente, não pelo agente):
+- backend/app/core/limiter.py — Limiter(key_func=client_ip,
+  default_limits=['200/minute']) SEM storage_uri. Continua em memória
+  de processo mesmo após o hardening recente (que só trocou o
+  key_func para usar client_ip.py corretamente).
+- docker-compose.prod.yml — ainda sobe com --workers 3.
+- Isso NÃO foi corrigido pelas mudanças não commitadas atuais.
+
+Avaliação: interpretação e impacto corretos — o limite de 5/min do
+login vira, na prática, ~15/min agregado (3 workers, 3 contadores
+independentes). O Redis já está provisionado e ocioso (ver INT-01).
+
+Correção recomendada: Limiter(storage_uri="redis://redis:6379/0", ...).
+Risco da mudança: baixo — é configuração, não lógica de negócio.
+
+Dependências: resolve INT-01 ao mesmo tempo (mesmo fix).
+
+
+SEC-04 — Portal do cliente desconectado do roteador (rota morta)
+-----------------------------------------------------------------
+STATUS: CONFIRMADO
+SEVERIDADE ORIGINAL: Média  →  SEVERIDADE REAL: Média (motivo revisado)
+
+Evidência verificada:
+- backend/app/api/v1/api.py não importa nem inclui
+  client_portal.router — confirmado, o router nunca é montado na API.
+- endpoints/__init__.py importa client_portal só como módulo (parte
+  de __all__), o que NÃO monta rota nenhuma.
+- auth.py: `if user.role == UserRole.CLIENT: raise HTTPException(403,
+  'O acesso de clientes foi desativado...')` — texto exato confere.
+  register_client() sempre retorna 403 (confirmado).
+- client_portal.py tem exatamente 408 linhas, 7 endpoints usando
+  require_roles(UserRole.CLIENT) — inacessíveis mesmo que montados
+  por engano, pois login de CLIENT é bloqueado antes de gerar token.
+- ACHADO EXTRA: o git diff de client_portal.py mostra que ele RECEBEU
+  o hardening de upload (uploads.py) recentemente — ou seja, alguém
+  está mantendo/hardenizando código morto. Risco de falsa sensação
+  de segurança se for reativado no futuro sem revisão completa.
+- ACHADO EXTRA (reduz o risco real): as rotas do frontend
+  /login/cliente, /cliente/dashboard e /cadastro/cliente JÁ SÃO
+  stubs — todas redirecionam para /login/admin, sem nenhuma UI real,
+  formulário ou chamada a client_portal. O lado frontend já foi
+  devidamente desativado (correção já commitada, não faz parte do
+  relatório original).
+
+Avaliação: a severidade Média é adequada, mas o MOTIVO deveria ser
+"risco de reativação futura sem revisão de segurança", não "superfície
+de auth exposta hoje" — não há exposição real hoje (nem API, nem
+frontend apontam para o portal).
+
+Correção recomendada: decisão de produto explícita — remover o
+módulo (endpoint + schema em app/schemas/client_portal.py + o import
+em endpoints/__init__.py) ou reativar deliberadamente com revisão de
+segurança completa. Não deixar em estado "meio existente".
+Risco da mudança: baixo — nenhum usuário real é afetado; cuidado
+apenas para limpar as duas pontas (endpoint e schema) e não deixar
+import quebrado.
+
+Dependências: nenhuma.
+
+
+SEC-05 — Logout ao clicar em item de menu sem permissão
+-----------------------------------------------------------------
+STATUS: CONFIRMADO
+SEVERIDADE ORIGINAL: Baixa  →  SEVERIDADE REAL: Baixa (mantida)
+
+Evidência verificada:
+- frontend/lib/use-auth-guard.ts:34-37 — confirmado exatamente como
+  citado: `if (!allowedRoles.includes(me.role)) { clearSession();
+  window.location.href = '/login/admin'; }`.
+- frontend/components/sidebar.tsx — NAV_GROUPS é uma lista estática
+  sem nenhum campo de role/permissão; renderiza os mesmos itens para
+  todos os perfis.
+- ACHADO EXTRA: o MESMO padrão de "logout total" também existe no
+  bloco de catch de erros 401/403 genéricos de QUALQUER chamada de
+  API dentro da página (use-auth-guard.ts, linhas ~47-51) — não é só
+  o caso de clicar em item de menu errado. Uma correção que só mexa
+  no bloco de allowedRoles.includes sem revisar esse catch deixa uma
+  segunda ocorrência do mesmo problema intacta.
+
+Avaliação: não é falha de segurança (backend protege corretamente via
+require_roles) — é UX hostil que gera tickets de suporte.
+
+Correção recomendada: filtrar itens de menu por role (a sidebar
+precisaria receber o usuário — ver FE-04, mesma causa) e trocar
+"limpar sessão" por uma tela de "Acesso restrito" quando o erro for
+403 e o token continuar válido — cobrindo tanto o clique de menu
+quanto o catch genérico de erro de API.
+Risco da mudança: baixo — UI isolada.
+
+Dependências: mesma causa raiz de FE-04 (sidebar sem informação de
+role do usuário). Resolver os dois juntos.
+
+
+SEC-06 — Sem rotina de purga/retenção para logs com payloads de integração
+-----------------------------------------------------------------
+STATUS: CONFIRMADO, com uma imprecisão factual no relatório original
+SEVERIDADE ORIGINAL: Baixa  →  SEVERIDADE REAL: Baixa (mantida)
+
+Evidência verificada:
+- backend/app/models/ailos_api_log.py — request_payload/
+  response_payload como JSON, sem TTL, sem coluna de expiração,
+  sem índice por data.
+- _mask_payload (ailos_client.py) EXISTE e funciona como descrito:
+  mascara recursivamente chaves com "token", "senha", "password",
+  "secret", "authorization", "authentication" — todo o resto do
+  payload (CPF/CNPJ, valores, endereços) é gravado em texto claro
+  e fica indefinidamente.
+- IMPRECISÃO DO RELATÓRIO: backend/app/models/audit_log.py NÃO
+  armazena payload nenhum (só method, path, entity_type, entity_id,
+  status_code, ip_address, description — confirmado lendo
+  core/audit.py _write_log). O relatório erra ao agrupar os dois
+  modelos sob "logs com payloads de integração" — o risco real do
+  audit_log é reter indefinidamente IP e identidade do usuário
+  (relevante para LGPD), não payload de integração.
+- Busca ampla por "purge", "retention", "cleanup" no backend inteiro:
+  nenhuma rotina de purga em app/services, nos workers de main.py,
+  nem em scripts/. Também não há relação com backup/backup.sh (esse
+  trata de retenção de backup do banco inteiro, não de purga de
+  linhas dentro do banco vivo).
+
+Correção recomendada: job periódico de retenção (12-24 meses) para
+ailos_api_logs; política separada e documentada para audit_logs.
+ATENÇÃO a dois efeitos colaterais não considerados pelo relatório:
+  1. AilosApiLog.billing_id é FK — purga por data pode falhar por
+     constraint se a FK não tiver ON DELETE SET NULL/CASCADE definido
+     explicitamente. Checar antes de implementar.
+  2. Para audit_logs, alinhar o período de retenção com exigências
+     de compliance/LGPD antes de definir — trilha de auditoria às
+     vezes precisa ser mantida por período legal mínimo.
+Risco da mudança: baixo.
+
+Dependências: nenhuma.
+
+
+RESUMO SEC
+-----------------------------------------------------------------
+Todos os 6 achados de segurança foram CONFIRMADOS. Nenhum foi
+corrigido pelo hardening não commitado em andamento (que tratou de
+client_ip.py, uploads.py, revogação de sessão por troca de senha e
+.dockerignore — nenhum desses 5 itens toca SEC-02, SEC-04, SEC-05 ou
+SEC-06). SEC-01 e SEC-03 seguem sem correção também.
+
+Ordem sugerida dentro de SEC (ver arquivo de ordem geral para o
+encaixe com as demais categorias):
+  1. SEC-01 (zero risco, sem depender de código)
+  2. SEC-03 (baixo risco, resolve INT-01 junto)
+  3. SEC-06 (baixo risco)
+  4. SEC-04 (baixo risco, código já morto)
+  5. SEC-05 (junto com FE-04, mesma causa)
+  6. SEC-02 (maior risco, mudança de arquitetura de auth — planejar
+     com calma, e só então destravar FE-06)

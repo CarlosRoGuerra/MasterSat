@@ -1,0 +1,317 @@
+warning: in the working copy of 'backend/app/api/v1/endpoints/client_portal.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/api/v1/endpoints/clients.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/api/v1/endpoints/contracts.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/api/v1/endpoints/documents.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/api/v1/endpoints/integration_multiportal.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/api/v1/endpoints/trackers.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/core/security.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/models/user.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/schemas/auth.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/services/multiportal.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/services/multiportal_lifecycle.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/services/multiportal_outbox.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/services/multiportal_sync_state.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/tests/test_multiportal_outbox.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/tests/test_multiportal_service.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/tests/test_trackers_api.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/tests/test_vehicles_api.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'docker-compose.caddy.yml', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'frontend/app/login/admin/page.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'frontend/lib/api.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'frontend/lib/auth.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'frontend/lib/use-auth-guard.ts', LF will be replaced by CRLF the next time Git touches it
+[1mdiff --git a/README.md b/README.md[m
+[1mindex 3cb27d8..90dd079 100644[m
+[1m--- a/README.md[m
+[1m+++ b/README.md[m
+[36m@@ -44,10 +44,19 @@[m [mProjeto full-stack com:[m
+ [m
+ ## Como subir[m
+ ```bash[m
+[31m-docker compose down -v[m
+ docker compose build --no-cache[m
+ docker compose up[m
+ ```[m
+[32m+[m[32mSchema do banco é gerenciado por Alembic (`backend/alembic/`) — não é mais[m
+[32m+[m[32mnecessário `down -v` para aplicar mudança de schema, veja[m
+[32m+[m[32m[`backend/alembic/README.md`](backend/alembic/README.md).[m
+[32m+[m
+[32m+[m[32m## Hooks de git (uma vez por clone)[m
+[32m+[m[32m```bash[m
+[32m+[m[32mgit config core.hooksPath .githooks[m
+[32m+[m[32m```[m
+[32m+[m[32mBloqueia commit acidental de `.env`, certificados (`.pfx`/`.p12`/`.pem`) e[m
+[32m+[m[32mchaves privadas — defesa extra além do `.gitignore`.[m
+ [m
+ ## URLs[m
+ - Frontend: http://localhost:3000[m
+[36m@@ -56,7 +65,6 @@[m [mdocker compose up[m
+ - MinIO Console: http://localhost:9001[m
+ [m
+ ## Observações[m
+[31m-- Como houve mudança de schema, use `docker compose down -v` antes de subir para recriar o banco local.[m
+ - Os arquivos são servidos pelo backend, então o portal não depende de abrir URL direta do MinIO no navegador.[m
+ - Em ambiente local, mantenha `MINIO_ENDPOINT=minio:9000` e `MINIO_PUBLIC_URL=http://localhost:9000` no `.env` / `.env.example`.[m
+ - O backend desta versão foi validado com `python -m compileall`.[m
+[1mdiff --git a/backend/Dockerfile b/backend/Dockerfile[m
+[1mindex b036453..3d92a14 100644[m
+[1m--- a/backend/Dockerfile[m
+[1m+++ b/backend/Dockerfile[m
+[36m@@ -1,9 +1,19 @@[m
+ FROM python:3.12-slim[m
+[32m+[m[32m# Sem .pyc: o /app e bind-mount em dev e read-only-ish para o usuario nao-root,[m
+[32m+[m[32m# entao evitar __pycache__ tira um ruido de permissao.[m
+[32m+[m[32mENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1[m
+ WORKDIR /app[m
+ COPY requirements.txt .[m
+ RUN pip install --no-cache-dir -r requirements.txt[m
+[32m+[m[32m# O .dockerignore ao lado deste arquivo e o que impede o certificado ICP-Brasil[m
+[32m+[m[32m# (certs/*.pfx) e os tokens da Ailos (scripts/*.json) de entrarem na imagem.[m
+[32m+[m[32m# O .gitignore NAO tem efeito sobre o Docker.[m
+ COPY . .[m
+[31m-# --proxy-headers + --forwarded-allow-ips: confia no X-Forwarded-For do nginx[m
+[31m-# (único container que fala com o backend) para que rate limiting (slowapi)[m
+[31m-# e auditoria enxerguem o IP real do cliente, não o IP interno do nginx.[m
+[31m-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--proxy-headers", "--forwarded-allow-ips=*"][m
+[32m+[m[32m# Nao roda como root: o .pfx e montado em /certs:ro e um escape do processo[m
+[32m+[m[32m# nao deve dar leitura direta da chave privada da empresa.[m
+[32m+[m[32mRUN useradd --create-home --uid 10001 appuser && chown -R appuser:appuser /app[m
+[32m+[m[32mUSER appuser[m
+[32m+[m[32m# O IP real do cliente vem de app/core/client_ip.py (ultima entrada do[m
+[32m+[m[32m# X-Forwarded-For), nao do --proxy-headers da uvicorn. Ver nota no[m
+[32m+[m[32m# docker-compose.prod.yml.[m
+[32m+[m[32mCMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"][m
+[1mdiff --git a/backend/app/api/deps.py b/backend/app/api/deps.py[m
+[1mindex ad1df9e..fa8b373 100644[m
+[1m--- a/backend/app/api/deps.py[m
+[1m+++ b/backend/app/api/deps.py[m
+[36m@@ -7,6 +7,7 @@[m [mfrom jose import JWTError, jwt[m
+ from sqlalchemy.orm import Session[m
+ [m
+ from app.core.config import settings[m
+[32m+[m[32mfrom app.core.security import token_revogado[m
+ from app.db.session import get_db[m
+ from app.models.enums import UserRole[m
+ from app.models.user import User[m
+[36m@@ -32,6 +33,10 @@[m [mdef get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends([m
+     user = db.get(User, int(user_id))[m
+     if not user or not user.active or user.is_deleted:[m
+         raise credentials_exception[m
+[32m+[m[32m    # Sessao revogada (troca de senha) — o token e valido criptograficamente,[m
+[32m+[m[32m    # mas foi emitido antes do corte.[m
+[32m+[m[32m    if token_revogado(payload, user.tokens_valid_from):[m
+[32m+[m[32m        raise credentials_exception[m
+     return user[m
+ [m
+ [m
+[1mdiff --git a/backend/app/api/v1/endpoints/auth.py b/backend/app/api/v1/endpoints/auth.py[m
+[1mindex 9681c50..7220e85 100644[m
+[1m--- a/backend/app/api/v1/endpoints/auth.py[m
+[1m+++ b/backend/app/api/v1/endpoints/auth.py[m
+[36m@@ -1,7 +1,7 @@[m
+ from datetime import datetime, timedelta, timezone[m
+ from uuid import uuid4[m
+ [m
+[31m-from fastapi import APIRouter, Depends, HTTPException, Request, status[m
+[32m+[m[32mfrom fastapi import APIRouter, Depends, HTTPException, Request, Response, status[m
+ from jose import JWTError, jwt[m
+ from sqlalchemy import select[m
+ from sqlalchemy.orm import Session[m
+[36m@@ -9,17 +9,23 @@[m [mfrom sqlalchemy.orm import Session[m
+ from app.api.deps import get_current_user[m
+ from app.core.config import settings[m
+ from app.core.limiter import limiter[m
+[31m-from app.core.security import create_access_token, create_refresh_token, get_password_hash, verify_password[m
+[32m+[m[32mfrom app.core.security import ([m
+[32m+[m[32m    create_access_token,[m
+[32m+[m[32m    create_refresh_token,[m
+[32m+[m[32m    get_password_hash,[m
+[32m+[m[32m    token_revogado,[m
+[32m+[m[32m    verify_password,[m
+[32m+[m[32m)[m
+ from app.db.session import get_db[m
+ from app.models.client import Client[m
+ from app.models.enums import ClientStatus, UserRole[m
+ from app.models.password_reset_token import PasswordResetToken[m
+[32m+[m[32mfrom app.models.refresh_token import RefreshToken[m
+ from app.models.user import User[m
+ from app.schemas.auth import ([m
+     ForgotPasswordRequest,[m
+     ForgotPasswordResponse,[m
+     LoginRequest,[m
+[31m-    RefreshRequest,[m
+     RegisterClientRequest,[m
+     RegisterClientResponse,[m
+     ResetPasswordRequest,[m
+[36m@@ -29,6 +35,100 @@[m [mfrom app.schemas.auth import ([m
+ [m
+ router = APIRouter()[m
+ [m
+[32m+[m[32m# Refresh token: cookie httpOnly (JS não consegue ler/exfiltrar via XSS) em vez[m
+[32m+[m[32m# de corpo JSON/localStorage. Escopo de path restrito a /auth — o cookie não é[m
+[32m+[m[32m# reenviado em chamadas comuns da API (/clients, /vehicles, etc.), só onde é[m
+[32m+[m[32m# de fato lido (refresh e logout).[m
+[32m+[m[32mREFRESH_COOKIE_NAME = 'refresh_token'[m
+[32m+[m[32mREFRESH_COOKIE_PATH = f'{settings.api_v1_prefix}/auth'[m
+[32m+[m
+[32m+[m
+[32m+[m[32mdef _set_refresh_cookie(response: Response, token: str) -> None:[m
+[32m+[m[32m    response.set_cookie([m
+[32m+[m[32m        key=REFRESH_COOKIE_NAME,[m
+[32m+[m[32m        value=token,[m
+[32m+[m[32m        httponly=True,[m
+[32m+[m[32m        # Secure exige HTTPS — desligado só em dev (http://localhost), senão o[m
+[32m+[m[32m        # navegador nunca grava o cookie e ninguém consegue logar localmente.[m
+[32m+[m[32m        secure=settings.is_production,[m
+[32m+[m[32m        samesite='strict',[m
+[32m+[m[32m        path=REFRESH_COOKIE_PATH,[m
+[32m+[m[32m        max_age=settings.refresh_token_expire_days * 86400,[m
+[32m+[m[32m    )[m
+[32m+[m
+[32m+[m
+[32m+[m[32mdef _clear_refresh_cookie(response: Response) -> None:[m
+[32m+[m[32m    response.delete_cookie(key=REFRESH_COOKIE_NAME, path=REFRESH_COOKIE_PATH)[m
+[32m+[m
+[32m+[m
+[32m+[m[32mdef _issue_refresh_token(db: Session, user_id: int, family: str | None = None) -> tuple[str, str]:[m
+[32m+[m[32m    """Emite (e persiste o estado de) um refresh token novo. Retorna (token, jti).[m
+[32m+[m
+[32m+[m[32m    family=None → login novo, começa uma família. family=<existente> → é uma[m
+[32m+[m[32m    ROTAÇÃO dentro do /refresh (ver _rotate_refresh_token).[m
+[32m+[m[32m    """[m
+[32m+[m[32m    token, jti, family = create_refresh_token(str(user_id), family=family)[m
+[32m+[m[32m    expires_at = datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days)[m
+[32m+[m[32m    db.add(RefreshToken(user_id=user_id, jti=jti, family=family, expires_at=expires_at))[m
+[32m+[m[32m    return token, jti[m
+[32m+[m
+[32m+[m
+[32m+[m[32mdef _revoke_family(db: Session, family: str) -> None:[m
+[32m+[m[32m    db.query(RefreshToken).filter([m
+[32m+[m[32m        RefreshToken.family == family,[m
+[32m+[m[32m        RefreshToken.revoked_at.is_(None),[m
+[32m+[m[32m    ).update({'revoked_at': datetime.now(timezone.utc)}, synchronize_session=False)[m
+[32m+[m
+[32m+[m
+[32m+[m[32mdef _rotate_refresh_token(db: Session, token: str) -> tuple[User, str]:[m
+[32m+[m[32m    """Valida um refresh token, detecta reuso e rotaciona. Retorna (user, novo_token).[m
+[32m+[m
+[32m+[m[32m    Reuso = apresentar um jti que já tem replaced_by_jti (foi rotacionado) ou[m
+[32m+[m[32m    já está revoked_at (família comprometida/logout). É o sinal de que um[m
+[32m+[m[32m    refresh token vazado está sendo usado em paralelo ao legítimo — a família[m
+[32m+[m[32m    inteira é revogada, forçando novo login em todos os dispositivos daquela[m
+[32m+[m[32m    sessão. Sem isto, rotacionar sozinho não detecta token roubado, só atrasa[m
+[32m+[m[32m    o problema.[m
+[32m+[m[32m    """[m
+[32m+[m[32m    credenciais_invalidas = HTTPException(status_code=401, detail='Sessão expirada. Faça login novamente.')[m
+[32m+[m[32m    try:[m
+[32m+[m[32m        decoded = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])[m
+[32m+[m[32m        if decoded.get('type') != 'refresh':[m
+[32m+[m[32m            raise HTTPException(status_code=401, detail='Token inválido')[m
+[32m+[m[32m        user_id = decoded.get('sub')[m
+[32m+[m[32m        jti = decoded.get('jti')[m
+[32m+[m[32m        family = decoded.get('family')[m
+[32m+[m[32m        if not user_id or not jti or not family:[m
+[32m+[m[32m            raise HTTPException(status_code=401, detail='Token inválido')[m
+[32m+[m[32m    except JWTError as exc:[m
+[32m+[m[32m        raise HTTPException(status_code=401, detail='Refresh token inválido') from exc[m
+[32m+[m
+[32m+[m[32m    user = db.scalar(select(User).where(User.id == int(user_id), User.is_deleted.is_(False)))[m
+[32m+[m[32m    if not user or not user.active:[m
+[32m+[m[32m        raise credenciais_invalidas[m
+[32m+[m[32m    if token_revogado(decoded, user.tokens_valid_from):[m
+[32m+[m[32m        raise credenciais_invalidas[m
+[32m+[m
+[32m+[m[32m    row = db.scalar(select(RefreshToken).where(RefreshToken.jti == jti))[m
+[32m+[m[32m    if not row or row.user_id != user.id:[m
+[32m+[m[32m        raise credenciais_invalidas[m
+[32m+[m
+[32m+[m[32m    if row.revoked_at is not None or row.replaced_by_jti is not None:[m
+[32m+[m[32m        _revoke_family(db, row.family)[m
+[32m+[m[32m        db.commit()[m
+[32m+[m[32m        raise credenciais_invalidas[m
+[32m+[m
+[32m+[m[32m    expira_em = row.expires_at[m
+[32m+[m[32m    if expira_em.tzinfo is None:[m
+[32m+[m[32m        expira_em = expira_em.replace(tzinfo=timezone.utc)[m
+[32m+[m[32m    if expira_em < datetime.now(timezone.utc):[m
+[32m+[m[32m        raise credenciais_invalidas[m
+[32m+[m
+[32m+[m[32m    new_token, new_jti = _issue_refresh_token(db, user.id, family=family)[m
+[32m+[m[32m    row.replaced_by_jti = new_jti[m
+[32m+[m[32m    db.commit()[m
+[32m+[m[32m    return user, new_token[m
+[32m+[m
+ [m
+ def build_full_address(payload: RegisterClientRequest) -> str:[m
+     parts = [[m
+[36m@@ -44,7 +144,7 @@[m [mdef build_full_address(payload: RegisterClientRequest) -> str:[m
+ [m
+ @router.post('/login', response_model=TokenResponse)[m
+ @limiter.limit('5/minute')[m
+[31m-def login(request: Request, payload: LoginRequest, db: Session = Depends(get_db)):[m
+[32m+[m[32mdef login(request: Request, response: Response, payload: LoginRequest, db: Session = Depends(get_db)):[m
+     normalized_email = payload.email.strip().lower()[m
+     user = db.scalar(select(User).where(User.email == normalized_email, User.is_deleted.is_(False)))[m
+     if not user or not user.active or not verify_password(payload.password, user.password_hash):[m
+[36m@@ -52,10 +152,12 @@[m [mdef login(request: Request, payload: LoginRequest, db: Session = Depends(get_db)[m
+     if user.role == UserRole.CLIENT:[m
+         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='O acesso de clientes foi desativado. Utilize o painel administrativo.')[m
+     role_value = user.role.value if hasattr(user.role, 'value') else str(user.role)[m
+[31m-    return TokenResponse([m
+[31m-        access_token=create_access_token(str(user.id), name=user.name, role=role_value),[m
+[31m-        refresh_token=create_refresh_token(str(user.id)),[m
+[31m-    )[m
+[32m+[m
+[32m+[m[32m    refresh_token, _jti = _issue_refresh_token(db, user.id)[m
+[32m+[m[32m    db.commit()[m
+[32m+[m[32m    _set_refresh_cookie(response, refresh_token)[m
+[32m+[m
+[32m+[m[32m    return TokenResponse(access_token=create_access_token(str(user.id), name=user.name, role=role_value))[m
+ [m
+ [m
+ @router.post('/register-client', response_model=RegisterClientResponse)[m
+[36m@@ -68,26 +170,35 @@[m [mdef register_client(payload: RegisterClientRequest, db: Session = Depends(get_db[m
+ [m
+ [m
+ @router.post('/refresh', response_model=TokenResponse)[m
+[31m-def refresh(payload: RefreshRequest, db: Session = Depends(get_db)):[m
+[31m-    try:[m
+[31m-        decoded = jwt.decode(payload.refresh_token, settings.secret_key, algorithms=[settings.algorithm])[m
+[31m-        if decoded.get('type') != 'refresh':[m
+[31m-            raise HTTPException(status_code=401, detail='Token inválido')[m
+[31m-        user_id = decoded.get('sub')[m
+[31m-        if not user_id:[m
+[31m-            raise HTTPException(status_code=401, detail='Token inválido')[m
+[31m-    except JWTError as exc:[m
+[31m-        raise HTTPException(status_code=401, detail='Refresh token inválido') from exc[m
+[32m+[m[32mdef refresh(request: Request, response: Response, db: Session = Depends(get_db)):[m
+[32m+[m[32m    token = request.cookies.get(REFRESH_COOKIE_NAME)[m
+[32m+[m[32m    if not token:[m
+[32m+[m[32m        raise HTTPException(status_code=401, detail='Sessão expirada. Faça login novamente.')[m
+ [m
+[31m-    user = db.scalar(select(User).where(User.id == int(user_id), User.is_deleted.is_(False)))[m
+[31m-    if not user or not user.active:[m
+[31m-        raise HTTPException(status_code=401, detail='Usuário não encontrado ou inativo')[m
+[32m+[m[32m    user, new_refresh_token = _rotate_refresh_token(db, token)[m
+[32m+[m[32m    _set_refresh_cookie(response, new_refresh_token)[m
+ [m
+     role_value = user.role.value if hasattr(user.role, 'value') else str(user.role)[m
+[31m-    return TokenResponse([m
+[31m-        access_token=create_access_token(str(user.id), name=user.name, role=role_value),[m
+[31m-        refresh_token=create_refresh_token(str(user.id)),[m
+[31m-    )[m
+[32m+[m[32m    return TokenResponse(access_token=create_access_token(str(user.id), name=user.name, role=role_value))[m
+[32m+[m
+[32m+[m
+[32m+[m[32m@router.post('/logout')[m
+[32m+[m[32mdef logout(request: Request, response: Response, db: Session = Depends(get_db)):[m
+[32m+[m[32m    """Revoga a família do refresh token apresentado (server-side) e limpa o[m
+[32m+[m[32m    cookie. Sem isto, 'logout' era só um efeito visual do front — um cookie[m
+[32m+[m[32m    vazado antes do clique continuava válido normalmente até expirar sozinho."""[m
+[32m+[m[32m    token = request.cookies.get(REFRESH_COOKIE_NAME)[m
+[32m+[m[32m    if token:[m
+[32m+[m[32m        try:[m
+[32m+[m[32m            decoded = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])[m
+[32m+[m[32m            family = decoded.get('family')[m
+[32m+[m[32m            if family:[m
+[32m+[m[32m                _revoke_family(db, family

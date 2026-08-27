@@ -4,11 +4,16 @@ Testes de integração para /api/v1/auth.
 Cobertos:
 - POST /login       → credenciais corretas, senha errada, email não existe,
                       usuário inativo, role CLIENT bloqueado
-- POST /refresh     → token válido, token expirado/inválido
+- POST /refresh     → cookie válido, ausente, inválido, reuso de token rotacionado
+- POST /logout      → revoga o refresh token no servidor (não só limpa cookie)
 - POST /forgot-password → email existente, email inexistente (resposta genérica)
-- POST /reset-password  → token válido, token expirado, token já usado
+- POST /reset-password  → token válido, token expirado, token já usado, derruba refresh tokens
 - GET  /me          → retorna usuário autenticado
 - POST /register-client → sempre retorna 403 (cadastro desativado)
+
+Refresh token vive em cookie httpOnly (não no corpo JSON) — os testes usam o
+cookie jar do TestClient (como um navegador) em vez de ler `refresh_token` do
+JSON de resposta.
 """
 from __future__ import annotations
 
@@ -50,8 +55,9 @@ class TestLogin:
         assert r.status_code == 200
         data = r.json()
         assert "access_token" in data
-        assert "refresh_token" in data
+        assert "refresh_token" not in data, "refresh token não pode voltar no corpo JSON (só cookie httpOnly)"
         assert data["token_type"] == "bearer"
+        assert "refresh_token" in r.cookies
 
     def test_wrong_password(self, http_unauth, db):
         _create_user(db)
@@ -102,21 +108,70 @@ class TestRefresh:
     def test_valid_refresh_returns_new_tokens(self, http_unauth, db):
         user = _create_user(db)
         login_r = http_unauth.post(PREFIX + "/login", json={"email": user.email, "password": "Senha@123"})
-        refresh_token = login_r.json()["refresh_token"]
-        r = http_unauth.post(PREFIX + "/refresh", json={"refresh_token": refresh_token})
+        assert "refresh_token" in login_r.cookies
+        r = http_unauth.post(PREFIX + "/refresh")
         assert r.status_code == 200
         assert "access_token" in r.json()
+        # rotação: o cookie devolvido não pode ser o mesmo apresentado
+        assert r.cookies["refresh_token"] != login_r.cookies["refresh_token"]
+
+    def test_missing_cookie_returns_401(self, http_unauth, db):
+        r = http_unauth.post(PREFIX + "/refresh")
+        assert r.status_code == 401
 
     def test_invalid_token_returns_401(self, http_unauth, db):
-        r = http_unauth.post(PREFIX + "/refresh", json={"refresh_token": "token.invalido.xyz"})
+        http_unauth.cookies.set("refresh_token", "token.invalido.xyz")
+        r = http_unauth.post(PREFIX + "/refresh")
         assert r.status_code == 401
 
     def test_access_token_rejected_as_refresh(self, http_unauth, db):
         user = _create_user(db)
         login_r = http_unauth.post(PREFIX + "/login", json={"email": user.email, "password": "Senha@123"})
         access_token = login_r.json()["access_token"]
-        r = http_unauth.post(PREFIX + "/refresh", json={"refresh_token": access_token})
+        http_unauth.cookies.set("refresh_token", access_token)
+        r = http_unauth.post(PREFIX + "/refresh")
         assert r.status_code == 401
+
+    def test_reused_rotated_token_is_rejected_and_revokes_family(self, http_unauth, db):
+        """Reuso de um refresh token já rotacionado é o sinal de token roubado:
+        a família inteira (incluindo o token novo, legítimo) é revogada."""
+        user = _create_user(db)
+        login_r = http_unauth.post(PREFIX + "/login", json={"email": user.email, "password": "Senha@123"})
+        old_token = login_r.cookies["refresh_token"]
+
+        r1 = http_unauth.post(PREFIX + "/refresh")
+        assert r1.status_code == 200
+        new_token = r1.cookies["refresh_token"]
+
+        # reapresenta o token antigo (já rotacionado) — reuso
+        http_unauth.cookies.set("refresh_token", old_token)
+        r2 = http_unauth.post(PREFIX + "/refresh")
+        assert r2.status_code == 401
+
+        # o token novo (que era válido) também foi revogado junto
+        http_unauth.cookies.set("refresh_token", new_token)
+        r3 = http_unauth.post(PREFIX + "/refresh")
+        assert r3.status_code == 401
+
+
+class TestLogout:
+    def test_logout_revokes_refresh_token_server_side(self, http_unauth, db):
+        user = _create_user(db)
+        login_r = http_unauth.post(PREFIX + "/login", json={"email": user.email, "password": "Senha@123"})
+        old_token = login_r.cookies["refresh_token"]
+
+        r = http_unauth.post(PREFIX + "/logout")
+        assert r.status_code == 200
+
+        # mesmo reapresentando manualmente o cookie de antes do logout (ex.:
+        # um cookie vazado), o servidor já revogou — não é só limpeza local.
+        http_unauth.cookies.set("refresh_token", old_token)
+        r2 = http_unauth.post(PREFIX + "/refresh")
+        assert r2.status_code == 401
+
+    def test_logout_without_cookie_still_succeeds(self, http_unauth):
+        r = http_unauth.post(PREFIX + "/logout")
+        assert r.status_code == 200
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +253,24 @@ class TestResetPassword:
         assert r1.status_code == 200
         r2 = http_unauth.post(PREFIX + "/reset-password", json=payload)
         assert r2.status_code == 400
+
+    def test_reset_revoga_refresh_tokens_ativos(self, http_unauth, db):
+        """Um refresh token roubado não pode sobreviver à troca de senha."""
+        user = _create_user(db, email="alvo-reset@test.local")
+        login_r = http_unauth.post(PREFIX + "/login", json={"email": user.email, "password": "Senha@123"})
+        old_refresh_token = login_r.cookies["refresh_token"]
+
+        token_str = self._make_token(db, user)
+        r = http_unauth.post(PREFIX + "/reset-password", json={
+            "token": token_str,
+            "new_password": "NovaSenha@456",
+            "password_confirmation": "NovaSenha@456",
+        })
+        assert r.status_code == 200
+
+        http_unauth.cookies.set("refresh_token", old_refresh_token)
+        r2 = http_unauth.post(PREFIX + "/refresh")
+        assert r2.status_code == 401
 
 
 # ---------------------------------------------------------------------------

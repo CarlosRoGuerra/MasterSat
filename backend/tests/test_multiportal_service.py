@@ -21,7 +21,7 @@ Cobertos:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -147,6 +147,41 @@ class TestUserPayloadSenha:
         s1 = svc._build_user_payload(FakeClient(), FakeUser())['senha']
         s2 = svc._build_user_payload(FakeClient(), FakeUser())['senha']
         assert s1 != s2
+
+    def test_atualizacao_nao_redefine_senha_nem_reenvia_boas_vindas(self):
+        payload = MultiportalService()._build_user_payload(
+            FakeClient(), FakeUser(), provision_credentials=False,
+        )
+        assert 'senha' not in payload
+        assert 'enviarEmail' not in payload
+
+    def test_cliente_nao_embute_segundo_provisionamento_de_usuario(self):
+        payload = MultiportalService()._build_client_payload(FakeClient(), FakeUser())
+        assert 'usuario' not in payload
+
+
+class TestSyncUserCredentials:
+    def test_fallback_de_cadastro_para_update_omite_nova_senha(self):
+        svc = MultiportalService()
+        payloads = []
+        results = [_fail_result('sincronizaUsuario', '40'), _ok_result('sincronizaUsuario')]
+
+        def fake_call(operation, **params):
+            payloads.append(params['usuario'])
+            return results[len(payloads) - 1]
+
+        svc._call = fake_call
+        with patch('app.services.multiportal.settings') as settings_mock:
+            settings_mock.multiportal_id = 'ID'
+            settings_mock.multiportal_password = 'PW'
+            settings_mock.multiportal_group_codes = '1'
+            result = svc.sync_user(FakeClient(), FakeUser())
+
+        assert result.success is True
+        assert 'senha' in payloads[0]
+        assert payloads[0]['enviarEmail'] is True
+        assert 'senha' not in payloads[1]
+        assert 'enviarEmail' not in payloads[1]
 
 
 # ---------------------------------------------------------------------------
@@ -437,11 +472,7 @@ class TestBuildContacts:
         svc = MultiportalService()
         c = FakeClient(phone=None, contacts=[{"email": "ana@test.com"}])
         contacts = svc._build_contacts(c)
-        # Email contact is added (tipoContato=5) but kept in contacts list
-        # The comment says it's rejected by server, but the code still adds it
-        # This test verifies existing behavior:
-        email_contacts = [x for x in contacts if x.get("tipoContato") == 5]
-        assert len(email_contacts) == 1  # code does add email contacts
+        assert contacts == []
 
 
 # ---------------------------------------------------------------------------
@@ -761,7 +792,7 @@ class TestFullSyncForTracker:
         def fake_call(operation, **params):
             return _ok_result(operation)
         svc._call = fake_call
-        svc._build_client_payload = lambda c, u, contract=None: {}
+        svc._build_client_payload = lambda c, u: {}
         svc._build_vehicle_payload = lambda v: {}
         svc._build_equipment_payload = lambda t: {}
         svc._build_client_reference = lambda c: {}
@@ -796,7 +827,7 @@ class TestFullSyncForTracker:
             return _ok_result(operation)
 
         svc._call = fake_call
-        svc._build_client_payload = lambda c, u, contract=None: {}
+        svc._build_client_payload = lambda c, u: {}
         svc._build_vehicle_payload = lambda v: {}
         svc._build_equipment_payload = lambda t: {}
         svc._build_client_reference = lambda c: {}
@@ -831,87 +862,29 @@ class TestConstants:
         assert "200" in SUCCESS_CODES
 
     def test_idempotent_codes(self):
-        for code in ["20", "21", "22", "40", "56", "59"]:
+        for code in ["11", "20", "21", "22", "40", "55", "56", "58", "59", "64"]:
             assert code in IDEMPOTENT_CODES
+
+    @pytest.mark.parametrize('code', ['55', '58'])
+    def test_desvinculo_ja_concluido_e_sucesso(self, code):
+        assert code in SOFT_SUCCESS_CODES
 
     def test_soft_success_is_union(self):
         assert SOFT_SUCCESS_CODES == SUCCESS_CODES | IDEMPOTENT_CODES
 
 
-# ---------------------------------------------------------------------------
-# Campos contratuais do cliente (item #6 da auditoria)
-# ---------------------------------------------------------------------------
-
-class _ContratoFake:
-    """Espelha só os atributos que o builder lê de um Contract."""
-
-    def __init__(self, **kw):
-        self.id = kw.get('id', 77)
-        self.contract_number = kw.get('contract_number')
-        self.billing_day = kw.get('billing_day')
-        self.start_date = kw.get('start_date')
-        self.end_date = kw.get('end_date')
-        self.payment_method = kw.get('payment_method')
-
-
-class TestCamposContratuaisDoCliente:
-    """Numero do contrato, dia de vencimento e vigencia eram enviados fixos
-    como None: o cliente chegava ao provedor sem a informacao comercial que
-    ele usa para cobranca e vigencia."""
-
-    def _svc(self):
+class TestFronteiraComercialMasterSat:
+    def test_payload_do_cliente_nao_envia_contrato_ou_pagamento(self, cliente):
+        """Contrato, cobrança e pagamento pertencem exclusivamente à MasterSat."""
         from app.services.multiportal import MultiportalService
-        return MultiportalService()
 
-    def test_sem_contrato_mantem_campos_nulos(self):
-        campos = self._svc()._build_contract_fields(None)
-        assert campos == {
-            'numeroContrato': None,
-            'diaVencimentoFatura': None,
-            'tempoContrato': None,
-            'formaPagamento': None,
+        payload = MultiportalService()._build_client_payload(cliente, None)
+
+        campos_financeiros = {
+            'numeroContrato', 'diaVencimentoFatura', 'tempoContrato',
+            'formaPagamento', 'valor', 'preco', 'plano',
         }
-
-    def test_envia_numero_do_contrato(self):
-        c = _ContratoFake(contract_number='CT-2026-001')
-        assert self._svc()._build_contract_fields(c)['numeroContrato'] == 'CT-2026-001'
-
-    def test_sem_numero_proprio_usa_o_id(self):
-        c = _ContratoFake(id=42, contract_number=None)
-        assert self._svc()._build_contract_fields(c)['numeroContrato'] == '42'
-
-    def test_envia_dia_de_vencimento(self):
-        c = _ContratoFake(billing_day=10)
-        assert self._svc()._build_contract_fields(c)['diaVencimentoFatura'] == 10
-
-    def test_vigencia_em_meses(self):
-        c = _ContratoFake(start_date=date(2025, 1, 15), end_date=date(2026, 1, 15))
-        assert self._svc()._build_contract_fields(c)['tempoContrato'] == 12
-
-    def test_vigencia_parcial_nao_conta_mes_incompleto(self):
-        c = _ContratoFake(start_date=date(2025, 1, 20), end_date=date(2025, 7, 10))
-        # 20/01 a 10/07 sao 5 meses completos, nao 6.
-        assert self._svc()._build_contract_fields(c)['tempoContrato'] == 5
-
-    def test_contrato_sem_fim_nao_inventa_duracao(self):
-        """Prazo indeterminado: melhor omitir do que enviar um numero inventado."""
-        c = _ContratoFake(start_date=date(2025, 1, 15), end_date=None)
-        assert self._svc()._build_contract_fields(c)['tempoContrato'] is None
-
-    def test_forma_pagamento_nao_e_enviada_sem_tabela_de_codigos(self):
-        """O WSDL declara formaPagamento como xs:int sem enumeracao e o servidor
-        valida codigos. Chutar um valor quebraria a sincronizacao de todos os
-        clientes, entao o campo fica de fora ate o fornecedor confirmar."""
-        c = _ContratoFake(payment_method='boleto')
-        assert self._svc()._build_contract_fields(c)['formaPagamento'] is None
-
-    def test_payload_do_cliente_carrega_os_campos(self, cliente):
-        c = _ContratoFake(contract_number='CT-9', billing_day=5,
-                          start_date=date(2025, 1, 1), end_date=date(2026, 1, 1))
-        payload = self._svc()._build_client_payload(cliente, None, c)
-        assert payload['numeroContrato'] == 'CT-9'
-        assert payload['diaVencimentoFatura'] == 5
-        assert payload['tempoContrato'] == 12
+        assert campos_financeiros.isdisjoint(payload)
 
 
 class TestEnderecoDoCliente:

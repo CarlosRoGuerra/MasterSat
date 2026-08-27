@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from 'react';
 
-import { apiFetch } from '@/lib/api';
-import { AuthUser, clearSession, getAccessToken } from '@/lib/auth';
+import { apiFetch, logout } from '@/lib/api';
+import { AuthUser, getAccessToken } from '@/lib/auth';
 
 type AllowedRole = AuthUser['role'];
 
@@ -32,22 +32,30 @@ export function useAuthGuard(allowedRoles: AllowedRole[], loginPath: string): Gu
     apiFetch<AuthUser>('/auth/me', {}, currentToken)
       .then((me) => {
         if (!allowedRoles.includes(me.role)) {
-          clearSession();
-          window.location.href = '/login/admin';
+          // Token válido, só sem permissão para ESTA página — não é motivo
+          // pra derrubar a sessão inteira. Antes isto fazia logout completo
+          // só por clicar num item de menu errado (gerava ticket de suporte
+          // à toa); o backend já protege de verdade via require_roles.
+          setUser(me);
+          setError('Acesso restrito a este perfil.');
           return;
         }
         setUser(me);
       })
       .catch((err) => {
-        // 401 (sessão expirada/ inválida) já é tratado dentro do apiFetch:
-        // limpa os tokens e redireciona para o login. Aqui só chegam erros
-        // que NÃO são de autenticação (rede, 429 de rate limit, 5xx). Nesse
-        // caso NÃO deslogar — senão uma falha transitória joga o usuário pra
-        // tela de login. Apenas sinaliza o erro; o token continua válido.
+        // 401 (sessão expirada/inválida) já tentou renovar sozinho dentro do
+        // apiFetch; só chega aqui se o refresh também falhou — aí sim a
+        // sessão acabou de verdade e o logout() revoga no servidor. 403 é
+        // igual ao caso acima (token válido, sem permissão): não desloga,
+        // só sinaliza. Qualquer outro erro (rede, 429, 5xx) também não
+        // desloga — uma falha transitória não pode jogar o usuário pro login.
         const status = (err as { status?: number })?.status;
-        if (status === 401 || status === 403) {
-          clearSession();
-          window.location.href = loginPath;
+        if (status === 401) {
+          logout(loginPath);
+          return;
+        }
+        if (status === 403) {
+          setError('Acesso restrito a este perfil.');
           return;
         }
         setError(err instanceof Error ? err.message : 'Não foi possível carregar a sessão.');

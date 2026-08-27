@@ -1,0 +1,23 @@
+#!/bin/sh
+# Defesa em profundidade além do .gitignore: bloqueia o commit se algum arquivo
+# staged bater com padrão de segredo (.env, certificado .pfx/.p12/.pem, chave
+# privada). O .gitignore já impede o caso comum; isto cobre o caso de alguém
+# rodar "git add -f" por engano num arquivo que não deveria ir para o repo.
+#
+# Ativação (uma vez por clone): git config core.hooksPath .githooks
+
+padrao='(^|/)\.env($|\.[^.]+$)|\.(pfx|p12|pem|key)$'
+excecoes='(^|/)\.env\.(example|sample|template)$'
+
+achados=$(git diff --cached --name-only --diff-filter=ACM | grep -E "$padrao" | grep -Ev "$excecoes")
+
+if [ -n "$achados" ]; then
+    echo "COMMIT BLOQUEADO: arquivo(s) com padrão de segredo/certificado no stage:" >&2
+    echo "$achados" | sed 's/^/  /' >&2
+    echo >&2
+    echo "Se for intencional (ex.: um .env.example), renomeie para deixar claro" >&2
+    echo "que não é segredo real, ou use 'git commit --no-verify' conscientemente." >&2
+    exit 1
+fi
+
+exit 0

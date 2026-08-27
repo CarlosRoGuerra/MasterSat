@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.models.multiportal_outbox import MultiportalOutbox
@@ -76,12 +76,25 @@ def enqueue_full_sync(
     da mesma transação da alteração do dado. Se aquela transação falhar, a
     intenção some junto — que é exatamente o comportamento desejado.
     """
+    # Serializa enfileiramentos concorrentes do mesmo rastreador. Sem isto,
+    # duas requisições podem observar "não existe pending" e criar duplicatas.
+    # SQLite (testes) não possui advisory lock; em produção usamos PostgreSQL.
+    bind = db.get_bind()
+    if bind.dialect.name == 'postgresql':
+        db.execute(
+            text('SELECT pg_advisory_xact_lock(:namespace, :tracker_id)'),
+            {'namespace': 918273649, 'tracker_id': tracker_id},
+        )
+
     existing = db.scalar(
         select(MultiportalOutbox)
         .where(
             MultiportalOutbox.tracker_id == tracker_id,
             MultiportalOutbox.operation == 'full_sync',
-            MultiportalOutbox.status.in_(ACTIVE_STATUSES),
+            # Um item já em processamento não pode ser reaproveitado: seus
+            # objetos foram lidos antes da edição atual. Criamos outro pending
+            # para garantir que o valor novo seja enviado depois.
+            MultiportalOutbox.status == 'pending',
         )
         .order_by(MultiportalOutbox.id.asc())
     )
@@ -126,6 +139,7 @@ def claim_due_items(db: Session, limit: int = 20) -> list[MultiportalOutbox]:
             )
             .order_by(MultiportalOutbox.next_attempt_at.asc(), MultiportalOutbox.id.asc())
             .limit(limit)
+            .with_for_update(skip_locked=True)
         ).all()
     )
     for item in itens:
@@ -202,6 +216,9 @@ def reconcile_pending_trackers(db: Session, limit: int = 200) -> int:
     ativos = select(MultiportalOutbox.tracker_id).where(
         MultiportalOutbox.status.in_(ACTIVE_STATUSES)
     )
+    falhas_terminais = select(MultiportalOutbox.tracker_id).where(
+        MultiportalOutbox.status == 'failed'
+    )
     candidatos = list(
         db.scalars(
             select(Tracker)
@@ -209,8 +226,13 @@ def reconcile_pending_trackers(db: Session, limit: int = 200) -> int:
                 Tracker.is_deleted.is_(False),
                 Tracker.vehicle_id.isnot(None),
                 or_(
+                    # Uma nova edição muda erro -> pendente e pode criar uma
+                    # nova tentativa mesmo que exista falha antiga.
                     Tracker.integration_status == 'pendente',
-                    Tracker.integration_status == 'erro',
+                    and_(
+                        Tracker.integration_status == 'erro',
+                        Tracker.id.notin_(falhas_terminais),
+                    ),
                 ),
                 Tracker.id.notin_(ativos),
             )
@@ -248,7 +270,6 @@ def process_item(db: Session, item: MultiportalOutbox) -> bool:
     from app.models.user import User
     from app.models.vehicle import Vehicle
     from app.services.multiportal import multiportal_service
-    from app.services.multiportal_sync_state import active_contract_for
 
     batch_id = uuid4().hex
     tracker = db.get(Tracker, item.tracker_id)
@@ -283,12 +304,42 @@ def process_item(db: Session, item: MultiportalOutbox) -> bool:
         )
     )
 
+    def _newer_pending() -> MultiportalOutbox | None:
+        return db.scalar(
+            select(MultiportalOutbox)
+            .where(
+                MultiportalOutbox.tracker_id == item.tracker_id,
+                MultiportalOutbox.operation == item.operation,
+                MultiportalOutbox.status == 'pending',
+                MultiportalOutbox.id != item.id,
+            )
+            .order_by(MultiportalOutbox.id.desc())
+        )
+
+    def _finish_as_superseded(newer: MultiportalOutbox, detail: str | None = None) -> bool:
+        item.status = 'done'
+        item.completed_at = _now()
+        item.last_error = (
+            f'Substituído pelo item #{newer.id}: dados mudaram durante o processamento.'
+            + (f' Resultado anterior: {detail}' if detail else '')
+        )[:2000]
+        tracker.integration_status = 'pendente'
+        db.commit()
+        return True
+
     try:
         steps = multiportal_service.full_sync_for_tracker(
             tracker=tracker, vehicle=vehicle, local_client=client, linked_user=linked_user,
-            contract=active_contract_for(db, vehicle_id=vehicle.id, client_id=client.id),
+            # Alterar veículo/rastreador não autoriza redefinir o
+            # usuário do portal. Cliente e reconciliação continuam completas.
+            sync_portal_user=item.reason not in {
+                'veículo alterado', 'rastreador alterado',
+            },
         )
     except Exception as exc:  # noqa: BLE001 — indisponibilidade vira retry, não crash do worker
+        newer = _newer_pending()
+        if newer is not None:
+            return _finish_as_superseded(newer, str(exc))
         tracker.integration_status = 'erro'
         db.flush()
         mark_failed_attempt(db, item, str(exc), batch_id=batch_id)
@@ -314,6 +365,17 @@ def process_item(db: Session, item: MultiportalOutbox) -> bool:
         )
 
     sucesso = bool(steps) and all(step.success for step in steps)
+    newer = _newer_pending()
+    if newer is not None:
+        detalhe_anterior = None
+        if not sucesso:
+            passo_ruim = next((s for s in steps if not s.success), None)
+            detalhe_anterior = (
+                f'{passo_ruim.operation}: [{passo_ruim.status_code}] {passo_ruim.status_description}'
+                if passo_ruim else 'Fluxo não retornou etapas.'
+            )
+        return _finish_as_superseded(newer, detalhe_anterior)
+
     tracker.integration_status = 'sincronizado' if sucesso else 'erro'
     if steps:
         tracker.integration_last_code = steps[-1].status_code

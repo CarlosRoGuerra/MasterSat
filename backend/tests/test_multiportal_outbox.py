@@ -99,6 +99,18 @@ class TestEnfileiramento:
         db.commit()
         assert db.query(MultiportalOutbox).count() == 2
 
+    def test_edicao_durante_processamento_cria_novo_item(self, db, rastreador_vinculado):
+        atual = outbox.enqueue_full_sync(db, rastreador_vinculado.id)
+        atual.status = 'processing'
+        db.commit()
+
+        novo = outbox.enqueue_full_sync(db, rastreador_vinculado.id, reason='cliente alterado')
+        db.commit()
+
+        assert novo.id != atual.id
+        assert atual.status == 'processing'
+        assert novo.status == 'pending'
+
 
 class TestBackoff:
     def test_cresce_exponencialmente_e_tem_teto(self):
@@ -185,9 +197,18 @@ class TestReconciliacao:
         item.status = 'failed'
         db.commit()
 
-        assert outbox.reconcile_pending_trackers(db) == 1  # cria um novo, não reusa
+        assert outbox.reconcile_pending_trackers(db) == 0
         db.refresh(item)
         assert item.status == 'failed'
+
+    def test_novo_dado_apos_falha_terminal_pode_ser_reconciliado(self, db, rastreador_vinculado):
+        item = outbox.enqueue_full_sync(db, rastreador_vinculado.id)
+        item.status = 'failed'
+        rastreador_vinculado.integration_status = 'pendente'
+        db.commit()
+
+        assert outbox.reconcile_pending_trackers(db) == 1
+        assert db.query(MultiportalOutbox).filter_by(status='pending').count() == 1
 
     def test_ignora_rastreador_sincronizado(self, db, rastreador_vinculado):
         rastreador_vinculado.integration_status = 'sincronizado'
@@ -261,6 +282,24 @@ class TestProcessamento:
         assert res['sucesso'] == 1
         assert res['falhas'] == 0
 
+    def test_resultado_antigo_nao_apaga_pendencia_mais_nova(self, db, rastreador_vinculado):
+        atual = outbox.enqueue_full_sync(db, rastreador_vinculado.id)
+        atual.status = 'processing'
+        db.commit()
+        novo = outbox.enqueue_full_sync(db, rastreador_vinculado.id, reason='cliente alterado')
+        db.commit()
+
+        with patch('app.services.multiportal.multiportal_service.full_sync_for_tracker', side_effect=_fluxo_ok):
+            assert outbox.process_item(db, atual) is True
+
+        db.refresh(atual)
+        db.refresh(novo)
+        db.refresh(rastreador_vinculado)
+        assert atual.status == 'done'
+        assert 'Substituído' in atual.last_error
+        assert novo.status == 'pending'
+        assert rastreador_vinculado.integration_status == 'pendente'
+
 
 class TestQueueStats:
     def test_conta_por_status(self, db, rastreador_vinculado):
@@ -312,6 +351,21 @@ class TestEndpointsDaFila:
     def test_retry_de_item_inexistente_404(self, http):
         assert http.post(f'{self.PREFIX}/queue/999999/retry').status_code == 404
 
+    def test_retry_nao_toma_item_em_processamento_do_worker(self, http, db, rastreador_vinculado):
+        item = outbox.enqueue_full_sync(db, rastreador_vinculado.id)
+        item.status = 'processing'
+        db.commit()
+        assert http.post(f'{self.PREFIX}/queue/{item.id}/retry').status_code == 409
+
+    def test_retry_nao_duplica_item_ativo(self, http, db, rastreador_vinculado):
+        falho = outbox.enqueue_full_sync(db, rastreador_vinculado.id)
+        falho.status = 'failed'
+        db.commit()
+        outbox.enqueue_full_sync(db, rastreador_vinculado.id, reason='nova edição')
+        db.commit()
+
+        assert http.post(f'{self.PREFIX}/queue/{falho.id}/retry').status_code == 409
+
     def test_queue_negada_para_cliente(self, http_cliente):
         assert http_cliente.get(f'{self.PREFIX}/queue').status_code == 403
 
@@ -340,43 +394,29 @@ class TestIntegracaoTransacional:
         assert r.status_code == 200
         assert db.query(MultiportalOutbox).count() == 0
 
+    def test_contrato_e_pagamento_nao_disparam_multiportal(
+        self, http, db, cliente, veiculo, plan, rastreador_vinculado,
+    ):
+        r = http.post('/api/v1/contracts/', json={
+            'client_id': cliente.id,
+            'plan_id': plan.id,
+            'vehicle_id': veiculo.id,
+            'tracker_id': rastreador_vinculado.id,
+            'start_date': '2026-01-01',
+            'status': 'ativo',
+            'billing_day': 10,
+        })
+        assert r.status_code == 200
+        contract_id = r.json()['id']
+        assert db.query(MultiportalOutbox).count() == 0
 
-class TestContratoAtivoParaSincronizacao:
-    """O provedor guarda numero do contrato, vencimento e vigencia no cadastro
-    do CLIENTE, entao e preciso escolher um contrato ao sincroniza-lo."""
+        r = http.put(f'/api/v1/contracts/{contract_id}', json={
+            'billing_day': 15,
+            'payment_method': 'pix',
+        })
+        assert r.status_code == 200
+        assert db.query(MultiportalOutbox).count() == 0
 
-    def test_prefere_o_contrato_do_veiculo(self, db, cliente, veiculo, plan):
-        from app.models.contract import Contract
-        from app.services.multiportal_sync_state import active_contract_for
-
-        outro = Contract(client_id=cliente.id, plan_id=plan.id, start_date=date(2025, 1, 1), status='ativo')
-        do_veiculo = Contract(client_id=cliente.id, plan_id=plan.id, vehicle_id=veiculo.id,
-                              start_date=date(2025, 1, 1), status='ativo')
-        db.add(outro); db.add(do_veiculo); db.commit()
-
-        achado = active_contract_for(db, vehicle_id=veiculo.id, client_id=cliente.id)
-        assert achado.id == do_veiculo.id
-
-    def test_sem_contrato_do_veiculo_cai_no_do_cliente(self, db, cliente, veiculo, plan):
-        from app.models.contract import Contract
-        from app.services.multiportal_sync_state import active_contract_for
-
-        do_cliente = Contract(client_id=cliente.id, plan_id=plan.id, start_date=date(2025, 1, 1), status='ativo')
-        db.add(do_cliente); db.commit()
-
-        achado = active_contract_for(db, vehicle_id=veiculo.id, client_id=cliente.id)
-        assert achado.id == do_cliente.id
-
-    def test_ignora_contrato_cancelado(self, db, cliente, veiculo, plan):
-        from app.models.contract import Contract
-        from app.services.multiportal_sync_state import active_contract_for
-
-        cancelado = Contract(client_id=cliente.id, plan_id=plan.id, vehicle_id=veiculo.id,
-                             start_date=date(2025, 1, 1), status='cancelado')
-        db.add(cancelado); db.commit()
-
-        assert active_contract_for(db, vehicle_id=veiculo.id, client_id=cliente.id) is None
-
-    def test_sem_contrato_retorna_none(self, db, cliente, veiculo):
-        from app.services.multiportal_sync_state import active_contract_for
-        assert active_contract_for(db, vehicle_id=veiculo.id, client_id=cliente.id) is None
+        r = http.delete(f'/api/v1/contracts/{contract_id}')
+        assert r.status_code == 200
+        assert db.query(MultiportalOutbox).count() == 0

@@ -1,0 +1,257 @@
+VALIDAÇÃO DA AUDITORIA MASTERSAT — FRONTEND (FE-01 a FE-06)
+================================================================
+Verificação feita contra o código real do repositório em 27/08/2026.
+Nenhum arquivo do projeto foi alterado durante esta verificação.
+
+
+FE-01 — Páginas monolíticas com dezenas de useState
+-----------------------------------------------------------------
+STATUS: CONFIRMADO COM PRECISÃO TOTAL
+SEVERIDADE ORIGINAL: Alta  →  SEVERIDADE REAL: Alta (mantida)
+
+Evidência verificada (recontagem independente):
+    financeiro/page.tsx linhas:        2.403 (alegado 2.403) — bate
+    financeiro/page.tsx useState:         76 (alegado 76) — bate
+    financeiro/page.tsx apiFetch:         45 (alegado 45) — bate
+    financeiro/page.tsx tipos locais:     22 (alegado 22) — bate
+    clientes/page.tsx linhas:          2.580 (alegado 2.580) — bate
+    clientes/page.tsx useState:           65 (alegado 65) — bate
+package.json confirma ausência total de bibliotecas de estado/data-
+fetching: dependencies = clsx, leaflet, lucide-react, next, react,
+react-dom, react-leaflet. devDependencies = só tipos + tooling de
+build (sem @tanstack/react-query, swr, zustand).
+
+Avaliação: 100% preciso, sem nenhuma ressalva a fazer.
+
+Correção recomendada: introduzir TanStack Query (ou SWR) para separar
+estado de servidor de estado de UI, depois quebrar a página em
+subcomponentes por seção. ATENÇÃO: com 22 tipos locais interdependentes
+e 45 chamadas de API entrelaçadas por regra de negócio, refatorar sem
+rede de segurança de testes (ver FE-02, que hoje é inexistente) é o
+maior risco prático — refatorar antes de ter testes tende a introduzir
+regressões silenciosas.
+Risco da mudança: alto — são as duas telas de maior uso diário; exige
+plano de migração incremental por seção, nunca reescrita de uma vez.
+
+Dependências: depende de FE-02 (testes/lint) antes de ser seguro
+refatorar. Compartilha causa com FE-03 (tipos locais duplicados).
+
+
+FE-02 — Nenhuma ferramenta de lint, formatação ou teste configurada
+-----------------------------------------------------------------
+STATUS: CONFIRMADO
+SEVERIDADE ORIGINAL: Alta  →  SEVERIDADE REAL: Alta (mantida)
+
+Evidência verificada:
+- package.json completo: sem eslint, jest, vitest, @testing-library/*,
+  prettier em dependencies ou devDependencies. Scripts são só dev,
+  build, start — nenhum lint ou test.
+- Nenhum .eslintrc* ou eslint.config.* em frontend/.
+- Nenhum *.test.ts(x) ou *.spec.ts(x) em todo o frontend/.
+
+Avaliação: confirmado sem ressalvas. Coerente com o tamanho dos
+arquivos do FE-01 — 5.000+ linhas de lógica de negócio sem nenhum
+teste é risco operacional real.
+
+Correção recomendada: adicionar ESLint com config oficial do Next.js
+(baixo custo); introduzir Vitest + Testing Library começando pelas
+funções puras de lib/ (format, boleto-mensagem) antes de componentes.
+ATENÇÃO: ligar ESLint num código com anos de acúmulo (arquivos de
+2.000+ linhas) provavelmente gera centenas de warnings/erros na
+primeira execução — recomendável configurar com regras graduais ou
+--max-warnings alto inicialmente, senão trava o CI.
+Risco da mudança: baixo — puramente aditivo, não toca comportamento
+existente.
+
+Dependências: pré-requisito prático para refatorar FE-01 com
+segurança e para prevenir regressão dos tipos de FE-03.
+
+
+FE-03 — Tipos de domínio redeclarados de forma incompatível
+-----------------------------------------------------------------
+STATUS: CONFIRMADO qualitativamente, CONTAGEM IMPRECISA
+SEVERIDADE ORIGINAL: Média  →  SEVERIDADE REAL: Média (mantida)
+
+Evidência verificada:
+- Os dois `type Tracker` são REALMENTE incompatíveis, não só cópias:
+    rastreadores/page.tsx:26-45 — 17 campos (imei, brand, model,
+      status, firmware, sim_number, datas de aquisição/instalação/
+      garantia, client_id, vehicle_id, etc.)
+    integracao/page.tsx:57 — 7 campos (id, imei, brand, model,
+      client_name, vehicle_plate, integration_status)
+  Um Tracker de uma tela não é atribuível ao tipo da outra sem erro
+  de TS — confirmado.
+- Não existe frontend/types/ nem lib/types.ts compartilhado —
+  confirmado.
+- pricePeriodSuffix existe em lib/format.ts:60, corretamente
+  documentado com o comentário sobre o bug de planos trimestrais/
+  semestrais exibidos como "/mês" — confirmado.
+- CONTAGEM "143 tipos locais": recontagem de `type|interface` no
+  início de linha em todo o frontend deu 117 (só em app/) ou 155 (app
+  + components + lib). Nenhuma leitura bate exatamente com 143 — a
+  metodologia de contagem do relatório original não é reproduzível
+  com certeza, mas a ordem de grandeza (mais de uma centena de tipos
+  locais espalhados) está correta, e dependendo do escopo o número
+  real é até MAIOR (155), não menor.
+
+Avaliação: a causa raiz e o exemplo concreto (Tracker) estão corretos;
+só o número "143" não se reproduz — mas isso não muda a conclusão.
+
+Correção recomendada: gerar tipos TypeScript a partir do OpenAPI do
+FastAPI (ex.: openapi-typescript) como fonte única de verdade.
+ATENÇÃO: os dois Tracker têm propósitos genuinamente diferentes
+(cadastro completo vs. status de integração) — a solução correta NÃO
+é forçar um único tipo "canônico" com campos opcionais artificiais
+(isso mascararia bugs de dados incompletos em vez de o TypeScript
+acusar em build). Ter Tracker (completo) e algo como
+TrackerIntegrationSummary (visão reduzida), nomeados explicitamente,
+é mais correto.
+Risco da mudança: médio — introduz um passo de geração de código no
+build; migração incremental página por página é viável.
+
+Dependências: relaciona-se com FE-01 (22 dos tipos locais do frontend
+estão só em financeiro/page.tsx) e FE-02 (sem lint/testes,
+divergências de tipo não são pegas automaticamente).
+
+
+FE-04 — Menu lateral não filtra por permissão do usuário logado
+-----------------------------------------------------------------
+STATUS: CONFIRMADO, estruturalmente PIOR do que descrito
+SEVERIDADE ORIGINAL: Média  →  SEVERIDADE REAL: Média (mantida — RBAC
+real no backend limita o dano)
+
+Evidência verificada:
+- sidebar.tsx:29-30 — NavItem/NavGroup não têm campo role/
+  allowedRoles. NAV_GROUPS (linhas 32-66) é constante estática com 13
+  itens: Dashboard, Clientes, Veículos, Rastreadores, Ordens de
+  serviço, Financeiro, Fechamento, Notas Fiscais, Equipe, Relatórios,
+  Integração, Auditoria, Configurações.
+- ACHADO MAIS GRAVE QUE O DESCRITO: export function Sidebar() (linha
+  83) NÃO RECEBE NENHUMA PROP — não há user, role nem equivalente
+  sendo passado. page-shell.tsx:17 instancia <Sidebar /> sem
+  argumentos. Ou seja, não é que o filtro exista e falhe — a
+  informação de papel do usuário NUNCA CHEGA ao componente.
+- backend/app/api/deps.py:43-49 — require_roles revalida o papel do
+  usuário em CADA endpoint via dependency FastAPI, retornando 403
+  independentemente do que a sidebar mostra. Confirmado.
+
+Avaliação: severidade Média é adequada, e não deveria subir para
+Alta, porque o backend garante que não há vazamento de dados — é
+problema de UX/menor exposição de informação (revela que essas telas
+existem), não falha de controle de acesso a dados.
+
+Correção recomendada: adicionar allowedRoles a cada NavItem e passar
+user.role para <Sidebar user={user} />. ATENÇÃO: isso exige que
+PageShell/Sidebar recebam o usuário — hoje NENHUMA das 13 páginas que
+chamam useAuthGuard passa isso adiante para o shell, então a mudança
+toca todas as 13 páginas, não só sidebar.tsx.
+Risco da mudança: baixo, mas com escopo maior do que parece (13
+páginas a tocar).
+
+Dependências: mesma família de causa que FE-06 (controle de acesso
+client-side pós-render, mitigado pelo RBAC real do backend). Tratar
+FE-04 e FE-06 como uma dupla de "defesa em profundidade ausente no
+client", não como dois achados de mesmo peso. Também compartilha
+causa com SEC-05 (sidebar sem role → clique gera logout hostil).
+
+
+FE-05 — Formatação de moeda/data reimplementada localmente
+-----------------------------------------------------------------
+STATUS: PARCIALMENTE CONFIRMADO
+SEVERIDADE ORIGINAL: Baixa  →  SEVERIDADE REAL: Baixa (mantida)
+
+Evidência verificada (grep exato de Intl.NumberFormat|
+toLocaleDateString fora de lib/):
+    app/clientes/page.tsx                14
+    app/veiculos/page.tsx                 4
+    app/financeiro/page.tsx               2
+    components/carne-tracking-modal.tsx   2
+    components/ui/revenue-chart.tsx       2
+    app/auditoria/page.tsx                1
+    app/dashboard/page.tsx                1
+    app/fechamento/page.tsx               1
+    app/notas-fiscais/page.tsx            1
+    app/relatorios/page.tsx               1
+    components/vehicle-onboarding-wizard.tsx  1
+    TOTAL: 30 ocorrências em 11 arquivos
+O número de arquivos (11) bate exatamente. O número de ocorrências
+(39 alegado) NÃO bate — real é 30 (~23% menor). Ampliando para
+toLocaleString/Intl.DateTimeFormat sobe para 37, mas aí entram mais 2
+arquivos (13 no total) — nenhuma combinação testada bate exatamente
+com "11 arquivos, 39 ocorrências" simultaneamente.
+
+PONTO MAIS IMPORTANTE: lib/format.ts NÃO TEM NENHUMA função de
+formatação de moeda ou data. Suas funções são: onlyDigits,
+formatCpfCnpj, formatPhone, formatZipCode, validatePassword,
+intervalLabel, pricePeriodSuffix. Ou seja, a formulação do achado
+("reimplementada... sem passar por lib/format.ts") sugere que existe
+um utilitário sendo ignorado — NA VERDADE NÃO EXISTE UTILITÁRIO DE
+MOEDA/DATA NENHUM PARA SER USADO. A causa raiz correta é "ausência de
+utilitário centralizado", não "utilitário existente sendo bypassado".
+
+Correção recomendada: CRIAR formatCurrency e formatDate em
+lib/format.ts (não "usar as funções existentes", que não existem) e
+migrar as 30 (ou 37) ocorrências. ATENÇÃO: clientes/page.tsx
+concentra 14 das 30 ocorrências — checar se todas usam a mesma
+configuração de locale/moeda (pt-BR/BRL) ou se há variações antes de
+unificar.
+Risco da mudança: baixo.
+
+Dependências: mesma causa cultural de FE-03 (cada página resolve
+localmente algo que deveria ser compartilhado); reforçado por FE-01
+(clientes/financeiro concentram a duplicação).
+
+
+FE-06 — Sem Next.js Middleware para proteção de rota
+-----------------------------------------------------------------
+STATUS: CONFIRMADO INTEGRALMENTE
+SEVERIDADE ORIGINAL: Baixa  →  SEVERIDADE REAL: Baixa (mantida — RBAC
+do backend cobre o risco real)
+
+Evidência verificada:
+- Nenhum frontend/middleware.ts ou frontend/src/middleware.ts existe
+  (frontend nem tem diretório src/).
+- useAuthGuard (use-auth-guard.ts:17-59) roda inteiramente dentro de
+  useEffect (linha 23) — após o primeiro paint/mount — chamando
+  /auth/me de forma assíncrona.
+- Contagem real de páginas usando useAuthGuard: 13, exatamente como
+  alegado (fechamento, configuracoes, dashboard, rastreadores,
+  veiculos, integracao, financeiro, auditoria, clientes, notas-
+  fiscais, ordens-servico, usuarios, relatorios).
+
+Avaliação: severidade Baixa está correta, não deveria subir, porque o
+backend (require_roles) valida token/papel a cada requisição de API
+independentemente do middleware. A ausência de middleware causa
+apenas: (a) flash breve do shell da página antes do redirect, e (b)
+uma chamada de rede a /auth/me evitável. Nenhum dado sensível vaza —
+o fetch de dados de negócio das páginas normalmente também depende de
+token/loading do guard antes de disparar.
+
+Correção recomendada: middleware.ts validando token básico antes de
+servir a rota. ATENÇÃO: isso exige mover o token de localStorage para
+cookie primeiro (Next.js Middleware roda no edge/servidor e não lê
+localStorage) — é mudança de arquitetura de auth, não adição trivial.
+Migrar para cookie também traz implicações de CSRF (SameSite, flags)
+que precisam ser tratadas.
+Risco da mudança: médio — depende inteiramente de SEC-02.
+
+Dependências: BLOQUEADO por SEC-02 (migração de token para cookie).
+Mesma família de causa que FE-04 (verificação client-side pós-paint,
+mitigada por RBAC sólido do backend).
+
+
+RESUMO FE
+-----------------------------------------------------------------
+FE-01, FE-02, FE-04 e FE-06 têm evidência exata ou muito próxima do
+alegado. FE-03 e FE-05 têm contagens que não se reproduzem com
+exatidão (143 vs. 117-155; 39 vs. 30), mas a direção do problema é
+real em ambos os casos — nenhum dos 6 achados é incorreto na
+conclusão qualitativa.
+
+Ordem sugerida dentro de FE:
+  1. FE-02 (zero risco, pré-requisito de FE-01)
+  2. FE-04 + SEC-05 (junto, mesma causa — sidebar sem role)
+  3. FE-05 (baixo risco)
+  4. FE-03 (médio risco)
+  5. FE-01 (alto risco, só depois de FE-02 no lugar)
+  6. FE-06 (bloqueado por SEC-02 — só depois dele)

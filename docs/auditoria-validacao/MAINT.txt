@@ -1,0 +1,88 @@
+VALIDAÇÃO DA AUDITORIA MASTERSAT — MANUTENIBILIDADE (MAINT-01, MAINT-02)
+================================================================
+Verificação feita contra o código real do repositório em 27/08/2026.
+Nenhum arquivo do projeto foi alterado durante esta verificação.
+
+
+MAINT-01 — Scripts de investigação acumulados na raiz do repositório
+-----------------------------------------------------------------
+STATUS: CONFIRMADO + detalhe relevante não capturado pelo relatório
+SEVERIDADE ORIGINAL: Baixa  →  SEVERIDADE REAL: Baixa (mantida)
+
+Evidência verificada:
+    test_multiportal.py   (raiz, RASTREADO no git)
+    test_system.py        (raiz, RASTREADO no git)
+    ts.py                 (raiz, RASTREADO no git)
+    backend/scripts/tst.py
+
+DETALHE IMPORTANTE não capturado pelo relatório original:
+backend/scripts/tst.py está LISTADO NO .gitignore (linha 47) — ou
+seja, não é versionado; existe só localmente na máquina do
+desenvolvedor e não "polui" o repositório para quem clona. Os outros
+três (test_multiportal.py, test_system.py, ts.py) ESTÃO DE FATO
+COMMITADOS e confirmam o achado.
+
+ACHADO EXTRA: ts.py NÃO TEM ABSOLUTAMENTE NADA A VER COM O
+MASTERSAT — é um script que baixa um Google Doc público e decodifica
+uma "mensagem ASCII" de um quebra-cabeça (função
+decode_message_from_doc, URL de docs.google.com/document/...pub). É
+lixo de repositório MAIS GRAVE do que "script de teste manual
+esquecido" — é conteúdo completamente alheio ao projeto, possivelmente
+copiado/colado por engano em algum momento.
+
+test_multiportal.py e test_system.py são scripts de fumaça reais
+(fazem chamadas HTTP contra um backend rodando e/ou contra o WSDL
+real do Multiportal), fora do diretório backend/tests/ — não rodam no
+pytest, presumivelmente fora do CI.
+
+Correção recomendada: mover o que ainda é útil para backend/scripts/
+(que já tem convenção e propósito de scripts operacionais) e remover
+o que não é mais usado — ts.py deveria ser removido diretamente, não
+"movido", por não ter relação com o projeto. Verificado: nenhum outro
+arquivo do projeto referencia esses três nomes (grep em yml/
+Dockerfile/cfg/ini/toml retorna vazio) — remoção/realocação é segura.
+Risco da mudança: baixo, contanto que não haja algum runbook/
+documentação externa (não encontrada nos arquivos do próprio repo)
+instruindo a rodar esses scripts a partir da raiz.
+
+Dependências: nenhuma.
+
+
+MAINT-02 — Módulo integration_stub.py sem nenhuma referência
+-----------------------------------------------------------------
+STATUS: CONFIRMADO INTEGRALMENTE
+SEVERIDADE ORIGINAL: Baixa  →  SEVERIDADE REAL: Baixa (mantida)
+
+Evidência verificada:
+- backend/app/services/integration_stub.py existe, com apenas 3
+  linhas:
+      def sync_tracker_status(tracker_id: int) -> dict:
+          return {'tracker_id': tracker_id, 'status': 'stub',
+                   'message': 'Integração externa será adicionada na
+                   fase 2.'}
+- grep -rn "integration_stub" em todo o repositório (*.py): ZERO
+  resultados, inclusive nada referenciando sync_tracker_status.
+
+Avaliação: confirmado sem nenhuma ressalva. Código morto, nunca
+importado, provável placeholder de uma fase de projeto substituída
+por integrações reais (Multiportal, Ailos) e nunca removido.
+
+Correção recomendada: remover o arquivo. Sem lacunas — não há testes,
+imports ou referências de configuração apontando para ele.
+Risco da mudança: baixo — nenhum efeito colateral.
+
+Dependências: nenhuma.
+
+
+RESUMO MAINT
+-----------------------------------------------------------------
+Os 2 achados foram confirmados integralmente, com um detalhe extra em
+MAINT-01 (tst.py já é ignorado pelo git, não conta como poluição
+versionada; ts.py é conteúdo totalmente alheio ao projeto, mais grave
+que um "script de teste esquecido"). Ambos são remoções seguras e
+triviais, sem dependências com o restante da auditoria.
+
+Ordem sugerida dentro de MAINT (podem ser feitos imediatamente, em
+qualquer ordem, junto com SEC-01 na "onda 0" do plano geral):
+  1. MAINT-02 (remoção mais simples)
+  2. MAINT-01 (remover/realocar os 3 arquivos rastreados)

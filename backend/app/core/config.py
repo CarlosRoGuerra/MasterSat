@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     database_url: str = 'postgresql+psycopg://postgres:postgres@db:5432/rastreamento'
     frontend_url: str = 'http://localhost:3000'
     backend_public_url: str = 'http://localhost:8000'
+    # Backend de storage do rate limiter (slowapi/limits) — compartilhado entre
+    # workers uvicorn. Sem isto cada worker mantém seu próprio contador em
+    # memória e o limite efetivo vira (limite x workers).
+    redis_url: str = 'redis://redis:6379/0'
     # Teto de tamanho de requisição/upload (bytes). Protege contra upload gigante
     # que estouraria a memória (o arquivo é lido inteiro para o MinIO). 25 MB.
     max_upload_bytes: int = 25 * 1024 * 1024
@@ -171,6 +175,11 @@ class Settings(BaseSettings):
     rate_limit_default: str = '200/minute'
     rate_limit_login: str = '5/minute'
     rate_limit_exports: str = '10/minute'
+
+    # Retenção de logs de integração Ailos (request/response mascarados só nas
+    # chaves sensíveis — CPF/CNPJ, endereço e valores ficam em texto claro).
+    # Purgados automaticamente após esse período (ver main.py, worker de retenção).
+    ailos_log_retention_months: int = 12
 
     @property
     def is_production(self) -> bool:

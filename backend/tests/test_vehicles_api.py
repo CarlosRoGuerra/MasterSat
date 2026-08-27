@@ -396,15 +396,31 @@ class TestUninstallVehicle:
         _enable_multiportal(monkeypatch)
         rastreador_instalado.integration_status = 'sincronizado'
         db.commit()
-        monkeypatch.setattr(
-            multiportal_service,
-            'unlink_equipment_vehicle',
-            lambda tracker, vehicle, when=None: _multiportal_result('vinculoEquipamentoVeiculo', success=False),
-        )
+        calls = []
+
+        def unlink_equipment(tracker, vehicle, when=None):
+            calls.append(('unlink_equipment', tracker.id, vehicle.id))
+            return _multiportal_result('vinculoEquipamentoVeiculo', success=False)
+
+        def relink_equipment(tracker, vehicle, when=None):
+            calls.append(('relink_equipment', tracker.id, vehicle.id))
+            return _multiportal_result('vinculoEquipamentoVeiculo')
+
+        def relink_client(vehicle, client, when=None):
+            calls.append(('relink_client', vehicle.id, client.id))
+            return _multiportal_result('vinculoVeiculoCliente')
+
+        monkeypatch.setattr(multiportal_service, 'unlink_equipment_vehicle', unlink_equipment)
+        monkeypatch.setattr(multiportal_service, 'link_equipment_vehicle', relink_equipment)
+        monkeypatch.setattr(multiportal_service, 'link_vehicle_client', relink_client)
 
         r = self._uninstall(http, veiculo.id)
         assert r.status_code == 502
         assert r.json()['detail']['code'] == 'multiportal_unlink_failed'
+        assert r.json()['detail']['reconciliation_required'] is False
+        assert [call[0] for call in calls] == [
+            'unlink_equipment', 'relink_client', 'relink_equipment',
+        ]
         db.refresh(rastreador_instalado)
         db.refresh(contrato)
         db.refresh(veiculo)
