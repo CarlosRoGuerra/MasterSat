@@ -101,6 +101,19 @@ def resolver_pagador(db: Session, billing: Billing, fallback: Client | None = No
     veículo. Sem interveniente (ou se ele foi removido), cai no cliente da
     própria cobrança.
     """
+    # Títulos novos guardam um snapshot explícito. Ele tem precedência sobre o
+    # contrato atual para impedir que uma troca posterior de interveniente altere
+    # retroativamente o pagador de boleto, recibo e NFS-e já emitidos.
+    if getattr(billing, 'payer_client_id', None):
+        payer = db.get(Client, billing.payer_client_id)
+        if payer and not payer.is_deleted:
+            return payer
+        raise ValueError(
+            f'Responsável financeiro #{billing.payer_client_id} da cobrança '
+            f'#{billing.id} não está disponível.'
+        )
+
+    # Compatibilidade com títulos legados, anteriores ao snapshot do pagador.
     if billing.contract_id:
         contrato = db.get(Contract, billing.contract_id)
         if contrato and contrato.interveniente_client_id:

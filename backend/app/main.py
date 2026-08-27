@@ -100,6 +100,27 @@ def ensure_schema_updates():
                 if column_name not in contract_columns:
                     conn.execute(text(sql))
 
+        if inspector.has_table('billings'):
+            billing_columns = {column['name'] for column in inspector.get_columns('billings')}
+            if 'payer_client_id' not in billing_columns:
+                conn.execute(text(
+                    'ALTER TABLE billings ADD COLUMN payer_client_id INTEGER REFERENCES clients(id)'
+                ))
+            # Migração conservadora: registra o interveniente atual dos títulos
+            # legados; sem interveniente, o próprio cliente continua pagador.
+            conn.execute(text(
+                'UPDATE billings SET payer_client_id = COALESCE('
+                '(SELECT contracts.interveniente_client_id FROM contracts '
+                'WHERE contracts.id = billings.contract_id), client_id) '
+                'WHERE payer_client_id IS NULL'
+            ))
+            billing_indexes = {index['name'] for index in inspector.get_indexes('billings')}
+            if 'ix_billings_payer_client_id' not in billing_indexes:
+                conn.execute(text(
+                    'CREATE INDEX IF NOT EXISTS ix_billings_payer_client_id '
+                    'ON billings (payer_client_id)'
+                ))
+
         if inspector.has_table('ailos_boletos'):
             ailos_boleto_columns = {column['name'] for column in inspector.get_columns('ailos_boletos')}
             if 'pix_emv' not in ailos_boleto_columns:
@@ -268,6 +289,7 @@ def ensure_schema_updates():
                     tracker_id INTEGER REFERENCES trackers(id),
                     contract_id INTEGER REFERENCES contracts(id),
                     client_id INTEGER NOT NULL REFERENCES clients(id),
+                    payer_client_id INTEGER REFERENCES clients(id),
                     uninstall_date DATE NOT NULL,
                     fee_amount NUMERIC(10,2),
                     service_product_id INTEGER REFERENCES service_products(id),
@@ -279,6 +301,33 @@ def ensure_schema_updates():
                     updated_at TIMESTAMP WITH TIME ZONE DEFAULT now()
                 )
             '''))
+            conn.execute(text(
+                'CREATE INDEX IF NOT EXISTS ix_uninstall_events_payer_client_id '
+                'ON uninstall_events (payer_client_id)'
+            ))
+        else:
+            uninstall_columns = {
+                column['name'] for column in inspector.get_columns('uninstall_events')
+            }
+            if 'payer_client_id' not in uninstall_columns:
+                conn.execute(text(
+                    'ALTER TABLE uninstall_events ADD COLUMN payer_client_id '
+                    'INTEGER REFERENCES clients(id)'
+                ))
+            conn.execute(text(
+                'UPDATE uninstall_events SET payer_client_id = COALESCE('
+                '(SELECT contracts.interveniente_client_id FROM contracts '
+                'WHERE contracts.id = uninstall_events.contract_id), client_id) '
+                'WHERE payer_client_id IS NULL'
+            ))
+            uninstall_indexes = {
+                index['name'] for index in inspector.get_indexes('uninstall_events')
+            }
+            if 'ix_uninstall_events_payer_client_id' not in uninstall_indexes:
+                conn.execute(text(
+                    'CREATE INDEX IF NOT EXISTS ix_uninstall_events_payer_client_id '
+                    'ON uninstall_events (payer_client_id)'
+                ))
 
         # ── Closure jobs (rastreamento de geração assíncrona de fechamento) ──
         if not inspector.has_table('closure_jobs'):

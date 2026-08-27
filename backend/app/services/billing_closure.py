@@ -6,7 +6,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from io import BytesIO
 
-from sqlalchemy import func, or_, text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session, aliased
 
 from app.core.timezone import hoje
@@ -25,6 +25,7 @@ from app.services.financial import (
     add_months,
     associate_billing_charge_item,
     charge_item_effective_billing_count,
+    contract_payer_client_id,
     decimal_to_float,
     generate_item_billings,
     normalize_due_date,
@@ -103,21 +104,43 @@ def _prorata_fields(plan_price: float, start_date: date) -> tuple[bool, float, i
     return True, prorated, remaining, dim
 
 
-def _pending_uninstall_events_for_month(db: Session, reference_month: date) -> list[UninstallEvent]:
-    month_start = reference_month.replace(day=1)
+def _apply_client_scope(query, client_column, filter_type: str, client_id: int | None):
+    """Aplica o mesmo recorte de clientes a qualquer categoria do fechamento."""
+    eligible_clients = select(Client.id).where(Client.is_deleted.is_(False))
+    if filter_type in ('pf', 'pj'):
+        eligible_clients = eligible_clients.where(Client.type == filter_type)
+    elif filter_type == 'client' and client_id is not None:
+        eligible_clients = eligible_clients.where(Client.id == client_id)
+    return query.filter(client_column.in_(eligible_clients))
+
+
+def _pending_uninstall_events_for_month(
+    db: Session,
+    reference_month: date,
+    filter_type: str = 'all',
+    client_id: int | None = None,
+) -> list[UninstallEvent]:
+    """Eventos vencidos até a competência, inclusive os esquecidos em meses anteriores.
+
+    ``skipped`` era o estado terminal usado para valores abaixo de R$ 5. Ele é
+    incluído para recuperar dados históricos e volta a ``pending`` enquanto
+    aguarda acumulação suficiente.
+    """
     if reference_month.month == 12:
         month_end = date(reference_month.year + 1, 1, 1)
     else:
         month_end = date(reference_month.year, reference_month.month + 1, 1)
-    return (
+    query = (
         db.query(UninstallEvent)
         .filter(
-            UninstallEvent.status == 'pending',
-            UninstallEvent.uninstall_date >= month_start,
+            UninstallEvent.status.in_(('pending', 'skipped')),
+            UninstallEvent.billing_id.is_(None),
             UninstallEvent.uninstall_date < month_end,
         )
-        .all()
     )
+    return _apply_client_scope(
+        query, UninstallEvent.client_id, filter_type, client_id,
+    ).order_by(UninstallEvent.uninstall_date.asc(), UninstallEvent.id.asc()).all()
 
 
 def uninstall_fee_for_event(db: Session, event: UninstallEvent) -> tuple[Decimal, str]:
@@ -166,6 +189,28 @@ def _due_date_for_uninstall_event(event: UninstallEvent, db: Session) -> date:
     if due <= event.uninstall_date:
         due = add_months(due, 1)
     return due
+
+
+def _uninstall_event_payer_client_id(db: Session, event: UninstallEvent) -> int:
+    """Pagador do evento, sem aceitar referência contratual inconsistente."""
+    if event.payer_client_id:
+        payer = db.get(Client, event.payer_client_id)
+        if not payer or payer.is_deleted:
+            raise ValueError(
+                f'Responsável financeiro #{event.payer_client_id} do evento '
+                f'#{event.id} não está disponível.'
+            )
+        return payer.id
+    if not event.contract_id:
+        return event.client_id
+    contract = db.get(Contract, event.contract_id)
+    if not contract or contract.is_deleted:
+        raise ValueError(f'Contrato #{event.contract_id} da desinstalação não está disponível.')
+    if contract.client_id != event.client_id:
+        raise ValueError(
+            f'Evento #{event.id} e contrato #{contract.id} pertencem a clientes diferentes.'
+        )
+    return contract_payer_client_id(db, contract)
 
 
 def _first_cycle_charge_items(
@@ -217,6 +262,8 @@ def _pending_charge_items(
     db: Session,
     reference_month: date,
     exclude_ids: set[int] | None = None,
+    filter_type: str = 'all',
+    client_id: int | None = None,
 ) -> list[dict]:
     """
     Retorna ClientChargeItems ativos cujos billings ainda não foram totalmente gerados
@@ -228,15 +275,17 @@ def _pending_charge_items(
     else:
         month_end = date(reference_month.year, reference_month.month + 1, 1)
 
-    items = (
+    query = (
         db.query(ClientChargeItem)
         .filter(
             ClientChargeItem.is_deleted.is_(False),
             ClientChargeItem.active.is_(True),
             ClientChargeItem.start_date < month_end,
         )
-        .all()
     )
+    items = _apply_client_scope(
+        query, ClientChargeItem.client_id, filter_type, client_id,
+    ).order_by(ClientChargeItem.id.asc()).all()
 
     result = []
     for item in items:
@@ -366,6 +415,10 @@ def simulate_closure(
             'contract_id': contract.id,
             'client_id': client.id,
             'client_name': client.name,
+            'payer_client_id': contract_payer_client_id(db, contract),
+            'payer_name': (
+                interveniente.name if interveniente and not interveniente.is_deleted else client.name
+            ),
             'client_type': client.type,
             'vehicle_plate': vehicle.plate if vehicle else None,
             'tracker_imei': tracker.imei if tracker else None,
@@ -400,37 +453,67 @@ def simulate_closure(
         for c in item['first_month_charges']
     }
 
-    # Eventos de desinstalação pendentes no mês
-    uninstall_events = _pending_uninstall_events_for_month(db, reference_month)
+    # Eventos de desinstalação vencidos até esta competência. Valores pequenos
+    # são acumulados por cliente; nunca mais viram perda terminal em ``skipped``.
+    uninstall_events = _pending_uninstall_events_for_month(
+        db, reference_month, filter_type, client_id,
+    )
+    uninstall_amounts = {
+        event.id: uninstall_fee_for_event(db, event)[0]
+        for event in uninstall_events
+    }
+    payer_ids_by_event = {
+        event.id: _uninstall_event_payer_client_id(db, event)
+        for event in uninstall_events
+    }
+    totals_by_payer: dict[int, Decimal] = defaultdict(lambda: Decimal('0.00'))
+    for event in uninstall_events:
+        totals_by_payer[payer_ids_by_event[event.id]] += uninstall_amounts[event.id]
+
     uninstall_items = []
     for event in uninstall_events:
         client = db.get(Client, event.client_id)
         vehicle = db.get(Vehicle, event.vehicle_id)
-        fee_amount, _ = uninstall_fee_for_event(db, event)
+        payer_id = payer_ids_by_event[event.id]
+        payer = db.get(Client, payer_id)
+        fee_amount = uninstall_amounts[event.id]
+        aggregation_total = totals_by_payer[payer_id]
+        deferred = aggregation_total < MIN_BILLING_AMOUNT
         uninstall_items.append({
             'type': 'taxa_desinstalacao',
             'event_id': event.id,
             'client_id': event.client_id,
             'client_name': client.name if client else f'Cliente #{event.client_id}',
+            'payer_client_id': payer_id,
+            'payer_name': payer.name if payer else f'Responsável financeiro #{payer_id}',
             'client_type': client.type if client else 'pf',
             'vehicle_plate': vehicle.plate if vehicle else None,
             'uninstall_date': event.uninstall_date,
             'fee_amount': float(fee_amount),
-            'skipped': fee_amount < MIN_BILLING_AMOUNT,
+            'deferred': deferred,
+            # Compatibilidade temporária para clientes antigos da API. Agora
+            # significa "não faturado nesta rodada", sem mudar o evento para
+            # um estado terminal.
+            'skipped': deferred,
             'skip_reason': (
-                f'Valor R$ {float(fee_amount):.2f} abaixo do mínimo R$ {float(MIN_BILLING_AMOUNT):.2f}'
-                if fee_amount < MIN_BILLING_AMOUNT else None
+                f'Acumulado do cliente em R$ {float(aggregation_total):.2f}; '
+                f'aguardando mínimo de R$ {float(MIN_BILLING_AMOUNT):.2f}'
+                if deferred else None
             ),
+            'aggregation_total': float(aggregation_total),
         })
 
     # Serviços / cobranças avulsas pendentes (exclui os embutidos)
-    charge_items = _pending_charge_items(db, reference_month, exclude_ids=embedded_ids)
+    charge_items = _pending_charge_items(
+        db, reference_month, exclude_ids=embedded_ids,
+        filter_type=filter_type, client_id=client_id,
+    )
 
     to_generate = [i for i in items if not i['already_generated']]
     already_done = [i for i in items if i['already_generated']]
     # total_amount inclui os serviços embutidos na primeira cobrança
     total_amount = sum(i['total_first_billing'] for i in to_generate)
-    total_uninstall = sum(i['fee_amount'] for i in uninstall_items if not i['skipped'])
+    total_uninstall = sum(i['fee_amount'] for i in uninstall_items if not i['deferred'])
     total_services = sum(i['total_remaining'] for i in charge_items)
 
     return {
@@ -454,6 +537,8 @@ def execute_closure(
     filter_type: str = 'all',
     client_id: int | None = None,
     contract_ids: list[int] | None = None,
+    uninstall_event_ids: list[int] | None = None,
+    charge_item_ids: list[int] | None = None,
 ) -> dict:
     # Trava a competência ANTES de simular: simulação + geração ficam atômicas em
     # relação a outro fechamento do mesmo mês, fechando a corrida de duplicação.
@@ -461,9 +546,47 @@ def execute_closure(
     # commit final pode comitar — daí o commit=False propagado abaixo.
     _lock_competencia(db, reference_month)
     simulation = simulate_closure(db, reference_month, filter_type, client_id, commit=False)
+    # Ao receber qualquer lista de seleção, opera em modo snapshot/fail-closed:
+    # categorias omitidas significam seleção vazia, não "processar tudo". Sem
+    # lista alguma preservamos o comando administrativo de fechamento integral.
+    exact_selection = any(
+        ids is not None
+        for ids in (contract_ids, uninstall_event_ids, charge_item_ids)
+    )
     to_generate = [i for i in simulation['items'] if not i['already_generated']]
-    if contract_ids is not None:
-        to_generate = [i for i in to_generate if i['contract_id'] in contract_ids]
+    if exact_selection:
+        selected_contracts = set(contract_ids or [])
+        to_generate = [
+            item for item in to_generate
+            if item['contract_id'] in selected_contracts
+        ]
+
+    deferred_item_ids = {
+        item['event_id'] for item in simulation['uninstall_events'] if item['deferred']
+    }
+    # Recupera estados terminais gravados pela implementação antiga, mesmo que
+    # esses eventos não sejam selecionados para faturar nesta rodada.
+    for event_id in deferred_item_ids:
+        deferred_event = db.get(UninstallEvent, event_id)
+        if deferred_event and deferred_event.status == 'skipped':
+            deferred_event.status = 'pending'
+            deferred_event.processed_at = None
+
+    selected_uninstall_items = [
+        item for item in simulation['uninstall_events'] if not item['deferred']
+    ]
+    if exact_selection:
+        selected = set(uninstall_event_ids or [])
+        selected_uninstall_items = [
+            item for item in selected_uninstall_items if item['event_id'] in selected
+        ]
+
+    selected_charge_items = list(simulation['charge_items'])
+    if exact_selection:
+        selected = set(charge_item_ids or [])
+        selected_charge_items = [
+            item for item in selected_charge_items if item['item_id'] in selected
+        ]
 
     created_ids = []
     for item in to_generate:
@@ -501,6 +624,7 @@ def execute_closure(
             billing = Billing(
                 contract_id=contract.id,
                 client_id=contract.client_id,
+                payer_client_id=contract_payer_client_id(db, contract),
                 vehicle_id=getattr(contract, 'vehicle_id', None),
                 tracker_id=getattr(contract, 'tracker_id', None),
                 amount=combined_amount,
@@ -543,6 +667,7 @@ def execute_closure(
             billing = Billing(
                 contract_id=contract.id,
                 client_id=contract.client_id,
+                payer_client_id=contract_payer_client_id(db, contract),
                 vehicle_id=getattr(contract, 'vehicle_id', None),
                 tracker_id=getattr(contract, 'tracker_id', None),
                 amount=billing_amount,
@@ -565,16 +690,16 @@ def execute_closure(
     # As individuais são canceladas com referência cruzada — e continuam
     # contando para a idempotência (_has_existing_billing ignora o status).
     consolidated_ids: list[int] = []
-    _por_cliente: dict[int, list[Billing]] = defaultdict(list)
+    _por_pagador: dict[int, list[Billing]] = defaultdict(list)
     for bid in created_ids:
         b = db.get(Billing, bid)
         if b and b.billing_type == 'recorrente':
-            _por_cliente[b.client_id].append(b)
+            _por_pagador[b.payer_client_id or b.client_id].append(b)
 
-    for cid, grupo in _por_cliente.items():
+    for payer_id, grupo in _por_pagador.items():
         if len(grupo) < 2:
             continue
-        cliente = db.get(Client, cid)
+        cliente = db.get(Client, payer_id)
         # Só consolida com a opção EXPLÍCITA no cadastro (campo vazio = individual)
         if not cliente or cliente.boleto_format != 'unico':
             continue
@@ -588,8 +713,12 @@ def execute_closure(
             return v.plate if v and not v.is_deleted else (b.title or f'#{b.id}')
 
         detalhes = ' | '.join(f'{_placa(b)}: R$ {float(b.amount):.2f}' for b in grupo)
+        owner_ids = {billing.client_id for billing in grupo}
         unico = Billing(
-            client_id=cid,
+            # Se há vários clientes atendidos pelo mesmo interveniente, o título
+            # consolidado não pertence exclusivamente a nenhum deles.
+            client_id=(next(iter(owner_ids)) if len(owner_ids) == 1 else payer_id),
+            payer_client_id=payer_id,
             billing_type='recorrente',
             title=f'Mensalidades — {len(grupo)} veículos (boleto único)',
             amount=total,
@@ -609,49 +738,95 @@ def execute_closure(
         created_ids.append(unico.id)
         consolidated_ids.append(unico.id)
 
-    # Processa eventos de desinstalação pendentes
-    uninstall_billing_ids = []
-    skipped_events = 0
-    uninstall_events = _pending_uninstall_events_for_month(db, reference_month)
+    # Processa SOMENTE os eventos que pertenciam à simulação e foram enviados
+    # pelo cliente da API. Isso fecha o TOCTOU em que uma taxa criada depois da
+    # prévia entrava silenciosamente no fechamento.
+    uninstall_billing_ids: list[int] = []
+    deferred_events = len(deferred_item_ids)
+    processed_events = 0
+    allowed_event_ids = {item['event_id'] for item in selected_uninstall_items}
+    uninstall_events = [
+        event for event in _pending_uninstall_events_for_month(
+            db, reference_month, filter_type, client_id,
+        )
+        if event.id in allowed_event_ids
+    ]
     now_utc = datetime.now(timezone.utc)
 
+    events_by_payer: dict[int, list[UninstallEvent]] = defaultdict(list)
     for event in uninstall_events:
-        fee_amount, fee_title = uninstall_fee_for_event(db, event)
+        events_by_payer[_uninstall_event_payer_client_id(db, event)].append(event)
 
-        if fee_amount < MIN_BILLING_AMOUNT:
-            event.status = 'skipped'
-            event.processed_at = now_utc
-            skipped_events += 1
+    for event_payer_id, events in events_by_payer.items():
+        event_amounts = {
+            event.id: uninstall_fee_for_event(db, event)[0]
+            for event in events
+        }
+        total_fee = sum(event_amounts.values(), Decimal('0.00'))
+        if total_fee < MIN_BILLING_AMOUNT:
+            # Recupera inclusive os antigos ``skipped``. O grupo permanece
+            # pendente e poderá ser somado a eventos de competências futuras.
+            for event in events:
+                event.status = 'pending'
+                event.processed_at = None
+            deferred_events += len(events)
             continue
 
-        due_date = _due_date_for_uninstall_event(event, db)
+        due_date = max(_due_date_for_uninstall_event(event, db) for event in events)
+        # Só associa a cobrança agregada a um contrato quando TODOS os eventos
+        # pertencem explicitamente ao mesmo contrato. Misturar evento sem
+        # contrato com evento contratado e escolher o único ID conhecido
+        # produziria uma associação contábil enganosa.
+        contract_ids_in_group = {event.contract_id for event in events}
+        owner_ids_in_group = {event.client_id for event in events}
+        single_event = events[0] if len(events) == 1 else None
+        if single_event is not None:
+            _, fee_title = uninstall_fee_for_event(db, single_event)
+        else:
+            fee_title = f'Taxas de desinstalação agrupadas ({len(events)} eventos)'
+
+        detail_parts = []
+        for event in events:
+            vehicle = db.get(Vehicle, event.vehicle_id)
+            detail_parts.append(
+                f'#{event.id} {vehicle.plate if vehicle else "veículo removido"} '
+                f'{event.uninstall_date.strftime("%d/%m/%Y")}: '
+                f'R$ {float(event_amounts[event.id]):.2f}'
+            )
         fee_billing = Billing(
-            contract_id=event.contract_id,
-            client_id=event.client_id,
-            vehicle_id=event.vehicle_id,
-            tracker_id=event.tracker_id,
+            contract_id=(
+                next(iter(contract_ids_in_group))
+                if len(contract_ids_in_group) == 1 and None not in contract_ids_in_group
+                else None
+            ),
+            client_id=(
+                next(iter(owner_ids_in_group))
+                if len(owner_ids_in_group) == 1 else event_payer_id
+            ),
+            payer_client_id=event_payer_id,
+            vehicle_id=(single_event.vehicle_id if single_event else None),
+            tracker_id=(single_event.tracker_id if single_event else None),
             title=fee_title,
             billing_type='taxa_desinstalacao',
-            amount=fee_amount,
+            amount=total_fee,
             due_date=due_date,
             status=BillingStatus.PENDING if due_date >= hoje() else BillingStatus.OVERDUE,
             period_label=due_date.strftime('%m/%Y'),
-            notes=(
-                f'Taxa de desinstalação — retirada em {event.uninstall_date.strftime("%d/%m/%Y")}'
-                + (f' | {event.notes}' if event.notes else '')
-            ),
+            notes='Taxas processadas no fechamento: ' + ' | '.join(detail_parts),
         )
         db.add(fee_billing)
         db.flush()
-        event.status = 'processed'
-        event.billing_id = fee_billing.id
-        event.processed_at = now_utc
+        for event in events:
+            event.status = 'processed'
+            event.billing_id = fee_billing.id
+            event.processed_at = now_utc
+            processed_events += 1
         uninstall_billing_ids.append(fee_billing.id)
 
     # Gera billings para serviços/cobranças avulsas pendentes (os não embutidos)
     services_generated = 0
     service_billing_ids: list[int] = []
-    for charge_item_dict in simulation['charge_items']:
+    for charge_item_dict in selected_charge_items:
         item_obj = db.get(ClientChargeItem, charge_item_dict['item_id'])
         if item_obj:
             new_billings = generate_item_billings(db, item_obj, commit=False)
@@ -683,7 +858,11 @@ def execute_closure(
         'consolidated_unico': len(consolidated_ids),
         'total_amount': total_mensalidades,
         'uninstall_fees_generated': len(uninstall_billing_ids),
-        'uninstall_fees_skipped': skipped_events,
+        'uninstall_events_processed': processed_events,
+        'uninstall_fees_deferred': deferred_events,
+        # Compatibilidade com consumidores antigos: eventos não são mais
+        # descartados, portanto o total de ignorados é sempre zero.
+        'uninstall_fees_skipped': 0,
         'uninstall_billing_ids': uninstall_billing_ids,
         'services_generated': services_generated,
         'service_billing_ids': service_billing_ids,
@@ -844,7 +1023,11 @@ def montar_linhas_simulacao(simulation: dict) -> list[str]:
     }
     desinst_por_grupo: dict[str, list[dict]] = defaultdict(list)
     for ev in simulation.get('uninstall_events') or []:
-        grupo = interveniente_do_cliente.get(ev.get('client_id')) or ev.get('client_name') or ''
+        grupo = (
+            ev.get('payer_name')
+            or interveniente_do_cliente.get(ev.get('client_id'))
+            or ev.get('client_name') or ''
+        )
         desinst_por_grupo[grupo].append(ev)
 
     fin = _totais_financeiros(itens, simulation)
@@ -955,7 +1138,11 @@ def _movimentacao_do_mes(itens: list[dict], simulation: dict,
 
     desinstalacoes: dict[str, list[dict]] = defaultdict(list)
     for ev in simulation.get('uninstall_events') or []:
-        grupo = interveniente_do_cliente.get(ev.get('client_id')) or ev.get('client_name') or ''
+        grupo = (
+            ev.get('payer_name')
+            or interveniente_do_cliente.get(ev.get('client_id'))
+            or ev.get('client_name') or ''
+        )
         desinstalacoes[grupo].append(ev)
 
     if not instalacoes and not desinstalacoes:
@@ -980,9 +1167,12 @@ def _movimentacao_do_mes(itens: list[dict], simulation: dict,
                          key=lambda e: (e.get('uninstall_date') or date.min,
                                         e.get('vehicle_plate') or '')):
             taxa = float(ev.get('fee_amount') or 0)
-            # Taxa abaixo do mínimo não vira cobrança, mas a desinstalação
-            # aconteceu — sumir com ela do relatório esconderia o serviço.
-            sufixo = 'SEM COBRANÇA' if ev.get('skipped') else f'TAXA {_v(taxa)}'
+            # O valor pequeno continua devido e será acumulado; o relatório não
+            # pode apresentá-lo como isento ou descartado.
+            sufixo = (
+                f'TAXA {_v(taxa)} (AGUARDANDO ACUMULAÇÃO)'
+                if ev.get('deferred') else f'TAXA {_v(taxa)}'
+            )
             linhas.append(_par(
                 f'    DESINSTALAÇÃO  {_d(ev.get("uninstall_date"))}  '
                 f'{(ev.get("vehicle_plate") or "SEM PLACA"):<10} {sufixo}',
@@ -1158,7 +1348,7 @@ def generate_closure_xlsx(simulation: dict) -> BytesIO:
 
     # ── Aba Movimentação ────────────────────────────────────────────────────
     ws3 = wb.create_sheet('Movimentação')
-    _cabecalho(ws3, ['Tipo', 'Data', 'Interveniente', 'Cliente', 'Placa', 'Rastreador', 'Taxa'])
+    _cabecalho(ws3, ['Tipo', 'Data', 'Interveniente', 'Cliente', 'Placa', 'Rastreador', 'Taxa', 'Status'])
     rr = 2
     for it in itens:
         if _no_mes(it.get('tracker_install_date'), mes_ref):
@@ -1166,7 +1356,7 @@ def generate_closure_xlsx(simulation: dict) -> BytesIO:
                 'Instalação', it.get('tracker_install_date'),
                 it.get('interveniente_nome') or it.get('client_name'),
                 it.get('client_name'), it.get('vehicle_plate') or '',
-                it.get('tracker_imei') or '', None,
+                it.get('tracker_imei') or '', None, '',
             ]
             for ci, val in enumerate(valores, 1):
                 cell = ws3.cell(rr, ci, val)
@@ -1174,11 +1364,16 @@ def generate_closure_xlsx(simulation: dict) -> BytesIO:
                     cell.number_format = DATA
             rr += 1
     for ev in desinst:
-        taxa = None if ev.get('skipped') else float(ev.get('fee_amount') or 0)
-        grupo = interveniente_do_cliente.get(ev.get('client_id')) or ev.get('client_name') or ''
+        taxa = float(ev.get('fee_amount') or 0)
+        grupo = (
+            ev.get('payer_name')
+            or interveniente_do_cliente.get(ev.get('client_id'))
+            or ev.get('client_name') or ''
+        )
         valores = [
             'Desinstalação', ev.get('uninstall_date'), grupo,
             ev.get('client_name') or '', ev.get('vehicle_plate') or '', '', taxa,
+            ('Aguardando acumulação' if ev.get('deferred') else 'A faturar'),
         ]
         for ci, val in enumerate(valores, 1):
             cell = ws3.cell(rr, ci, val)
@@ -1187,7 +1382,7 @@ def generate_closure_xlsx(simulation: dict) -> BytesIO:
             elif ci == 7 and val is not None:
                 cell.number_format = MONEY
         rr += 1
-    for ci, largura in enumerate([14, 12, 28, 28, 10, 20, 12], 1):
+    for ci, largura in enumerate([14, 12, 28, 28, 10, 20, 12, 24], 1):
         ws3.column_dimensions[get_column_letter(ci)].width = largura
 
     buffer = BytesIO()

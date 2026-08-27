@@ -302,6 +302,19 @@ class TestUninstallVehicle:
         assert event is not None
         assert float(event.fee_amount) == 100.0
 
+    def test_uninstall_fee_snapshots_contract_intervenient(
+        self, http, db, veiculo, rastreador_instalado, contrato, outro_cliente,
+    ):
+        contrato.interveniente_client_id = outro_cliente.id
+        db.commit()
+
+        r = self._uninstall(http, veiculo.id, uninstall_fee=100.0)
+
+        assert r.status_code == 200
+        event = db.query(UninstallEvent).filter_by(vehicle_id=veiculo.id).one()
+        assert event.client_id == veiculo.client_id
+        assert event.payer_client_id == outro_cliente.id
+
     def test_uninstall_nao_cancela_contrato_de_outro_veiculo(self, http, db, cliente, veiculo, rastreador_instalado, contrato, plan):
         """Frota: desinstalar o veículo A não pode cancelar o contrato do veículo B."""
         from app.models.contract import Contract
@@ -509,3 +522,66 @@ class TestUninstallVehicle:
         assert second.vehicle_id is None
         assert contrato.status == 'cancelado'
         assert second_contract.status == 'cancelado'
+
+    def test_multiple_assignments_do_not_attribute_fee_to_arbitrary_first_row(
+        self, http, db, cliente, veiculo, rastreador_instalado, contrato, plan,
+    ):
+        from app.models.contract import Contract
+        from app.models.tracker import Tracker
+
+        second = Tracker(
+            imei='999992222233333', serial_number='999992222233333',
+            brand='Teltonika', model='FMB920', status=TrackerStatus.INSTALLED,
+            client_id=cliente.id, vehicle_id=veiculo.id,
+            install_date=date(2024, 2, 1),
+        )
+        db.add(second)
+        db.flush()
+        db.add(Contract(
+            client_id=cliente.id, plan_id=plan.id, vehicle_id=veiculo.id,
+            tracker_id=second.id, start_date=date(2024, 2, 1), status='ativo',
+        ))
+        db.commit()
+
+        r = self._uninstall(http, veiculo.id, uninstall_fee=100.0)
+        assert r.status_code == 200
+        event = db.query(UninstallEvent).filter_by(vehicle_id=veiculo.id).one()
+        assert event.tracker_id is None
+        assert event.contract_id is None
+        assert event.payer_client_id == cliente.id
+
+    def test_uninstall_fee_rejects_ambiguous_financial_responsibility(
+        self, http, db, cliente, outro_cliente, veiculo,
+        rastreador_instalado, contrato, plan,
+    ):
+        from app.models.contract import Contract
+        from app.models.tracker import Tracker
+
+        second = Tracker(
+            imei='999992222244444', serial_number='999992222244444',
+            brand='Teltonika', model='FMB920', status=TrackerStatus.INSTALLED,
+            client_id=cliente.id, vehicle_id=veiculo.id,
+            install_date=date(2024, 2, 1),
+        )
+        db.add(second)
+        db.flush()
+        second_contract = Contract(
+            client_id=cliente.id, interveniente_client_id=outro_cliente.id,
+            plan_id=plan.id, vehicle_id=veiculo.id, tracker_id=second.id,
+            start_date=date(2024, 2, 1), status='ativo',
+        )
+        db.add(second_contract)
+        db.commit()
+
+        r = self._uninstall(http, veiculo.id, uninstall_fee=100.0)
+
+        assert r.status_code == 409
+        assert r.json()['detail']['code'] == 'ambiguous_financial_responsibility'
+        assert db.query(UninstallEvent).filter_by(vehicle_id=veiculo.id).count() == 0
+        db.refresh(rastreador_instalado)
+        db.refresh(second)
+        db.refresh(contrato)
+        db.refresh(second_contract)
+        assert rastreador_instalado.vehicle_id == veiculo.id
+        assert second.vehicle_id == veiculo.id
+        assert contrato.status == second_contract.status == 'ativo'

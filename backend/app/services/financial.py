@@ -11,11 +11,40 @@ from sqlalchemy.orm import Session
 from app.core.timezone import hoje
 from app.models.billing import Billing
 from app.models.billing_charge_item import BillingChargeItem
+from app.models.client import Client
 from app.models.client_charge_item import ClientChargeItem
 from app.models.contract import Contract
 from app.models.enums import BillingStatus
 from app.models.plan import Plan
 from app.models.service_product import ServiceProduct
+
+
+def contract_payer_client_id(db: Session, contract: Contract) -> int:
+    """Responsável financeiro efetivo, validado, para novas cobranças.
+
+    O ID é congelado no Billing. Assim boleto e NFS-e não mudam de tomador se
+    alguém editar o interveniente do contrato depois que o título foi emitido.
+    """
+    payer_id = contract.interveniente_client_id or contract.client_id
+    payer = db.get(Client, payer_id)
+    if not payer or payer.is_deleted:
+        raise ValueError(
+            f'Responsável financeiro #{payer_id} do contrato #{contract.id} não está disponível.'
+        )
+    return payer.id
+
+
+def charge_item_payer_client_id(db: Session, item: ClientChargeItem) -> int:
+    if not item.contract_id:
+        return item.client_id
+    contract = db.get(Contract, item.contract_id)
+    if not contract or contract.is_deleted:
+        raise ValueError(f'Contrato #{item.contract_id} do serviço não está disponível.')
+    if contract.client_id != item.client_id:
+        raise ValueError(
+            f'Serviço #{item.id} e contrato #{contract.id} pertencem a clientes diferentes.'
+        )
+    return contract_payer_client_id(db, contract)
 
 
 def decimal_to_float(value: Decimal | float | int | None) -> float:
@@ -103,7 +132,7 @@ def mark_delinquent_clients(db: Session) -> dict:
 
     Retorna um resumo das alterações realizadas.
     """
-    from sqlalchemy import select as sa_select
+    from sqlalchemy import func, select as sa_select
     from app.models.client import Client
     from app.models.enums import ClientStatus
 
@@ -113,7 +142,7 @@ def mark_delinquent_clients(db: Session) -> dict:
     # Clientes com cobranças vencidas
     overdue_client_ids: set[int] = set(
         db.scalars(
-            sa_select(Billing.client_id)
+            sa_select(func.coalesce(Billing.payer_client_id, Billing.client_id))
             .where(
                 Billing.is_deleted.is_(False),
                 Billing.status == BillingStatus.OVERDUE,
@@ -194,6 +223,7 @@ def generate_prorated_first_billing(
     prorata_billing = Billing(
         contract_id=contract.id,
         client_id=contract.client_id,
+        payer_client_id=contract_payer_client_id(db, contract),
         vehicle_id=getattr(contract, 'vehicle_id', None),
         tracker_id=getattr(contract, 'tracker_id', None),
         amount=prorated,
@@ -213,6 +243,7 @@ def generate_prorated_first_billing(
         fee_billing = Billing(
             contract_id=contract.id,
             client_id=contract.client_id,
+            payer_client_id=contract_payer_client_id(db, contract),
             vehicle_id=getattr(contract, 'vehicle_id', None),
             tracker_id=getattr(contract, 'tracker_id', None),
             amount=fee,
@@ -264,6 +295,7 @@ def generate_monthly_billings(db: Session, contract: Contract, cycles: int = 12,
             existing.amount = plan.price
             existing.due_date = due_date
             existing.client_id = contract.client_id
+            existing.payer_client_id = contract_payer_client_id(db, contract)
             existing.period_label = period_label
             existing.title = plan_title(plan)
             existing.notes = notes
@@ -275,6 +307,7 @@ def generate_monthly_billings(db: Session, contract: Contract, cycles: int = 12,
         billing = Billing(
             contract_id=contract.id,
             client_id=contract.client_id,
+            payer_client_id=contract_payer_client_id(db, contract),
             amount=plan.price,
             due_date=due_date,
             status=BillingStatus.PENDING if due_date >= hoje() else BillingStatus.OVERDUE,
@@ -309,6 +342,7 @@ def generate_item_billings(
     base_amount = (total_amount / installments).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
     remainder = total_amount - (base_amount * installments)
     created: list[Billing] = []
+    payer_client_id = charge_item_payer_client_id(db, item)
 
     for index in range(installments):
         due_date = normalize_due_date(item.start_date, index, item.start_date.day if item.start_date.day <= 28 else 28, 1)
@@ -331,6 +365,7 @@ def generate_item_billings(
             existing.due_date = due_date
             existing.title = title
             existing.client_id = item.client_id
+            existing.payer_client_id = payer_client_id
             existing.contract_id = item.contract_id
             existing.vehicle_id = item.vehicle_id
             existing.tracker_id = getattr(item, 'tracker_id', None)
@@ -340,6 +375,7 @@ def generate_item_billings(
         billing = Billing(
             contract_id=item.contract_id,
             client_id=item.client_id,
+            payer_client_id=payer_client_id,
             item_id=item.id,
             vehicle_id=item.vehicle_id,
             tracker_id=getattr(item, 'tracker_id', None),

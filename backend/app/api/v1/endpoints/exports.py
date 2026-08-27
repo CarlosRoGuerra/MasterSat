@@ -16,7 +16,7 @@ from datetime import date
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.limiter import limiter
@@ -378,13 +378,18 @@ def export_billings_report(
 
     query = (
         db.query(Billing, Client.name.label('cliente'))
-        .join(Client, Client.id == Billing.client_id)
+        .join(
+            Client,
+            Client.id == func.coalesce(Billing.payer_client_id, Billing.client_id),
+        )
         .filter(Billing.is_deleted.is_(False), Client.is_deleted.is_(False))
     )
     if situacao != 'todas':
         query = query.filter(Billing.status == BillingStatus(situacao))
     if client_id:
-        query = query.filter(Billing.client_id == client_id)
+        query = query.filter(
+            func.coalesce(Billing.payer_client_id, Billing.client_id) == client_id
+        )
     if date_from:
         query = query.filter(campo >= date_from)
     if date_to:
@@ -521,7 +526,10 @@ def export_delinquents(
 
     query = (
         db.query(Billing, Client.name.label('cliente'), AilosBoleto.nosso_numero)
-        .join(Client, Client.id == Billing.client_id)
+        .join(
+            Client,
+            Client.id == func.coalesce(Billing.payer_client_id, Billing.client_id),
+        )
         .outerjoin(AilosBoleto, AilosBoleto.billing_id == Billing.id)
         .filter(
             Client.is_deleted.is_(False),

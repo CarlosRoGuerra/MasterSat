@@ -38,7 +38,7 @@ type Plan = { id: number; name: string; price: number; description?: string | nu
 type ServiceProduct = { id: number; name: string; category: string; default_price: number; description?: string | null; active: boolean; allow_installments: boolean; remove_after_payment: boolean; auto_add_on_uninstall: boolean };
 type Contract = { id: number; client_id: number; plan_id: number; vehicle_id?: number | null; tracker_id?: number | null; start_date: string; end_date?: string | null; status: string; billing_day?: number | null; payment_method?: string | null; notes?: string | null; installation_fee?: number | null; uninstall_fee?: number | null; signed?: boolean | null; signed_at?: string | null; client_name?: string | null; plan_name?: string | null; vehicle_plate?: string | null; tracker_identifier?: string | null; monthly_value?: number | null; open_billings: number; next_due_date?: string | null };
 type ChargeItem = { id: number; client_id: number; contract_id?: number | null; vehicle_id?: number | null; tracker_id?: number | null; service_product_id?: number | null; title: string; description?: string | null; quantity: number; unit_price: number; total_amount: number; installment_count: number; start_date: string; active: boolean; remove_after_payment: boolean; completed_at?: string | null; status: string; client_name?: string | null; vehicle_plate?: string | null; tracker_identifier?: string | null; service_product_name?: string | null; open_installments: number };
-type Billing = { id: number; contract_id?: number | null; client_id: number; item_id?: number | null; vehicle_id?: number | null; tracker_id?: number | null; title?: string | null; billing_type: string; installment_number?: number | null; installment_total?: number | null; amount: number; due_date: string; status: BillingStatus; payment_date?: string | null; payment_method?: string | null; notes?: string | null; paid_amount?: number | null; receipt_number?: string | null; period_label?: string | null; client_name?: string | null; vehicle_plate?: string | null; tracker_identifier?: string | null; plan_name?: string | null; contract_status?: string | null; overdue_days: number };
+type Billing = { id: number; contract_id?: number | null; client_id: number; payer_client_id?: number | null; item_id?: number | null; vehicle_id?: number | null; tracker_id?: number | null; title?: string | null; billing_type: string; installment_number?: number | null; installment_total?: number | null; amount: number; due_date: string; status: BillingStatus; payment_date?: string | null; payment_method?: string | null; notes?: string | null; paid_amount?: number | null; receipt_number?: string | null; period_label?: string | null; client_name?: string | null; payer_name?: string | null; vehicle_plate?: string | null; tracker_identifier?: string | null; plan_name?: string | null; contract_status?: string | null; overdue_days: number };
 type Summary = { active_plans: number; active_contracts: number; pending_billings: number; overdue_billings: number; pending_amount: number; overdue_amount: number; paid_this_month: number };
 type RevenueItem = { label: string; total_received: number; total_billed: number; total_outstanding: number };
 type DelinquentItem = { client_id: number; client_name: string; total_open: number; overdue_count: number };
@@ -439,7 +439,7 @@ function BillingTableSection({
                     />
                   </Th>
                 )}
-                <Th>Cliente</Th>
+                <Th>Responsável financeiro</Th>
                 <Th>Título</Th>
                 <Th>Vencimento</Th>
                 <Th>Valor</Th>
@@ -465,8 +465,12 @@ function BillingTableSection({
                       </Td>
                     )}
                     <Td>
-                      <p className="font-medium">{b.client_name ?? '—'}</p>
-                      <p className="text-xs text-slate-400">{b.vehicle_plate ?? ''}</p>
+                      <p className="font-medium">{b.payer_name ?? b.client_name ?? '—'}</p>
+                      <p className="text-xs text-slate-400">
+                        {b.payer_name && b.client_name && b.payer_name !== b.client_name
+                          ? `Cliente atendido: ${b.client_name}${b.vehicle_plate ? ` • ${b.vehicle_plate}` : ''}`
+                          : (b.vehicle_plate ?? '')}
+                      </p>
                     </Td>
                     <Td className="text-xs text-slate-500">{b.title ?? b.plan_name ?? b.billing_type}</Td>
                     <Td>
@@ -1262,7 +1266,7 @@ export default function FinanceiroPage() {
         { method: 'POST', body: JSON.stringify({ billing_id: selectedBilling.id }) },
         token,
       );
-      await downloadProtectedFile(`/boletos/${selectedBilling.id}/pdf`, token, `${nomeArquivoCliente(selectedBilling.client_name, selectedBilling.due_date)}.pdf`);
+      await downloadProtectedFile(`/boletos/${selectedBilling.id}/pdf`, token, `${nomeArquivoCliente(selectedBilling.payer_name ?? selectedBilling.client_name, selectedBilling.due_date)}.pdf`);
       setFeedback(
         boleto.linha_digitavel
           ? `Boleto registrado na Ailos. Linha digitável: ${boleto.linha_digitavel}`
@@ -1863,12 +1867,13 @@ export default function FinanceiroPage() {
 
       {/* ── Modals (unchanged) ── */}
 
-      <Modal open={!!selectedBilling} onClose={() => setSelectedBilling(null)} title={selectedBilling?.title ?? selectedBilling?.client_name ?? 'Cobrança'} subtitle="Detalhes da cobrança" size="md">
+      <Modal open={!!selectedBilling} onClose={() => setSelectedBilling(null)} title={selectedBilling?.title ?? selectedBilling?.payer_name ?? selectedBilling?.client_name ?? 'Cobrança'} subtitle="Detalhes da cobrança" size="md">
         {selectedBilling && (
           <div className="space-y-4">
             <div className="grid gap-3 sm:grid-cols-2">
               {([
-                ['Cliente', selectedBilling.client_name ?? '—'],
+                ['Cliente atendido', selectedBilling.client_name ?? '—'],
+                ['Responsável financeiro', selectedBilling.payer_name ?? selectedBilling.client_name ?? '—'],
                 ['Status', <Badge key="s" variant={statusVariant(selectedBilling.status)}>{statusLabel(selectedBilling.status)}</Badge>],
                 ['Valor', formatCurrency(selectedBilling.amount)],
                 ['Vencimento', selectedBilling.due_date],

@@ -155,6 +155,13 @@ class TestSimulatePdf:
         r = http.get(PREFIX + "/simulate/pdf")
         assert r.status_code == 422
 
+    def test_filter_client_without_client_id_returns_422(self, http):
+        r = http.get(PREFIX + "/simulate/pdf", params={
+            "reference_month": REF_MONTH,
+            "filter_type": "client",
+        })
+        assert r.status_code == 422
+
     def test_operational_cannot_access(self, http_op):
         r = http_op.get(PREFIX + "/simulate/pdf", params={"reference_month": REF_MONTH})
         assert r.status_code == 403
@@ -168,11 +175,52 @@ class TestSimulatePdf:
         assert r.status_code == 401
 
 
+class TestSimulateXlsx:
+    def test_filter_client_without_client_id_returns_422(self, http):
+        r = http.get(PREFIX + "/simulate/xlsx", params={
+            "reference_month": REF_MONTH,
+            "filter_type": "client",
+        })
+        assert r.status_code == 422
+
+
 # ---------------------------------------------------------------------------
 # POST /generate
 # ---------------------------------------------------------------------------
 
 class TestGenerate:
+    def test_forwards_exact_selections_for_every_category(self, http, monkeypatch):
+        import app.api.v1.endpoints.billing_closure as endpoint
+
+        captured = {}
+
+        def fake_execute(db, ref, filter_type, client_id, **kwargs):
+            captured.update(kwargs)
+            return {
+                'reference_month': '05/2025', 'generated': 0,
+                'billing_ids': [], 'consolidated_unico': 0, 'total_amount': 0,
+                'uninstall_fees_generated': 0, 'uninstall_events_processed': 0,
+                'uninstall_fees_deferred': 0, 'uninstall_fees_skipped': 0,
+                'uninstall_billing_ids': [], 'services_generated': 0,
+                'service_billing_ids': [], 'total_services_amount': 0,
+                'grand_total': 0,
+            }
+
+        monkeypatch.setattr(endpoint, 'execute_closure', fake_execute)
+        r = http.post(PREFIX + '/generate', params=[
+            ('reference_month', REF_MONTH),
+            ('contract_ids', '10'), ('contract_ids', '11'),
+            ('uninstall_event_ids', '20'), ('uninstall_event_ids', '21'),
+            ('charge_item_ids', '30'), ('charge_item_ids', '31'),
+        ])
+
+        assert r.status_code == 200
+        assert captured == {
+            'contract_ids': [10, 11],
+            'uninstall_event_ids': [20, 21],
+            'charge_item_ids': [30, 31],
+        }
+
     def test_returns_200(self, http):
         r = http.post(PREFIX + "/generate", params={"reference_month": REF_MONTH})
         assert r.status_code == 200

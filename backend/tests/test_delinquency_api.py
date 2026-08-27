@@ -44,6 +44,21 @@ class TestDelinquencyRefresh:
         db.refresh(cliente)
         assert cliente.status == ClientStatus.DELINQUENT
 
+    def test_marks_financial_responsible_not_service_owner(
+        self, http, db, cliente, outro_cliente,
+    ):
+        billing = _make_overdue_billing(db, cliente)
+        billing.payer_client_id = outro_cliente.id
+        db.commit()
+
+        r = http.post(PREFIX + "/refresh")
+
+        assert r.status_code == 200
+        db.refresh(cliente)
+        db.refresh(outro_cliente)
+        assert cliente.status == ClientStatus.ACTIVE
+        assert outro_cliente.status == ClientStatus.DELINQUENT
+
     def test_restores_active_when_no_overdue(self, http, db, cliente):
         # Coloca em inadimplente manualmente
         cliente.status = ClientStatus.DELINQUENT

@@ -138,6 +138,24 @@ class TestCreateBilling:
         r = http.post(PREFIX + "/", json={"amount": 100.0, "due_date": "2099-12-31"})
         assert r.status_code == 422
 
+    def test_contract_billing_uses_intervenient_as_payer(
+        self, http, db, contrato, cliente, outro_cliente,
+    ):
+        contrato.interveniente_client_id = outro_cliente.id
+        db.commit()
+
+        r = http.post(PREFIX + "/", json={
+            "client_id": cliente.id,
+            "contract_id": contrato.id,
+            "amount": 100.0,
+            "due_date": "2099-12-31",
+        })
+
+        assert r.status_code == 200
+        assert r.json()['client_id'] == cliente.id
+        assert r.json()['payer_client_id'] == outro_cliente.id
+        assert r.json()['payer_name'] == outro_cliente.name
+
     def test_missing_amount_returns_422(self, http, cliente):
         r = http.post(PREFIX + "/", json={"client_id": cliente.id, "due_date": "2099-12-31"})
         assert r.status_code == 422
@@ -177,6 +195,24 @@ class TestCreateBilling:
         })
         assert r.status_code == 400
 
+
+class TestParcelarContrato:
+    def test_carne_uses_intervenient_as_payer(
+        self, http, db, contrato, outro_cliente,
+    ):
+        contrato.interveniente_client_id = outro_cliente.id
+        db.commit()
+
+        r = http.post(PREFIX + '/parcelar', json={
+            'contract_id': contrato.id,
+            'num_parcelas': 2,
+            'primeiro_vencimento': '2099-01-10',
+        })
+
+        assert r.status_code == 200
+        assert len(r.json()) == 2
+        assert all(row['payer_client_id'] == outro_cliente.id for row in r.json())
+        assert all(row['payer_name'] == outro_cliente.name for row in r.json())
 
 # ---------------------------------------------------------------------------
 # GET /{id}

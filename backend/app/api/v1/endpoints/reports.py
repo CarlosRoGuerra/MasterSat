@@ -154,7 +154,10 @@ def delinquents_report(
             func.min(Billing.due_date).label('mais_antiga'),
             func.max(Billing.due_date).label('mais_recente'),
         )
-        .join(Billing, Billing.client_id == Client.id)
+        .join(
+            Billing,
+            func.coalesce(Billing.payer_client_id, Billing.client_id) == Client.id,
+        )
         .filter(
             Client.is_deleted.is_(False),
             Billing.is_deleted.is_(False),
@@ -306,7 +309,10 @@ def executive_summary(
     # Top clientes inadimplentes
     top_delinquents = (
         db.query(Client.name, func.sum(Billing.amount).label('valor'))
-        .join(Billing, Billing.client_id == Client.id)
+        .join(
+            Billing,
+            func.coalesce(Billing.payer_client_id, Billing.client_id) == Client.id,
+        )
         .filter(
             Client.is_deleted.is_(False),
             Billing.is_deleted.is_(False),

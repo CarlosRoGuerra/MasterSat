@@ -2,18 +2,17 @@
 Testes unitários para o serviço billing_closure.
 
 Cobertos:
-- simulate_closure: estrutura, to_generate, already_generated, uninstall_events,
-                    skipped abaixo de MIN_BILLING_AMOUNT, filtros pf/pj/client,
-                    eventos fora do mês excluídos, grand_total = mensalidades + taxas
+- simulate_closure: estrutura, filtros aplicados a todas as categorias,
+                    recuperação de eventos antigos e acumulação do valor mínimo
 - execute_closure: gera billings recorrentes, não duplica billing já existente,
                    processa UninstallEvent (→ processed + billing_id),
-                   skip de evento abaixo de MIN_BILLING_AMOUNT, billing type correto,
+                   diferimento abaixo de MIN_BILLING_AMOUNT, billing type correto,
                    segundo run não reprocessa evento já tratado
 - generate_closure_pdf: retorna BytesIO não vazio com header %PDF
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from io import BytesIO
 
@@ -204,18 +203,20 @@ class TestSimulateClosure:
         assert item["client_id"] == cliente.id
         assert item["skipped"] is False
 
-    def test_event_below_minimum_marked_skipped(self, db, cliente, veiculo):
+    def test_event_below_minimum_waits_for_accumulation(self, db, cliente, veiculo):
         _make_pending_event(db, cliente, veiculo, fee_amount=Decimal("1.00"))
         result = simulate_closure(db, REF_MONTH)
-        skipped = [e for e in result["uninstall_events"] if e["skipped"]]
-        assert len(skipped) >= 1
-        assert skipped[0]["skip_reason"] is not None
+        deferred = [e for e in result["uninstall_events"] if e["deferred"]]
+        assert len(deferred) >= 1
+        assert deferred[0]["skip_reason"] is not None
+        assert 'aguardando mínimo' in deferred[0]["skip_reason"]
 
-    def test_total_uninstall_fees_excludes_skipped(self, db, cliente, veiculo):
+    def test_small_fee_joins_billable_group_for_same_client(self, db, cliente, veiculo):
         _make_pending_event(db, cliente, veiculo, fee_amount=Decimal("100.00"))
         _make_pending_event(db, cliente, veiculo, fee_amount=Decimal("2.00"))
         result = simulate_closure(db, REF_MONTH)
-        assert result["total_uninstall_fees"] == pytest.approx(100.0)
+        assert result["total_uninstall_fees"] == pytest.approx(102.0)
+        assert all(not event['deferred'] for event in result['uninstall_events'])
 
     def test_grand_total_sums_both(self, db, cliente, plan, veiculo):
         _make_active_contract(db, cliente, plan, billing_day=15)
@@ -249,7 +250,7 @@ class TestSimulateClosure:
         result = simulate_closure(db, REF_MONTH, filter_type="client", client_id=cliente.id)
         assert all(i["client_id"] == cliente.id for i in result["items"])
 
-    def test_event_outside_month_not_included(self, db, cliente, veiculo):
+    def test_pending_event_from_previous_month_is_recovered(self, db, cliente, veiculo):
         e = UninstallEvent(
             vehicle_id=veiculo.id,
             client_id=cliente.id,
@@ -260,7 +261,7 @@ class TestSimulateClosure:
         db.add(e)
         db.commit()
         result = simulate_closure(db, REF_MONTH)
-        assert len(result["uninstall_events"]) == 0
+        assert [item['event_id'] for item in result["uninstall_events"]] == [e.id]
 
     def test_reference_month_in_response(self, db):
         result = simulate_closure(db, REF_MONTH)
@@ -347,7 +348,7 @@ class TestExecuteClosure:
         assert uninstall_event.processed_at is not None
         assert result["uninstall_fees_generated"] >= 1
 
-    def test_event_below_minimum_gets_skipped(self, db, cliente, veiculo):
+    def test_event_below_minimum_remains_pending(self, db, cliente, veiculo):
         e = UninstallEvent(
             vehicle_id=veiculo.id,
             client_id=cliente.id,
@@ -359,16 +360,18 @@ class TestExecuteClosure:
         db.commit()
         result = execute_closure(db, REF_MONTH)
         db.refresh(e)
-        assert e.status == "skipped"
+        assert e.status == "pending"
         assert e.billing_id is None
-        assert result["uninstall_fees_skipped"] >= 1
+        assert result["uninstall_fees_deferred"] >= 1
+        assert result["uninstall_fees_skipped"] == 0
         assert result["uninstall_fees_generated"] == 0
 
     def test_returns_required_summary_keys(self, db):
         result = execute_closure(db, REF_MONTH)
         for key in (
             "generated", "billing_ids", "total_amount",
-            "uninstall_fees_generated", "uninstall_fees_skipped",
+            "uninstall_fees_generated", "uninstall_events_processed",
+            "uninstall_fees_deferred", "uninstall_fees_skipped",
             "uninstall_billing_ids", "grand_total",
         ):
             assert key in result
@@ -379,6 +382,19 @@ class TestExecuteClosure:
         for bid in result["billing_ids"]:
             b = db.get(Billing, bid)
             assert b.billing_type == "recorrente"
+
+    def test_generated_billing_uses_intervenient_as_snapshotted_payer(
+        self, db, cliente, outro_cliente, plan,
+    ):
+        contract = _make_active_contract(db, cliente, plan)
+        contract.interveniente_client_id = outro_cliente.id
+        db.commit()
+
+        result = execute_closure(db, REF_MONTH)
+        billing = db.get(Billing, result['billing_ids'][0])
+
+        assert billing.client_id == cliente.id
+        assert billing.payer_client_id == outro_cliente.id
 
     def test_uninstall_billing_is_taxa_desinstalacao(self, db, cliente, veiculo, contrato):
         e = UninstallEvent(
@@ -407,6 +423,196 @@ class TestExecuteClosure:
         assert result["generated"] == 0
         assert result["uninstall_fees_generated"] == 0
         assert result["grand_total"] == pytest.approx(0.0)
+
+
+class TestClosureScopeAndAccumulation:
+    def _charge_item(self, db, client, title):
+        item = ClientChargeItem(
+            client_id=client.id,
+            title=title,
+            quantity=1,
+            unit_price=Decimal('40.00'),
+            total_amount=Decimal('40.00'),
+            installment_count=1,
+            start_date=date(2025, 5, 1),
+            active=True,
+            status='ativo',
+        )
+        db.add(item)
+        db.flush()
+        return item
+
+    def test_client_filter_scopes_events_and_services(
+        self, db, cliente, outro_cliente, veiculo, veiculo_outro_cliente,
+    ):
+        own_event = _make_pending_event(db, cliente, veiculo, fee_amount=Decimal('50.00'))
+        _make_pending_event(db, outro_cliente, veiculo_outro_cliente, fee_amount=Decimal('60.00'))
+        own_item = self._charge_item(db, cliente, 'Serviço cliente certo')
+        self._charge_item(db, outro_cliente, 'Serviço de outro cliente')
+        db.commit()
+
+        result = simulate_closure(
+            db, REF_MONTH, filter_type='client', client_id=cliente.id,
+        )
+
+        assert [row['event_id'] for row in result['uninstall_events']] == [own_event.id]
+        assert [row['item_id'] for row in result['charge_items']] == [own_item.id]
+        assert all(row['client_id'] == cliente.id for row in result['items'])
+
+    def test_exact_contract_ids_do_not_include_new_unreviewed_contract(
+        self, db, cliente, plan,
+    ):
+        selected = _make_active_contract(db, cliente, plan)
+        unreviewed = _make_active_contract(db, cliente, plan)
+
+        result = execute_closure(db, REF_MONTH, contract_ids=[selected.id])
+
+        assert result['generated'] == 1
+        assert db.query(Billing).filter(
+            Billing.contract_id == selected.id,
+            Billing.is_deleted.is_(False),
+        ).count() == 1
+        assert db.query(Billing).filter(
+            Billing.contract_id == unreviewed.id,
+            Billing.is_deleted.is_(False),
+        ).count() == 0
+
+    def test_pf_pj_filter_also_scopes_events_and_services(
+        self, db, cliente, outro_cliente, veiculo, veiculo_outro_cliente,
+    ):
+        outro_cliente.type = 'pj'
+        pf_event = _make_pending_event(db, cliente, veiculo, fee_amount=Decimal('50.00'))
+        pj_event = _make_pending_event(db, outro_cliente, veiculo_outro_cliente, fee_amount=Decimal('60.00'))
+        pf_item = self._charge_item(db, cliente, 'Serviço PF')
+        pj_item = self._charge_item(db, outro_cliente, 'Serviço PJ')
+        db.commit()
+
+        pf = simulate_closure(db, REF_MONTH, filter_type='pf')
+        pj = simulate_closure(db, REF_MONTH, filter_type='pj')
+
+        assert [row['event_id'] for row in pf['uninstall_events']] == [pf_event.id]
+        assert [row['item_id'] for row in pf['charge_items']] == [pf_item.id]
+        assert [row['event_id'] for row in pj['uninstall_events']] == [pj_event.id]
+        assert [row['item_id'] for row in pj['charge_items']] == [pj_item.id]
+
+    def test_small_events_are_grouped_into_one_billing(self, db, cliente, veiculo):
+        first = _make_pending_event(db, cliente, veiculo, fee_amount=Decimal('2.00'))
+        second = _make_pending_event(db, cliente, veiculo, fee_amount=Decimal('3.00'))
+
+        result = execute_closure(db, REF_MONTH)
+        db.refresh(first)
+        db.refresh(second)
+
+        assert result['uninstall_fees_generated'] == 1
+        assert result['uninstall_events_processed'] == 2
+        assert first.status == second.status == 'processed'
+        assert first.billing_id == second.billing_id
+        billing = db.get(Billing, first.billing_id)
+        assert billing.billing_type == 'taxa_desinstalacao'
+        assert Decimal(str(billing.amount)) == Decimal('5.00')
+
+    def test_group_with_unassigned_event_is_not_attributed_to_one_contract(
+        self, db, cliente, veiculo, contrato,
+    ):
+        assigned = _make_pending_event(db, cliente, veiculo, fee_amount=Decimal('3.00'))
+        assigned.contract_id = contrato.id
+        unassigned = _make_pending_event(db, cliente, veiculo, fee_amount=Decimal('3.00'))
+        unassigned.contract_id = None
+        db.commit()
+
+        execute_closure(db, REF_MONTH)
+        db.refresh(assigned)
+        billing = db.get(Billing, assigned.billing_id)
+
+        assert billing.amount == Decimal('6.00')
+        assert billing.contract_id is None
+
+    def test_small_events_from_different_clients_do_not_mix(
+        self, db, cliente, outro_cliente, veiculo, veiculo_outro_cliente,
+    ):
+        first = _make_pending_event(db, cliente, veiculo, fee_amount=Decimal('3.00'))
+        second = _make_pending_event(
+            db, outro_cliente, veiculo_outro_cliente, fee_amount=Decimal('3.00'),
+        )
+
+        result = execute_closure(db, REF_MONTH)
+        db.refresh(first)
+        db.refresh(second)
+
+        assert result['uninstall_fees_generated'] == 0
+        assert result['uninstall_fees_deferred'] == 2
+        assert first.status == second.status == 'pending'
+
+    def test_legacy_skipped_event_returns_to_pending(self, db, cliente, veiculo):
+        event = _make_pending_event(db, cliente, veiculo, fee_amount=Decimal('1.00'))
+        event.status = 'skipped'
+        event.processed_at = datetime.now(timezone.utc)
+        db.commit()
+
+        result = execute_closure(db, REF_MONTH)
+        db.refresh(event)
+
+        assert result['uninstall_fees_deferred'] == 1
+        assert event.status == 'pending'
+        assert event.processed_at is None
+
+    def test_uninstall_billing_preserves_snapshotted_payer(
+        self, db, cliente, outro_cliente, veiculo, contrato,
+    ):
+        event = _make_pending_event(db, cliente, veiculo, fee_amount=Decimal('50.00'))
+        event.contract_id = contrato.id
+        event.payer_client_id = outro_cliente.id
+        contrato.interveniente_client_id = None
+        db.commit()
+
+        result = execute_closure(db, REF_MONTH, contract_ids=[-1], uninstall_event_ids=[event.id])
+        billing = db.get(Billing, result['uninstall_billing_ids'][0])
+
+        assert billing.client_id == cliente.id
+        assert billing.payer_client_id == outro_cliente.id
+
+    def test_exact_ids_prevent_unreviewed_events_and_services(
+        self, db, cliente, veiculo,
+    ):
+        selected_event = _make_pending_event(db, cliente, veiculo, fee_amount=Decimal('50.00'))
+        unreviewed_event = _make_pending_event(db, cliente, veiculo, fee_amount=Decimal('60.00'))
+        selected_item = self._charge_item(db, cliente, 'Serviço selecionado')
+        unreviewed_item = self._charge_item(db, cliente, 'Serviço novo')
+        db.commit()
+
+        execute_closure(
+            db, REF_MONTH,
+            contract_ids=[-1],
+            uninstall_event_ids=[selected_event.id],
+            charge_item_ids=[selected_item.id],
+        )
+        for row in (selected_event, unreviewed_event, selected_item, unreviewed_item):
+            db.refresh(row)
+
+        assert selected_event.status == 'processed'
+        assert unreviewed_event.status == 'pending'
+        assert selected_item.status == 'faturado'
+        assert unreviewed_item.status == 'ativo'
+        assert db.query(Billing).filter(Billing.item_id == selected_item.id).count() == 1
+        assert db.query(Billing).filter(Billing.item_id == unreviewed_item.id).count() == 0
+
+    def test_partial_exact_request_fails_closed_for_omitted_categories(
+        self, db, cliente, plan, veiculo,
+    ):
+        contract = _make_active_contract(db, cliente, plan)
+        event = _make_pending_event(db, cliente, veiculo, fee_amount=Decimal('50.00'))
+        charge_item = self._charge_item(db, cliente, 'Não selecionado')
+        db.commit()
+
+        result = execute_closure(db, REF_MONTH, contract_ids=[contract.id])
+        db.refresh(event)
+        db.refresh(charge_item)
+
+        assert result['generated'] == 1
+        assert result['uninstall_fees_generated'] == 0
+        assert result['services_generated'] == 0
+        assert event.status == 'pending'
+        assert charge_item.status == 'ativo'
 
 
 # ---------------------------------------------------------------------------
@@ -639,19 +845,20 @@ class TestFormatoSimulacao:
         assert 'TAXA 70,00' in mov
         assert 'INTERVENIENTE: ABR EXPRESS' in mov
 
-    def test_desinstalacao_sem_cobranca_continua_aparecendo(self):
-        """Taxa abaixo do mínimo não vira cobrança, mas o serviço foi feito —
-        sumir com ela do relatório esconderia trabalho da equipe."""
+    def test_desinstalacao_aguardando_acumulacao_continua_aparecendo(self):
         from datetime import date as _date
         txt = self._texto_completo({
             'reference_month': '08/2026',
             'items': [self._item(client_id=7)],
             'uninstall_events': [{
                 'client_id': 7, 'client_name': 'CLIENTE X', 'vehicle_plate': 'AAA1B22',
-                'uninstall_date': _date(2026, 8, 3), 'fee_amount': 3.0, 'skipped': True,
+                'uninstall_date': _date(2026, 8, 3), 'fee_amount': 3.0,
+                'deferred': True, 'skipped': True,
             }],
         })
-        assert 'SEM COBRANÇA' in txt.split('MOVIMENTAÇÃO DO PERÍODO')[1]
+        movimentacao = txt.split('MOVIMENTAÇÃO DO PERÍODO')[1]
+        assert 'TAXA 3,00 (AGUARDANDO ACUMULAÇÃO)' in movimentacao
+        assert 'SEM COBRANÇA' not in movimentacao
 
     def test_subtotal_por_interveniente_concorda_no_singular(self):
         from datetime import date as _date

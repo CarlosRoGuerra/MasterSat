@@ -12,7 +12,14 @@ class Billing(Base, TimestampMixin, SoftDeleteMixin):
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     contract_id: Mapped[int | None] = mapped_column(ForeignKey('contracts.id'), nullable=True, index=True)
+    # Cliente atendido/dono do contrato. O responsável financeiro fica em
+    # payer_client_id para não perder a origem operacional da cobrança.
     client_id: Mapped[int] = mapped_column(ForeignKey('clients.id'), index=True)
+    # Snapshot do pagador no momento da emissão. Sem este campo, alterar o
+    # interveniente do contrato mudava retroativamente boleto e NFS-e antigos.
+    payer_client_id: Mapped[int | None] = mapped_column(
+        ForeignKey('clients.id'), nullable=True, index=True,
+    )
     item_id: Mapped[int | None] = mapped_column(ForeignKey('client_charge_items.id'), nullable=True, index=True)
     vehicle_id: Mapped[int | None] = mapped_column(ForeignKey('vehicles.id'), nullable=True, index=True)
     tracker_id: Mapped[int | None] = mapped_column(ForeignKey('trackers.id'), nullable=True, index=True)

@@ -21,10 +21,16 @@ class UninstallEvent(Base, TimestampMixin):
     tracker_id: Mapped[int | None] = mapped_column(ForeignKey('trackers.id'), nullable=True, index=True)
     contract_id: Mapped[int | None] = mapped_column(ForeignKey('contracts.id'), nullable=True)
     client_id: Mapped[int] = mapped_column(ForeignKey('clients.id'), index=True)
+    # Snapshot do responsável financeiro na retirada; o contrato pode ser
+    # alterado/cancelado antes de o fechamento transformar o evento em cobrança.
+    payer_client_id: Mapped[int | None] = mapped_column(
+        ForeignKey('clients.id'), nullable=True, index=True,
+    )
     uninstall_date: Mapped[date] = mapped_column(Date, index=True)
     fee_amount: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
     service_product_id: Mapped[int | None] = mapped_column(ForeignKey('service_products.id'), nullable=True)
-    # pending → processed (billing gerado) | skipped (valor abaixo do mínimo)
+    # pending → processed (billing gerado). ``skipped`` é legado e é recuperado
+    # pelo fechamento para voltar à acumulação; valores pequenos não são perdidos.
     status: Mapped[str] = mapped_column(String(20), default='pending', index=True)
     billing_id: Mapped[int | None] = mapped_column(ForeignKey('billings.id'), nullable=True)
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -13,7 +13,7 @@ from openpyxl import Workbook
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from sqlalchemy import and_, case, func, or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.api.deps import require_roles
 from app.db.session import get_db
@@ -45,6 +45,7 @@ from app.schemas.billing import (
 )
 from app.services.financial import (
     add_months,
+    charge_item_payer_client_id,
     decimal_to_float,
     generate_receipt_number,
     marcar_billing_pago,
@@ -55,6 +56,7 @@ from app.services.financial import (
     refresh_charge_items_for_billing,
     transfer_charge_items_to_billing,
     valor_com_juros,
+    contract_payer_client_id,
 )
 
 router = APIRouter()
@@ -70,9 +72,20 @@ def base_query(db: Session):
               AilosBoleto.codigo_barras.isnot(None)), True),
         else_=False,
     ).label('boleto_ailos')
+    Payer = aliased(Client)
     return (
-        db.query(Billing, Client.name.label('client_name'), Plan.name.label('plan_name'), Contract.status.label('contract_status'), Vehicle.plate.label('vehicle_plate'), Tracker.imei.label('tracker_identifier'), boleto_ailos)
+        db.query(
+            Billing,
+            Client.name.label('client_name'),
+            Payer.name.label('payer_name'),
+            Plan.name.label('plan_name'),
+            Contract.status.label('contract_status'),
+            Vehicle.plate.label('vehicle_plate'),
+            Tracker.imei.label('tracker_identifier'),
+            boleto_ailos,
+        )
         .join(Client, Client.id == Billing.client_id)
+        .join(Payer, Payer.id == func.coalesce(Billing.payer_client_id, Billing.client_id))
         .outerjoin(Contract, Contract.id == Billing.contract_id)
         .outerjoin(Plan, Plan.id == Contract.plan_id)
         .outerjoin(Vehicle, Vehicle.id == Billing.vehicle_id)
@@ -81,6 +94,7 @@ def base_query(db: Session):
         .filter(
             Billing.is_deleted.is_(False),
             Client.is_deleted.is_(False),
+            Payer.is_deleted.is_(False),
             or_(Contract.id.is_(None), Contract.is_deleted.is_(False)),
             or_(Plan.id.is_(None), Plan.is_deleted.is_(False)),
             or_(Vehicle.id.is_(None), Vehicle.is_deleted.is_(False)),
@@ -90,7 +104,10 @@ def base_query(db: Session):
 
 
 def serialize_billing(row) -> BillingOut:
-    billing, client_name, plan_name, contract_status, vehicle_plate, tracker_identifier, boleto_ailos = row
+    (
+        billing, client_name, payer_name, plan_name, contract_status,
+        vehicle_plate, tracker_identifier, boleto_ailos,
+    ) = row
     overdue_days = 0
     if billing.status == BillingStatus.OVERDUE:
         overdue_days = max((date.today() - billing.due_date).days, 0)
@@ -98,6 +115,7 @@ def serialize_billing(row) -> BillingOut:
         id=billing.id,
         contract_id=billing.contract_id,
         client_id=billing.client_id,
+        payer_client_id=billing.payer_client_id or billing.client_id,
         item_id=billing.item_id,
         vehicle_id=billing.vehicle_id,
         title=billing.title,
@@ -114,6 +132,7 @@ def serialize_billing(row) -> BillingOut:
         receipt_number=billing.receipt_number,
         period_label=billing.period_label,
         client_name=client_name,
+        payer_name=payer_name,
         vehicle_plate=vehicle_plate,
         tracker_identifier=tracker_identifier,
         plan_name=plan_name,
@@ -186,7 +205,10 @@ def revenue_report(period: str = Query(default='monthly', pattern='^(monthly|qua
 def delinquent_report(db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
     rows = (
         db.query(Client.id, Client.name, func.coalesce(func.sum(Billing.amount), 0), func.count(Billing.id))
-        .join(Billing, Billing.client_id == Client.id)
+        .join(
+            Billing,
+            func.coalesce(Billing.payer_client_id, Billing.client_id) == Client.id,
+        )
         .filter(Client.is_deleted == False, Billing.is_deleted == False, Billing.status == BillingStatus.OVERDUE)
         .group_by(Client.id, Client.name)
         .order_by(func.sum(Billing.amount).desc())
@@ -205,10 +227,10 @@ def export_csv(search: str | None = None, status: str | None = None, client_id: 
     rows = apply_filters(base_query(db), search, status, client_id, contract_id, due_from, due_to).order_by(Billing.due_date.desc()).all()
     buffer = StringIO()
     writer = csv.writer(buffer)
-    writer.writerow(['ID', 'Cliente', 'Veículo', 'Rastreador', 'Título', 'Tipo', 'Valor', 'Vencimento', 'Status', 'Recebido em', 'Recibo'])
+    writer.writerow(['ID', 'Cliente atendido', 'Responsável financeiro', 'Veículo', 'Rastreador', 'Título', 'Tipo', 'Valor', 'Vencimento', 'Status', 'Recebido em', 'Recibo'])
     for row in rows:
         item = serialize_billing(row)
-        writer.writerow([item.id, item.client_name, item.vehicle_plate or '', item.tracker_identifier or '', item.title or item.plan_name or '', item.billing_type, item.amount, item.due_date, item.status, item.payment_date or '', item.receipt_number or ''])
+        writer.writerow([item.id, item.client_name, item.payer_name or item.client_name, item.vehicle_plate or '', item.tracker_identifier or '', item.title or item.plan_name or '', item.billing_type, item.amount, item.due_date, item.status, item.payment_date or '', item.receipt_number or ''])
     buffer.seek(0)
     return StreamingResponse(iter([buffer.getvalue()]), media_type='text/csv', headers={'Content-Disposition': 'attachment; filename=financeiro.csv'})
 
@@ -219,10 +241,10 @@ def export_xlsx(search: str | None = None, status: str | None = None, client_id:
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = 'Financeiro'
-    sheet.append(['ID', 'Cliente', 'Título', 'Tipo', 'Valor', 'Vencimento', 'Status', 'Recebido em', 'Recibo'])
+    sheet.append(['ID', 'Cliente atendido', 'Responsável financeiro', 'Veículo', 'Rastreador', 'Título', 'Tipo', 'Valor', 'Vencimento', 'Status', 'Recebido em', 'Recibo'])
     for row in rows:
         item = serialize_billing(row)
-        sheet.append([item.id, item.client_name, item.vehicle_plate or '', item.tracker_identifier or '', item.title or item.plan_name or '', item.billing_type, item.amount, str(item.due_date), item.status, str(item.payment_date or ''), item.receipt_number or ''])
+        sheet.append([item.id, item.client_name, item.payer_name or item.client_name, item.vehicle_plate or '', item.tracker_identifier or '', item.title or item.plan_name or '', item.billing_type, item.amount, str(item.due_date), item.status, str(item.payment_date or ''), item.receipt_number or ''])
     output = BytesIO()
     workbook.save(output)
     output.seek(0)
@@ -306,6 +328,15 @@ def create_item(payload: BillingCreate, db: Session = Depends(get_db), _: object
             raise HTTPException(status_code=404, detail='Contrato não encontrado')
         if contract.client_id != payload.client_id:
             raise HTTPException(status_code=400, detail='O contrato selecionado não pertence ao cliente informado.')
+        try:
+            data_payer_id = contract_payer_client_id(db, contract)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    else:
+        data_payer_id = payload.payer_client_id or payload.client_id
+        payer = db.get(Client, data_payer_id)
+        if not payer or payer.is_deleted:
+            raise HTTPException(status_code=404, detail='Responsável financeiro não encontrado')
     if payload.item_id:
         charge_item = db.get(ClientChargeItem, payload.item_id)
         if not charge_item or charge_item.is_deleted:
@@ -314,7 +345,13 @@ def create_item(payload: BillingCreate, db: Session = Depends(get_db), _: object
             raise HTTPException(status_code=400, detail='O item selecionado não pertence ao cliente informado.')
         if payload.contract_id and charge_item.contract_id and charge_item.contract_id != payload.contract_id:
             raise HTTPException(status_code=400, detail='O item selecionado pertence a outro contrato.')
+        if charge_item.contract_id:
+            try:
+                data_payer_id = charge_item_payer_client_id(db, charge_item)
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
     data = payload.model_dump()
+    data['payer_client_id'] = data_payer_id
     if not data.get('period_label'):
         data['period_label'] = payload.due_date.strftime('%m/%Y')
     obj = Billing(**data)
@@ -363,6 +400,11 @@ def parcelar_contrato(payload: ParcelarContratoIn, db: Session = Depends(get_db)
         hoje = date.today()
         primeiro = normalize_due_date(hoje.replace(day=1), 0 if hoje.day <= billing_day else 1, billing_day, 1)
 
+    try:
+        payer_client_id = contract_payer_client_id(db, contract)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     total = payload.num_parcelas
     criados: list[Billing] = []
     for i in range(total):
@@ -370,6 +412,7 @@ def parcelar_contrato(payload: ParcelarContratoIn, db: Session = Depends(get_db)
         b = Billing(
             contract_id=contract.id,
             client_id=contract.client_id,
+            payer_client_id=payer_client_id,
             vehicle_id=getattr(contract, 'vehicle_id', None),
             tracker_id=getattr(contract, 'tracker_id', None),
             title=f'{plan_title(plan)} • parcela {i + 1}/{total}',
@@ -491,13 +534,23 @@ def unify_billings(payload: BillingUnify, db: Session = Depends(get_db), _: obje
     if invalidas:
         raise HTTPException(status_code=400, detail=f'Apenas cobranças pendentes/vencidas podem ser unificadas: {invalidas}')
 
+    payer_ids = {
+        resolver_pagador(db, billing, db.get(Client, billing.client_id)).id
+        for billing in billings
+    }
+    if len(payer_ids) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail='Todas as cobranças precisam ter o mesmo responsável financeiro.',
+        )
     if len({b.client_id for b in billings}) > 1:
-        raise HTTPException(status_code=400, detail='Todas as cobranças precisam ser do mesmo cliente.')
+        raise HTTPException(status_code=400, detail='Todas as cobranças precisam ser do mesmo cliente atendido.')
 
     total = sum(float(b.amount) for b in billings)
     refs = ', '.join(f'#{b.id}' for b in billings)
     nova = Billing(
         client_id=billings[0].client_id,
+        payer_client_id=next(iter(payer_ids)),
         billing_type='avulsa',
         title=f'BOLETO ÚNICO — UNIFICAÇÃO ({refs})',
         amount=payload.amount or total,
@@ -609,11 +662,14 @@ def update_item(item_id: int, payload: BillingUpdate, db: Session = Depends(get_
     data = payload.model_dump(exclude_unset=True)
     justification = data.pop('justification', None)
 
-    immutable_links = {'client_id', 'contract_id', 'item_id', 'vehicle_id', 'tracker_id'}
+    immutable_links = {
+        'client_id', 'payer_client_id', 'contract_id', 'item_id',
+        'vehicle_id', 'tracker_id',
+    }
     if immutable_links.intersection(data):
         raise HTTPException(
             status_code=400,
-            detail='Cliente, contrato, item, veículo e rastreador da cobrança não podem ser alterados após a emissão.',
+            detail='Cliente, responsável financeiro, contrato, item, veículo e rastreador da cobrança não podem ser alterados após a emissão.',
         )
 
     # Transição de status tem fluxo próprio (Receber/Cancelar), com as travas da

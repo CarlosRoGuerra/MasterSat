@@ -532,6 +532,7 @@ def _serialize_contract(db: Session, contract: Contract) -> ContractOut:
     return ContractOut(
         id=contract.id,
         client_id=contract.client_id,
+        interveniente_client_id=contract.interveniente_client_id,
         plan_id=contract.plan_id,
         vehicle_id=contract.vehicle_id,
         tracker_id=contract.tracker_id,
@@ -627,6 +628,40 @@ def link_vehicle(
             .with_for_update()
         ).all()
     )
+    contract_vehicle_ids = {
+        contract.vehicle_id for contract in active_contracts if contract.vehicle_id is not None
+    }
+    if active_contracts and previous_vehicle_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'code': 'orphan_active_contract',
+                'message': (
+                    'O rastreador está sem veículo local, mas ainda possui contrato ativo. '
+                    'Reconcilie esse contrato antes de criar outro vínculo.'
+                ),
+                'contract_ids': [contract.id for contract in active_contracts],
+            },
+        )
+    if previous_vehicle_id is not None and any(
+        vehicle_id != previous_vehicle_id for vehicle_id in contract_vehicle_ids
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'code': 'inconsistent_active_contract_assignment',
+                'message': (
+                    'Há contrato ativo deste rastreador apontando para outro veículo. '
+                    'Reconcilie os dados antes de transferir.'
+                ),
+                'contract_ids': [contract.id for contract in active_contracts],
+            },
+        )
+    if is_transfer and payload.start_date > date.today():
+        raise HTTPException(
+            status_code=422,
+            detail='A data da transferência não pode estar no futuro.',
+        )
     if any(payload.start_date < contract.start_date for contract in active_contracts):
         raise HTTPException(status_code=422, detail='A transferência não pode ser anterior ao início do contrato atual.')
 

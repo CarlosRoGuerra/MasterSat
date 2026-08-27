@@ -7,6 +7,7 @@ from app.models.enums import BillingStatus
 class BillingBase(BaseModel):
     contract_id: int | None = None
     client_id: int
+    payer_client_id: int | None = None
     item_id: int | None = None
     vehicle_id: int | None = None
     tracker_id: int | None = None
@@ -32,6 +33,7 @@ class BillingCreate(BillingBase):
 class BillingUpdate(BaseModel):
     contract_id: int | None = None
     client_id: int | None = None
+    payer_client_id: int | None = None
     item_id: int | None = None
     vehicle_id: int | None = None
     tracker_id: int | None = None
@@ -97,6 +99,7 @@ class BillingCancel(BaseModel):
 class BillingOut(BillingBase):
     id: int
     client_name: str | None = None
+    payer_name: str | None = None
     vehicle_plate: str | None = None
     tracker_identifier: str | None = None
     plan_name: str | None = None

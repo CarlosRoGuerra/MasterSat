@@ -55,6 +55,8 @@ type UninstallEventItem = {
   vehicle_plate: string | null;
   uninstall_date: string;
   fee_amount: number;
+  deferred: boolean;
+  aggregation_total: number;
   skipped: boolean;
   skip_reason: string | null;
 };
@@ -98,6 +100,8 @@ type GenerateResult = {
   generated: number;
   total_amount: number;
   uninstall_fees_generated: number;
+  uninstall_events_processed: number;
+  uninstall_fees_deferred: number;
   uninstall_fees_skipped: number;
   services_generated: number;
   total_services_amount: number;
@@ -308,17 +312,20 @@ export default function FechamentoPage() {
     try {
       const params = new URLSearchParams({ reference_month: referenceMonth, filter_type: filterType });
       if (filterType === 'client' && selectedClientId) params.set('client_id', selectedClientId);
-      // Manda a seleção EXATA das mensalidades. Quando não estão todas
-      // selecionadas (inclusive quando nenhuma está), envia os IDs escolhidos —
-      // e um sentinela (-1) quando são zero, senão o backend geraria TODAS
-      // (ausência de contract_ids = "processar todos"). Bug: desmarcar tudo e
-      // gerar (por causa de uma taxa/serviço) recriava todas as mensalidades.
-      const allPending = recorrentes.filter(i => !i.already_generated);
-      const allSelected = selectedContractIds.size === allPending.length;
-      if (!allSelected) {
-        selectedContractIds.forEach(id => params.append('contract_ids', String(id)));
-        if (selectedContractIds.size === 0) params.append('contract_ids', '-1');
-      }
+      // Manda SEMPRE a seleção exata das mensalidades, mesmo quando todas estão
+      // marcadas. Ausência de contract_ids significa "estado atual do banco";
+      // um contrato criado entre Simular e Gerar entraria sem ter aparecido na
+      // prévia. O sentinela -1 representa uma seleção intencionalmente vazia.
+      selectedContractIds.forEach(id => params.append('contract_ids', String(id)));
+      if (selectedContractIds.size === 0) params.append('contract_ids', '-1');
+      // A prévia é um snapshot: envia também as seleções exatas de taxas e
+      // serviços. Assim um lançamento criado por outra pessoa entre Simular e
+      // Gerar não entra silenciosamente nesta execução.
+      const eventIds = desinstalacoes.filter(e => !e.deferred).map(e => e.event_id);
+      eventIds.forEach(id => params.append('uninstall_event_ids', String(id)));
+      if (eventIds.length === 0) params.append('uninstall_event_ids', '-1');
+      chargeItems.forEach(item => params.append('charge_item_ids', String(item.item_id)));
+      if (chargeItems.length === 0) params.append('charge_item_ids', '-1');
       const result = await apiFetch<GenerateResult>(`/billing-closure/generate?${params}`, { method: 'POST' }, token);
       setGenerateResult(result);
     } catch (e) {
@@ -362,7 +369,7 @@ export default function FechamentoPage() {
   const hasWork =
     simulation &&
     (selectedContractIds.size > 0 ||
-      desinstalacoes.filter((e) => !e.skipped).length > 0 ||
+      desinstalacoes.filter((e) => !e.deferred).length > 0 ||
       chargeItems.length > 0);
 
   /* ── Confirm button label ── */
@@ -370,7 +377,7 @@ export default function FechamentoPage() {
     if (!simulation) return 'Nada a gerar';
     const parts: string[] = [];
     if (selectedContractIds.size > 0) parts.push(`${selectedContractIds.size} mensalidade(s)`);
-    const taxas = desinstalacoes.filter((e) => !e.skipped).length;
+    const taxas = desinstalacoes.filter((e) => !e.deferred).length;
     if (taxas > 0) parts.push(`${taxas} taxa(s)`);
     if (chargeItems.length > 0) parts.push(`${chargeItems.length} serviço(s)`);
     return parts.length ? `Confirmar e gerar: ${parts.join(' + ')}` : 'Nada a gerar';
@@ -485,8 +492,8 @@ export default function FechamentoPage() {
             <MetricCard
               label="Taxas desinstalação"
               value={
-                <span className={desinstalacoes.filter(e => !e.skipped).length > 0 ? 'text-orange-600 dark:text-orange-400' : ''}>
-                  {desinstalacoes.filter(e => !e.skipped).length}
+                <span className={desinstalacoes.filter(e => !e.deferred).length > 0 ? 'text-orange-600 dark:text-orange-400' : ''}>
+                  {desinstalacoes.filter(e => !e.deferred).length}
                 </span>
               }
               sub={`${fmt(simulation.total_uninstall_fees)} a faturar`}
@@ -730,13 +737,13 @@ export default function FechamentoPage() {
                             {fmt(item.fee_amount)}
                           </Td>
                           <Td>
-                            {item.skipped ? (
+                            {item.deferred ? (
                               <span
-                                className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 dark:text-slate-400"
+                                className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-600 dark:text-amber-400"
                                 title={item.skip_reason ?? ''}
                               >
-                                <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
-                                Ignorado
+                                <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+                                Aguardando acumulação
                               </span>
                             ) : (
                               <span className="inline-flex items-center gap-1.5 text-xs font-medium text-orange-700 dark:text-orange-400">
@@ -893,9 +900,9 @@ export default function FechamentoPage() {
                   icon={<ClipboardList className="h-5 w-5" />}
                 />
                 <MetricCard
-                  label="Taxas de desinstalação"
-                  value={generateResult.uninstall_fees_generated}
-                  sub={`${generateResult.uninstall_fees_skipped} ignoradas`}
+                  label="Eventos de desinstalação"
+                  value={generateResult.uninstall_events_processed}
+                  sub={`${generateResult.uninstall_fees_generated} cobrança(s) · ${generateResult.uninstall_fees_deferred} aguardando acumulação`}
                   icon={<Wrench className="h-5 w-5" />}
                 />
                 <MetricCard

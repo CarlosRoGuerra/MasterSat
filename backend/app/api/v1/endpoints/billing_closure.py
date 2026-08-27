@@ -39,7 +39,10 @@ def simulate(
     ref = _parse_reference_month(reference_month)
     if filter_type == 'client' and not client_id:
         raise HTTPException(status_code=422, detail='client_id obrigatório quando filter_type=client.')
-    return simulate_closure(db, ref, filter_type, client_id)
+    try:
+        return simulate_closure(db, ref, filter_type, client_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get('/simulate/pdf')
@@ -51,7 +54,12 @@ def simulate_pdf(
     _: object = Depends(require_roles(*ALLOWED_ROLES)),
 ):
     ref = _parse_reference_month(reference_month)
-    simulation = simulate_closure(db, ref, filter_type, client_id)
+    if filter_type == 'client' and not client_id:
+        raise HTTPException(status_code=422, detail='client_id obrigatório quando filter_type=client.')
+    try:
+        simulation = simulate_closure(db, ref, filter_type, client_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     pdf_buffer = generate_closure_pdf(simulation)
     filename = f'fechamento-{reference_month}.pdf'
     return StreamingResponse(
@@ -70,7 +78,12 @@ def simulate_xlsx(
     _: object = Depends(require_roles(*ALLOWED_ROLES)),
 ):
     ref = _parse_reference_month(reference_month)
-    simulation = simulate_closure(db, ref, filter_type, client_id)
+    if filter_type == 'client' and not client_id:
+        raise HTTPException(status_code=422, detail='client_id obrigatório quando filter_type=client.')
+    try:
+        simulation = simulate_closure(db, ref, filter_type, client_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     xlsx_buffer = generate_closure_xlsx(simulation)
     filename = f'fechamento-{reference_month}.xlsx'
     return StreamingResponse(
@@ -85,7 +98,9 @@ def generate(
     reference_month: str = Query(..., description='Mês de referência no formato YYYY-MM'),
     filter_type: str = Query(default='all', pattern='^(all|pf|pj|client)$'),
     client_id: int | None = None,
-    contract_ids: list[int] | None = Query(default=None, description='IDs de contratos específicos para gerar'),
+    contract_ids: list[int] | None = Query(default=None, description='Seleção exata de contratos recorrentes'),
+    uninstall_event_ids: list[int] | None = Query(default=None, description='Seleção exata de eventos de desinstalação'),
+    charge_item_ids: list[int] | None = Query(default=None, description='Seleção exata de serviços avulsos'),
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*ALLOWED_ROLES)),
 ):
@@ -97,7 +112,16 @@ def generate(
     if filter_type == 'client' and not client_id:
         raise HTTPException(status_code=422, detail='client_id obrigatório quando filter_type=client.')
 
-    result = execute_closure(db, ref, filter_type, client_id, contract_ids or None)
+    try:
+        result = execute_closure(
+            db, ref, filter_type, client_id,
+            contract_ids=contract_ids,
+            uninstall_event_ids=uninstall_event_ids,
+            charge_item_ids=charge_item_ids,
+        )
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     # `**result` traz um reference_month já formatado para exibição (MM/YYYY) e
     # vinha sobrescrevendo o eco do parâmetro logo acima. O efeito era um
     # contrato inconsistente: a API só aceita YYYY-MM, mas devolvia 05/2025 —

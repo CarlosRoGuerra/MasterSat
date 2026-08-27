@@ -27,6 +27,7 @@ from app.services.financial import (
     period_label_for_date,
     refresh_overdue_statuses,
 )
+from app.services.ailos_boletos import resolver_pagador
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +259,21 @@ class TestGenerateMonthlyBillings:
     def test_billing_client_id_matches_contract(self, db, contrato, plan):
         created = generate_monthly_billings(db, contrato, cycles=1)
         assert created[0].client_id == contrato.client_id
+
+    def test_billing_snapshots_financial_intervenient(
+        self, db, contrato, plan, outro_cliente,
+    ):
+        contrato.interveniente_client_id = outro_cliente.id
+        db.commit()
+
+        billing = generate_monthly_billings(db, contrato, cycles=1)[0]
+
+        assert billing.client_id == contrato.client_id
+        assert billing.payer_client_id == outro_cliente.id
+        # Alterar o contrato depois não pode trocar o pagador de título emitido.
+        contrato.interveniente_client_id = None
+        db.commit()
+        assert resolver_pagador(db, billing).id == outro_cliente.id
 
     def test_billing_contract_id_matches(self, db, contrato, plan):
         created = generate_monthly_billings(db, contrato, cycles=1)

@@ -718,6 +718,60 @@ class TestLinkVeiculo:
         assert rastreador_instalado.vehicle_id == veiculo.id
         assert contrato.status == 'ativo'
 
+    def test_transfer_with_future_date_is_rejected_without_changes(
+        self, http, db, cliente, veiculo, rastreador_instalado, contrato,
+    ):
+        from datetime import timedelta
+        from app.models.vehicle import Vehicle
+
+        destination = Vehicle(
+            client_id=cliente.id, plate='NEW5E67', type='passeio',
+            chassis='9BWZZZ377VT000325',
+        )
+        db.add(destination)
+        db.commit()
+
+        r = http.post(
+            f"{PREFIX}/{rastreador_instalado.id}/link-vehicle",
+            json={
+                'vehicle_id': destination.id,
+                'confirm_transfer': True,
+                'start_date': (date.today() + timedelta(days=1)).isoformat(),
+            },
+        )
+
+        assert r.status_code == 422
+        db.refresh(rastreador_instalado)
+        db.refresh(contrato)
+        assert rastreador_instalado.vehicle_id == veiculo.id
+        assert contrato.status == 'ativo'
+
+    def test_orphan_active_contract_blocks_new_assignment(
+        self, http, db, cliente, veiculo, rastreador_instalado, contrato,
+    ):
+        from app.models.vehicle import Vehicle
+
+        destination = Vehicle(
+            client_id=cliente.id, plate='NEW6F78', type='passeio',
+            chassis='9BWZZZ377VT000326',
+        )
+        db.add(destination)
+        rastreador_instalado.vehicle_id = None
+        rastreador_instalado.client_id = None
+        db.commit()
+
+        r = http.post(
+            f"{PREFIX}/{rastreador_instalado.id}/link-vehicle",
+            json={'vehicle_id': destination.id, 'plan_id': contrato.plan_id},
+        )
+
+        assert r.status_code == 409
+        assert r.json()['detail']['code'] == 'orphan_active_contract'
+        db.refresh(rastreador_instalado)
+        db.refresh(contrato)
+        assert rastreador_instalado.vehicle_id is None
+        assert contrato.status == 'ativo'
+
     def test_transfer_failure_restores_old_external_and_local_assignment(
         self, http, db, cliente, veiculo, rastreador_instalado, contrato, monkeypatch,
     ):

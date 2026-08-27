@@ -58,7 +58,10 @@ def dashboard(
     # ── Upcoming billings (next 7 days, max 5) ───────────────────────────
     upcoming_rows = db.execute(
         select(Billing.id, Billing.due_date, Billing.amount, Client.name.label('client_name'))
-        .join(Client, Client.id == Billing.client_id)
+        .join(
+            Client,
+            Client.id == func.coalesce(Billing.payer_client_id, Billing.client_id),
+        )
         .where(
             Billing.status.in_([BillingStatus.PENDING, BillingStatus.OVERDUE]),
             Billing.is_deleted.is_(False),

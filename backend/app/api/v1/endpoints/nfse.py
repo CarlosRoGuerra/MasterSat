@@ -22,6 +22,7 @@ from __future__ import annotations
 from typing import NoReturn
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_roles
@@ -322,7 +323,10 @@ def _municipio_do_tomador(db: Session, billing_id: int) -> dict[str, str]:
     """
     linha = (
         db.query(Client.zip_code, Client.city, Client.state)
-        .join(Billing, Billing.client_id == Client.id)
+        .join(
+            Billing,
+            func.coalesce(Billing.payer_client_id, Billing.client_id) == Client.id,
+        )
         .filter(Billing.id == billing_id)
         .first()
     )

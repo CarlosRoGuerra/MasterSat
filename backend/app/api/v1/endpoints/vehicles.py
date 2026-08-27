@@ -26,7 +26,14 @@ from app.models.user import User
 from app.models.vehicle import Vehicle
 from app.schemas.document import DocumentDeleteOut, DocumentOut, DocumentReviewUpdate
 from app.schemas.vehicle import VehicleCreate, VehicleOut, VehicleUpdate
-from app.services.financial import add_months, current_cycle_bounds, decimal_to_float, period_label_for_date, prorated_amount
+from app.services.financial import (
+    add_months,
+    contract_payer_client_id,
+    current_cycle_bounds,
+    decimal_to_float,
+    period_label_for_date,
+    prorated_amount,
+)
 from app.services.multiportal_lifecycle import (
     LifecycleSyncError,
     add_lifecycle_logs,
@@ -293,6 +300,29 @@ def uninstall_vehicle(
             ),
         )
 
+    has_fee = (uninstall_fee and uninstall_fee > 0) or uninstall_service_product_id
+    try:
+        contract_payer_ids = {
+            contract_payer_client_id(db, contract) for contract in contracts
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if has_fee and len(contract_payer_ids) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'code': 'ambiguous_financial_responsibility',
+                'message': (
+                    'O veículo possui contratos ativos com responsáveis financeiros '
+                    'diferentes. Reconcilie os contratos antes de registrar uma taxa.'
+                ),
+                'payer_client_ids': sorted(contract_payer_ids),
+            },
+        )
+    event_payer_id = (
+        next(iter(contract_payer_ids)) if contract_payer_ids else vehicle.client_id
+    )
+
     client = db.scalar(
         select(Client).where(Client.id == vehicle.client_id, Client.is_deleted.is_(False))
     )
@@ -348,7 +378,6 @@ def uninstall_vehicle(
 
     # Registra evento de desinstalação pendente — a taxa será injetada pelo motor
     # de fechamento mensal ao rodar o mês correspondente à data de retirada.
-    has_fee = (uninstall_fee and uninstall_fee > 0) or uninstall_service_product_id
     if has_fee:
         # O valor cobrado é congelado AQUI, no momento da retirada: é o que foi
         # acordado com o cliente e mostrado na tela. O produto de serviço diz
@@ -375,9 +404,13 @@ def uninstall_vehicle(
             )
         event = UninstallEvent(
             vehicle_id=vehicle.id,
-            tracker_id=trackers[0].id if trackers else None,
-            contract_id=contracts[0].id if contracts else None,
+            # Uma taxa é do veículo. Só gravamos rastreador/contrato quando a
+            # referência é inequívoca; escolher arbitrariamente o primeiro em
+            # uma instalação múltipla corrompia a rastreabilidade financeira.
+            tracker_id=trackers[0].id if len(trackers) == 1 else None,
+            contract_id=contracts[0].id if len(contracts) == 1 else None,
             client_id=vehicle.client_id,
+            payer_client_id=event_payer_id,
             uninstall_date=uninstall_date,
             fee_amount=fee_value,
             service_product_id=uninstall_service_product_id,
