@@ -99,7 +99,11 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}, token
   }
 
   if (!response.ok) {
-    if (response.status === 401 && typeof window !== 'undefined') {
+    // effectiveToken só existe quando a chamada pretendia usar uma sessão já
+    // aberta. Sem ele (ex.: o POST de /auth/login em si), um 401 é só
+    // "credenciais inválidas" — nunca sessão expirada, e não deve redirecionar
+    // para o login nem sobrescrever a mensagem de erro do backend.
+    if (response.status === 401 && effectiveToken && typeof window !== 'undefined') {
       // Refresh indisponível ou também expirado → sessão realmente encerrada
       localStorage.removeItem('access_token');
       window.location.href = loginPathForCurrentPage();
