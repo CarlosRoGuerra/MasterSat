@@ -70,6 +70,16 @@ class TestListBillings:
         assert r.status_code == 200
         assert len(r.json()) >= 1
 
+    def test_search_by_billing_id(self, http, billing_pendente):
+        r = http.get(PREFIX + "/", params={"search": str(billing_pendente.id)})
+        assert r.status_code == 200
+        assert any(x["id"] == billing_pendente.id for x in r.json())
+
+    def test_search_by_nonexistent_id_is_empty(self, http, billing_pendente, billing_vencida):
+        r = http.get(PREFIX + "/", params={"search": "999999"})
+        assert r.status_code == 200
+        assert r.json() == []
+
     def test_excludes_soft_deleted(self, http, db, billing_pendente):
         billing_pendente.is_deleted = True
         db.commit()

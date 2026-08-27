@@ -388,7 +388,7 @@ function BillingTableSection({
       </div>
       {billingView === 'all' && (
         <div className="mt-3 flex flex-wrap gap-3">
-          <input className={fc} style={{ maxWidth: 260 }} placeholder="Buscar por cliente ou título" value={billingSearch} onChange={e => onSearchChange(e.target.value)} />
+          <input className={fc} style={{ maxWidth: 260 }} placeholder="Buscar por número, cliente ou título" value={billingSearch} onChange={e => onSearchChange(e.target.value)} />
           <select className={fc} style={{ width: 160 }} value={billingStatusFilter} onChange={e => onStatusFilterChange(e.target.value)}>
             <option value="">Todos os status</option>
             <option value="pendente">Pendente</option>

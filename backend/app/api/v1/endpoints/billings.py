@@ -148,7 +148,19 @@ def serialize_billing(row) -> BillingOut:
 
 def apply_filters(query, search: str | None, status: str | None, client_id: int | None, contract_id: int | None, due_from: date | None, due_to: date | None, vehicle_id: int | None = None):
     if search:
-        query = query.filter(or_(Client.name.ilike(f'%{search}%'), Client.cpf_cnpj.ilike(f'%{search}%'), Billing.receipt_number.ilike(f'%{search}%'), Billing.notes.ilike(f'%{search}%'), Billing.title.ilike(f'%{search}%')))
+        termo = search.strip()
+        condicoes = [
+            Client.name.ilike(f'%{termo}%'),
+            Client.cpf_cnpj.ilike(f'%{termo}%'),
+            Billing.receipt_number.ilike(f'%{termo}%'),
+            Billing.notes.ilike(f'%{termo}%'),
+            Billing.title.ilike(f'%{termo}%'),
+        ]
+        # Número da cobrança (o que aparece nas telas como "número do boleto") —
+        # busca exata, só quando o termo é puramente numérico.
+        if termo.isdigit():
+            condicoes.append(Billing.id == int(termo))
+        query = query.filter(or_(*condicoes))
     if status:
         query = query.filter(Billing.status == status)
     if client_id:
