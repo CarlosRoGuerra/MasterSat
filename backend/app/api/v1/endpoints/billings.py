@@ -558,7 +558,7 @@ def unify_billings(payload: BillingUnify, db: Session = Depends(get_db), _: obje
     if len({b.client_id for b in billings}) > 1:
         raise HTTPException(status_code=400, detail='Todas as cobranças precisam ser do mesmo cliente atendido.')
 
-    total = sum(float(b.amount) for b in billings)
+    total = sum((Decimal(str(b.amount)) for b in billings), Decimal('0.00'))
     refs = ', '.join(f'#{b.id}' for b in billings)
     # Título vai pro boleto/recibo — o cliente vê isso, não os IDs internos.
     # "#12, #13" não diz nada pra quem recebe; quantidade + período de
@@ -571,7 +571,7 @@ def unify_billings(payload: BillingUnify, db: Session = Depends(get_db), _: obje
         payer_client_id=next(iter(payer_ids)),
         billing_type='avulsa',
         title=titulo,
-        amount=payload.amount or total,
+        amount=Decimal(str(payload.amount)) if payload.amount else total,
         due_date=payload.due_date,
         status=BillingStatus.PENDING,
         period_label=payload.due_date.strftime('%m/%Y'),

@@ -90,14 +90,22 @@ def plan_title(plan) -> str:
 def valor_com_juros(amount, due_date: date, referencia: date | None = None) -> float | None:
     """Valor atualizado de cobrança em atraso: multa 2% + juros de 1% ao mês
     ou fração (cláusula 4.3 do contrato). None se não está em atraso.
-    Fonte ÚNICA do cálculo — tela, mensagens e integrações usam este valor."""
+    Fonte ÚNICA do cálculo — tela, mensagens e integrações usam este valor.
+
+    Calculado inteiramente em Decimal — o resultado sai do backend em
+    float apenas na fronteira de serialização (contrato da API), não durante
+    a conta. Fazer a multiplicação em float faz meio-centavo exato (ex.:
+    1,50 × 1,03 = 1,545) cair do lado errado do arredondamento por causa da
+    representação binária, divergindo do ROUND_HALF_UP usado no resto do
+    serviço (parcelas, pró-rata)."""
     referencia = referencia or hoje()
     dias = (referencia - due_date).days
     if dias <= 0:
         return None
     meses = -(-dias // 30)  # ceil
-    valor = float(amount)
-    return round(valor * 1.02 + valor * 0.01 * meses, 2)
+    valor = Decimal(str(amount))
+    atualizado = valor + valor * Decimal('0.02') + valor * Decimal('0.01') * meses
+    return decimal_to_float(_quantize_amount(atualizado))
 
 
 def refresh_overdue_statuses(db: Session, *, commit: bool = True) -> None:
