@@ -707,8 +707,8 @@ def _draw_boleto_itau_style(c, d: DadosBoleto, y_top: float, parcela: tuple[int,
     _box(c, fx, yf, cINS, H_INS)
     c.setFillColorRGB(0.5, 0.5, 0.5); c.setFont("Helvetica", 5)
     c.drawString(fx + _mm(1), yf - _mm(2.2), "Instruções (texto de responsabilidade do beneficiário)")
-    qr = 20
-    qx = fx + cINS - _mm(qr) - _mm(1.5); qy = yf - _mm(2.5)
+    qr = 18
+    qx = fx + cINS - _mm(qr) - _mm(1.5); qy = yf - _mm(1.5)
     txt_x = fx + _mm(1.5)
     txt_max_w = qx - _mm(1.5) - txt_x  # não invade a coluna do QR Code
     c.setFillColorRGB(0, 0, 0); c.setFont("Helvetica", 5.8)
@@ -723,7 +723,7 @@ def _draw_boleto_itau_style(c, d: DadosBoleto, y_top: float, parcela: tuple[int,
             break
     if _draw_pix_no_quadro(c, d, qx, qy, qr):
         c.setFont("Helvetica-Bold", 5.5); c.setFillColorRGB(0, 0, 0)
-        c.drawCentredString(qx + _mm(qr) / 2, qy - _mm(qr) - _mm(1.8), "Pague com Pix")
+        c.drawCentredString(qx + _mm(qr) / 2, qy - _mm(qr) - _mm(1.2), "Pague com Pix")
     hf = H_INS / 5
     for i, lbl in enumerate([
         "(-) Descontos / Abatimentos", "(-) Outras deduções",
