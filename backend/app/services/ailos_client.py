@@ -73,6 +73,32 @@ _WSO2_INVALID_CREDENTIALS_CODE = '900901'
 
 _SENSITIVE_KEYS = ('token', 'code', 'senha', 'password', 'secret', 'authorization', 'authentication')
 
+# SEC-06: CPF/CNPJ — mantém só os 2 últimos dígitos (dá pra cruzar com o
+# billing_id do próprio log sem reter o documento completo).
+_DOCUMENT_KEYS = {'identificadorreceitafederal', 'cpfcnpj', 'cpf', 'cnpj'}
+
+# SEC-06: nome de pessoa/empresa — mantém só a primeira palavra.
+_NAME_KEYS = {'nome', 'nomesacado', 'razaosocial'}
+
+# SEC-06: sem valor de diagnóstico isolado (endereço completo, telefone,
+# e-mail) — mascarados por inteiro. 'cidade'/'uf' ficam de fora de propósito:
+# ajudam a depurar erro de praça/tributação sem expor o endereço completo.
+_PII_KEYS = {'logradouro', 'numero', 'complemento', 'bairro', 'cep', 'endereco'}
+
+
+def _mask_document(value: str) -> str:
+    """Mascara CPF/CNPJ mantendo só os 2 últimos dígitos."""
+    digits = ''.join(c for c in value if c.isdigit())
+    if len(digits) <= 2:
+        return '*' * len(digits)
+    return '*' * (len(digits) - 2) + digits[-2:]
+
+
+def _mask_name(value: str) -> str:
+    """Mascara nome/razão social mantendo só a primeira palavra."""
+    first, _, rest = value.strip().partition(' ')
+    return f'{first} ***' if rest else value
+
 
 # ---------------------------------------------------------------------------
 # Exceptions
@@ -145,12 +171,25 @@ def _extract_code(body: dict | list | None) -> str | None:
 
 
 def _mask_payload(value):
-    """Mascara recursivamente valores de chaves sensíveis (token/code/senha/etc.)."""
+    """Mascara recursivamente segredos (token/code/senha/etc.) e dados
+    pessoais (CPF/CNPJ, nome, endereço, telefone, e-mail — SEC-06).
+
+    Valores monetários e datas ficam em claro: são o dado mais útil pra
+    diagnosticar divergência de boleto e não são, isoladamente, dado
+    pessoal sensível.
+    """
     if isinstance(value, dict):
         masked = {}
         for k, v in value.items():
-            if isinstance(v, str) and any(s in k.lower() for s in _SENSITIVE_KEYS):
+            key = k.lower()
+            if isinstance(v, str) and any(s in key for s in _SENSITIVE_KEYS):
                 masked[k] = mask_token(v)
+            elif isinstance(v, str) and key in _DOCUMENT_KEYS:
+                masked[k] = _mask_document(v)
+            elif isinstance(v, str) and key in _NAME_KEYS:
+                masked[k] = _mask_name(v)
+            elif isinstance(v, str) and key in _PII_KEYS:
+                masked[k] = '***' if v else v
             else:
                 masked[k] = _mask_payload(v)
         return masked
