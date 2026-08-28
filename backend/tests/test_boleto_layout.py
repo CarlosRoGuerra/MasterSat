@@ -46,7 +46,7 @@ def _dados(**kw):
 def test_mensalidade_ganha_nome_legivel_e_competencia():
     """No fechamento o título é só "Mensalidade" — sozinho não explica nada."""
     d = descricao_servico(_billing(title='Mensalidade', period_label='08/2026'), 'ABC1D23')
-    assert d == 'MENSALIDADE DE MONITORAMENTO VEICULAR · REF. 08/2026 · PLACA ABC1D23'
+    assert d == 'MENSALIDADE DE MONITORAMENTO VEICULAR · REF. 08/2026 · PLACA:\xa0ABC1D23'
 
 
 def test_o_titulo_entra_quando_acrescenta_informacao():

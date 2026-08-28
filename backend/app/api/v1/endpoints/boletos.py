@@ -100,6 +100,11 @@ def descricao_servico(b: Billing, placa: str | None = None) -> str:
     título já diz.
     """
     titulo = (b.title or '').strip()
+    # O título de cobrança parcelada já vem com o sufixo "• parcela N/M"
+    # (ver financial.py e billings.py) — removido aqui porque a parcela é
+    # readicionada abaixo a partir de installment_number/installment_total,
+    # o que duplicava "PARCELA N/M" na descrição.
+    titulo = re.sub(r'\s*[•·-]\s*parcela\s+\d+\s*/\s*\d+\s*$', '', titulo, flags=re.IGNORECASE).strip()
     base = _TIPO_SERVICO.get(b.billing_type or '', '') or titulo or 'SERVIÇO DE RASTREAMENTO'
     partes = [base.upper()]
 
@@ -113,7 +118,7 @@ def descricao_servico(b: Billing, placa: str | None = None) -> str:
     if placa:
         # Espaço não separável — no boleto/carnê, "PLACA" nunca deve quebrar
         # de linha isolado da placa em si.
-        partes.append(f'PLACA {placa}')
+        partes.append(f'PLACA: {placa}')
     return ' · '.join(partes)
 
 
