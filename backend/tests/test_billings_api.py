@@ -240,6 +240,61 @@ class TestGetBilling:
 
 
 # ---------------------------------------------------------------------------
+# Efeito colateral de refresh_overdue_statuses em GET (BE-05)
+#
+# Caracteriza o comportamento ATUAL antes de qualquer mudança: hoje não há
+# job de background que reclassifica pendente -> vencida, então esse UPDATE
+# roda dentro de base_query() a cada GET. Este teste documenta essa
+# dependência para que a migração para um worker (BE-05) não a quebre sem
+# perceber — se falhar depois de introduzir o worker e remover a chamada do
+# GET, é sinal de que o worker precisa estar rodando/validado antes.
+# ---------------------------------------------------------------------------
+
+class TestOverdueStatusRefreshOnGet:
+    def test_list_updates_stale_pending_to_overdue(self, http, db, contrato):
+        stale = Billing(
+            contract_id=contrato.id,
+            client_id=contrato.client_id,
+            amount=Decimal("50.00"),
+            due_date=date(2020, 1, 1),
+            status=BillingStatus.PENDING,
+            billing_type="recorrente",
+            period_label="01/2020",
+            title="Pendente vencida (stale)",
+        )
+        db.add(stale)
+        db.commit()
+        db.refresh(stale)
+
+        r = http.get(PREFIX + "/")
+        assert r.status_code == 200
+        item = next(x for x in r.json() if x["id"] == stale.id)
+        assert item["status"] == "vencida"
+
+        db.refresh(stale)
+        assert stale.status == BillingStatus.OVERDUE
+
+    def test_get_by_id_updates_stale_pending_to_overdue(self, http, db, contrato):
+        stale = Billing(
+            contract_id=contrato.id,
+            client_id=contrato.client_id,
+            amount=Decimal("50.00"),
+            due_date=date(2020, 1, 1),
+            status=BillingStatus.PENDING,
+            billing_type="recorrente",
+            period_label="01/2020",
+            title="Pendente vencida (stale)",
+        )
+        db.add(stale)
+        db.commit()
+        db.refresh(stale)
+
+        r = http.get(f"{PREFIX}/{stale.id}")
+        assert r.status_code == 200
+        assert r.json()["status"] == "vencida"
+
+
+# ---------------------------------------------------------------------------
 # POST /{id}/receive (baixar pagamento)
 # ---------------------------------------------------------------------------
 
