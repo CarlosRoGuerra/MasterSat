@@ -26,6 +26,7 @@ import dataclasses
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -46,7 +47,11 @@ from app.services.ailos_validators import (
     validate_boleto_payload,
 )
 from app.services.boleto_ailos import DadosBoleto
-from app.services.financial import marcar_billing_pago, refresh_overdue_statuses
+from app.services.financial import (
+    lock_billings_for_update,
+    marcar_billing_pago,
+    refresh_overdue_statuses,
+)
 
 # ---------------------------------------------------------------------------
 # Caminhos (relativos a AILOS_GATEWAY_BASE_URL)
@@ -219,81 +224,214 @@ def _upsert_ailos_boleto(
     payload_request: dict,
     payload_response: dict | None,
     lote_id: int | None = None,
+    *,
+    commit: bool = True,
 ) -> AilosBoleto:
+    def _aplicar(alvo: AilosBoleto) -> None:
+        if lote_id is not None:
+            alvo.lote_id = lote_id
+
+        alvo.payload_request = payload_request
+
+        if payload_response is not None:
+            alvo.payload_response = payload_response
+            # A geração V2 responde envelopando em {"boleto": {...}}; consultas
+            # podem vir já no nível raiz. Desembrulha para ler os dois formatos.
+            dados = payload_response.get('boleto')
+            if not isinstance(dados, dict):
+                dados = payload_response
+
+            documento = dados.get('documento') or {}
+            codigo_barras_obj = dados.get('codigoBarras') or {}
+            valor_boleto = dados.get('valorBoleto') or {}
+            vencimento = dados.get('vencimento') or {}
+
+            alvo.numero_documento = _to_str_or_none(documento.get('numeroDocumento'))
+            alvo.nosso_numero = _to_str_or_none(documento.get('nossoNumero'))
+            alvo.identificador_unico_titulo = _to_str_or_none(documento.get('identificadorUnicoTitulo'))
+            alvo.linha_digitavel = codigo_barras_obj.get('linhaDigitavel')
+            alvo.codigo_barras = codigo_barras_obj.get('codigoBarras')
+            alvo.status_ailos = _to_str_or_none(dados.get('indicadorSituacaoBoleto'))
+            alvo.pix_emv, alvo.pix_qr_base64 = _extrair_pix(dados.get('pix'))
+
+            # valorNominal (consulta) ou valorOriginalTitulo/valorAtual (geração)
+            valor_nominal = (
+                valor_boleto.get('valorNominal')
+                if valor_boleto.get('valorNominal') is not None
+                else valor_boleto.get('valorOriginalTitulo') or valor_boleto.get('valorAtual')
+            )
+            if valor_nominal is not None:
+                alvo.valor_nominal = Decimal(str(valor_nominal))
+
+            # Aceita dataVencimento (consulta) ou dataVencimentoAtual (geração),
+            # que pode vir como datetime ISO ("2026-06-26T00:00:00").
+            data_venc = (
+                vencimento.get('dataVencimento')
+                or vencimento.get('dataVencimentoAtual')
+                or vencimento.get('dataVencimentoOriginal')
+            )
+            if data_venc:
+                try:
+                    alvo.data_vencimento = date.fromisoformat(str(data_venc)[:10])
+                except ValueError:
+                    pass
+
     boleto = db.query(AilosBoleto).filter_by(billing_id=billing_id).first()
     if boleto is None:
-        boleto = AilosBoleto(billing_id=billing_id, numero_convenio=settings.ailos_numero_convenio)
-        db.add(boleto)
+        try:
+            # `db.add` acontece DENTRO do savepoint: `begin_nested()` flusha
+            # qualquer pendência da Session para tirar o "snapshot" antes de
+            # abrir o SAVEPOINT — se o `add` viesse antes, esse flush inicial
+            # já dispararia o INSERT (e um eventual IntegrityError) fora de
+            # qualquer proteção de savepoint.
+            with db.begin_nested():
+                boleto = AilosBoleto(billing_id=billing_id, numero_convenio=settings.ailos_numero_convenio)
+                db.add(boleto)
+                _aplicar(boleto)
+                db.flush()
+        except IntegrityError:
+            # Corrida: outra sessão inseriu este billing_id entre o SELECT e
+            # este INSERT (billing_id é UNIQUE — ver app/models/ailos_boleto.py).
+            # O ROLLBACK TO SAVEPOINT já descartou a tentativa; reaplica os
+            # mesmos dados sobre o registro que venceu, em vez de propagar o erro.
+            boleto = db.query(AilosBoleto).filter_by(billing_id=billing_id).first()
+            _aplicar(boleto)
+            db.flush()
+    else:
+        _aplicar(boleto)
+        db.flush()
 
-    if lote_id is not None:
-        boleto.lote_id = lote_id
-
-    boleto.payload_request = payload_request
-
-    if payload_response is not None:
-        boleto.payload_response = payload_response
-        # A geração V2 responde envelopando em {"boleto": {...}}; consultas
-        # podem vir já no nível raiz. Desembrulha para ler os dois formatos.
-        dados = payload_response.get('boleto')
-        if not isinstance(dados, dict):
-            dados = payload_response
-
-        documento = dados.get('documento') or {}
-        codigo_barras_obj = dados.get('codigoBarras') or {}
-        valor_boleto = dados.get('valorBoleto') or {}
-        vencimento = dados.get('vencimento') or {}
-
-        boleto.numero_documento = _to_str_or_none(documento.get('numeroDocumento'))
-        boleto.nosso_numero = _to_str_or_none(documento.get('nossoNumero'))
-        boleto.identificador_unico_titulo = _to_str_or_none(documento.get('identificadorUnicoTitulo'))
-        boleto.linha_digitavel = codigo_barras_obj.get('linhaDigitavel')
-        boleto.codigo_barras = codigo_barras_obj.get('codigoBarras')
-        boleto.status_ailos = _to_str_or_none(dados.get('indicadorSituacaoBoleto'))
-        boleto.pix_emv, boleto.pix_qr_base64 = _extrair_pix(dados.get('pix'))
-
-        # valorNominal (consulta) ou valorOriginalTitulo/valorAtual (geração)
-        valor_nominal = (
-            valor_boleto.get('valorNominal')
-            if valor_boleto.get('valorNominal') is not None
-            else valor_boleto.get('valorOriginalTitulo') or valor_boleto.get('valorAtual')
-        )
-        if valor_nominal is not None:
-            boleto.valor_nominal = Decimal(str(valor_nominal))
-
-        # Aceita dataVencimento (consulta) ou dataVencimentoAtual (geração),
-        # que pode vir como datetime ISO ("2026-06-26T00:00:00").
-        data_venc = (
-            vencimento.get('dataVencimento')
-            or vencimento.get('dataVencimentoAtual')
-            or vencimento.get('dataVencimentoOriginal')
-        )
-        if data_venc:
-            try:
-                boleto.data_vencimento = date.fromisoformat(str(data_venc)[:10])
-            except ValueError:
-                pass
-
-    db.commit()
-    db.refresh(boleto)
+    if commit:
+        db.commit()
+        db.refresh(boleto)
     return boleto
+
+
+_AILOS_REGISTRATION_IN_PROGRESS = {'REGISTRANDO', 'PROCESSANDO'}
+
+
+def _lock_open_billings_for_ailos(
+    db: Session,
+    billings: list[Billing],
+) -> list[Billing]:
+    """Serializa somente os Billing que serão enviados ao banco.
+
+    A revalidação ocorre depois do ``FOR UPDATE`` para impedir que uma baixa,
+    um cancelamento ou uma unificação confirmada em paralelo gere um título
+    bancário a partir de estado obsoleto.
+    """
+    ids = [billing.id for billing in billings]
+    locked_by_id = {billing.id: billing for billing in lock_billings_for_update(db, ids)}
+    missing = [billing_id for billing_id in ids if billing_id not in locked_by_id]
+    unavailable = [
+        billing_id
+        for billing_id in ids
+        if billing_id in locked_by_id
+        and (
+            locked_by_id[billing_id].is_deleted
+            or locked_by_id[billing_id].status
+            not in (BillingStatus.PENDING, BillingStatus.OVERDUE)
+        )
+    ]
+    if missing or unavailable:
+        invalid = sorted(set(missing + unavailable))
+        raise AilosValidationError([
+            f'Cobranças indisponíveis para registro na Ailos: {invalid}'
+        ])
+    return [locked_by_id[billing_id] for billing_id in ids]
+
+
+def _reserve_ailos_billings(
+    db: Session,
+    billings_and_payloads: list[tuple[Billing, dict]],
+    *,
+    allow_in_progress_ids: set[int] | None = None,
+) -> list[AilosBoleto]:
+    """Persiste a intenção idempotente antes de chamar o serviço externo.
+
+    O lock do Billing protege a decisão; a constraint 1:1 de ``billing_id``
+    protege a reserva. Depois do commit, mutações financeiras conseguem ver
+    ``REGISTRANDO`` e não alteram valor/estado enquanto a Ailos responde.
+    """
+    billing_ids = [billing.id for billing, _ in billings_and_payloads]
+    allowed_takeovers = allow_in_progress_ids or set()
+    existing_by_id = {
+        boleto.billing_id: boleto
+        for boleto in db.query(AilosBoleto)
+        .filter(AilosBoleto.billing_id.in_(billing_ids))
+        .all()
+    }
+    conflicts = [
+        billing_id
+        for billing_id, boleto in existing_by_id.items()
+        if boleto.linha_digitavel
+        or boleto.codigo_barras
+        or (
+            boleto.status_ailos in _AILOS_REGISTRATION_IN_PROGRESS
+            and billing_id not in allowed_takeovers
+        )
+    ]
+    if conflicts:
+        raise AilosValidationError([
+            'Cobranças já registradas ou com registro Ailos em andamento: '
+            f'{sorted(conflicts)}'
+        ])
+
+    reservations: list[AilosBoleto] = []
+    for billing, payload in billings_and_payloads:
+        boleto = existing_by_id.get(billing.id)
+        if boleto is None:
+            boleto = AilosBoleto(
+                billing_id=billing.id,
+                numero_convenio=settings.ailos_numero_convenio,
+            )
+            db.add(boleto)
+        boleto.numero_convenio = settings.ailos_numero_convenio
+        boleto.payload_request = payload
+        boleto.payload_response = None
+        boleto.status_ailos = 'REGISTRANDO'
+        reservations.append(boleto)
+    db.commit()
+    return reservations
+
+
+def _mark_ailos_registration_error(
+    db: Session,
+    reservations: list[AilosBoleto],
+) -> None:
+    for reservation in reservations:
+        reservation.status_ailos = 'ERRO_REGISTRO'
+    db.commit()
 
 
 # ---------------------------------------------------------------------------
 # Geração — boleto único / lote / carnê
 # ---------------------------------------------------------------------------
 
-def gerar_boleto(db: Session, billing: Billing, client: Client) -> AilosBoleto:
+def gerar_boleto(
+    db: Session,
+    billing: Billing,
+    client: Client,
+    *,
+    manual_retry: bool = False,
+) -> AilosBoleto:
     """Gera um boleto via API Ailos para um billing.
 
     Idempotente: se já existe um boleto registrado (com linha digitável) para
     este billing, retorna o existente sem chamar a Ailos de novo — evita erro
     de número duplicado ao re-clicar "Gerar boleto" na tela.
     """
+    billing = _lock_open_billings_for_ailos(db, [billing])[0]
     existing = db.query(AilosBoleto).filter_by(billing_id=billing.id).first()
     if existing is not None and existing.linha_digitavel:
         return existing
 
     payload = montar_payload_boleto(billing, resolver_pagador(db, billing, client))
+    reservations = _reserve_ailos_billings(
+        db,
+        [(billing, payload)],
+        allow_in_progress_ids={billing.id} if manual_retry else None,
+    )
 
     try:
         resp = ailos_client.request(
@@ -312,6 +450,10 @@ def gerar_boleto(db: Session, billing: Billing, client: Client) -> AilosBoleto:
             recuperado = _recuperar_boleto_existente(db, billing, payload)
             if recuperado is not None and recuperado.linha_digitavel:
                 return recuperado
+        _mark_ailos_registration_error(db, reservations)
+        raise
+    except Exception:
+        _mark_ailos_registration_error(db, reservations)
         raise
 
     response_body = resp.json if isinstance(resp.json, dict) else {}
@@ -336,21 +478,27 @@ def _recuperar_boleto_existente(db: Session, billing: Billing, payload: dict) ->
 
 def gerar_boleto_lote(db: Session, billings: list[Billing], clients_by_id: dict[int, Client]) -> AilosLote:
     """Gera um lote assíncrono de boletos. Retorna o ``AilosLote`` (status='processing')."""
+    billings = _lock_open_billings_for_ailos(db, billings)
     payloads = [
         montar_payload_boleto(b, resolver_pagador(db, b, clients_by_id.get(b.client_id)))
         for b in billings
     ]
+    reservations = _reserve_ailos_billings(db, list(zip(billings, payloads)))
 
     body_lote = {
         'convenioCobranca': {'codigoCarteiraCobranca': settings.ailos_default_carteira},
         'boletos': payloads,
     }
 
-    resp = ailos_client.request(
-        db, 'POST',
-        _PATH_GERAR_BOLETO_LOTE.format(convenio=settings.ailos_numero_convenio),
-        json_body=body_lote,
-    )
+    try:
+        resp = ailos_client.request(
+            db, 'POST',
+            _PATH_GERAR_BOLETO_LOTE.format(convenio=settings.ailos_numero_convenio),
+            json_body=body_lote,
+        )
+    except Exception:
+        _mark_ailos_registration_error(db, reservations)
+        raise
 
     body = resp.json if isinstance(resp.json, dict) else {}
     ticket = body.get('ticketLote') or body.get('ticket')
@@ -363,11 +511,12 @@ def gerar_boleto_lote(db: Session, billings: list[Billing], clients_by_id: dict[
         status='processing',
     )
     db.add(lote)
+    db.flush()
+    for boleto in reservations:
+        boleto.lote_id = lote.id
+        boleto.status_ailos = 'PROCESSANDO'
     db.commit()
     db.refresh(lote)
-
-    for b, payload in zip(billings, payloads):
-        _upsert_ailos_boleto(db, b.id, payload, None, lote_id=lote.id)
 
     return lote
 
@@ -383,6 +532,11 @@ def gerar_carne_lote(
     ``billings_by_parcela`` é uma lista de ``(numeroParcela, billing)`` na
     ordem das parcelas do carnê.
     """
+    original_numbers = [numero_parcela for numero_parcela, _ in billings_by_parcela]
+    locked = _lock_open_billings_for_ailos(
+        db, [billing for _, billing in billings_by_parcela],
+    )
+    billings_by_parcela = list(zip(original_numbers, locked))
     payloads = []
     billings = []
     for numero_parcela, b in billings_by_parcela:
@@ -397,17 +551,22 @@ def gerar_carne_lote(
         }
         payloads.append(payload)
         billings.append(b)
+    reservations = _reserve_ailos_billings(db, list(zip(billings, payloads)))
 
     body_lote = {
         'convenioCobranca': {'codigoCarteiraCobranca': settings.ailos_default_carteira},
         'carnes': payloads,
     }
 
-    resp = ailos_client.request(
-        db, 'POST',
-        _PATH_GERAR_CARNE_LOTE.format(convenio=settings.ailos_numero_convenio),
-        json_body=body_lote,
-    )
+    try:
+        resp = ailos_client.request(
+            db, 'POST',
+            _PATH_GERAR_CARNE_LOTE.format(convenio=settings.ailos_numero_convenio),
+            json_body=body_lote,
+        )
+    except Exception:
+        _mark_ailos_registration_error(db, reservations)
+        raise
 
     body = resp.json if isinstance(resp.json, dict) else {}
     ticket = body.get('ticketLote') or body.get('ticket')
@@ -420,11 +579,12 @@ def gerar_carne_lote(
         status='processing',
     )
     db.add(lote)
+    db.flush()
+    for boleto in reservations:
+        boleto.lote_id = lote.id
+        boleto.status_ailos = 'PROCESSANDO'
     db.commit()
     db.refresh(lote)
-
-    for b, payload in zip(billings, payloads):
-        _upsert_ailos_boleto(db, b.id, payload, None, lote_id=lote.id)
 
     return lote
 
@@ -587,7 +747,12 @@ def registrar_parcela_individual(db: Session, lote: AilosLote, billing_id: int) 
     if billing is None or billing.is_deleted:
         raise ValueError(f'Cobrança {billing_id} não encontrada.')
 
-    boleto = gerar_boleto(db, billing, resolver_pagador(db, billing))
+    boleto = gerar_boleto(
+        db,
+        billing,
+        resolver_pagador(db, billing),
+        manual_retry=True,
+    )
     if boleto.lote_id != lote.id:
         boleto.lote_id = lote.id
         db.commit()

@@ -23,6 +23,7 @@ import threading
 from datetime import date, datetime, timezone
 
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
@@ -171,8 +172,22 @@ def criar_lote(
         for billing_id in alvo:
             nota = db.query(NfseNota).filter_by(billing_id=billing_id).first()
             if nota is None:
-                nota = NfseNota(billing_id=billing_id)
-                db.add(nota)
+                try:
+                    # `db.add` acontece DENTRO do savepoint — ver comentário
+                    # equivalente em `ailos_boletos._upsert_ailos_boleto` sobre
+                    # por que precisa ser assim (`begin_nested()` flusha
+                    # pendências antes de abrir o SAVEPOINT).
+                    with db.begin_nested():
+                        nota = NfseNota(billing_id=billing_id)
+                        db.add(nota)
+                        db.flush()
+                except IntegrityError:
+                    # Corrida: outro lote/emissão avulsa concorrente já criou a
+                    # nota deste billing_id entre o SELECT e este INSERT
+                    # (billing_id é UNIQUE — ver app/models/nfse_nota.py). O
+                    # SAVEPOINT isola a falha: só esta iteração é descartada, o
+                    # resto do lote (já commitado ou ainda por vir) segue intacto.
+                    nota = db.query(NfseNota).filter_by(billing_id=billing_id).first()
             nota.lote_id = lote.id
             nota.status = 'pending'
             nota.erro_codigo = None

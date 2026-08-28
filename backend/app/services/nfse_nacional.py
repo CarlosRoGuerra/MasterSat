@@ -34,6 +34,7 @@ from pathlib import Path
 
 import requests
 from lxml import etree
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -569,8 +570,23 @@ def emitir_nfse(db: Session, billing: Billing, client: Client,
     if nota and nota.status == 'emitida':
         return nota
     if nota is None:
-        nota = NfseNota(billing_id=billing.id)
-        db.add(nota)
+        try:
+            # `db.add` acontece DENTRO do savepoint — ver comentário equivalente
+            # em `ailos_boletos._upsert_ailos_boleto` sobre por que precisa ser
+            # assim (`begin_nested()` flusha pendências antes de abrir o
+            # SAVEPOINT).
+            with db.begin_nested():
+                nota = NfseNota(billing_id=billing.id)
+                db.add(nota)
+                db.flush()
+        except IntegrityError:
+            # Corrida: outra emissão concorrente para o mesmo billing_id já
+            # inseriu a nota entre o SELECT e este INSERT (billing_id é UNIQUE
+            # — ver app/models/nfse_nota.py). Descarta a tentativa e reaproveita
+            # o registro vencedor em vez de propagar o erro.
+            nota = db.query(NfseNota).filter_by(billing_id=billing.id).first()
+            if nota.status == 'emitida':
+                return nota
 
     numero_dps = str(billing.id)
     dps = montar_dps(billing, client, numero_dps, cod_trib_nacional)
