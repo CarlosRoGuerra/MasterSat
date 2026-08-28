@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
 
+from app.core.config import settings
+
 # ---------------------------------------------------------------------------
 # Configuração estática do beneficiário
 # ---------------------------------------------------------------------------
@@ -31,9 +33,13 @@ MOEDA           = "9"           # 9 = Real (BRL)
 AGENCIA         = "0102"        # sem dígito
 AGENCIA_DIG     = "3"
 
-CARTEIRA        = "01"
 VARIACAO        = "001"
-CONVENIO        = "102004"
+
+# Convênio e carteira também alimentam a chamada real à API Ailos
+# (services/ailos_boletos.py) via settings — mesma fonte, para não divergirem
+# entre a linha digitável calculada aqui e o boleto de fato registrado no banco.
+CONVENIO        = settings.ailos_numero_convenio
+CARTEIRA        = str(settings.ailos_default_carteira).zfill(2)
 
 CEDENTE_CNPJ    = "14228344000167"
 CEDENTE_NOME    = "MASTERSAT RASTREAMENTO"
