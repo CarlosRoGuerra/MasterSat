@@ -298,7 +298,12 @@ def dados_boleto(b: Billing, c: Client, db: Session, ailos_boleto: AilosBoleto) 
     aplicados. Compartilhado pelo boleto avulso e por cada parcela do carnê.
     """
     item = _billing_to_boleto_item(b, c)
-    servico = descricao_servico(b, _placa_do_billing(b, db) or None)
+    placa = _placa_do_billing(b, db) or None
+    servico = descricao_servico(b, placa)
+    # Na linha "Referente a" a placa fica em instrução própria, na linha de
+    # baixo — não misturada ao resto do texto (item["itens"] mantém o
+    # descritivo completo, com placa, para a tabela do boleto).
+    servico_sem_placa = descricao_servico(b, None)
     dados = gerar_dados_boleto(
         billing_id=b.id,
         valor=b.amount,
@@ -313,7 +318,8 @@ def dados_boleto(b: Billing, c: Client, db: Session, ailos_boleto: AilosBoleto) 
         sacado_ie=c.rg_ie or "",
         itens=[(servico, float(b.amount))],
         instrucoes=[
-            f"Referente a: {servico}.",
+            f"Referente a: {servico_sem_placa}.",
+            *([f"Placa: {placa}"] if placa else []),
             "Não receber após o vencimento.",
             "Após vencimento entrar em contato: contato@mastersat.com.br",
         ],
