@@ -388,6 +388,90 @@ class TestUnificarBoletos:
         assert r.status_code == 422
 
 
+class TestUnificarFaixaPeriodo:
+    """period_label é 'MM/YYYY' (ex.: '09/2025'). A faixa exibida no título da
+    negociação ('REF. X A Y') precisa ordenar esses rótulos por DATA (ano,
+    depois mês), não por texto — comparar string compara o mês antes do ano
+    e inverte a faixa sempre que os períodos cruzam a virada do ano."""
+
+    def _billing(self, db, contrato, *, period_label, title="Parcela"):
+        b = Billing(
+            contract_id=contrato.id,
+            client_id=contrato.client_id,
+            amount=Decimal("100.00"),
+            due_date=date(2099, 6, 1),
+            status=BillingStatus.PENDING,
+            billing_type="recorrente",
+            period_label=period_label,
+            title=title,
+        )
+        db.add(b)
+        db.commit()
+        db.refresh(b)
+        return b
+
+    def test_mesmo_ano_ordena_cronologicamente(self, http, db, contrato):
+        a = self._billing(db, contrato, period_label="03/2025")
+        b = self._billing(db, contrato, period_label="07/2025")
+        r = http.post(f"{PREFIX}/unificar", json={
+            "billing_ids": [a.id, b.id], "due_date": "2099-01-15",
+        })
+        assert r.status_code == 200
+        assert "REF. 03/2025 A 07/2025" in r.json()["title"]
+
+    def test_virada_de_ano_ordena_por_data_nao_por_texto(self, http, db, contrato):
+        # Alfabeticamente "02/2026" < "11/2025" (o mês vem antes do ano na
+        # string), mas cronologicamente novembro/2025 é ANTES de
+        # fevereiro/2026. A faixa correta é '11/2025 A 02/2026'.
+        nov = self._billing(db, contrato, period_label="11/2025")
+        fev = self._billing(db, contrato, period_label="02/2026")
+        r = http.post(f"{PREFIX}/unificar", json={
+            "billing_ids": [nov.id, fev.id], "due_date": "2099-01-15",
+        })
+        assert r.status_code == 200
+        titulo = r.json()["title"]
+        assert "REF. 11/2025 A 02/2026" in titulo
+        assert "REF. 02/2026 A 11/2025" not in titulo
+
+    def test_mes_de_um_digito_nao_quebra_ordenacao(self, http, db, contrato):
+        # Dado malformado (mês sem zero à esquerda) não pode derrubar a rota.
+        set_ = self._billing(db, contrato, period_label="9/2025")
+        nov = self._billing(db, contrato, period_label="11/2025")
+        r = http.post(f"{PREFIX}/unificar", json={
+            "billing_ids": [set_.id, nov.id], "due_date": "2099-01-15",
+        })
+        assert r.status_code == 200
+
+    def test_meses_de_dois_digitos_mesma_faixa(self, http, db, contrato):
+        a = self._billing(db, contrato, period_label="01/2025")
+        b = self._billing(db, contrato, period_label="12/2025")
+        r = http.post(f"{PREFIX}/unificar", json={
+            "billing_ids": [a.id, b.id], "due_date": "2099-01-15",
+        })
+        assert r.status_code == 200
+        assert "REF. 01/2025 A 12/2025" in r.json()["title"]
+
+    def test_ordem_de_entrada_nao_afeta_a_faixa(self, http, db, contrato):
+        # Passar os ids "fora de ordem" (o mais recente primeiro) não muda o
+        # resultado: a faixa é sempre cronológica, não a ordem de envio.
+        fev = self._billing(db, contrato, period_label="02/2026")
+        nov = self._billing(db, contrato, period_label="11/2025")
+        r = http.post(f"{PREFIX}/unificar", json={
+            "billing_ids": [fev.id, nov.id], "due_date": "2099-01-15",
+        })
+        assert r.status_code == 200
+        assert "REF. 11/2025 A 02/2026" in r.json()["title"]
+
+    def test_periodo_invalido_nao_derruba_a_rota(self, http, db, contrato):
+        valido = self._billing(db, contrato, period_label="05/2025")
+        invalido = self._billing(db, contrato, period_label="período indefinido")
+        r = http.post(f"{PREFIX}/unificar", json={
+            "billing_ids": [valido.id, invalido.id], "due_date": "2099-01-15",
+        })
+        assert r.status_code == 200
+        assert "PARCELA" in r.json()["title"]
+
+
 class TestFiltroVeiculo:
     def test_filtra_por_vehicle_id(self, http, db, billing_pendente, veiculo, veiculo_outro_cliente):
         billing_pendente.vehicle_id = veiculo.id

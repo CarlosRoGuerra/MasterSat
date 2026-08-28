@@ -19,6 +19,64 @@ from app.models.plan import Plan
 from app.models.service_product import ServiceProduct
 
 
+def lock_billings_for_update(db: Session, billing_ids: Iterable[int]) -> list[Billing]:
+    """Lock billing rows in a stable order for state-dependent mutations.
+
+    ``populate_existing`` is intentional: a caller may already have loaded a
+    Billing in the identity map before asking for the lock.  Revalidation must
+    see the version committed by the transaction that released the row lock.
+    """
+    ordered_ids = sorted(set(billing_ids))
+    if not ordered_ids:
+        return []
+    statement = (
+        select(Billing)
+        .where(Billing.id.in_(ordered_ids))
+        .order_by(Billing.id.asc())
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    return list(db.scalars(statement).all())
+
+
+def charge_item_ids_for_billings(db: Session, billings: Iterable[Billing]) -> list[int]:
+    rows = list(billings)
+    billing_ids = [billing.id for billing in rows if billing.id is not None]
+    item_ids = {billing.item_id for billing in rows if billing.item_id is not None}
+    if billing_ids:
+        item_ids.update(db.scalars(
+            select(BillingChargeItem.item_id).where(
+                BillingChargeItem.billing_id.in_(billing_ids),
+            )
+        ).all())
+    return sorted(item_ids)
+
+
+def lock_charge_items_for_update(
+    db: Session,
+    item_ids: Iterable[int],
+) -> list[ClientChargeItem]:
+    """Serialize derived charge-item state updates in primary-key order."""
+    ordered_ids = sorted(set(item_ids))
+    if not ordered_ids:
+        return []
+    statement = (
+        select(ClientChargeItem)
+        .where(ClientChargeItem.id.in_(ordered_ids))
+        .order_by(ClientChargeItem.id.asc())
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    return list(db.scalars(statement).all())
+
+
+def lock_charge_items_for_billings(
+    db: Session,
+    billings: Iterable[Billing],
+) -> list[ClientChargeItem]:
+    return lock_charge_items_for_update(db, charge_item_ids_for_billings(db, billings))
+
+
 def contract_payer_client_id(db: Session, contract: Contract) -> int:
     """Responsável financeiro efetivo, validado, para novas cobranças.
 
@@ -425,12 +483,21 @@ def marcar_billing_pago(
     paid_amount: float | Decimal | None,
     payment_method: str = 'boleto',
     notes: str | None = None,
+    lock: bool = True,
 ) -> Billing:
     """Marca uma cobrança como paga (status, data, valor, recibo).
 
     Reaproveitado pelo recebimento manual e pela baixa automática Ailos —
     mesma lógica do endpoint /billings/{id}/receive.
     """
+    if lock:
+        locked = lock_billings_for_update(db, [billing.id])
+        if not locked or locked[0].is_deleted:
+            raise ValueError(f'Cobrança #{billing.id} não está disponível.')
+        billing = locked[0]
+        if billing.status == BillingStatus.PAID:
+            return billing
+
     billing.status = BillingStatus.PAID
     billing.payment_date = payment_date
     billing.payment_method = payment_method
@@ -573,7 +640,9 @@ def refresh_charge_items_for_billing(
     completion_date: date | None = None,
     commit: bool = True,
 ) -> None:
-    for item_id in charge_item_ids_for_billing(db, billing):
+    item_ids = charge_item_ids_for_billing(db, billing)
+    lock_charge_items_for_update(db, item_ids)
+    for item_id in item_ids:
         refresh_charge_item_state(db, item_id, completion_date=completion_date)
     if commit:
         db.commit()
