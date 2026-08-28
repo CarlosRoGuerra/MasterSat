@@ -13,6 +13,7 @@ import tempfile
 from datetime import date
 
 from reportlab.lib.pagesizes import A4
+from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas as pdfcanvas
 
 from app.services.boleto_ailos import DadosBoleto
@@ -74,6 +75,18 @@ def _fd(d: date | None) -> str:
 
 def _fv(v) -> str:
     return f"{float(v or 0):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+def _elide(texto: str, font: str, size: float, max_width: float) -> str:
+    """Corta o texto (com '...') para não ultrapassar max_width — evita que
+    instruções longas invadam a área do QR Code do Pix."""
+    if stringWidth(texto, font, size) <= max_width:
+        return texto
+    sufixo = "..."
+    base = texto
+    while base and stringWidth(base + sufixo, font, size) > max_width:
+        base = base[:-1]
+    return base.rstrip() + sufixo
+
 
 def _fmt_cnpj(s: str) -> str:
     c = "".join(ch for ch in (s or "") if ch.isdigit())
@@ -687,12 +700,15 @@ def _draw_boleto_itau_style(c, d: DadosBoleto, y_top: float, parcela: tuple[int,
     _box(c, fx, yf, cINS, H_INS)
     c.setFillColorRGB(0.5, 0.5, 0.5); c.setFont("Helvetica", 5)
     c.drawString(fx + _mm(1), yf - _mm(2.2), "Instruções (texto de responsabilidade do beneficiário)")
+    qr = 20
+    qx = fx + cINS - _mm(qr) - _mm(1.5); qy = yf - _mm(2.5)
+    txt_x = fx + _mm(1.5)
+    txt_max_w = qx - _mm(1.5) - txt_x  # não invade a coluna do QR Code
     c.setFillColorRGB(0, 0, 0); c.setFont("Helvetica", 5.8)
     ty = yf - _mm(5.2)
     for line in (d.instrucoes or [])[:3]:
-        c.drawString(fx + _mm(1.5), ty, f"• {line}"); ty -= _mm(3.4)
-    qr = 20
-    qx = fx + cINS - _mm(qr) - _mm(1.5); qy = yf - _mm(2.5)
+        texto = _elide(f"• {line}", "Helvetica", 5.8, txt_max_w)
+        c.drawString(txt_x, ty, texto); ty -= _mm(3.4)
     if _draw_pix_no_quadro(c, d, qx, qy, qr):
         c.setFont("Helvetica-Bold", 5.5); c.setFillColorRGB(0, 0, 0)
         c.drawCentredString(qx + _mm(qr) / 2, qy - _mm(qr) - _mm(1.8), "Pague com Pix")
