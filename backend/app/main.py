@@ -808,6 +808,38 @@ def _ailos_log_retention_worker():
             logger.warning('Purga de ailos_api_logs falhou (tentará novamente no próximo ciclo): %s', exc)
 
 
+def _refresh_overdue_status_job(db):
+    """O trabalho em si, isolado numa função nomeada (em vez de closure) para
+    poder ser testado sem depender do advisory lock (Postgres-only — não
+    reproduzível no SQLite dos testes, por isso os demais workers/_run_locked
+    também não têm teste direto do laço)."""
+    from app.services.financial import refresh_overdue_statuses
+    refresh_overdue_statuses(db)
+
+
+def _overdue_status_refresh_worker():
+    """Reclassifica cobranças pendente<->vencida (ver financial.refresh_overdue_statuses).
+
+    Histórico (BE-05): antes desse worker, a reclassificação só acontecia como
+    efeito colateral de um GET (base_query() em billings.py, list_items de
+    contracts.py, o webhook do CobraZap em integrations.py) — não havia job
+    algum. Ou seja, sem esse worker rodando, remover essas chamadas faz o
+    status parar de atualizar sozinho. Roda de hora em hora (due_date é
+    granularidade de dia, então mesmo 1h de atraso na reclassificação não
+    afeta nenhuma regra de negócio) com advisory lock (só 1 worker por vez).
+    """
+    logger = logging.getLogger('uvicorn.error')
+
+    espera = 60  # primeira execução logo após o boot — é o único job que mantém status em dia
+    while True:
+        time.sleep(espera)
+        espera = 3600  # 1h
+        try:
+            _run_locked(918273651, _refresh_overdue_status_job)
+        except Exception as exc:  # noqa: BLE001 — reclassificação nunca pode derrubar o worker
+            logger.warning('Reclassificação de cobranças vencidas falhou (tentará novamente no próximo ciclo): %s', exc)
+
+
 @app.on_event('startup')
 def on_startup():
     # Com múltiplos workers (uvicorn --workers), o startup roda em cada processo.
@@ -843,6 +875,11 @@ def on_startup():
 
     ensure_bucket()
 
+    # Reclassifica cobranças pendente<->vencida (BE-05). Sempre ligado,
+    # independente de qualquer integração — é regra de negócio pura sobre a
+    # tabela de cobranças, sem dependência externa.
+    threading.Thread(target=_overdue_status_refresh_worker, daemon=True).start()
+
     # Renovador automático do token do cooperado Ailos (mantém a sessão viva
     # sem reautorização manual) + conciliação automática de pagamentos (baixa
     # dos boletos pagos). Só sobem se a integração estiver configurada.
@@ -869,8 +906,8 @@ def on_startup():
             mark_delinquent_clients(startup_db)
         finally:
             startup_db.close()
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception:  # noqa: BLE001 — verificação nunca pode derrubar o boot
+        logging.getLogger('uvicorn.error').exception('Falha ao verificar inadimplência no boot.')
 
 
 @app.get('/')
