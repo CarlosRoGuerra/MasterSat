@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { apiFetch } from './api';
+import { apiFetch, apiFetchList } from './api';
 
 const originalLocation = window.location;
 
@@ -77,5 +77,34 @@ describe('apiFetch', () => {
 
     await expect(apiFetch('/auth/login', { method: 'POST' })).rejects.toThrow('Credenciais inválidas.');
     expect(window.location.href).toBe('');
+  });
+});
+
+// BE-02: /clients, /trackers e /vehicles passaram a devolver {items, total}
+// em vez de array puro — apiFetchList desembrulha isso pros ~20 pontos do app
+// que só querem a lista (dropdowns, seletores, tabelas sem paginação de UI).
+describe('apiFetchList', () => {
+  it('desembrulha items de um envelope {items, total}', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [{ id: 1 }, { id: 2 }], total: 2 }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await apiFetchList<{ id: number }>('/clients', {}, 'token');
+
+    expect(result).toEqual([{ id: 1 }, { id: 2 }]);
+  });
+
+  it('devolve array vazio quando a página não tem itens', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [], total: 0 }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await apiFetchList('/vehicles', {}, 'token');
+
+    expect(result).toEqual([]);
   });
 });

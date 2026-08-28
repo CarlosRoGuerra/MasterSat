@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button';
 import { StatCard } from '@/components/ui/stat-card';
 import { SectionHeader } from '@/components/ui/section-header';
 import { TrackerAutocomplete } from '@/components/ui/tracker-autocomplete';
-import { apiFetch } from '@/lib/api';
+import { apiFetch, apiFetchList } from '@/lib/api';
 import { useAuthGuard } from '@/lib/use-auth-guard';
 import { ROUTE_ROLES } from '@/lib/route-roles';
 
@@ -119,7 +119,7 @@ export default function IntegracaoPage() {
       const [st, lg, tr] = await Promise.all([
         apiFetch<IntegrationStatus>('/integrations/multiportal/status', {}, tok),
         apiFetch<IntegrationLog[]>('/integrations/multiportal/logs?limit=50', {}, tok),
-        apiFetch<Tracker[]>('/trackers?limit=200', {}, tok),
+        apiFetchList<Tracker>('/trackers?limit=200', {}, tok),
       ]);
       setStatus(st);
       setLogs(lg);

@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 
-import { apiFetch } from '@/lib/api';
+import { apiFetchList } from '@/lib/api';
 import type { Client, VehicleDetailed, VehicleSummary } from './types';
 
 /**
@@ -29,7 +29,7 @@ export function useClientsQuery(token: string | null, filters: { search: string;
       if (filters.status) query.set('status', filters.status);
       if (filters.type) query.set('type', filters.type);
       query.set('limit', '200');
-      return apiFetch<Client[]>(`/clients?${query.toString()}`, {}, token!);
+      return apiFetchList<Client>(`/clients?${query.toString()}`, {}, token!);
     },
     enabled: !!token,
   });
@@ -38,7 +38,7 @@ export function useClientsQuery(token: string | null, filters: { search: string;
 export function useVehicleSummariesQuery(token: string | null) {
   return useQuery({
     queryKey: vehicleSummariesKeys.all,
-    queryFn: () => apiFetch<VehicleSummary[]>('/vehicles?limit=500', {}, token!),
+    queryFn: () => apiFetchList<VehicleSummary>('/vehicles?limit=500', {}, token!),
     enabled: !!token,
   });
 }
@@ -51,8 +51,8 @@ export function useClientVehiclesDetailedQuery(token: string | null, clientId: n
     queryKey: clientsKeys.vehiclesDetailed(clientId ?? -1),
     queryFn: async (): Promise<VehicleDetailed[]> => {
       const [vehs, trackers] = await Promise.all([
-        apiFetch<RawVehicle[]>(`/vehicles?client_id=${clientId}&limit=100`, {}, token!).catch(() => []),
-        apiFetch<RawTracker[]>(`/trackers?client_id=${clientId}&limit=100`, {}, token!).catch(() => []),
+        apiFetchList<RawVehicle>(`/vehicles?client_id=${clientId}&limit=100`, {}, token!).catch(() => []),
+        apiFetchList<RawTracker>(`/trackers?client_id=${clientId}&limit=100`, {}, token!).catch(() => []),
       ]);
       return vehs.map((v) => {
         const t = trackers.find((tr) => tr.vehicle_id === v.id);

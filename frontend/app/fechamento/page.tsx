@@ -15,7 +15,7 @@ import { usePagination, Pagination } from '@/components/ui/pagination';
 import { ClientAutocomplete } from '@/components/ui/client-autocomplete';
 import { MetricCard } from '@/components/ui/metric-card';
 import { ErrorBanner } from '@/components/ui/error-banner';
-import { apiFetch, API_URL } from '@/lib/api';
+import { apiFetch, apiFetchList, API_URL } from '@/lib/api';
 import { useAuthGuard } from '@/lib/use-auth-guard';
 import { ROUTE_ROLES } from '@/lib/route-roles';
 import type { ClientOption } from '@/lib/domain-types';
@@ -209,7 +209,7 @@ export default function FechamentoPage() {
 
   useEffect(() => {
     if (!token) return;
-    apiFetch<ClientOption[]>('/clients?limit=300', {}, token)
+    apiFetchList<ClientOption>('/clients?limit=300', {}, token)
       .then(setClients)
       .catch(() => null);
   }, [token]);

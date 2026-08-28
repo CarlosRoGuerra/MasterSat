@@ -146,3 +146,17 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}, token
 
   return response.json();
 }
+
+// Envelope de listagem paginada por skip/limit (ver BE-02 no backend) — só
+// /clients, /trackers e /vehicles usam esse formato; os demais endpoints de
+// listagem continuam devolvendo array puro (limitam um teto, não paginam de
+// verdade) e não passam por aqui.
+export interface Page<T> {
+  items: T[];
+  total: number;
+}
+
+export async function apiFetchList<T>(path: string, options: RequestInit = {}, token?: string): Promise<T[]> {
+  const page = await apiFetch<Page<T>>(path, options, token);
+  return page.items;
+}

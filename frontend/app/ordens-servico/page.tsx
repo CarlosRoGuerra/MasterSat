@@ -14,7 +14,7 @@ import { Badge, statusVariant, statusLabel } from '@/components/ui/badge';
 import { Table, TableHead, Th, TableBody, Tr, Td } from '@/components/ui/table';
 import { EmptyState, TableSkeleton } from '@/components/ui/empty-state';
 import { usePagination, Pagination } from '@/components/ui/pagination';
-import { apiFetch } from '@/lib/api';
+import { apiFetch, apiFetchList } from '@/lib/api';
 import { useAuthGuard } from '@/lib/use-auth-guard';
 import { ROUTE_ROLES } from '@/lib/route-roles';
 import { useDebouncedValue, useEffectSkipFirst } from '@/lib/use-debounced-value';
@@ -276,9 +276,9 @@ export default function ServiceOrdersPage() {
 
       const [orderResult, clientResult, vehicleResult, trackerResult, userResult] = await Promise.allSettled([
         apiFetch<ServiceOrder[]>(`/service-orders?${query.toString()}`, {}, currentToken),
-        apiFetch<ClientOption[]>('/clients?limit=200', {}, currentToken),
-        apiFetch<VehicleOption[]>('/vehicles?limit=500', {}, currentToken),
-        apiFetch<TrackerOption[]>('/trackers?limit=200', {}, currentToken),
+        apiFetchList<ClientOption>('/clients?limit=200', {}, currentToken),
+        apiFetchList<VehicleOption>('/vehicles?limit=500', {}, currentToken),
+        apiFetchList<TrackerOption>('/trackers?limit=200', {}, currentToken),
         apiFetch<UserOption[]>('/users', {}, currentToken),
       ]);
 

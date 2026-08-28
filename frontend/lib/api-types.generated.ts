@@ -4333,6 +4333,27 @@ export interface components {
          * @enum {string}
          */
         OrderType: "instalacao" | "manutencao" | "retirada" | "visita_tecnica";
+        /** Page[ClientOut] */
+        Page_ClientOut_: {
+            /** Items */
+            items: components["schemas"]["ClientOut"][];
+            /** Total */
+            total: number;
+        };
+        /** Page[TrackerOut] */
+        Page_TrackerOut_: {
+            /** Items */
+            items: components["schemas"]["TrackerOut"][];
+            /** Total */
+            total: number;
+        };
+        /** Page[VehicleOut] */
+        Page_VehicleOut_: {
+            /** Items */
+            items: components["schemas"]["VehicleOut"][];
+            /** Total */
+            total: number;
+        };
         /** ParcelarContratoIn */
         ParcelarContratoIn: {
             /** Contract Id */
@@ -5800,7 +5821,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ClientOut"][];
+                    "application/json": components["schemas"]["Page_ClientOut_"];
                 };
             };
             /** @description Validation Error */
@@ -6131,7 +6152,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["VehicleOut"][];
+                    "application/json": components["schemas"]["Page_VehicleOut_"];
                 };
             };
             /** @description Validation Error */
@@ -6466,7 +6487,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TrackerOut"][];
+                    "application/json": components["schemas"]["Page_TrackerOut_"];
                 };
             };
             /** @description Validation Error */

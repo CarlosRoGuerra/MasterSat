@@ -19,7 +19,7 @@ import { Select } from '@/components/ui/select';
 import { FormField, FormGrid } from '@/components/ui/form-field';
 import { Eye, DollarSign, ClipboardList, Pencil, CreditCard, Zap, Building2, Banknote, FileText as FileBillet, Search, X, AlertTriangle, Car, CheckCircle2, MapPin, Undo2 } from 'lucide-react';
 import { ExportButton } from '@/components/ui/export-button';
-import { apiFetch } from '@/lib/api';
+import { apiFetch, apiFetchList } from '@/lib/api';
 import { fetchAddressByCep } from '@/lib/cep';
 import { formatZipCode, onlyDigits, pricePeriodSuffix } from '@/lib/format';
 import { useAuthGuard } from '@/lib/use-auth-guard';
@@ -660,8 +660,8 @@ export default function VeiculosPage() {
       query.set('limit', '300');
 
       const [vehicleResponse, clientResponse, contractResponse, serviceProductResponse] = await Promise.all([
-        apiFetch<Vehicle[]>(`/vehicles?${query.toString()}`, {}, currentToken),
-        apiFetch<ClientOption[]>('/clients?limit=300', {}, currentToken),
+        apiFetchList<Vehicle>(`/vehicles?${query.toString()}`, {}, currentToken),
+        apiFetchList<ClientOption>('/clients?limit=300', {}, currentToken),
         apiFetch<ContractOption[]>('/contracts', {}, currentToken).catch(() => []),
         apiFetch<ServiceProductOption[]>('/service-products', {}, currentToken).catch(() => []),
       ]);
@@ -683,7 +683,7 @@ export default function VeiculosPage() {
     setDetailsOpen(true);
     if (token) {
       const [trackers, plansData] = await Promise.all([
-        apiFetch<TrackerOption[]>(`/trackers?vehicle_id=${vehicle.id}&limit=20`, {}, token).catch(() => []),
+        apiFetchList<TrackerOption>(`/trackers?vehicle_id=${vehicle.id}&limit=20`, {}, token).catch(() => []),
         apiFetch<PlanOption[]>('/plans', {}, token).catch(() => []),
         loadDocuments(token, vehicle.id),
       ]);
@@ -704,7 +704,7 @@ export default function VeiculosPage() {
     setLinkForm((p) => ({ ...p, billing_day: _billingDayFromClient(vehicle.client_id) }));
     if (token) {
       const [trackers, plansData] = await Promise.all([
-        apiFetch<TrackerOption[]>(`/trackers?vehicle_id=${vehicle.id}&limit=20`, {}, token).catch(() => []),
+        apiFetchList<TrackerOption>(`/trackers?vehicle_id=${vehicle.id}&limit=20`, {}, token).catch(() => []),
         apiFetch<PlanOption[]>('/plans', {}, token).catch(() => []),
       ]);
       setLinkedTrackers(trackers);
@@ -744,7 +744,7 @@ export default function VeiculosPage() {
   async function loadStockTrackers() {
     if (!token) return;
     try {
-      const trackers = await apiFetch<TrackerOption[]>('/trackers?status=em_estoque&limit=200', {}, token);
+      const trackers = await apiFetchList<TrackerOption>('/trackers?status=em_estoque&limit=200', {}, token);
       setStockTrackers(trackers);
     } catch { setStockTrackers([]); }
   }
@@ -815,7 +815,7 @@ export default function VeiculosPage() {
         bank: 'ailos',
       });
       await loadVehicles(token);
-      const updated = await apiFetch<TrackerOption[]>(`/trackers?vehicle_id=${selectedVehicle.id}`, {}, token).catch(() => []);
+      const updated = await apiFetchList<TrackerOption>(`/trackers?vehicle_id=${selectedVehicle.id}`, {}, token).catch(() => []);
       setLinkedTrackers(updated);
     } catch (err) { setError(parseError(err)); }
     finally { setLinking(false); }

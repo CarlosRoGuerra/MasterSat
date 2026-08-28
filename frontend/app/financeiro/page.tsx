@@ -17,7 +17,7 @@ import { usePagination, Pagination } from '@/components/ui/pagination';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { ClientAutocomplete } from '@/components/ui/client-autocomplete';
 import { CarneTrackingModal, useCarneTracking } from '@/components/carne-tracking-modal';
-import { API_URL, apiFetch } from '@/lib/api';
+import { API_URL, apiFetch, apiFetchList } from '@/lib/api';
 import { entregarArquivo, nomeArquivoCliente } from '@/lib/arquivo';
 import { enviarBoletoEmail, enviarBoletoWhats } from '@/lib/boleto-mensagem';
 import { useAuthGuard } from '@/lib/use-auth-guard';
@@ -695,9 +695,9 @@ export default function FinanceiroPage() {
       query.set('limit', '300');
       const [plansRes, clientsRes, vehiclesRes, trackersRes, contractsRes, productsRes, chargeItemsRes, billingsRes, summaryRes, revenueRes, delinquentRes] = await Promise.all([
         apiFetch<Plan[]>('/plans', {}, currentToken),
-        apiFetch<ClientOption[]>('/clients?limit=300', {}, currentToken),
-        apiFetch<VehicleOption[]>('/vehicles?limit=300', {}, currentToken),
-        apiFetch<TrackerOption[]>('/trackers?limit=300', {}, currentToken),
+        apiFetchList<ClientOption>('/clients?limit=300', {}, currentToken),
+        apiFetchList<VehicleOption>('/vehicles?limit=300', {}, currentToken),
+        apiFetchList<TrackerOption>('/trackers?limit=300', {}, currentToken),
         apiFetch<Contract[]>('/contracts', {}, currentToken),
         apiFetch<ServiceProduct[]>('/service-products', {}, currentToken),
         apiFetch<ChargeItem[]>('/client-charge-items', {}, currentToken),

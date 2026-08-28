@@ -17,7 +17,7 @@ import { ExportButton } from '@/components/ui/export-button';
 import { ClientAutocomplete } from '@/components/ui/client-autocomplete';
 import { BillingDayInput, erroDiaVencimento } from '@/components/ui/billing-day-input';
 import { useDebouncedValue, useEffectSkipFirst } from '@/lib/use-debounced-value';
-import { apiFetch } from '@/lib/api';
+import { apiFetch, apiFetchList } from '@/lib/api';
 import { onlyDigits, formatCpfCnpj, pricePeriodSuffix } from '@/lib/format';
 import { useAuthGuard } from '@/lib/use-auth-guard';
 import { ROUTE_ROLES } from '@/lib/route-roles';
@@ -273,9 +273,9 @@ export default function RastreadoresPage() {
       if (vehicleFilter) query.set('vehicle_id', vehicleFilter);
       query.set('limit', '100');
       const [trackerResponse, clientResponse, vehicleResponse, planResponse] = await Promise.all([
-        apiFetch<Tracker[]>(`/trackers?${query.toString()}`, {}, currentToken),
-        apiFetch<ClientOption[]>('/clients?limit=300', {}, currentToken),
-        apiFetch<VehicleOption[]>('/vehicles?limit=400', {}, currentToken),
+        apiFetchList<Tracker>(`/trackers?${query.toString()}`, {}, currentToken),
+        apiFetchList<ClientOption>('/clients?limit=300', {}, currentToken),
+        apiFetchList<VehicleOption>('/vehicles?limit=400', {}, currentToken),
         apiFetch<PlanOption[]>('/plans?limit=100', {}, currentToken).catch(() => [] as PlanOption[]),
       ]);
       setTrackers(trackerResponse);
@@ -321,7 +321,7 @@ export default function RastreadoresPage() {
       .then((items) => setTrackerContract(items[0] || null))
       .catch(() => setTrackerContract(null));
     if (selectedTracker.vehicle_id) {
-      apiFetch<Tracker[]>(`/trackers?vehicle_id=${selectedTracker.vehicle_id}&limit=20`, {}, token)
+      apiFetchList<Tracker>(`/trackers?vehicle_id=${selectedTracker.vehicle_id}&limit=20`, {}, token)
         .then((items) => setVehicleTrackers(items.filter((t) => t.id !== selectedTracker.id)))
         .catch(() => setVehicleTrackers([]));
     } else {
