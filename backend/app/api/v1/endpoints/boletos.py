@@ -111,7 +111,9 @@ def descricao_servico(b: Billing, placa: str | None = None) -> str:
     if b.installment_total and b.installment_total > 1:
         partes.append(f'PARCELA {b.installment_number or 1}/{b.installment_total}')
     if placa:
-        partes.append(f'PLACA {placa}')
+        # Espaço não separável — no boleto/carnê, "PLACA" nunca deve quebrar
+        # de linha isolado da placa em si.
+        partes.append(f'PLACA {placa}')
     return ' · '.join(partes)
 
 

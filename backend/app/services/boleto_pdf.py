@@ -79,8 +79,11 @@ def _fv(v) -> str:
 def _wrap(texto: str, font: str, size: float, max_width: float) -> list[str]:
     """Quebra o texto em linhas que cabem em max_width — evita que
     instruções longas invadam a área do QR Code do Pix, sem cortar o
-    conteúdo (o texto completo continua legível, só que em mais linhas)."""
-    palavras = texto.split()
+    conteúdo (o texto completo continua legível, só que em mais linhas).
+    Divide só no espaço comum (" ") — um espaço não separável ("\xa0",
+    ex.: entre "PLACA" e o valor da placa) mantém as duas palavras juntas
+    numa mesma linha."""
+    palavras = [w for w in texto.split(" ") if w]
     linhas: list[str] = []
     atual = ""
     for w in palavras:
