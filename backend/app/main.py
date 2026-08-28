@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
-from sqlalchemy import inspect, text
+from sqlalchemy import inspect, or_, text
 from sqlalchemy.exc import IntegrityError
 
 from app.api.v1.api import api_router
@@ -77,11 +77,10 @@ def _apply_database_migrations() -> None:
     Bancos que já existiam ANTES do Alembic (criados por `create_all` +
     `ensure_schema_updates`) não têm a tabela `alembic_version`: rodar
     `upgrade head` neles direto falha com "relation already exists", porque
-    as tabelas da baseline já estão lá. Por isso: sem `alembic_version` E com
-    o schema já existente (checa a tabela `users`), só CARIMBA como já
-    migrado (stamp), sem tentar recriar nada. Um banco vazio de verdade builda
-    o schema inteiro a partir das migrations (upgrade). Um banco já carimbado
-    só aplica o que houver de novo.
+    as tabelas da baseline já estão lá. Por isso, eles são carimbados na
+    revisão que o schema realmente representa e então recebem normalmente as
+    migrations posteriores. Nunca devem ser carimbados diretamente em
+    ``head``: isso faria uma migration nova ser silenciosamente ignorada.
     """
     from alembic import command
     from alembic.config import Config
@@ -93,15 +92,22 @@ def _apply_database_migrations() -> None:
     with engine.connect() as conn:
         current_rev = MigrationContext.configure(conn).get_current_revision()
         schema_already_exists = inspect(conn).has_table('users')
+        has_refresh_tokens = inspect(conn).has_table('refresh_tokens')
 
     if current_rev is None and schema_already_exists:
-        command.stamp(cfg, 'head')
+        # A baseline não continha refresh_tokens. Alguns ambientes legados
+        # podem tê-la recebido depois por create_all; nesse caso seu schema já
+        # corresponde à revisão seguinte. Em ambos os casos, o upgrade abaixo
+        # ainda executa todas as revisões realmente pendentes.
+        legacy_revision = 'e0905f77f744' if has_refresh_tokens else '96f61a589162'
+        command.stamp(cfg, legacy_revision)
         logging.getLogger('uvicorn.error').warning(
-            'Alembic: banco pré-existente (sem alembic_version) carimbado como head — '
-            'nenhuma tabela foi recriada.'
+            'Alembic: banco pré-existente (sem alembic_version) carimbado como %s; '
+            'aplicando migrations posteriores.',
+            legacy_revision,
         )
-    else:
-        command.upgrade(cfg, 'head')
+
+    command.upgrade(cfg, 'head')
 
 
 def ensure_schema_updates():
@@ -808,6 +814,57 @@ def _ailos_log_retention_worker():
             logger.warning('Purga de ailos_api_logs falhou (tentará novamente no próximo ciclo): %s', exc)
 
 
+def _audit_log_retention_worker():
+    """Anonimiza e purga audit_logs (retenção — SEC-06).
+
+    audit_logs não guarda payload de negócio, só a trilha de quem fez o quê
+    (ver app/core/audit.py). Os dois campos com dado pessoal são user_name e
+    ip_address — user_id permanece, então a trilha de auditoria continua
+    íntegra depois da anonimização. Roda 1x/dia com advisory lock (só 1
+    worker por vez), mesmo padrão do _ailos_log_retention_worker.
+    """
+    from app.models.audit_log import AuditLog
+    logger = logging.getLogger('uvicorn.error')
+
+    def _job(db):
+        now = datetime.now(timezone.utc)
+        anonymize_cutoff = now - timedelta(days=30.44 * settings.audit_log_anonymize_months)
+        retention_cutoff = now - timedelta(days=30.44 * settings.audit_log_retention_months)
+
+        anonymized = (
+            db.query(AuditLog)
+            .filter(
+                AuditLog.created_at < anonymize_cutoff,
+                AuditLog.created_at >= retention_cutoff,
+                or_(AuditLog.user_name.is_not(None), AuditLog.ip_address.is_not(None)),
+            )
+            .update({'user_name': None, 'ip_address': None}, synchronize_session=False)
+        )
+        deleted = (
+            db.query(AuditLog)
+            .filter(AuditLog.created_at < retention_cutoff)
+            .delete(synchronize_session=False)
+        )
+        db.commit()
+        return anonymized, deleted
+
+    espera = 300  # primeira execução 5 min após o boot (não compete com o resto do startup)
+    while True:
+        time.sleep(espera)
+        espera = 86400  # 24h
+        try:
+            anonymized, deleted = _run_locked(918273650, _job)
+            if anonymized or deleted:
+                logger.info(
+                    'Retenção audit_logs: %s registro(s) anonimizado(s) (> %s meses), '
+                    '%s registro(s) purgado(s) (> %s meses).',
+                    anonymized, settings.audit_log_anonymize_months,
+                    deleted, settings.audit_log_retention_months,
+                )
+        except Exception as exc:  # noqa: BLE001 — retenção nunca pode derrubar o worker
+            logger.warning('Retenção de audit_logs falhou (tentará novamente no próximo ciclo): %s', exc)
+
+
 def _refresh_overdue_status_job(db):
     """O trabalho em si, isolado numa função nomeada (em vez de closure) para
     poder ser testado sem depender do advisory lock (Postgres-only — não
@@ -897,6 +954,11 @@ def on_startup():
     # independente da integração Ailos estar configurada: se já existirem
     # registros antigos de uma configuração anterior, continuam sendo purgados.
     threading.Thread(target=_ailos_log_retention_worker, daemon=True).start()
+
+    # Anonimização + purga periódica de audit_logs (retenção — SEC-06). Sempre
+    # ligado, independente de qualquer integração — audit_logs registra ação
+    # de usuário do sistema, não payload de integração.
+    threading.Thread(target=_audit_log_retention_worker, daemon=True).start()
 
     # Verificação inicial de inadimplência (idempotente; não bloqueia o startup)
     try:

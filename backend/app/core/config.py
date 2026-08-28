@@ -176,10 +176,21 @@ class Settings(BaseSettings):
     rate_limit_login: str = '5/minute'
     rate_limit_exports: str = '10/minute'
 
-    # Retenção de logs de integração Ailos (request/response mascarados só nas
-    # chaves sensíveis — CPF/CNPJ, endereço e valores ficam em texto claro).
+    # Retenção de logs de integração Ailos (request/response mascarados —
+    # segredos, CPF/CNPJ, nome e endereço; valores e datas ficam em texto
+    # claro por utilidade de diagnóstico — ver _mask_payload em ailos_client.py).
     # Purgados automaticamente após esse período (ver main.py, worker de retenção).
     ailos_log_retention_months: int = 12
+
+    # Retenção de audit_logs (trilha de auditoria — SEC-06). Não guarda
+    # payload, só quem fez o quê: user_id/user_name/user_role, method, path,
+    # entity_type/id, status_code, ip_address, description. Após
+    # audit_log_anonymize_months, user_name e ip_address são apagados
+    # (mantém user_id — a trilha "quem fez o quê" continua íntegra sem reter
+    # identidade/IP indefinidamente). Após audit_log_retention_months, a
+    # linha é purgada por completo (ver main.py, worker de retenção).
+    audit_log_anonymize_months: int = 6
+    audit_log_retention_months: int = 24
 
     @property
     def is_production(self) -> bool:
