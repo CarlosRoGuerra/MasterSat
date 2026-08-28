@@ -222,10 +222,22 @@ def _emitir_uma(db: Session, nota: NfseNota, emitir_fn, cod_trib_nacional=None) 
         nota.erro_mensagem = 'Cobrança ou cliente não encontrado.'
         db.commit()
         return
+    from app.services import nfse_provider  # tardio: evita ciclo de import (ver _processar_lote)
+    erros_esperados = (*nfse_provider.ErrosConfig, *nfse_provider.ErrosApi)
+
     try:
         emitir_fn(db, billing, client, cod_trib_nacional=cod_trib_nacional)
-    except Exception as exc:  # NfseError/NfseApiError e afins
+    except erros_esperados as exc:
         # emitir_nfse já pode ter marcado 'erro' e commitado; garante a mensagem.
+        db.rollback()
+        nota = db.get(NfseNota, nota.id)
+        nota.status = 'erro'
+        nota.erro_mensagem = (nota.erro_mensagem or str(exc))[:2000]
+        db.commit()
+    except Exception as exc:  # noqa: BLE001 — bug inesperado, não falha de negócio/API
+        # Mesmo desfecho pro usuário (nota marcada 'erro', lote segue para as
+        # próximas), mas logado como exceção pra distinguir de erro de negócio.
+        logger.exception('Falha inesperada ao emitir NFS-e da nota %s', nota.id)
         db.rollback()
         nota = db.get(NfseNota, nota.id)
         nota.status = 'erro'

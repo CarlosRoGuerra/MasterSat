@@ -15,8 +15,11 @@ Retorno: {'level': 'ok'|'unreadable'|'mismatch', 'message': str}.
 from __future__ import annotations
 
 import io
+import logging
 import re
 import unicodedata
+
+logger = logging.getLogger(__name__)
 
 try:  # pypdf é pure-Python; se faltar (imagem sem rebuild), a validação se cala.
     from pypdf import PdfReader
@@ -42,7 +45,8 @@ def _extrair_texto_pdf(data: bytes) -> str:
         reader = PdfReader(io.BytesIO(data))
         partes = [(page.extract_text() or '') for page in reader.pages[:6]]
         return '\n'.join(partes)
-    except Exception:
+    except Exception:  # noqa: BLE001 — PDF ilegível vira 'unreadable' pro chamador, não é fatal
+        logger.warning('Falha ao extrair texto do PDF do contrato', exc_info=True)
         return ''
 
 

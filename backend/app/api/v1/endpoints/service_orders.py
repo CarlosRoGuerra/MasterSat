@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from io import BytesIO
 from secrets import token_urlsafe
@@ -36,6 +37,7 @@ from app.schemas.service_order import (
 from app.services.storage import remove_object, upload_bytes
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 VIEW_ROLES = (UserRole.ADMIN, UserRole.OPERATIONAL, UserRole.FINANCIAL)
 EDIT_ROLES = (UserRole.ADMIN, UserRole.OPERATIONAL)
@@ -459,8 +461,8 @@ def delete_document(item_id: int, document_id: int, db: Session = Depends(get_db
         raise HTTPException(status_code=404, detail='Documento não encontrado')
     try:
         remove_object(doc.object_key)
-    except Exception:
-        pass
+    except Exception:  # noqa: BLE001 — exclusão do registro não pode depender do storage
+        logger.warning('Falha ao remover objeto %s do storage', doc.object_key, exc_info=True)
     doc.active = False
     db.commit()
     return DocumentDeleteOut(message='Documento removido com sucesso')

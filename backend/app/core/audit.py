@@ -153,8 +153,8 @@ def _write_log(
         logger.exception('Erro ao gravar log de auditoria no banco')
         try:
             db.rollback()
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001 — já estamos no tratamento de erro; não há mais para onde escalar
+            logger.warning('Rollback do log de auditoria também falhou (conexão pode estar comprometida)', exc_info=True)
     finally:
         db.close()
 

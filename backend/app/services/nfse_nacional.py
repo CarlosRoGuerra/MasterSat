@@ -26,6 +26,7 @@ from __future__ import annotations
 import base64
 import datetime as dt
 import gzip
+import logging
 import re
 from decimal import Decimal
 from functools import lru_cache
@@ -39,6 +40,8 @@ from app.core.config import settings
 from app.models.billing import Billing
 from app.models.client import Client
 from app.models.nfse_nota import NfseNota
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Constantes do padrão nacional
@@ -373,6 +376,7 @@ def _material_do_banco() -> tuple[bytes, bytes] | None:
         finally:
             db.close()
     except Exception:  # noqa: BLE001 — sem banco/tabela, usa o arquivo do .env
+        logger.warning('Falha ao buscar certificado NFS-e cadastrado no banco; caindo para o .env', exc_info=True)
         return None
 
 
