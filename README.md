@@ -58,6 +58,33 @@ git config core.hooksPath .githooks
 Bloqueia commit acidental de `.env`, certificados (`.pfx`/`.p12`/`.pem`) e
 chaves privadas — defesa extra além do `.gitignore`.
 
+## Segredos locais (uma vez por máquina) — SEC-01
+Se a pasta do projeto estiver dentro de uma pasta sincronizada (OneDrive,
+Dropbox etc.), **não guarde `.env` nem os certificados `.pfx` dentro dela** —
+eles saem do controle do `.gitignore`/git assim que a nuvem os sincroniza.
+
+1. Mova o `.env` e a pasta de certificados para fora da árvore sincronizada,
+   ex.:
+   ```
+   C:\mastersat-secrets\.env
+   C:\mastersat-secrets\certs\ecnpj.pfx
+   ```
+2. Defina as variáveis de ambiente do usuário (uma vez, sobrevive a reboot —
+   feche e reabra o terminal depois):
+   ```powershell
+   [Environment]::SetEnvironmentVariable('MASTERSAT_ENV_FILE', 'C:\mastersat-secrets\.env', 'User')
+   [Environment]::SetEnvironmentVariable('MASTERSAT_CERTS_DIR', 'C:/mastersat-secrets/certs', 'User')
+   ```
+3. `docker compose up` funciona normalmente — `docker-compose.yml` já lê
+   `${MASTERSAT_ENV_FILE:-.env}` e monta `${MASTERSAT_CERTS_DIR:-C:/mastersat-secrets/certs}`
+   em `/app/certs`. Sem as variáveis definidas, cai de volta em `.env` /
+   `C:/mastersat-secrets/certs` — combine com o passo 1 para não quebrar o
+   ambiente de quem ainda não migrou.
+
+Isso não é uma exigência do Docker/Compose em si — é só pra manter os
+segredos reais (certificado ICP-Brasil, credenciais Ailos) fora de qualquer
+pasta com sincronização/backup automático na nuvem.
+
 ## URLs
 - Frontend: http://localhost:3000
 - Backend: http://localhost:8000

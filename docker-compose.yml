@@ -40,17 +40,23 @@ services:
 
   backend:
     build: { context: ./backend }
-    env_file: [.env]
+    # SEC-01: .env fica fora da pasta do projeto (que é sincronizada pelo
+    # OneDrive) — ver "Segredos locais" no README para o setup de máquina.
+    env_file: ["${MASTERSAT_ENV_FILE:-.env}"]
     ports: ["127.0.0.1:8000:8000"]
     depends_on:
       db: { condition: service_healthy }
       redis: { condition: service_started }
       minio: { condition: service_started }
-    volumes: ["./backend:/app"]
+    volumes:
+      - "./backend:/app"
+      # SEC-01: certificado ICP-Brasil (.pfx) montado de fora do OneDrive —
+      # mais específico que o mount acima, sobrepõe só este subcaminho.
+      - "${MASTERSAT_CERTS_DIR:-C:/mastersat-secrets/certs}:/app/certs:ro"
 
   frontend:
     build: { context: ./frontend, target: dev }
-    env_file: [.env]
+    env_file: ["${MASTERSAT_ENV_FILE:-.env}"]
     environment:
       # Bind mount passa pela pasta sincronizada do OneDrive no Windows — os
       # eventos inotify não atravessam esse caminho de forma confiável, então
