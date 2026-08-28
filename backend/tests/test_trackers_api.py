@@ -52,60 +52,59 @@ class TestListRastreadores:
     def test_empty_list(self, http):
         r = http.get(PREFIX + "/")
         assert r.status_code == 200
-        assert r.json() == []
+        assert r.json() == {"items": [], "total": 0}
 
     def test_returns_existing_tracker(self, http, rastreador):
         r = http.get(PREFIX + "/")
         assert r.status_code == 200
-        data = r.json()
-        assert any(x["id"] == rastreador.id for x in data)
+        body = r.json()
+        assert body["total"] == 1
+        assert any(x["id"] == rastreador.id for x in body["items"])
 
     def test_filter_by_status(self, http, rastreador):
         r = http.get(PREFIX + "/", params={"status": "em_estoque"})
         assert r.status_code == 200
-        data = r.json()
-        assert all(x["status"] == "em_estoque" for x in data)
+        assert all(x["status"] == "em_estoque" for x in r.json()["items"])
 
     def test_filter_by_wrong_status_empty(self, http, rastreador):
         r = http.get(PREFIX + "/", params={"status": "voando"})
         assert r.status_code == 200
-        assert r.json() == []
+        assert r.json() == {"items": [], "total": 0}
 
     def test_filter_by_client_id(self, http, rastreador_instalado, cliente):
         r = http.get(PREFIX + "/", params={"client_id": cliente.id})
         assert r.status_code == 200
-        data = r.json()
-        assert all(x["client_id"] == cliente.id for x in data)
+        assert all(x["client_id"] == cliente.id for x in r.json()["items"])
 
     def test_filter_by_vehicle_id(self, http, rastreador_instalado, veiculo):
         r = http.get(PREFIX + "/", params={"vehicle_id": veiculo.id})
         assert r.status_code == 200
-        assert len(r.json()) >= 1
+        assert len(r.json()["items"]) >= 1
 
     def test_search_by_imei(self, http, rastreador):
         r = http.get(PREFIX + "/", params={"search": rastreador.imei[:8]})
         assert r.status_code == 200
-        assert any(x["imei"] == rastreador.imei for x in r.json())
+        assert any(x["imei"] == rastreador.imei for x in r.json()["items"])
 
     def test_search_by_brand(self, http, rastreador):
         r = http.get(PREFIX + "/", params={"search": "Teltonika"})
         assert r.status_code == 200
-        assert len(r.json()) >= 1
+        assert len(r.json()["items"]) >= 1
 
     def test_search_no_match(self, http, rastreador):
         r = http.get(PREFIX + "/", params={"search": "Marca Inexistente XYZ"})
         assert r.status_code == 200
-        assert r.json() == []
+        assert r.json() == {"items": [], "total": 0}
 
     def test_search_sql_injection_safe(self, http, rastreador):
         r = http.get(PREFIX + "/", params={"search": "'; DROP TABLE trackers; --"})
         assert r.status_code == 200
-        assert isinstance(r.json(), list)
+        assert isinstance(r.json()["items"], list)
 
     def test_search_xss_safe(self, http, rastreador):
         r = http.get(PREFIX + "/", params={"search": "<script>alert(1)</script>"})
         assert r.status_code == 200
-        assert isinstance(r.json(), list)
+        assert isinstance(r.json()["items"], list)
 
     def test_pagination_skip(self, http, db, rastreador):
         from app.models.tracker import Tracker
@@ -123,8 +122,10 @@ class TestListRastreadores:
         r2 = http.get(PREFIX + "/", params={"skip": 2, "limit": 2})
         assert r1.status_code == 200
         assert r2.status_code == 200
-        ids1 = {x["id"] for x in r1.json()}
-        ids2 = {x["id"] for x in r2.json()}
+        b1, b2 = r1.json(), r2.json()
+        assert b1["total"] == b2["total"] == 4  # rastreador (fixture) + 3 extras
+        ids1 = {x["id"] for x in b1["items"]}
+        ids2 = {x["id"] for x in b2["items"]}
         assert ids1.isdisjoint(ids2)
 
     def test_limit_max_500(self, http):
@@ -136,7 +137,28 @@ class TestListRastreadores:
         db.commit()
         r = http.get(PREFIX + "/")
         assert r.status_code == 200
-        assert not any(x["id"] == rastreador.id for x in r.json())
+        body = r.json()
+        assert body["total"] == 0
+        assert not any(x["id"] == rastreador.id for x in body["items"])
+
+    def test_total_reflects_full_count_beyond_limit(self, http, db, rastreador):
+        from app.models.tracker import Tracker
+        from app.models.enums import TrackerStatus
+
+        for i in range(3):
+            db.add(Tracker(
+                imei=f"8888888000000{i}",
+                brand="Test",
+                model="T",
+                status=TrackerStatus.STOCK,
+            ))
+        db.commit()
+
+        r = http.get(PREFIX + "/", params={"limit": 2})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["total"] == 4  # rastreador (fixture) + 3 extras
+        assert len(body["items"]) == 2
 
 
 # ---------------------------------------------------------------------------

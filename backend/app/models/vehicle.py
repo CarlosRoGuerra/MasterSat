@@ -1,4 +1,4 @@
-from sqlalchemy import Date, Enum, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Date, Enum, ForeignKey, Index, Integer, Numeric, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -8,6 +8,22 @@ from app.models.enums import VehicleStatus
 
 class Vehicle(Base, TimestampMixin, SoftDeleteMixin):
     __tablename__ = 'vehicles'
+    __table_args__ = (
+        Index(
+            'uq_vehicles_plate_active',
+            'plate',
+            unique=True,
+            postgresql_where=text('is_deleted = false'),
+            sqlite_where=text('is_deleted = 0'),
+        ),
+        Index(
+            'uq_vehicles_chassis_active',
+            'chassis',
+            unique=True,
+            postgresql_where=text('is_deleted = false'),
+            sqlite_where=text('is_deleted = 0'),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     client_id: Mapped[int] = mapped_column(ForeignKey('clients.id'), index=True)
@@ -29,8 +45,8 @@ class Vehicle(Base, TimestampMixin, SoftDeleteMixin):
     city: Mapped[str | None] = mapped_column(String(120), nullable=True)
     state: Mapped[str | None] = mapped_column(String(2), nullable=True)
 
-    plate: Mapped[str] = mapped_column(String(10), unique=True, index=True)
-    chassis: Mapped[str | None] = mapped_column(String(40), nullable=True, unique=True)
+    plate: Mapped[str] = mapped_column(String(10))
+    chassis: Mapped[str | None] = mapped_column(String(40), nullable=True)
     renavam: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
     brand: Mapped[str | None] = mapped_column(String(80), nullable=True)
     model: Mapped[str | None] = mapped_column(String(120), nullable=True)

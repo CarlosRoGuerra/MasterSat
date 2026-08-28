@@ -3,6 +3,13 @@ from pydantic import BaseModel, field_validator
 from app.models.enums import UserRole
 
 
+def _normalize_email(value: str) -> str:
+    value = value.strip().lower()
+    if '@' not in value:
+        raise ValueError('Informe um e-mail válido')
+    return value
+
+
 class UserBase(BaseModel):
     name: str
     email: str
@@ -13,10 +20,7 @@ class UserBase(BaseModel):
     @field_validator('email')
     @classmethod
     def normalize_email(cls, value: str) -> str:
-        value = value.strip().lower()
-        if '@' not in value:
-            raise ValueError('Informe um e-mail válido')
-        return value
+        return _normalize_email(value)
 
 
 class UserCreate(UserBase):
@@ -30,6 +34,11 @@ class UserUpdate(BaseModel):
     active: bool | None = None
     client_id: int | None = None
     password: str | None = None
+
+    @field_validator('email')
+    @classmethod
+    def normalize_email(cls, value: str | None) -> str | None:
+        return _normalize_email(value) if value is not None else None
 
 
 class UserOut(UserBase):

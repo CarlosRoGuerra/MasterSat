@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Callable
 from uuid import uuid4
 
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -385,6 +387,51 @@ def add_lifecycle_logs(db: Session, calls: list[LifecycleCall], *, batch_id: str
             )
         )
     return resolved_batch_id
+
+
+def commit_with_compensation(
+    db: Session,
+    *,
+    lifecycle_calls: list[LifecycleCall],
+    should_compensate: bool,
+    run_compensation: Callable[[], tuple[list[LifecycleCall], bool]],
+) -> None:
+    """Comita a transação local; se o commit falhar e o lado externo já tiver
+    sido aplicado (``should_compensate``), tenta desfazê-lo antes de propagar
+    o erro. Levanta HTTPException(500) estruturada quando a compensação falha
+    ou não é tentada.
+
+    Extraído de trackers.py (transferência) e vehicles.py (desinstalação) —
+    BE-01: os dois endpoints tinham o mesmo bloco try/commit/rollback/
+    compensa/recomita, byte a byte idêntico exceto por qual função de
+    compensação chamar. ``run_compensation`` é essa diferença isolada num
+    callable de zero argumentos que cada chamador monta com seus próprios
+    dados (tracker/veículos, ou trackers/veículo/cliente).
+    """
+    add_lifecycle_logs(db, lifecycle_calls)
+    try:
+        db.commit()
+    except Exception as db_exc:
+        db.rollback()
+        compensation_failed = False
+        if should_compensate:
+            try:
+                compensation_calls, compensation_failed = run_compensation()
+                add_lifecycle_logs(db, lifecycle_calls + compensation_calls)
+                db.commit()
+            except Exception:
+                db.rollback()
+                compensation_failed = True
+        if compensation_failed:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    'code': 'multiportal_compensation_failed',
+                    'message': 'A gravação local falhou e o vínculo externo não pôde ser restaurado automaticamente.',
+                    'reconciliation_required': True,
+                },
+            ) from db_exc
+        raise
 
 
 def apply_tracker_integration_result(tracker: Tracker, calls: list[LifecycleCall], *, status: str) -> None:

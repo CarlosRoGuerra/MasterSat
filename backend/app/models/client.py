@@ -1,6 +1,6 @@
 from datetime import date
 
-from sqlalchemy import Boolean, Date, Enum, Integer, JSON, String, Text
+from sqlalchemy import Boolean, Date, Enum, Index, Integer, JSON, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -10,12 +10,21 @@ from app.models.enums import ClientStatus
 
 class Client(Base, TimestampMixin, SoftDeleteMixin):
     __tablename__ = 'clients'
+    __table_args__ = (
+        Index(
+            'uq_clients_cpf_cnpj_active',
+            'cpf_cnpj',
+            unique=True,
+            postgresql_where=text('is_deleted = false'),
+            sqlite_where=text('is_deleted = 0'),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(180), index=True)
     # Nome fantasia (PJ) — exibido na listagem ao lado da razão social
     trade_name: Mapped[str | None] = mapped_column(String(180), nullable=True)
-    cpf_cnpj: Mapped[str] = mapped_column(String(18), unique=True, index=True)
+    cpf_cnpj: Mapped[str] = mapped_column(String(18))
     type: Mapped[str] = mapped_column(String(20), default='pf')
     status: Mapped[ClientStatus] = mapped_column(Enum(ClientStatus), default=ClientStatus.ACTIVE)
     email: Mapped[str | None] = mapped_column(String(180), nullable=True)

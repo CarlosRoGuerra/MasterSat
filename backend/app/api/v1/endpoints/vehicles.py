@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from calendar import monthrange as _monthrange
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -7,9 +8,11 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_roles
+from app.core.integrity import raise_integrity_conflict
 from app.core.config import settings
 from app.core.security import create_file_access_token
 from app.core.uploads import read_limited, safe_object_name, validate_content_type
@@ -26,6 +29,7 @@ from app.models.uninstall_event import UninstallEvent
 from app.models.user import User
 from app.models.vehicle import Vehicle
 from app.schemas.document import DocumentDeleteOut, DocumentOut, DocumentReviewUpdate
+from app.schemas.pagination import Page
 from app.schemas.vehicle import VehicleCreate, VehicleOut, VehicleUpdate
 from app.services.financial import (
     add_months,
@@ -39,6 +43,7 @@ from app.services.multiportal_lifecycle import (
     LifecycleSyncError,
     add_lifecycle_logs,
     apply_tracker_integration_result,
+    commit_with_compensation,
     compensate_successful_uninstall,
     unlink_vehicle_assignments,
 )
@@ -50,6 +55,18 @@ from app.services.multiportal_sync_state import (
 from app.services.storage import remove_object, upload_bytes
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+_VEHICLE_INTEGRITY_MESSAGES = {
+    'uq_vehicles_plate_active': 'Já existe veículo com essa placa',
+    'ix_vehicles_plate': 'Já existe veículo com essa placa',
+    'uq_vehicles_chassis_active': 'Já existe veículo com esse chassi',
+    'vehicles_chassis_key': 'Já existe veículo com esse chassi',
+}
+_VEHICLE_SQLITE_CONSTRAINTS = {
+    'UNIQUE constraint failed: vehicles.plate': 'uq_vehicles_plate_active',
+    'UNIQUE constraint failed: vehicles.chassis': 'uq_vehicles_chassis_active',
+}
 
 VIEW_ROLES = (UserRole.ADMIN, UserRole.OPERATIONAL, UserRole.FINANCIAL)
 EDIT_ROLES = (UserRole.ADMIN, UserRole.OPERATIONAL)
@@ -98,7 +115,7 @@ def _ensure_plate_available(plate: str, db: Session, ignore_id: int | None = Non
         stmt = stmt.where(Vehicle.id != ignore_id)
     exists = db.scalar(stmt)
     if exists:
-        raise HTTPException(status_code=400, detail='Já existe veículo com essa placa')
+        raise HTTPException(status_code=409, detail='Já existe veículo com essa placa')
 
 
 def _ensure_chassis_available(chassis: str | None, db: Session, ignore_id: int | None = None) -> None:
@@ -109,7 +126,7 @@ def _ensure_chassis_available(chassis: str | None, db: Session, ignore_id: int |
         stmt = stmt.where(Vehicle.id != ignore_id)
     exists = db.scalar(stmt)
     if exists:
-        raise HTTPException(status_code=400, detail='Já existe veículo com esse chassi')
+        raise HTTPException(status_code=409, detail='Já existe veículo com esse chassi')
 
 
 def _normalize_vehicle_data(data: dict) -> dict:
@@ -120,7 +137,7 @@ def _normalize_vehicle_data(data: dict) -> dict:
     return data
 
 
-@router.get('/', response_model=list[VehicleOut])
+@router.get('/', response_model=Page[VehicleOut])
 def list_items(
     search: str | None = None,
     status: str | None = None,
@@ -131,10 +148,10 @@ def list_items(
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*VIEW_ROLES)),
 ):
-    stmt = select(Vehicle).where(Vehicle.is_deleted.is_(False))
+    filtro = select(Vehicle).where(Vehicle.is_deleted.is_(False))
     if search:
         term = f'%{search.strip()}%'
-        stmt = stmt.where(
+        filtro = filtro.where(
             or_(
                 Vehicle.plate.ilike(term),
                 Vehicle.chassis.ilike(term),
@@ -148,13 +165,15 @@ def list_items(
             )
         )
     if status:
-        stmt = stmt.where(Vehicle.status == status)
+        filtro = filtro.where(Vehicle.status == status)
     if client_id:
-        stmt = stmt.where(Vehicle.client_id == client_id)
+        filtro = filtro.where(Vehicle.client_id == client_id)
     if type:
-        stmt = stmt.where(func.lower(Vehicle.type) == type.strip().lower())
-    stmt = stmt.order_by(Vehicle.id.desc()).offset(skip).limit(limit)
-    return db.scalars(stmt).all()
+        filtro = filtro.where(func.lower(Vehicle.type) == type.strip().lower())
+    total = db.scalar(select(func.count()).select_from(filtro.subquery())) or 0
+    stmt = filtro.order_by(Vehicle.id.desc()).offset(skip).limit(limit)
+    items = db.scalars(stmt).all()
+    return {'items': items, 'total': total}
 
 
 @router.post('/', response_model=VehicleOut)
@@ -169,7 +188,15 @@ def create_item(
     _ensure_chassis_available(data.get('chassis'), db)
     obj = Vehicle(**data)
     db.add(obj)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        raise_integrity_conflict(
+            db,
+            exc,
+            _VEHICLE_INTEGRITY_MESSAGES,
+            sqlite_columns=_VEHICLE_SQLITE_CONSTRAINTS,
+        )
     db.refresh(obj)
     return obj
 
@@ -205,7 +232,15 @@ def update_item(
         setattr(obj, key, value)
     if multiportal_changed:
         invalidate_vehicle_trackers(db, obj.id)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        raise_integrity_conflict(
+            db,
+            exc,
+            _VEHICLE_INTEGRITY_MESSAGES,
+            sqlite_columns=_VEHICLE_SQLITE_CONSTRAINTS,
+        )
     db.refresh(obj)
     return obj
 
@@ -442,38 +477,20 @@ def uninstall_vehicle(
         transfer_note = f'Desinstalado em {uninstall_date.strftime("%d/%m/%Y")}'
         contract.notes = f'{contract.notes}\n{transfer_note}'.strip() if contract.notes else transfer_note
 
-    add_lifecycle_logs(db, lifecycle.calls)
     managed_trackers = [
         tracker for tracker in trackers
         if any(call.tracker_id == tracker.id and call.phase == 'unlink_equipment' for call in lifecycle.calls)
     ]
-    try:
-        db.commit()
-    except Exception as db_exc:
-        db.rollback()
-        compensation_failed = False
-        if lifecycle.managed_externally:
-            try:
-                compensation_calls, compensation_failed = compensate_successful_uninstall(
-                    trackers=managed_trackers,
-                    vehicle=vehicle,
-                    client=client,
-                )
-                add_lifecycle_logs(db, lifecycle.calls + compensation_calls)
-                db.commit()
-            except Exception:
-                db.rollback()
-                compensation_failed = True
-        if compensation_failed:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    'code': 'multiportal_compensation_failed',
-                    'message': 'A gravação local falhou e o vínculo externo não pôde ser restaurado automaticamente.',
-                    'reconciliation_required': True,
-                },
-            ) from db_exc
-        raise
+    commit_with_compensation(
+        db,
+        lifecycle_calls=lifecycle.calls,
+        should_compensate=lifecycle.managed_externally,
+        run_compensation=lambda: compensate_successful_uninstall(
+            trackers=managed_trackers,
+            vehicle=vehicle,
+            client=client,
+        ),
+    )
 
     return {
         'message': 'Desinstalação registrada com sucesso.',
@@ -592,8 +609,8 @@ def delete_vehicle_document(
         raise HTTPException(status_code=404, detail='Documento não encontrado')
     try:
         remove_object(document.object_key)
-    except Exception:
-        pass
+    except Exception:  # noqa: BLE001 — exclusão do registro não pode depender do storage
+        logger.warning('Falha ao remover objeto %s do storage', document.object_key, exc_info=True)
     document.active = False
     db.commit()
     return DocumentDeleteOut(message='Documento removido com sucesso')

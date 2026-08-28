@@ -3,10 +3,12 @@ from __future__ import annotations
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_roles
+from app.core.integrity import integrity_conflict_detail, raise_integrity_conflict
 from app.db.session import get_db
 from app.models.billing import Billing
 from app.models.client import Client
@@ -28,11 +30,13 @@ from app.schemas.tracker import (
     TrackerOut,
     TrackerUpdate,
 )
+from app.schemas.pagination import Page
 from app.services.multiportal_lifecycle import (
     LifecycleResult,
     LifecycleSyncError,
     add_lifecycle_logs,
     apply_tracker_integration_result,
+    commit_with_compensation,
     compensate_successful_transfer,
     transfer_tracker_assignment,
 )
@@ -46,6 +50,14 @@ from app.services.multiportal_outbox import (
 )
 
 router = APIRouter()
+
+_TRACKER_INTEGRITY_MESSAGES = {
+    'uq_trackers_imei_active': 'Já existe rastreador com este IMEI/ID',
+    'ix_trackers_imei': 'Já existe rastreador com este IMEI/ID',
+}
+_TRACKER_SQLITE_CONSTRAINTS = {
+    'UNIQUE constraint failed: trackers.imei': 'uq_trackers_imei_active',
+}
 
 VIEW_ROLES = (UserRole.ADMIN, UserRole.OPERATIONAL, UserRole.FINANCIAL)
 EDIT_ROLES = (UserRole.ADMIN, UserRole.OPERATIONAL)
@@ -230,7 +242,7 @@ def _register_history(
     db.add(history)
 
 
-@router.get('/', response_model=list[TrackerOut])
+@router.get('/', response_model=Page[TrackerOut])
 def list_items(
     search: str | None = None,
     status: str | None = None,
@@ -241,10 +253,10 @@ def list_items(
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*VIEW_ROLES)),
 ):
-    stmt = select(Tracker).where(Tracker.is_deleted.is_(False))
+    filtro = select(Tracker).where(Tracker.is_deleted.is_(False))
     if search:
         term = f'%{search.strip()}%'
-        stmt = stmt.where(
+        filtro = filtro.where(
             or_(
                 Tracker.imei.ilike(term),
                 Tracker.serial_number.ilike(term),
@@ -255,12 +267,13 @@ def list_items(
             )
         )
     if status:
-        stmt = stmt.where(Tracker.status == status)
+        filtro = filtro.where(Tracker.status == status)
     if client_id:
-        stmt = stmt.where(Tracker.client_id == client_id)
+        filtro = filtro.where(Tracker.client_id == client_id)
     if vehicle_id:
-        stmt = stmt.where(Tracker.vehicle_id == vehicle_id)
-    trackers = db.scalars(stmt.order_by(Tracker.id.desc()).offset(skip).limit(limit)).all()
+        filtro = filtro.where(Tracker.vehicle_id == vehicle_id)
+    total = db.scalar(select(func.count()).select_from(filtro.subquery())) or 0
+    trackers = db.scalars(filtro.order_by(Tracker.id.desc()).offset(skip).limit(limit)).all()
 
     client_ids = {t.client_id for t in trackers if t.client_id}
     vehicle_ids = {t.vehicle_id for t in trackers if t.vehicle_id}
@@ -295,7 +308,7 @@ def list_items(
         p.id: p for p in db.scalars(select(Plan).where(Plan.id.in_(plan_ids))).all()
     } if plan_ids else {}
 
-    return [
+    items = [
         _tracker_to_out(
             item, db,
             client_map=client_map,
@@ -305,6 +318,7 @@ def list_items(
         )
         for item in trackers
     ]
+    return {'items': items, 'total': total}
 
 
 @router.post('/', response_model=TrackerOut)
@@ -319,21 +333,29 @@ def create_item(
 
     tracker = Tracker(**data)
     db.add(tracker)
-    db.flush()
-    _register_history(
-        db,
-        tracker,
-        action='created',
-        previous_vehicle_id=None,
-        new_vehicle_id=tracker.vehicle_id,
-        previous_client_id=None,
-        new_client_id=tracker.client_id,
-        previous_status=None,
-        new_status=tracker.status.value if isinstance(tracker.status, TrackerStatus) else str(tracker.status),
-        created_by_user_id=current_user.id,
-        notes='Cadastro inicial do rastreador',
-    )
-    db.commit()
+    try:
+        db.flush()
+        _register_history(
+            db,
+            tracker,
+            action='created',
+            previous_vehicle_id=None,
+            new_vehicle_id=tracker.vehicle_id,
+            previous_client_id=None,
+            new_client_id=tracker.client_id,
+            previous_status=None,
+            new_status=tracker.status.value if isinstance(tracker.status, TrackerStatus) else str(tracker.status),
+            created_by_user_id=current_user.id,
+            notes='Cadastro inicial do rastreador',
+        )
+        db.commit()
+    except IntegrityError as exc:
+        raise_integrity_conflict(
+            db,
+            exc,
+            _TRACKER_INTEGRITY_MESSAGES,
+            sqlite_columns=_TRACKER_SQLITE_CONSTRAINTS,
+        )
     db.refresh(tracker)
     return _tracker_to_out(tracker, db)
 
@@ -395,24 +417,53 @@ def create_lote(
             itens=itens,
         )
 
-    # Grava tudo numa transação: se algo falhar, nenhum rastreador entra pela metade.
+    # Cada INSERT usa savepoint: uma disputa de IMEI descoberta somente pela
+    # constraint não desfaz os demais itens válidos do lote. Erros de outra
+    # natureza continuam revertendo a transação inteira.
     try:
         por_imei: dict[str, Tracker] = {}
+        item_by_imei = {
+            item.imei: item for item in itens if item.situacao == 'criado'
+        }
         for imei in a_criar:
-            tracker = Tracker(**comuns, imei=imei, serial_number=imei)
-            db.add(tracker)
-            db.flush()
-            por_imei[imei] = tracker
-            _register_history(
-                db, tracker,
-                action='created',
-                previous_vehicle_id=None, new_vehicle_id=None,
-                previous_client_id=None, new_client_id=None,
-                previous_status=None,
-                new_status=tracker.status.value if isinstance(tracker.status, TrackerStatus) else str(tracker.status),
-                created_by_user_id=current_user.id,
-                notes='Cadastro em lote',
-            )
+            try:
+                with db.begin_nested():
+                    tracker = Tracker(**comuns, imei=imei, serial_number=imei)
+                    db.add(tracker)
+                    db.flush()
+                    _register_history(
+                        db, tracker,
+                        action='created',
+                        previous_vehicle_id=None, new_vehicle_id=None,
+                        previous_client_id=None, new_client_id=None,
+                        previous_status=None,
+                        new_status=(
+                            tracker.status.value
+                            if isinstance(tracker.status, TrackerStatus)
+                            else str(tracker.status)
+                        ),
+                        created_by_user_id=current_user.id,
+                        notes='Cadastro em lote',
+                    )
+                por_imei[imei] = tracker
+            except IntegrityError as exc:
+                detail = integrity_conflict_detail(
+                    exc,
+                    _TRACKER_INTEGRITY_MESSAGES,
+                    sqlite_columns=_TRACKER_SQLITE_CONSTRAINTS,
+                )
+                if detail is None:
+                    raise
+                existing = db.scalar(
+                    select(Tracker).where(
+                        Tracker.imei == imei,
+                        Tracker.is_deleted.is_(False),
+                    )
+                )
+                item = item_by_imei[imei]
+                item.situacao = 'ja_existe'
+                item.motivo = 'Já cadastrado no sistema'
+                item.tracker_id = existing.id if existing else None
         db.commit()
     except Exception:
         db.rollback()
@@ -425,8 +476,8 @@ def create_lote(
     return TrackerLoteOut(
         simulacao=False,
         total_enviados=len(payload.imeis),
-        criados=len(a_criar),
-        ignorados=len(payload.imeis) - len(a_criar),
+        criados=len(por_imei),
+        ignorados=len(payload.imeis) - len(por_imei),
         itens=itens,
     )
 
@@ -523,7 +574,15 @@ def update_item(
         created_by_user_id=current_user.id,
         notes=notes,
     )
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        raise_integrity_conflict(
+            db,
+            exc,
+            _TRACKER_INTEGRITY_MESSAGES,
+            sqlite_columns=_TRACKER_SQLITE_CONSTRAINTS,
+        )
     db.refresh(tracker)
     return _tracker_to_out(tracker, db)
 
@@ -600,11 +659,11 @@ def _serialize_contract(db: Session, contract: Contract) -> ContractOut:
         billing_day=contract.billing_day,
         payment_method=contract.payment_method,
         notes=contract.notes,
-        client_name=client.name if client else None,
-        plan_name=plan.name if plan else None,
-        vehicle_plate=vehicle.plate if vehicle else None,
-        tracker_identifier=tracker.imei if tracker else None,
-        monthly_value=float(plan.price) if plan else None,
+        client_name=client.name if client and not client.is_deleted else None,
+        plan_name=plan.name if plan and not plan.is_deleted else None,
+        vehicle_plate=vehicle.plate if vehicle and not vehicle.is_deleted else None,
+        tracker_identifier=tracker.imei if tracker and not tracker.is_deleted else None,
+        monthly_value=float(plan.price) if plan and not plan.is_deleted else None,
         open_billings=open_billings,
         next_due_date=next_due,
     )
@@ -851,34 +910,16 @@ def link_vehicle(
         db.flush()
         contract_out = _serialize_contract(db, contract)
 
-    add_lifecycle_logs(db, lifecycle.calls)
-    try:
-        db.commit()
-    except Exception as db_exc:
-        db.rollback()
-        compensation_failed = False
-        if is_transfer and lifecycle.managed_externally and old_vehicle:
-            try:
-                compensation_calls, compensation_failed = compensate_successful_transfer(
-                    tracker=tracker,
-                    old_vehicle=old_vehicle,
-                    new_vehicle=vehicle,
-                )
-                add_lifecycle_logs(db, lifecycle.calls + compensation_calls)
-                db.commit()
-            except Exception:
-                db.rollback()
-                compensation_failed = True
-        if compensation_failed:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    'code': 'multiportal_compensation_failed',
-                    'message': 'A gravação local falhou e o vínculo externo não pôde ser restaurado automaticamente.',
-                    'reconciliation_required': True,
-                },
-            ) from db_exc
-        raise
+    commit_with_compensation(
+        db,
+        lifecycle_calls=lifecycle.calls,
+        should_compensate=is_transfer and lifecycle.managed_externally and bool(old_vehicle),
+        run_compensation=lambda: compensate_successful_transfer(
+            tracker=tracker,
+            old_vehicle=old_vehicle,
+            new_vehicle=vehicle,
+        ),
+    )
     db.refresh(tracker)
 
     return {

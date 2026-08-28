@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from io import BytesIO
 from secrets import token_urlsafe
 from uuid import uuid4
@@ -8,10 +9,12 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from fastapi.responses import StreamingResponse
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_roles
+from app.core.integrity import raise_integrity_conflict
 from app.core.security import create_file_access_token, get_password_hash
 from app.core.config import settings
 from app.core.uploads import read_limited, safe_object_name, validate_content_type
@@ -26,6 +29,7 @@ from app.models.service_order import ServiceOrder
 from app.models.user import User
 from app.models.vehicle import Vehicle
 from app.schemas.client import ClientCreate, ClientOut, ClientUpdate
+from app.schemas.pagination import Page
 from app.schemas.document import DocumentDeleteOut, DocumentOut, DocumentReviewUpdate
 from app.services.multiportal_sync_state import (
     CLIENT_MULTIPORTAL_FIELDS,
@@ -35,6 +39,17 @@ from app.services.multiportal_sync_state import (
 from app.services.storage import remove_object, upload_bytes
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+_CLIENT_INTEGRITY_MESSAGES = {
+    'uq_clients_cpf_cnpj_active': 'Já existe cliente com este CPF/CNPJ',
+    # Mantém resposta específica durante uma implantação em que código e
+    # migration possam ficar brevemente em versões diferentes.
+    'ix_clients_cpf_cnpj': 'Já existe cliente com este CPF/CNPJ',
+}
+_CLIENT_SQLITE_CONSTRAINTS = {
+    'UNIQUE constraint failed: clients.cpf_cnpj': 'uq_clients_cpf_cnpj_active',
+}
 
 VIEW_ROLES = (UserRole.ADMIN, UserRole.OPERATIONAL, UserRole.FINANCIAL)
 EDIT_ROLES = (UserRole.ADMIN, UserRole.OPERATIONAL)
@@ -129,7 +144,7 @@ def _marcar_um(db: Session, client: Client) -> Client:
     return _marcar_contrato(client, _clientes_com_contrato(db, [client.id]))
 
 
-@router.get('/', response_model=list[ClientOut])
+@router.get('/', response_model=Page[ClientOut])
 def list_items(
     search: str | None = None,
     status: str | None = None,
@@ -140,13 +155,13 @@ def list_items(
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*VIEW_ROLES)),
 ):
-    stmt = select(Client).where(Client.is_deleted.is_(False))
+    filtro = select(Client).where(Client.is_deleted.is_(False))
 
     if cpf_cnpj:
-        stmt = stmt.where(Client.cpf_cnpj == cpf_cnpj.strip())
+        filtro = filtro.where(Client.cpf_cnpj == cpf_cnpj.strip())
     elif search:
         term = f"%{search.strip()}%"
-        stmt = stmt.where(
+        filtro = filtro.where(
             or_(
                 Client.name.ilike(term),
                 Client.trade_name.ilike(term),
@@ -157,14 +172,16 @@ def list_items(
             )
         )
     if status:
-        stmt = stmt.where(Client.status == status)
+        filtro = filtro.where(Client.status == status)
     if type:
-        stmt = stmt.where(Client.type == type)
+        filtro = filtro.where(Client.type == type)
 
-    stmt = stmt.order_by(Client.id.desc()).offset(skip).limit(limit)
+    total = db.scalar(select(func.count()).select_from(filtro.subquery())) or 0
+    stmt = filtro.order_by(Client.id.desc()).offset(skip).limit(limit)
     clientes = list(db.scalars(stmt).all())
     com_contrato = _clientes_com_contrato(db, [c.id for c in clientes])
-    return [_marcar_contrato(c, com_contrato) for c in clientes]
+    items = [_marcar_contrato(c, com_contrato) for c in clientes]
+    return {'items': items, 'total': total}
 
 
 @router.post('/', response_model=ClientOut)
@@ -186,9 +203,17 @@ def create_item(
     data['address'] = build_address(data)
     obj = Client(**data)
     db.add(obj)
-    db.flush()
-    _sync_client_user(obj, db)
-    db.commit()
+    try:
+        db.flush()
+        _sync_client_user(obj, db)
+        db.commit()
+    except IntegrityError as exc:
+        raise_integrity_conflict(
+            db,
+            exc,
+            _CLIENT_INTEGRITY_MESSAGES,
+            sqlite_columns=_CLIENT_SQLITE_CONSTRAINTS,
+        )
     db.refresh(obj)
     return _marcar_um(db, obj)
 
@@ -245,8 +270,16 @@ def update_item(
         setattr(obj, key, value)
     if multiportal_changed:
         invalidate_client_trackers(db, obj.id)
-    _sync_client_user(obj, db)
-    db.commit()
+    try:
+        _sync_client_user(obj, db)
+        db.commit()
+    except IntegrityError as exc:
+        raise_integrity_conflict(
+            db,
+            exc,
+            _CLIENT_INTEGRITY_MESSAGES,
+            sqlite_columns=_CLIENT_SQLITE_CONSTRAINTS,
+        )
     db.refresh(obj)
     return _marcar_um(db, obj)
 
@@ -374,8 +407,8 @@ def delete_client_document(
         raise HTTPException(status_code=404, detail='Documento não encontrado')
     try:
         remove_object(document.object_key)
-    except Exception:
-        pass
+    except Exception:  # noqa: BLE001 — exclusão do registro não pode depender do storage
+        logger.warning('Falha ao remover objeto %s do storage', document.object_key, exc_info=True)
     document.active = False
     db.commit()
     return DocumentDeleteOut(message='Documento removido com sucesso')
@@ -417,7 +450,11 @@ def client_timeline_pdf(
             return '-'
         if plan_id not in plan_cache:
             p = db.get(Plan, plan_id)
-            plan_cache[plan_id] = p.name if p else str(plan_id)
+            plan_cache[plan_id] = (
+                f'{p.name} (removido)' if p and p.is_deleted
+                else p.name if p
+                else str(plan_id)
+            )
         return plan_cache[plan_id]
 
     def vehicle_plate(vehicle_id: int | None) -> str:
@@ -425,7 +462,11 @@ def client_timeline_pdf(
             return '-'
         if vehicle_id not in vehicle_cache:
             v = db.get(Vehicle, vehicle_id)
-            vehicle_cache[vehicle_id] = v.plate if v else str(vehicle_id)
+            vehicle_cache[vehicle_id] = (
+                f'{v.plate} (removido)' if v and v.is_deleted
+                else v.plate if v
+                else str(vehicle_id)
+            )
         return vehicle_cache[vehicle_id]
 
     buffer = BytesIO()

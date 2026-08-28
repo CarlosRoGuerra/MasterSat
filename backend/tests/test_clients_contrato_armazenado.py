@@ -67,6 +67,6 @@ def test_contrato_de_outro_cliente_nao_vaza(http, db):
 def test_a_lista_traz_o_indicador_de_cada_um(http, db):
     a, b = _cliente(db, 'COM CONTRATO'), _cliente(db, 'SEM CONTRATO')
     _doc(db, a.id, category='contrato')
-    por_id = {c['id']: c['contrato_armazenado'] for c in http.get('/api/v1/clients/').json()}
+    por_id = {c['id']: c['contrato_armazenado'] for c in http.get('/api/v1/clients/').json()['items']}
     assert por_id[a.id] is True
     assert por_id[b.id] is False

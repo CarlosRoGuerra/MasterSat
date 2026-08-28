@@ -1,15 +1,25 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.api.deps import require_roles
+from app.core.integrity import raise_integrity_conflict
 from app.db.session import get_db
 from app.models.user import User
 from app.models.enums import UserRole
 from app.schemas.user import UserCreate, UserOut, UserUpdate
 from app.core.security import get_password_hash
 router = APIRouter()
+
+_USER_INTEGRITY_MESSAGES = {'uq_users_email_lower': 'E-mail já cadastrado'}
+_USER_SQLITE_SIGNATURES = {
+    'users.email': 'uq_users_email_lower',
+    "index 'uq_users_email_lower'": 'uq_users_email_lower',
+}
+
+
 @router.get('/', response_model=list[UserOut])
 def list_items(db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN))):
     return db.scalars(select(User).where(User.is_deleted.is_(False))).all()
@@ -18,8 +28,35 @@ def create_item(payload: UserCreate, db: Session = Depends(get_db), _: object = 
     data = payload.model_dump()
     data['password_hash'] = get_password_hash(data.pop('password'))
 
-    obj = User(**data)
-    db.add(obj); db.commit(); db.refresh(obj); return obj
+    existing = db.scalar(
+        select(User)
+        .where(func.lower(User.email) == data['email'])
+        .with_for_update()
+    )
+    if existing and not existing.is_deleted:
+        raise HTTPException(status_code=409, detail='E-mail já cadastrado')
+
+    if existing:
+        for key, value in data.items():
+            setattr(existing, key, value)
+        existing.is_deleted = False
+        existing.tokens_valid_from = datetime.now(timezone.utc)
+        obj = existing
+    else:
+        obj = User(**data)
+        db.add(obj)
+
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        raise_integrity_conflict(
+            db,
+            exc,
+            _USER_INTEGRITY_MESSAGES,
+            sqlite_columns=_USER_SQLITE_SIGNATURES,
+        )
+    db.refresh(obj)
+    return obj
 @router.get('/{item_id}', response_model=UserOut)
 def get_item(item_id: int, db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN))):
     obj = db.get(User, item_id)
@@ -37,7 +74,17 @@ def update_item(item_id: int, payload: UserUpdate, db: Session = Depends(get_db)
         data['tokens_valid_from'] = datetime.now(timezone.utc)
 
     for key, value in data.items(): setattr(obj, key, value)
-    db.commit(); db.refresh(obj); return obj
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        raise_integrity_conflict(
+            db,
+            exc,
+            _USER_INTEGRITY_MESSAGES,
+            sqlite_columns=_USER_SQLITE_SIGNATURES,
+        )
+    db.refresh(obj)
+    return obj
 @router.delete('/{item_id}')
 def delete_item(item_id: int, db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN))):
     obj = db.get(User, item_id)

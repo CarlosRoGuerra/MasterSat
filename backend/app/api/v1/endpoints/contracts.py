@@ -10,13 +10,14 @@ from app.api.deps import require_roles
 from app.db.session import get_db
 from app.models.billing import Billing
 from app.models.client import Client
+from app.models.client_charge_item import ClientChargeItem
 from app.models.contract import Contract
 from app.models.enums import BillingStatus, UserRole
 from app.models.plan import Plan
 from app.models.tracker import Tracker
 from app.models.vehicle import Vehicle
 from app.schemas.contract import ContractCreate, ContractOut, ContractUpdate
-from app.services.financial import refresh_overdue_statuses
+from app.services.financial import charge_item_effective_billing_count, refresh_overdue_statuses
 
 router = APIRouter()
 
@@ -314,9 +315,38 @@ def update_item(item_id: int, payload: ContractUpdate, db: Session = Depends(get
 
 @router.delete('/{item_id}')
 def delete_item(item_id: int, db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
-    obj = db.get(Contract, item_id)
+    # O contrato é o recurso que serializa exclusão e fechamento financeiro.
+    # Em PostgreSQL, uma geração concorrente que tomou o mesmo row lock termina
+    # antes desta revalidação; em SQLite o modificador é deliberadamente no-op.
+    obj = db.scalar(
+        select(Contract)
+        .where(Contract.id == item_id)
+        .with_for_update()
+    )
     if not obj or obj.is_deleted:
         raise HTTPException(status_code=404, detail='Contrato não encontrado')
+    active_items = db.scalars(
+        select(ClientChargeItem)
+        .where(
+            ClientChargeItem.contract_id == obj.id,
+            ClientChargeItem.is_deleted.is_(False),
+            ClientChargeItem.active.is_(True),
+        )
+        .order_by(ClientChargeItem.id.asc())
+    ).all()
+    pending_item = next((
+        item for item in active_items
+        if charge_item_effective_billing_count(db, item.id)
+        < max(int(item.installment_count or 1), 1)
+    ), None)
+    if pending_item:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f'Contrato possui lançamento ativo ainda não faturado '
+                f'(#{pending_item.id}). Fature ou remova o lançamento antes de excluir o contrato.'
+            ),
+        )
     obj.is_deleted = True
     obj.status = 'cancelado'
     db.commit()

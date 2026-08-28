@@ -65,28 +65,32 @@ class TestListVehicles:
     def test_empty_list(self, http):
         r = http.get(PREFIX + "/")
         assert r.status_code == 200
-        assert r.json() == []
+        assert r.json() == {"items": [], "total": 0}
 
     def test_returns_existing_vehicle(self, http, veiculo):
         r = http.get(PREFIX + "/")
         assert r.status_code == 200
-        assert any(x["id"] == veiculo.id for x in r.json())
+        body = r.json()
+        assert body["total"] == 1
+        assert any(x["id"] == veiculo.id for x in body["items"])
 
     def test_filter_by_client_id(self, http, veiculo, cliente):
         r = http.get(PREFIX + "/", params={"client_id": cliente.id})
         assert r.status_code == 200
-        assert all(x["client_id"] == cliente.id for x in r.json())
+        assert all(x["client_id"] == cliente.id for x in r.json()["items"])
 
     def test_search_by_plate(self, http, veiculo):
         r = http.get(PREFIX + "/", params={"search": veiculo.plate[:4]})
         assert r.status_code == 200
-        assert len(r.json()) >= 1
+        assert len(r.json()["items"]) >= 1
 
     def test_excludes_soft_deleted(self, http, db, veiculo):
         veiculo.is_deleted = True
         db.commit()
         r = http.get(PREFIX + "/")
-        assert all(x["id"] != veiculo.id for x in r.json())
+        body = r.json()
+        assert body["total"] == 0
+        assert all(x["id"] != veiculo.id for x in body["items"])
 
     def test_client_role_cannot_list(self, http_cliente):
         r = http_cliente.get(PREFIX + "/")
@@ -99,6 +103,26 @@ class TestListVehicles:
     def test_sql_injection_safe(self, http, veiculo):
         r = http.get(PREFIX + "/", params={"search": "'; DROP TABLE vehicles; --"})
         assert r.status_code == 200
+
+    def test_total_reflects_full_count_beyond_limit(self, http, db, veiculo, cliente):
+        # total precisa contar TODOS os veículos que casam o filtro, não só
+        # os que couberam na página — é o motivo de existir o campo.
+        from app.models.vehicle import Vehicle
+
+        for i in range(3):
+            db.add(Vehicle(
+                client_id=cliente.id,
+                plate=f"EXT{i}234",
+                type="carro",
+                status="ativo",
+            ))
+        db.commit()
+
+        r = http.get(PREFIX + "/", params={"limit": 2})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["total"] == 4  # veiculo (fixture) + 3 extras
+        assert len(body["items"]) == 2
 
 
 # ---------------------------------------------------------------------------

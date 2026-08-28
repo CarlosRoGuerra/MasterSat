@@ -1,4 +1,4 @@
-from sqlalchemy import Date, Enum, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Date, Enum, ForeignKey, Index, Integer, Numeric, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -8,9 +8,18 @@ from app.models.enums import TrackerStatus
 
 class Tracker(Base, TimestampMixin, SoftDeleteMixin):
     __tablename__ = 'trackers'
+    __table_args__ = (
+        Index(
+            'uq_trackers_imei_active',
+            'imei',
+            unique=True,
+            postgresql_where=text('is_deleted = false'),
+            sqlite_where=text('is_deleted = 0'),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
-    imei: Mapped[str] = mapped_column(String(50), unique=True, index=True)
+    imei: Mapped[str] = mapped_column(String(50))
     serial_number: Mapped[str | None] = mapped_column(String(60), nullable=True, index=True)
     brand: Mapped[str | None] = mapped_column(String(60), nullable=True)
     model: Mapped[str | None] = mapped_column(String(60), nullable=True)
