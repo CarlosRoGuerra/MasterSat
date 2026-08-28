@@ -1,7 +1,6 @@
 from app.schemas.auth import *
 from app.schemas.billing import *
 from app.schemas.client import *
-from app.schemas.client_portal import *
 from app.schemas.contract import *
 from app.schemas.document import *
 from app.schemas.plan import *
