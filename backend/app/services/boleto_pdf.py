@@ -76,16 +76,23 @@ def _fd(d: date | None) -> str:
 def _fv(v) -> str:
     return f"{float(v or 0):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-def _elide(texto: str, font: str, size: float, max_width: float) -> str:
-    """Corta o texto (com '...') para não ultrapassar max_width — evita que
-    instruções longas invadam a área do QR Code do Pix."""
-    if stringWidth(texto, font, size) <= max_width:
-        return texto
-    sufixo = "..."
-    base = texto
-    while base and stringWidth(base + sufixo, font, size) > max_width:
-        base = base[:-1]
-    return base.rstrip() + sufixo
+def _wrap(texto: str, font: str, size: float, max_width: float) -> list[str]:
+    """Quebra o texto em linhas que cabem em max_width — evita que
+    instruções longas invadam a área do QR Code do Pix, sem cortar o
+    conteúdo (o texto completo continua legível, só que em mais linhas)."""
+    palavras = texto.split()
+    linhas: list[str] = []
+    atual = ""
+    for w in palavras:
+        candidato = f"{atual} {w}".strip()
+        if not atual or stringWidth(candidato, font, size) <= max_width:
+            atual = candidato
+        else:
+            linhas.append(atual)
+            atual = w
+    if atual:
+        linhas.append(atual)
+    return linhas or [""]
 
 
 def _fmt_cnpj(s: str) -> str:
@@ -706,9 +713,14 @@ def _draw_boleto_itau_style(c, d: DadosBoleto, y_top: float, parcela: tuple[int,
     txt_max_w = qx - _mm(1.5) - txt_x  # não invade a coluna do QR Code
     c.setFillColorRGB(0, 0, 0); c.setFont("Helvetica", 5.8)
     ty = yf - _mm(5.2)
-    for line in (d.instrucoes or [])[:3]:
-        texto = _elide(f"• {line}", "Helvetica", 5.8, txt_max_w)
-        c.drawString(txt_x, ty, texto); ty -= _mm(3.4)
+    ty_min = yf - H_INS + _mm(1.5)  # não deixa o texto vazar do quadro
+    for line in (d.instrucoes or []):
+        for sub in _wrap(f"• {line}", "Helvetica", 5.8, txt_max_w):
+            if ty < ty_min:
+                break
+            c.drawString(txt_x, ty, sub); ty -= _mm(3.4)
+        if ty < ty_min:
+            break
     if _draw_pix_no_quadro(c, d, qx, qy, qr):
         c.setFont("Helvetica-Bold", 5.5); c.setFillColorRGB(0, 0, 0)
         c.drawCentredString(qx + _mm(qr) / 2, qy - _mm(qr) - _mm(1.8), "Pague com Pix")
