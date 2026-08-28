@@ -46,7 +46,7 @@ def main() -> None:
         itens=[('MENSALIDADE RASTREAMENTO — PLANO TESTE', 149.90)],
         instrucoes=[
             'Não receber após o vencimento.',
-            'Após vencimento entrar em contato: contato@mastersat.com.br',
+            'Após vencimento entrar em contato: whats (47)98877-9273',
             'Referente ao contrato de rastreamento.',
         ],
     )

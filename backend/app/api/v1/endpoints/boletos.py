@@ -321,7 +321,7 @@ def dados_boleto(b: Billing, c: Client, db: Session, ailos_boleto: AilosBoleto) 
             f"Referente a: {servico_sem_placa}.",
             *([f"Placa: {placa}"] if placa else []),
             "Não receber após o vencimento.",
-            "Após vencimento entrar em contato: contato@mastersat.com.br",
+            "Após vencimento entrar em contato: whats (47)98877-9273",
         ],
     )
     return aplicar_dados_oficiais_ailos(dados, ailos_boleto)
