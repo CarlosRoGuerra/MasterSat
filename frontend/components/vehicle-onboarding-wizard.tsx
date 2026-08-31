@@ -7,7 +7,7 @@ import { ClientAutocomplete } from '@/components/ui/client-autocomplete';
 import { TrackerAutocomplete } from '@/components/ui/tracker-autocomplete';
 import { BillingDayInput } from '@/components/ui/billing-day-input';
 import { CarneTrackingModal, useCarneTracking } from '@/components/carne-tracking-modal';
-import { apiFetch } from '@/lib/api';
+import { apiFetch, apiFetchList } from '@/lib/api';
 import { fetchAddressByCep } from '@/lib/cep';
 import { formatZipCode, intervalLabel, onlyDigits, pricePeriodSuffix } from '@/lib/format';
 
@@ -202,7 +202,7 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
     if (!open || !token) return;
     Promise.all([
       apiFetch<PlanOption[]>('/plans', {}, token).catch(() => []),
-      apiFetch<TrackerOption[]>('/trackers?status=em_estoque&limit=200', {}, token).catch(() => []),
+      apiFetchList<TrackerOption>('/trackers?status=em_estoque&limit=200', {}, token).catch(() => []),
       apiFetch<ServiceProductOption[]>('/service-products', {}, token).catch(() => []),
     ]).then(([p, t, s]) => { setPlans(p); setStockTrackers(t); setServiceProducts(s); });
   }, [open, token]);
