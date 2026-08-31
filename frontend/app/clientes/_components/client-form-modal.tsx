@@ -187,18 +187,6 @@ export function ClientFormModal({
               <Input placeholder="SP" value={form.state} onChange={(e) => onFieldChange('state', e.target.value)} maxLength={2} />
             </FormField>
           </FormGrid>
-          <FormField
-            label="Dia de vencimento preferido"
-            hint="1 a 31 — usado como padrão ao gerar contratos e cobranças. Em meses mais curtos, cai no último dia."
-            error={erroDiaVencimento(form.billing_day) ?? undefined}
-          >
-            <BillingDayInput
-              value={form.billing_day}
-              onChange={(v) => onFormPatch((p) => ({ ...p, billing_day: v }))}
-              placeholder="Ex.: 20"
-              className="max-w-[120px]"
-            />
-          </FormField>
           <FormField label="Observações">
             <Textarea placeholder="Anotações administrativas internas" value={form.notes} onChange={(e) => onFieldChange('notes', e.target.value)} />
           </FormField>
@@ -233,6 +221,18 @@ export function ClientFormModal({
 
         <FormSection title="Financeiro">
           <FormGrid cols={3}>
+            <FormField
+              label="Dia de vencimento preferido"
+              hint="1 a 31 — usado como padrão ao gerar contratos e cobranças. Em meses mais curtos, cai no último dia."
+              error={erroDiaVencimento(form.billing_day) ?? undefined}
+            >
+              <BillingDayInput
+                value={form.billing_day}
+                onChange={(v) => onFormPatch((p) => ({ ...p, billing_day: v }))}
+                placeholder="Ex.: 20"
+                className="max-w-[120px]"
+              />
+            </FormField>
             <FormField label="Formato do Boleto" required>
               <Select value={form.boleto_format} onChange={(e) => onFieldChange('boleto_format', e.target.value)}>
                 <option value="unico">Boleto Único</option>
