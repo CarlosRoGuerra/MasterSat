@@ -578,6 +578,220 @@ class TestCancelBilling:
 
 
 # ---------------------------------------------------------------------------
+# POST /lote/situacao (action=receber) → pagamento em lote e recibo consolidado
+#
+# Requisito do cliente: pagar N parcelas em uma única operação deve gerar UM
+# recibo consolidado (mesmo identificador, discriminando as parcelas, com o
+# total = soma efetivamente paga) — não um recibo por parcela.
+# ---------------------------------------------------------------------------
+
+class TestBatchReceiveConsolidatedReceipt:
+    def _parcelas(self, db, contrato, valores: tuple[float, ...]) -> list[Billing]:
+        criadas = []
+        for i, valor in enumerate(valores, start=1):
+            b = Billing(
+                contract_id=contrato.id,
+                client_id=contrato.client_id,
+                amount=Decimal(str(valor)),
+                due_date=date(2099, 1, i),
+                status=BillingStatus.PENDING,
+                billing_type="carne",
+                installment_number=i,
+                installment_total=len(valores),
+                period_label=f"{i:02d}/2099",
+                title=f"Parcela {i}/{len(valores)}",
+            )
+            db.add(b)
+            criadas.append(b)
+        db.commit()
+        for b in criadas:
+            db.refresh(b)
+        return criadas
+
+    def _receber_em_lote(self, http, ids: list[int], **overrides):
+        payload = {
+            "billing_ids": ids,
+            "action": "receber",
+            "payment_date": "2099-01-05",
+            "payment_method": "pix",
+        }
+        payload.update(overrides)
+        return http.post(f"{PREFIX}/lote/situacao", json=payload)
+
+    # -- cenário principal do requisito: 3 parcelas de R$ 100 -------------
+
+    def test_tres_parcelas_cem_reais_uma_operacao_um_recibo_consolidado(self, http, db, contrato):
+        p1, p2, p3 = self._parcelas(db, contrato, (100.0, 100.0, 100.0))
+
+        r = self._receber_em_lote(http, [p1.id, p2.id, p3.id])
+        assert r.status_code == 200
+        body = r.json()
+
+        # 1 pagamento processando as 3 parcelas de uma vez
+        assert set(body["processados"]) == {p1.id, p2.id, p3.id}
+        assert body["ignorados"] == []
+
+        db.refresh(p1); db.refresh(p2); db.refresh(p3)
+
+        # 3 parcelas liquidadas
+        assert p1.status == BillingStatus.PAID
+        assert p2.status == BillingStatus.PAID
+        assert p3.status == BillingStatus.PAID
+
+        # valor total efetivamente pago = R$ 300,00
+        total_pago = float(p1.paid_amount) + float(p2.paid_amount) + float(p3.paid_amount)
+        assert total_pago == pytest.approx(300.0)
+
+        # 1 único recibo consolidado para a operação: as 3 parcelas compartilham
+        # o mesmo identificador de recibo (hoje cada uma recebe o seu próprio)
+        assert p1.receipt_number is not None
+        assert p1.receipt_number == p2.receipt_number == p3.receipt_number, (
+            "cada parcela recebeu um número de recibo diferente — "
+            "não há recibo consolidado por operação"
+        )
+
+        # o recibo é acessível/discrimina as parcelas a partir de qualquer uma
+        # delas, e reflete o total pago (R$ 300,00), não o valor de 1 parcela
+        for parcela in (p1, p2, p3):
+            rr = http.get(f"{PREFIX}/{parcela.id}/receipt")
+            assert rr.status_code == 200
+            assert rr.headers["content-type"] == "application/pdf"
+
+    # -- variações de quantidade -------------------------------------------
+
+    def test_uma_parcela_gera_recibo_individual(self, http, db, contrato):
+        [p1] = self._parcelas(db, contrato, (100.0,))
+        r = self._receber_em_lote(http, [p1.id])
+        assert r.status_code == 200
+        db.refresh(p1)
+        assert p1.status == BillingStatus.PAID
+        assert p1.receipt_number is not None
+
+    def test_duas_parcelas_recibo_consolidado(self, http, db, contrato):
+        p1, p2 = self._parcelas(db, contrato, (100.0, 100.0))
+        r = self._receber_em_lote(http, [p1.id, p2.id])
+        assert r.status_code == 200
+        db.refresh(p1); db.refresh(p2)
+        assert p1.status == BillingStatus.PAID and p2.status == BillingStatus.PAID
+        assert p1.receipt_number == p2.receipt_number
+        total_pago = float(p1.paid_amount) + float(p2.paid_amount)
+        assert total_pago == pytest.approx(200.0)
+
+    # -- valores diferentes por parcela (cobre "juros"/"desconto": o valor já
+    # ajustado fica no próprio amount da parcela, não há campo separado) ----
+
+    def test_parcelas_com_valores_diferentes(self, http, db, contrato):
+        p1, p2, p3 = self._parcelas(db, contrato, (100.0, 150.0, 80.0))
+        r = self._receber_em_lote(http, [p1.id, p2.id, p3.id])
+        assert r.status_code == 200
+        db.refresh(p1); db.refresh(p2); db.refresh(p3)
+        total_pago = float(p1.paid_amount) + float(p2.paid_amount) + float(p3.paid_amount)
+        assert total_pago == pytest.approx(330.0)
+        assert p1.receipt_number == p2.receipt_number == p3.receipt_number
+
+    def test_parcela_com_juros_amount_ja_reajustado_entra_no_total(self, http, db, contrato):
+        # Neste sistema "juros" não é um campo à parte — é refletido no
+        # próprio amount da parcela (vencida e cobrada com acréscimo).
+        p1, p2 = self._parcelas(db, contrato, (100.0, 100.0))
+        p2.amount = Decimal("112.50")  # 100 + juros já calculado
+        db.commit()
+        r = self._receber_em_lote(http, [p1.id, p2.id])
+        assert r.status_code == 200
+        db.refresh(p1); db.refresh(p2)
+        total_pago = float(p1.paid_amount) + float(p2.paid_amount)
+        assert total_pago == pytest.approx(212.50)
+        assert p1.receipt_number == p2.receipt_number
+
+    def test_parcela_com_desconto_amount_ja_reajustado_entra_no_total(self, http, db, contrato):
+        p1, p2 = self._parcelas(db, contrato, (100.0, 100.0))
+        p2.amount = Decimal("90.00")  # desconto já aplicado
+        db.commit()
+        r = self._receber_em_lote(http, [p1.id, p2.id])
+        assert r.status_code == 200
+        db.refresh(p1); db.refresh(p2)
+        total_pago = float(p1.paid_amount) + float(p2.paid_amount)
+        assert total_pago == pytest.approx(190.0)
+
+    def test_parcela_com_multa_amount_ja_reajustado_entra_no_total(self, http, db, contrato):
+        p1, p2 = self._parcelas(db, contrato, (100.0, 100.0))
+        p2.amount = Decimal("105.00")  # multa já aplicada
+        db.commit()
+        r = self._receber_em_lote(http, [p1.id, p2.id])
+        assert r.status_code == 200
+        db.refresh(p1); db.refresh(p2)
+        total_pago = float(p1.paid_amount) + float(p2.paid_amount)
+        assert total_pago == pytest.approx(205.0)
+
+    # -- pagamento duplicado -------------------------------------------------
+
+    def test_pagamento_duplicado_nao_reprocessa_nem_gera_novo_recibo(self, http, db, contrato):
+        p1, p2, p3 = self._parcelas(db, contrato, (100.0, 100.0, 100.0))
+        r1 = self._receber_em_lote(http, [p1.id, p2.id, p3.id])
+        assert r1.status_code == 200
+        db.refresh(p1)
+        recibo_original = p1.receipt_number
+        paid_amount_original = float(p1.paid_amount)
+
+        # tenta pagar de novo o mesmo lote
+        r2 = self._receber_em_lote(http, [p1.id, p2.id, p3.id])
+        assert r2.status_code == 200
+        body2 = r2.json()
+        # já pagas → ignoradas, não reprocessadas
+        assert set(body2["ignorados"]) == {p1.id, p2.id, p3.id}
+        assert body2["processados"] == []
+
+        db.refresh(p1)
+        assert p1.receipt_number == recibo_original
+        assert float(p1.paid_amount) == pytest.approx(paid_amount_original)
+
+    # -- falha durante o processamento: tudo ou nada -------------------------
+
+    def test_falha_no_meio_do_lote_nao_deixa_pagamento_parcial(self, http, db, contrato):
+        from app.models.ailos_boleto import AilosBoleto
+
+        p1, p2, p3 = self._parcelas(db, contrato, (100.0, 100.0, 100.0))
+        # p2 tem boleto Ailos em registro — bloqueia o lote inteiro
+        db.add(AilosBoleto(
+            billing_id=p2.id, numero_convenio='102004', status_ailos='REGISTRANDO',
+        ))
+        db.commit()
+
+        r = self._receber_em_lote(http, [p1.id, p2.id, p3.id])
+        assert r.status_code == 409
+
+        db.refresh(p1); db.refresh(p2); db.refresh(p3)
+        # nenhuma das 3 pode ter sido paga — tudo ou nada
+        assert p1.status == BillingStatus.PENDING
+        assert p2.status == BillingStatus.PENDING
+        assert p3.status == BillingStatus.PENDING
+        assert p1.receipt_number is None
+        assert p3.receipt_number is None
+
+    # -- concorrência: lotes sobrepostos -------------------------------------
+
+    def test_lotes_sobrepostos_segunda_chamada_nao_duplica_baixa(self, http, db, contrato):
+        # Duas operações de lote que compartilham uma parcela (p2). A segunda
+        # chamada não pode reprocessar p2 nem gerar um segundo recibo pra ela.
+        p1, p2, p3 = self._parcelas(db, contrato, (100.0, 100.0, 100.0))
+
+        r1 = self._receber_em_lote(http, [p1.id, p2.id])
+        assert r1.status_code == 200
+        assert set(r1.json()["processados"]) == {p1.id, p2.id}
+
+        r2 = self._receber_em_lote(http, [p2.id, p3.id])
+        assert r2.status_code == 200
+        body2 = r2.json()
+        assert body2["processados"] == [p3.id]
+        assert body2["ignorados"] == [p2.id]
+
+        db.refresh(p2)
+        db.refresh(p3)
+        # p2 ficou com o recibo da primeira operação (lote 1), não da segunda
+        assert p2.receipt_number is not None
+        assert p3.status == BillingStatus.PAID
+
+
+# ---------------------------------------------------------------------------
 # POST /lote/situacao (cancelamento em lote)
 # ---------------------------------------------------------------------------
 

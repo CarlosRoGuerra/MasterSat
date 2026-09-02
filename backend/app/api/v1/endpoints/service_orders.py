@@ -11,11 +11,14 @@ from fastapi.responses import StreamingResponse
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_roles
 from app.core.config import settings
+from app.core.integrity import raise_integrity_conflict
 from app.core.security import create_file_access_token
+from app.core.uploads import safe_object_name
 from app.db.session import get_db
 from app.models.client import Client
 from app.models.document import Document
@@ -41,6 +44,13 @@ logger = logging.getLogger(__name__)
 
 VIEW_ROLES = (UserRole.ADMIN, UserRole.OPERATIONAL, UserRole.FINANCIAL)
 EDIT_ROLES = (UserRole.ADMIN, UserRole.OPERATIONAL)
+
+_SERVICE_ORDER_INTEGRITY_MESSAGES = {
+    'ix_service_orders_number': 'Já existe uma ordem de serviço com este número.',
+}
+_SERVICE_ORDER_SQLITE_CONSTRAINTS = {
+    'UNIQUE constraint failed: service_orders.number': 'ix_service_orders_number',
+}
 
 
 def _build_document_urls(document_id: int) -> tuple[str, str]:
@@ -146,6 +156,37 @@ def _append_status_log(db: Session, order_id: int, previous_status: OrderStatus 
             notes=notes,
         )
     )
+
+
+def _insert_service_order(db: Session, data: dict, *, number_generated: bool) -> ServiceOrder:
+    """Insere a ordem de serviço.
+
+    Quando o número foi gerado por nós (operador não informou), a contagem
+    usada em `_generate_order_number` não é atômica com o INSERT: duas
+    aberturas concorrentes no mesmo dia podem calcular a mesma sequência e
+    colidir no UNIQUE de `service_orders.number`. Não é um conflito do
+    operador — regeneramos com o estado atual do banco e tentamos mais uma
+    vez. Um número informado manualmente e duplicado, por outro lado, é
+    responsabilidade do operador e vira 409 já na primeira tentativa.
+    """
+    max_attempts = 2 if number_generated else 1
+    for attempt in range(max_attempts):
+        if number_generated and attempt > 0:
+            data = {**data, 'number': _generate_order_number(db)}
+        item = ServiceOrder(**data)
+        if item.status == OrderStatus.COMPLETED and item.executed_at is None:
+            item.executed_at = datetime.utcnow()
+        db.add(item)
+        try:
+            db.flush()
+            return item
+        except IntegrityError as exc:
+            db.rollback()
+            if attempt == max_attempts - 1:
+                raise_integrity_conflict(
+                    db, exc, _SERVICE_ORDER_INTEGRITY_MESSAGES,
+                    sqlite_columns=_SERVICE_ORDER_SQLITE_CONSTRAINTS,
+                )
 
 
 def _fetch_order_or_404(item_id: int, db: Session) -> ServiceOrder:
@@ -276,12 +317,10 @@ def create_item(
 ):
     data = payload.model_dump()
     _ensure_entities(db, data)
-    data['number'] = data.get('number') or _generate_order_number(db)
-    item = ServiceOrder(**data)
-    if item.status == OrderStatus.COMPLETED and item.executed_at is None:
-        item.executed_at = datetime.utcnow()
-    db.add(item)
-    db.flush()
+    number_generated = not data.get('number')
+    if number_generated:
+        data['number'] = _generate_order_number(db)
+    item = _insert_service_order(db, data, number_generated=number_generated)
     _append_status_log(db, item.id, None, item.status, current_user.id, 'Abertura da ordem de serviço')
     db.commit()
     row = _base_query(db).filter(ServiceOrder.id == item.id).first()
@@ -399,7 +438,7 @@ def upload_documents(
         content = file.file.read()
         if not content:
             continue
-        object_key = f'service-orders/{item_id}/documents/{uuid4()}-{file.filename}'
+        object_key = f'service-orders/{item_id}/documents/{uuid4()}-{safe_object_name(file.filename)}'
         upload_bytes(object_key, content, file.content_type or 'application/octet-stream')
         doc = Document(
             file_name=file.filename,

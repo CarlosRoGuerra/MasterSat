@@ -17,7 +17,7 @@ from app.models.plan import Plan
 from app.models.tracker import Tracker
 from app.models.vehicle import Vehicle
 from app.schemas.contract import ContractCreate, ContractOut, ContractUpdate
-from app.services.financial import charge_item_effective_billing_count, refresh_overdue_statuses
+from app.services.financial import cancel_open_billings_for_contract, charge_item_effective_billing_count, refresh_overdue_statuses
 
 router = APIRouter()
 
@@ -347,10 +347,17 @@ def delete_item(item_id: int, db: Session = Depends(get_db), _: object = Depends
                 f'(#{pending_item.id}). Fature ou remova o lançamento antes de excluir o contrato.'
             ),
         )
+    try:
+        boletos_ativos = cancel_open_billings_for_contract(db, obj.id, f'contrato #{obj.id} excluído')
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     obj.is_deleted = True
     obj.status = 'cancelado'
     db.commit()
-    return {'message': 'Contrato removido com sucesso'}
+    response = {'message': 'Contrato removido com sucesso'}
+    if boletos_ativos:
+        response['boletos_ativos'] = boletos_ativos
+    return response
 
 
 @router.get('/{item_id}/pdf')

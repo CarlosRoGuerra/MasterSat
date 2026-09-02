@@ -937,6 +937,122 @@ class TestLinkVeiculo:
 
 
 # ---------------------------------------------------------------------------
+# POST /{id}/swap — trocar o rastreador instalado, mantendo o contrato
+# ---------------------------------------------------------------------------
+
+class TestSwapRastreador:
+    def test_success_moves_old_to_stock_and_installs_new(
+        self, http, db, rastreador_instalado, rastreador, veiculo, contrato,
+    ):
+        from app.models.enums import TrackerStatus
+
+        r = http.post(
+            f"{PREFIX}/{rastreador_instalado.id}/swap",
+            json={"new_tracker_id": rastreador.id, "reason": "Defeito no GPS"},
+        )
+
+        assert r.status_code == 200
+        data = r.json()
+        assert data["contracts_updated"] == [contrato.id]
+
+        db.refresh(rastreador_instalado)
+        db.refresh(rastreador)
+        db.refresh(contrato)
+
+        assert rastreador_instalado.status == TrackerStatus.STOCK
+        assert rastreador_instalado.vehicle_id is None
+        assert rastreador_instalado.client_id is None
+        assert "Defeito no GPS" in rastreador_instalado.notes
+
+        assert rastreador.status == TrackerStatus.INSTALLED
+        assert rastreador.vehicle_id == veiculo.id
+        assert rastreador.client_id == veiculo.client_id
+
+        assert contrato.tracker_id == rastreador.id
+        assert contrato.status == "ativo"
+
+    def test_records_history_for_both_trackers(
+        self, http, db, rastreador_instalado, rastreador, contrato,
+    ):
+        r = http.post(
+            f"{PREFIX}/{rastreador_instalado.id}/swap",
+            json={"new_tracker_id": rastreador.id, "reason": "Defeito no GPS"},
+        )
+        assert r.status_code == 200
+
+        r = http.get(f"{PREFIX}/{rastreador_instalado.id}/history")
+        assert any("Defeito no GPS" in (entry["notes"] or "") for entry in r.json())
+
+        r = http.get(f"{PREFIX}/{rastreador.id}/history")
+        assert any("Defeito no GPS" in (entry["notes"] or "") for entry in r.json())
+
+    def test_rejects_new_tracker_not_in_stock(
+        self, http, db, rastreador_instalado, contrato, veiculo, cliente,
+    ):
+        from app.models.enums import TrackerStatus
+        from app.models.tracker import Tracker
+
+        outro_instalado = Tracker(
+            imei="111122223333444",
+            brand="Teltonika",
+            model="FMB920",
+            status=TrackerStatus.INSTALLED,
+            client_id=cliente.id,
+            vehicle_id=veiculo.id,
+        )
+        db.add(outro_instalado)
+        db.commit()
+        db.refresh(outro_instalado)
+
+        r = http.post(
+            f"{PREFIX}/{rastreador_instalado.id}/swap",
+            json={"new_tracker_id": outro_instalado.id, "reason": "Defeito"},
+        )
+
+        assert r.status_code == 409
+        db.refresh(rastreador_instalado)
+        assert rastreador_instalado.status == TrackerStatus.INSTALLED
+
+    def test_rejects_without_active_contract(self, http, db, rastreador_instalado, rastreador, contrato):
+        from app.models.enums import TrackerStatus
+
+        contrato.status = "cancelado"
+        db.commit()
+
+        r = http.post(
+            f"{PREFIX}/{rastreador_instalado.id}/swap",
+            json={"new_tracker_id": rastreador.id, "reason": "Defeito"},
+        )
+
+        assert r.status_code == 409
+        db.refresh(rastreador_instalado)
+        db.refresh(rastreador)
+        assert rastreador_instalado.status == TrackerStatus.INSTALLED
+        assert rastreador.status == TrackerStatus.STOCK
+
+    def test_rejects_tracker_not_installed(self, http, rastreador):
+        r = http.post(
+            f"{PREFIX}/{rastreador.id}/swap",
+            json={"new_tracker_id": 999999, "reason": "Defeito"},
+        )
+        assert r.status_code == 409
+
+    def test_rejects_same_tracker_as_new(self, http, rastreador_instalado):
+        r = http.post(
+            f"{PREFIX}/{rastreador_instalado.id}/swap",
+            json={"new_tracker_id": rastreador_instalado.id, "reason": "Defeito"},
+        )
+        assert r.status_code == 400
+
+    def test_reason_is_required(self, http, rastreador_instalado, rastreador):
+        r = http.post(
+            f"{PREFIX}/{rastreador_instalado.id}/swap",
+            json={"new_tracker_id": rastreador.id, "reason": ""},
+        )
+        assert r.status_code == 422
+
+
+# ---------------------------------------------------------------------------
 # Authorization
 # ---------------------------------------------------------------------------
 

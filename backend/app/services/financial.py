@@ -9,6 +9,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.timezone import hoje
+from app.models.ailos_boleto import AilosBoleto
 from app.models.billing import Billing
 from app.models.billing_charge_item import BillingChargeItem
 from app.models.client import Client
@@ -648,6 +649,57 @@ def refresh_charge_items_for_billing(
         db.commit()
     else:
         db.flush()
+
+
+_AILOS_REGISTRATION_IN_PROGRESS = ('REGISTRANDO', 'PROCESSANDO')
+
+
+def cancel_open_billings_for_contract(
+    db: Session,
+    contract_id: int,
+    reason: str,
+) -> list[dict]:
+    """Cancela em cascata as cobranças pendentes/vencidas de um contrato excluído.
+
+    Sem isso, uma cobrança já gerada sobrevive à exclusão do contrato — segue
+    vencendo, e até podendo ter boleto (re)emitido, sem nenhum serviço por trás.
+    Retorna as cobranças cujo boleto Ailos segue ativo no banco (baixa manual).
+    """
+    ids = [
+        row[0] for row in db.query(Billing.id).filter(
+            Billing.contract_id == contract_id,
+            Billing.is_deleted.is_(False),
+            Billing.status.in_((BillingStatus.PENDING, BillingStatus.OVERDUE)),
+        ).all()
+    ]
+    if not ids:
+        return []
+    billings = lock_billings_for_update(db, ids)
+    inflight = [
+        row[0] for row in db.query(AilosBoleto.billing_id).filter(
+            AilosBoleto.billing_id.in_(ids),
+            AilosBoleto.status_ailos.in_(_AILOS_REGISTRATION_IN_PROGRESS),
+        ).all()
+    ]
+    if inflight:
+        raise ValueError(
+            f'Cobranças {inflight} aguardando registro na Ailos — tente excluir o contrato novamente em instantes.'
+        )
+    lock_charge_items_for_billings(db, billings)
+    boletos_ativos: list[dict] = []
+    for billing in billings:
+        billing.status = BillingStatus.CANCELED
+        marker = f'Cancelada automaticamente: {reason}'
+        ab = db.query(AilosBoleto).filter_by(billing_id=billing.id).first()
+        if ab and ab.linha_digitavel and ab.codigo_barras:
+            boletos_ativos.append({'billing_id': billing.id, 'nosso_numero': ab.nosso_numero})
+            marker += (
+                f' | [ATENÇÃO] Boleto Ailos (nosso número {ab.nosso_numero or "—"}) '
+                'segue ativo no banco — baixa manual pendente.'
+            )
+        billing.notes = f'{billing.notes} | {marker}' if billing.notes else marker
+        refresh_charge_items_for_billing(db, billing, commit=False)
+    return boletos_ativos
 
 
 def transfer_charge_items_to_billing(

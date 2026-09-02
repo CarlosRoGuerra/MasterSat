@@ -346,18 +346,45 @@ def export_xlsx(search: str | None = None, status: str | None = None, client_id:
     return StreamingResponse(output, media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', headers={'Content-Disposition': 'attachment; filename=financeiro.xlsx'})
 
 
-def _receipt_pdf(billing: Billing, client: Client | None) -> BytesIO:
+def _billings_do_mesmo_recibo(db: Session, billing: Billing) -> list[Billing]:
+    """Todas as parcelas pagas na mesma operação de recebimento (mesmo
+    receipt_number) — para o recibo discriminar cada parcela da operação em
+    vez de mostrar só a que foi usada para abrir o download."""
+    if not billing.receipt_number:
+        return [billing]
+    rows = (
+        db.query(Billing)
+        .filter(
+            Billing.receipt_number == billing.receipt_number,
+            Billing.is_deleted.is_(False),
+            Billing.status == BillingStatus.PAID,
+        )
+        .order_by(Billing.id.asc())
+        .all()
+    )
+    return rows or [billing]
+
+
+def _receipt_pdf(billings: list[Billing], client: Client | None) -> BytesIO:
     """
     Recibo no layout aprovado pelo cliente (logo, CNPJ, dados da empresa, box
     do pagador, tabela de itens e assinatura) — o mesmo que sai no topo do
     boleto, reaproveitado de boleto_pdf.
+
+    Recebe uma ou mais cobranças: um pagamento em lote gera um único recibo
+    consolidado, com uma linha por parcela e o total da operação.
     """
     from decimal import Decimal
 
     from app.services.boleto_ailos import DadosBoleto
     from app.services.boleto_pdf import gerar_recibo_pdf
 
-    valor = Decimal(str(decimal_to_float(billing.paid_amount or billing.amount)))
+    primeira = billings[0]
+    itens = [
+        (b.title or b.notes or 'Cobrança', decimal_to_float(b.paid_amount or b.amount))
+        for b in billings
+    ]
+    valor = Decimal(str(sum(item[1] for item in itens)))
     endereco = ' '.join(filter(None, [
         (client.address_line if client else None),
         (client.address_number if client else None),
@@ -365,13 +392,13 @@ def _receipt_pdf(billing: Billing, client: Client | None) -> BytesIO:
     ])) if client else ''
 
     dados = DadosBoleto(
-        billing_id=billing.id,
+        billing_id=primeira.id,
         # Campos da ficha de compensação não são usados no recibo, mas a
         # dataclass os exige — o recibo avulso não desenha código de barras.
         nosso_numero='', nosso_numero_dv='', nosso_numero_display='',
         codigo_barras='', linha_digitavel='',
-        data_emissao=billing.payment_date or date.today(),
-        data_vencimento=billing.due_date,
+        data_emissao=primeira.payment_date or date.today(),
+        data_vencimento=primeira.due_date,
         valor=valor,
         sacado_nome=(client.name if client else '') or '',
         sacado_cpf_cnpj=(client.cpf_cnpj if client else '') or '',
@@ -380,7 +407,7 @@ def _receipt_pdf(billing: Billing, client: Client | None) -> BytesIO:
         sacado_cep=(client.zip_code if client else '') or '',
         sacado_uf=(client.state if client else '') or '',
         sacado_ie=(getattr(client, 'rg_ie', '') if client else '') or '',
-        itens=[(billing.title or billing.notes or 'Cobrança', float(valor))],
+        itens=itens,
     )
     return BytesIO(gerar_recibo_pdf(dados))
 
@@ -396,7 +423,8 @@ def download_receipt(item_id: int, db: Session = Depends(get_db), _: object = De
         raise HTTPException(status_code=400, detail='Recibo disponível apenas para cobranças pagas')
     # Recibo em nome de quem pagou = interveniente do contrato, quando houver.
     client = resolver_pagador(db, billing, db.get(Client, billing.client_id))
-    buffer = _receipt_pdf(billing, client)
+    grupo = _billings_do_mesmo_recibo(db, billing)
+    buffer = _receipt_pdf(grupo, client)
     filename = f'recibo-{billing.receipt_number or item_id}.pdf'
     return StreamingResponse(buffer, media_type='application/pdf', headers={'Content-Disposition': f'inline; filename={filename}'})
 
@@ -557,6 +585,15 @@ def batch_status(payload: BillingBatchStatusIn, db: Session = Depends(get_db), c
     ]
     _reject_inflight_ailos_billings(db, [billing.id for billing in processable])
     lock_charge_items_for_billings(db, processable)
+    # Um pagamento em lote é UMA operação: todas as parcelas recebidas juntas
+    # compartilham o mesmo número de recibo, para gerar um recibo consolidado
+    # em vez de um por parcela. Ancorado na menor id do lote — determinístico
+    # e único, já que uma parcela só entra em processable uma vez na vida
+    # (depois de paga, sai de `abertas`).
+    lote_receipt_number = (
+        generate_receipt_number(min(b.id for b in processable))
+        if payload.action == 'receber' and processable else None
+    )
     for bid in ids:
         b = locked_by_id.get(bid)
         if not b or b.is_deleted or b.status not in abertas:
@@ -567,7 +604,7 @@ def batch_status(payload: BillingBatchStatusIn, db: Session = Depends(get_db), c
             b.paid_amount = b.paid_amount or b.amount
             b.payment_date = payload.payment_date
             b.payment_method = payload.payment_method
-            b.receipt_number = b.receipt_number or generate_receipt_number(b.id)
+            b.receipt_number = b.receipt_number or lote_receipt_number
             refresh_charge_items_for_billing(
                 db, b, completion_date=payload.payment_date, commit=False,
             )

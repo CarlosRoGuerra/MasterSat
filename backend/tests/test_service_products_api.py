@@ -141,3 +141,54 @@ class TestDeleteServiceProduct:
     def test_operational_cannot_delete(self, http_op, produto_servico):
         r = http_op.delete(f"{PREFIX}/{produto_servico.id}")
         assert r.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# IntegrityError — UNIQUE(name)
+# ---------------------------------------------------------------------------
+#
+# Mesma corrida check-then-insert de test_plans_api.py::TestPlanNameUniqueIntegrity:
+# o pré-check por nome não é atômico com o INSERT/UPDATE, então quem barra a
+# duplicata de verdade é o UNIQUE de schema (`ix_service_products_name`).
+
+class TestServiceProductNameUniqueIntegrity:
+    def _bypass_precheck(self, monkeypatch):
+        from sqlalchemy.orm import Query as SAQuery
+
+        from app.models.service_product import ServiceProduct
+
+        original_first = SAQuery.first
+
+        def fake_first(self):
+            descriptions = self.column_descriptions
+            if descriptions and descriptions[0].get('type') is ServiceProduct:
+                return None
+            return original_first(self)
+
+        monkeypatch.setattr(SAQuery, 'first', fake_first)
+
+    def test_concurrent_create_same_name_returns_409_not_500(self, http, db, monkeypatch):
+        r_seed = http.post(PREFIX + "/", json=_PAYLOAD)
+        assert r_seed.status_code == 200
+        self._bypass_precheck(monkeypatch)
+
+        r = http.post(PREFIX + "/", json=_PAYLOAD)
+
+        assert r.status_code == 409
+        detail = r.json()["detail"]
+        assert "já existe" in detail.lower()
+        assert "unique" not in detail.lower()
+
+    def test_session_stays_usable_after_conflict(self, http, db, monkeypatch):
+        from app.models.service_product import ServiceProduct
+
+        r_seed = http.post(PREFIX + "/", json=_PAYLOAD)
+        assert r_seed.status_code == 200
+        self._bypass_precheck(monkeypatch)
+
+        r = http.post(PREFIX + "/", json=_PAYLOAD)
+        assert r.status_code == 409
+
+        assert db.query(ServiceProduct).filter(ServiceProduct.name == _PAYLOAD["name"]).count() == 1
+        r2 = http.get(PREFIX + "/")
+        assert r2.status_code == 200

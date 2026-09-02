@@ -208,6 +208,11 @@ class TrackerLinkPayload(BaseModel):
     bank: str | None = 'ailos'
 
 
+class TrackerSwapPayload(BaseModel):
+    new_tracker_id: int
+    reason: str = Field(min_length=3, max_length=500)
+
+
 # ── Cadastro em lote ────────────────────────────────────────────────────────
 
 class TrackerLoteIn(BaseModel):

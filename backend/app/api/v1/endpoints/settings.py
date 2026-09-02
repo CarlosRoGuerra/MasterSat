@@ -13,14 +13,28 @@ import smtplib
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_roles
+from app.core.integrity import raise_integrity_conflict
 from app.db.session import get_db
 from app.models.enums import UserRole
 from app.models.system_setting import SystemSetting
 
 router = APIRouter()
+
+# O upsert abaixo (SELECT, depois INSERT se não achar) não é atômico: duas
+# gravações concorrentes da mesma chave podem ambas cair no INSERT e disputar
+# o UNIQUE de `system_settings.key`. Sem valor de negócio em expor isso ao
+# operador — a última escrita é o que importa aqui —, então a resposta cai
+# pro genérico de volta e o operador só tenta salvar de novo.
+_SETTING_INTEGRITY_MESSAGES = {
+    'ix_system_settings_key': 'Configuração alterada por outra sessão ao mesmo tempo. Tente salvar novamente.',
+}
+_SETTING_SQLITE_CONSTRAINTS = {
+    'UNIQUE constraint failed: system_settings.key': 'ix_system_settings_key',
+}
 
 # Templates padrão (usados enquanto nada foi salvo no painel)
 MENSAGENS_PADRAO = {
@@ -78,7 +92,12 @@ def put_mensagens(
             row.value = value
         else:
             db.add(SystemSetting(key=key, value=value))
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        raise_integrity_conflict(
+            db, exc, _SETTING_INTEGRITY_MESSAGES, sqlite_columns=_SETTING_SQLITE_CONSTRAINTS,
+        )
     return _load(db)
 
 

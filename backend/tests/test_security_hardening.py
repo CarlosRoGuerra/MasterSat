@@ -19,7 +19,7 @@ from jose import jwt
 from app.core.client_ip import client_ip_from_scope
 from app.core.config import settings
 from app.core.security import create_access_token, create_refresh_token, token_revogado
-from app.core.uploads import serving_content_type, validate_content_type
+from app.core.uploads import safe_object_name, serving_content_type, validate_content_type
 from app.models.enums import UserRole
 
 
@@ -138,6 +138,78 @@ class TestServingContentType:
 
     def test_content_type_nulo_vira_attachment(self):
         assert serving_content_type(None) == ("application/octet-stream", "attachment")
+
+
+# ---------------------------------------------------------------------------
+# 3b. Nome de arquivo de upload → chave no MinIO (path traversal)
+# ---------------------------------------------------------------------------
+
+class TestSafeObjectName:
+    """``safe_object_name`` é o que impede o filename do usuário de escapar
+    do prefixo lógico da chave composta em cada endpoint de upload."""
+
+    @pytest.mark.parametrize("nome", [
+        "../../arquivo.txt",
+        "../../../etc/passwd",
+        "..\\..\\arquivo.txt",
+        "..\\..\\..\\windows\\win.ini",
+        "a/../../b.txt",
+        "....//....//arquivo.txt",
+    ])
+    def test_neutraliza_travessia(self, nome):
+        resultado = safe_object_name(nome)
+        assert ".." not in resultado
+        assert "/" not in resultado
+        assert "\\" not in resultado
+
+    @pytest.mark.parametrize("nome", [
+        "pasta/arquivo.txt",
+        "pasta\\arquivo.txt",
+        "a/b/c/d.txt",
+    ])
+    def test_remove_separadores_de_diretorio(self, nome):
+        resultado = safe_object_name(nome)
+        assert "/" not in resultado
+        assert "\\" not in resultado
+
+    def test_nome_muito_grande_nao_quebra(self):
+        nome = ("a" * 5000) + "../../etc/passwd"
+        resultado = safe_object_name(nome)
+        assert ".." not in resultado
+        assert "/" not in resultado
+        assert isinstance(resultado, str) and resultado
+
+    @pytest.mark.parametrize("nome", [
+        "arquivo com espaço.txt",
+        "arquivo;rm -rf ~.txt",
+        "arquivo\"'<>|?*.txt",
+        "relatório-ação-início.pdf",
+        "arquivo\x00oculto.txt",
+    ])
+    def test_caracteres_especiais_nao_geram_separador(self, nome):
+        resultado = safe_object_name(nome)
+        assert "/" not in resultado
+        assert "\\" not in resultado
+        assert ".." not in resultado
+
+    def test_none_vira_nome_padrao(self):
+        assert safe_object_name(None) == "arquivo"
+
+    def test_vazio_vira_nome_padrao(self):
+        assert safe_object_name("") == "arquivo"
+
+    def test_so_travessia_nao_fica_vazio(self):
+        resultado = safe_object_name("../../..")
+        assert resultado
+        assert ".." not in resultado
+
+    def test_remove_byte_nulo(self):
+        resultado = safe_object_name("arquivo\x00oculto.txt")
+        assert "\x00" not in resultado
+
+    def test_trunca_nome_muito_longo(self):
+        resultado = safe_object_name("a" * 5000 + ".pdf")
+        assert len(resultado) <= 200
 
 
 # ---------------------------------------------------------------------------

@@ -72,11 +72,19 @@ async def read_limited(file: UploadFile) -> bytes:
     return conteudo
 
 
+_MAX_OBJECT_NAME_LENGTH = 200
+
+
 def safe_object_name(filename: str | None) -> str:
     """Nome de arquivo sem separador de caminho, para compor a chave do objeto."""
     nome = (filename or 'arquivo').replace('/', '_').replace('\\', '_').strip()
     # ".." isolado viraria travessia ao compor a chave no MinIO.
     nome = nome.replace('..', '_')
+    # Byte nulo sobrevive aos replaces acima e pode confundir client libs/proxies.
+    nome = nome.replace('\x00', '_')
+    # Sem teto, um filename gigante estoura o limite de chave do MinIO/S3
+    # (1024 bytes) e quebra o upload; a coluna file_name também é String(255).
+    nome = nome[:_MAX_OBJECT_NAME_LENGTH]
     return nome or 'arquivo'
 
 

@@ -157,6 +157,24 @@ class TestCreateVehicle:
         r = http_cliente.post(PREFIX + "/", json=_payload(cliente.id))
         assert r.status_code == 403
 
+    def test_duplicate_plate_of_active_vehicle_returns_409(self, http, cliente, veiculo):
+        r = http.post(PREFIX + "/", json=_payload(cliente.id, veiculo.plate))
+        assert r.status_code == 409
+        assert r.json()["detail"] == "Já existe veículo com essa placa"
+
+    def test_duplicate_chassis_of_active_vehicle_returns_409(self, http, cliente, veiculo):
+        payload = {**_payload(cliente.id, "NEW1A11"), "chassis": veiculo.chassis}
+        r = http.post(PREFIX + "/", json=payload)
+        assert r.status_code == 409
+        assert r.json()["detail"] == "Já existe veículo com esse chassi"
+
+    def test_plate_of_soft_deleted_vehicle_can_be_reused(self, http, db, cliente, veiculo):
+        veiculo.is_deleted = True
+        db.commit()
+        r = http.post(PREFIX + "/", json=_payload(cliente.id, veiculo.plate))
+        assert r.status_code == 200
+        assert r.json()["id"] != veiculo.id
+
 
 # ---------------------------------------------------------------------------
 # GET /{id}
@@ -196,6 +214,29 @@ class TestUpdateVehicle:
     def test_update_nonexistent_returns_404(self, http):
         r = http.put(f"{PREFIX}/99999", json={"model": "X"})
         assert r.status_code == 404
+
+    def test_update_to_duplicate_plate_of_another_active_vehicle_returns_409(
+        self, http, veiculo, veiculo_outro_cliente,
+    ):
+        r = http.put(f"{PREFIX}/{veiculo.id}", json={"plate": veiculo_outro_cliente.plate})
+        assert r.status_code == 409
+        assert r.json()["detail"] == "Já existe veículo com essa placa"
+
+    def test_update_to_duplicate_chassis_of_another_active_vehicle_returns_409(
+        self, http, veiculo, veiculo_outro_cliente,
+    ):
+        r = http.put(f"{PREFIX}/{veiculo.id}", json={"chassis": veiculo_outro_cliente.chassis})
+        assert r.status_code == 409
+        assert r.json()["detail"] == "Já existe veículo com esse chassi"
+
+    def test_update_to_plate_of_soft_deleted_vehicle_succeeds(
+        self, http, db, veiculo, veiculo_outro_cliente,
+    ):
+        veiculo_outro_cliente.is_deleted = True
+        db.commit()
+        r = http.put(f"{PREFIX}/{veiculo.id}", json={"plate": veiculo_outro_cliente.plate})
+        assert r.status_code == 200
+        assert r.json()["plate"] == veiculo_outro_cliente.plate
 
     def test_multiportal_change_marks_all_vehicle_trackers_pending(
         self, http, db, cliente, veiculo, rastreador, rastreador_instalado,

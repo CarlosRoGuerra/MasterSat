@@ -344,6 +344,58 @@ class TestDeleteContrato:
         r = http.delete(f"{PREFIX}/{contrato.id}")
         assert r.status_code == 404
 
+    def test_cancels_open_billings_of_the_deleted_contract(
+        self, http, db, contrato, billing_pendente, billing_vencida,
+    ):
+        from app.models.enums import BillingStatus
+
+        r = http.delete(f"{PREFIX}/{contrato.id}")
+
+        assert r.status_code == 200
+        db.refresh(billing_pendente)
+        db.refresh(billing_vencida)
+        assert billing_pendente.status == BillingStatus.CANCELED
+        assert billing_vencida.status == BillingStatus.CANCELED
+        assert "excluído" in billing_pendente.notes
+        assert "excluído" in billing_vencida.notes
+
+    def test_does_not_touch_billings_already_paid_or_canceled(
+        self, http, db, contrato, billing_pendente,
+    ):
+        from app.models.enums import BillingStatus
+
+        billing_pendente.status = BillingStatus.PAID
+        billing_pendente.notes = None
+        db.commit()
+
+        r = http.delete(f"{PREFIX}/{contrato.id}")
+
+        assert r.status_code == 200
+        db.refresh(billing_pendente)
+        assert billing_pendente.status == BillingStatus.PAID
+        assert billing_pendente.notes is None
+
+    def test_blocks_deletion_while_ailos_boleto_is_being_registered(
+        self, http, db, contrato, billing_pendente,
+    ):
+        from app.models.ailos_boleto import AilosBoleto
+        from app.models.enums import BillingStatus
+
+        db.add(AilosBoleto(
+            billing_id=billing_pendente.id,
+            numero_convenio="102004",
+            status_ailos="REGISTRANDO",
+        ))
+        db.commit()
+
+        r = http.delete(f"{PREFIX}/{contrato.id}")
+
+        assert r.status_code == 409
+        db.refresh(contrato)
+        db.refresh(billing_pendente)
+        assert contrato.is_deleted is False
+        assert billing_pendente.status == BillingStatus.PENDING
+
 
 # ---------------------------------------------------------------------------
 # POST /{id}/generate-billings

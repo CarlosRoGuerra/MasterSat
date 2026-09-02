@@ -230,3 +230,81 @@ class TestPlanoPadroesContrato:
 
     def test_dia_de_vencimento_fora_da_faixa_rejeitado(self, http):
         assert self._criar(http, name='PLANO 32', default_billing_day=32).status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# IntegrityError — UNIQUE(name)
+# ---------------------------------------------------------------------------
+#
+# create/update já fazem um pré-check por nome (case-insensitive) antes do
+# INSERT/UPDATE, mas esse pré-check não é atômico com a escrita: duas
+# requisições concorrentes com o mesmo nome podem passar as duas pelo SELECT
+# antes de qualquer COMMIT. Quem barra a duplicata de verdade é o UNIQUE de
+# schema (`plans.name`) — estes testes cobrem esse caminho.
+
+class TestPlanNameUniqueIntegrity:
+    def _bypass_precheck_for_plan(self, monkeypatch):
+        """Neutraliza só o SELECT de pré-checagem por nome (que acharia o
+        duplicado e devolveria 400), simulando a janela de corrida em que
+        outra transação ainda não era visível para esta quando o SELECT
+        rodou. O INSERT segue até o banco de verdade, e o UNIQUE do SQLite
+        dispara o IntegrityError que o endpoint precisa traduzir."""
+        from sqlalchemy.orm import Query as SAQuery
+
+        original_first = SAQuery.first
+
+        def fake_first(self):
+            descriptions = self.column_descriptions
+            if descriptions and descriptions[0].get('type') is Plan:
+                return None
+            return original_first(self)
+
+        monkeypatch.setattr(SAQuery, 'first', fake_first)
+
+    def test_concurrent_create_same_name_returns_409_not_500(self, http, db, monkeypatch):
+        db.add(Plan(name='Plano Corrida', price=Decimal('10.00'), active=True, billing_interval_months=1))
+        db.commit()
+        self._bypass_precheck_for_plan(monkeypatch)
+
+        r = http.post('/api/v1/plans/', json={
+            'name': 'Plano Corrida', 'price': 20.0, 'billing_interval_months': 1,
+        })
+
+        assert r.status_code == 409
+        detail = r.json()['detail']
+        assert 'já existe' in detail.lower()
+        # Não vaza nome de constraint/SQL — só a mensagem de domínio.
+        assert 'unique' not in detail.lower()
+        assert 'constraint' not in detail.lower()
+
+    def test_session_stays_usable_after_conflict(self, http, db, monkeypatch):
+        """Requisito de produção: a sessão não pode ficar numa transação
+        quebrada depois do IntegrityError — a próxima query no mesmo
+        request/worker precisa funcionar normalmente."""
+        db.add(Plan(name='Plano Corrida', price=Decimal('10.00'), active=True, billing_interval_months=1))
+        db.commit()
+        self._bypass_precheck_for_plan(monkeypatch)
+
+        r = http.post('/api/v1/plans/', json={
+            'name': 'Plano Corrida', 'price': 20.0, 'billing_interval_months': 1,
+        })
+        assert r.status_code == 409
+
+        # Nenhum plano duplicado foi persistido, e a sessão segue operável.
+        assert db.query(Plan).filter(Plan.name == 'Plano Corrida').count() == 1
+        r2 = http.get('/api/v1/plans/')
+        assert r2.status_code == 200
+
+    def test_concurrent_update_to_same_name_returns_409(self, http, db, monkeypatch):
+        db.add(Plan(name='Plano Alvo', price=Decimal('10.00'), active=True, billing_interval_months=1))
+        outro = Plan(name='Plano Origem', price=Decimal('10.00'), active=True, billing_interval_months=1)
+        db.add(outro)
+        db.commit()
+        db.refresh(outro)
+        self._bypass_precheck_for_plan(monkeypatch)
+
+        r = http.put(f'/api/v1/plans/{outro.id}', json={'name': 'Plano Alvo'})
+
+        assert r.status_code == 409
+        db.refresh(outro)
+        assert outro.name == 'Plano Origem'

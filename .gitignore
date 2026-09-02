@@ -39,6 +39,8 @@ backend/scripts/ailos_login_gerado.json
 *.p12
 *.PFX
 *.P12
+*.pem
+*.key
 
 # ─── XMLs de NFS-e gerados pelo script de teste ──────────────────────────────
 backend/scripts/nfse_saida/

@@ -163,6 +163,12 @@ class TestCreateClient:
         assert r.status_code == 200
         assert r.json()["name"] == "<script>alert(1)</script>"
 
+    def test_duplicate_cpf_cnpj_of_active_client_returns_409(self, http, cliente):
+        payload = {**_PF_PAYLOAD, "cpf_cnpj": cliente.cpf_cnpj}
+        r = http.post(PREFIX + "/", json=payload)
+        assert r.status_code == 409
+        assert r.json()["detail"] == "Já existe cliente com este CPF/CNPJ"
+
 
 # ---------------------------------------------------------------------------
 # GET /{id}
@@ -209,6 +215,22 @@ class TestUpdateClient:
         assert r.status_code == 200
         data = r.json()
         assert data["cpf_cnpj"] == cliente.cpf_cnpj  # unchanged
+
+    def test_update_to_duplicate_cpf_cnpj_of_another_active_client_returns_409(
+        self, http, cliente, outro_cliente,
+    ):
+        r = http.put(f"{PREFIX}/{cliente.id}", json={"cpf_cnpj": outro_cliente.cpf_cnpj})
+        assert r.status_code == 409
+        assert r.json()["detail"] == "Já existe cliente com este CPF/CNPJ"
+
+    def test_update_to_cpf_cnpj_of_soft_deleted_client_succeeds(
+        self, http, db, cliente, outro_cliente,
+    ):
+        outro_cliente.is_deleted = True
+        db.commit()
+        r = http.put(f"{PREFIX}/{cliente.id}", json={"cpf_cnpj": outro_cliente.cpf_cnpj})
+        assert r.status_code == 200
+        assert r.json()["cpf_cnpj"] == outro_cliente.cpf_cnpj
 
     def test_multiportal_change_marks_linked_trackers_pending(
         self, http, db, cliente, rastreador_instalado,

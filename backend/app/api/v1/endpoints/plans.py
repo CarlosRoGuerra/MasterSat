@@ -1,8 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_roles
+from app.core.integrity import raise_integrity_conflict
 from app.db.session import get_db
 from app.models.contract import Contract
 from app.models.enums import UserRole
@@ -10,6 +12,18 @@ from app.models.plan import Plan
 from app.schemas.plan import PlanCreate, PlanOut, PlanUpdate
 
 router = APIRouter()
+
+# O pré-check por nome (case-insensitive) abaixo tem uma janela de corrida:
+# duas criações concorrentes com o mesmo nome podem passar as duas pelo
+# SELECT antes de qualquer COMMIT. O UNIQUE de schema (`plans.name`) barra a
+# duplicata no banco — isto só traduz esse IntegrityError numa mensagem de
+# domínio em vez de vazar como 500.
+_PLAN_INTEGRITY_MESSAGES = {
+    'plans_name_key': 'Já existe um plano com este nome.',
+}
+_PLAN_SQLITE_CONSTRAINTS = {
+    'UNIQUE constraint failed: plans.name': 'plans_name_key',
+}
 
 
 def serialize_plan(db: Session, plan: Plan) -> PlanOut:
@@ -55,7 +69,12 @@ def create_item(payload: PlanCreate, db: Session = Depends(get_db), _: object = 
         raise HTTPException(status_code=400, detail='Já existe um plano com este nome.')
     obj = Plan(**payload.model_dump())
     db.add(obj)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        raise_integrity_conflict(
+            db, exc, _PLAN_INTEGRITY_MESSAGES, sqlite_columns=_PLAN_SQLITE_CONSTRAINTS,
+        )
     db.refresh(obj)
     return serialize_plan(db, obj)
 
@@ -80,7 +99,12 @@ def update_item(item_id: int, payload: PlanUpdate, db: Session = Depends(get_db)
             raise HTTPException(status_code=400, detail='Já existe outro plano com este nome.')
     for key, value in data.items():
         setattr(obj, key, value)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        raise_integrity_conflict(
+            db, exc, _PLAN_INTEGRITY_MESSAGES, sqlite_columns=_PLAN_SQLITE_CONSTRAINTS,
+        )
     db.refresh(obj)
     return serialize_plan(db, obj)
 
