@@ -8,8 +8,6 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
-from reportlab.lib.pagesizes import A4
-from reportlab.pdfgen import canvas
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -18,25 +16,32 @@ from app.api.deps import require_roles
 from app.core.config import settings
 from app.core.integrity import raise_integrity_conflict
 from app.core.security import create_file_access_token
-from app.core.uploads import safe_object_name
+from app.core.uploads import read_limited, safe_object_name, validate_content_type
 from app.db.session import get_db
 from app.models.client import Client
 from app.models.document import Document
 from app.models.enums import DocumentReviewStatus, OrderStatus, OrderType, UserRole
 from app.models.service_order import ServiceOrder
+from app.models.service_order_material import ServiceOrderMaterial
 from app.models.service_order_status_log import ServiceOrderStatusLog
+from app.models.service_product import ServiceProduct
 from app.models.tracker import Tracker
 from app.models.user import User
 from app.models.vehicle import Vehicle
 from app.schemas.document import DocumentDeleteOut, DocumentOut, DocumentReviewUpdate
 from app.schemas.service_order import (
     ServiceOrderCreate,
+    ServiceOrderMaterialIn,
+    ServiceOrderMaterialOut,
     ServiceOrderOut,
     ServiceOrderPdfCreate,
     ServiceOrderStatusLogOut,
     ServiceOrderStatusUpdate,
     ServiceOrderUpdate,
+    SignatureIn,
 )
+from app.services.service_order_docx import decode_signature_image, gerar_os_docx, montar_dados_os
+from app.services.service_order_pdf import gerar_os_pdf
 from app.services.storage import remove_object, upload_bytes
 
 router = APIRouter()
@@ -102,6 +107,7 @@ def _serialize(row) -> ServiceOrderOut:
         number=order.number,
         type=order.type,
         status=order.status,
+        priority=order.priority,
         client_id=order.client_id,
         vehicle_id=order.vehicle_id,
         tracker_id=order.tracker_id,
@@ -110,6 +116,10 @@ def _serialize(row) -> ServiceOrderOut:
         executed_at=order.executed_at,
         checklist=order.checklist,
         observations=order.observations,
+        problem_description=order.problem_description,
+        execution_description=order.execution_description,
+        technician_signed_at=order.technician_signed_at,
+        client_signed_at=order.client_signed_at,
         client_name=client_name,
         vehicle_plate=vehicle_plate,
         tracker_label=tracker_imei,
@@ -196,79 +206,36 @@ def _fetch_order_or_404(item_id: int, db: Session) -> ServiceOrder:
     return item
 
 
-def _order_context(db: Session, item: ServiceOrder):
-    client = db.get(Client, item.client_id) if item.client_id else None
-    vehicle = db.get(Vehicle, item.vehicle_id) if item.vehicle_id else None
-    tracker = db.get(Tracker, item.tracker_id) if item.tracker_id else None
-    technician = db.get(User, item.technician_id) if item.technician_id else None
-    return client, vehicle, tracker, technician
+_DOCUMENT_KINDS = {
+    'ordem_servico': 'ordem-servico',
+    'termo_instalacao': 'termo-instalacao',
+    'termo_retirada': 'termo-retirada',
+    'historico_execucao': 'historico-execucao',
+}
 
 
-def _draw_title(pdf: canvas.Canvas, title: str, subtitle: str | None = None):
-    y = 800
-    pdf.setFont('Helvetica-Bold', 18)
-    pdf.drawString(50, y, title)
-    if subtitle:
-        y -= 20
-        pdf.setFont('Helvetica', 10)
-        pdf.drawString(50, y, subtitle)
-    return y - 30
+def _ensure_completion_requirements(item: ServiceOrder) -> None:
+    """OS 'profissional': concluir exige o registro mínimo de campo — o que
+    foi feito, e as duas assinaturas confirmando o atendimento."""
+    faltando = []
+    if not (item.execution_description and item.execution_description.strip()):
+        faltando.append('descrição do serviço executado')
+    if not item.technician_signed_at:
+        faltando.append('assinatura do técnico')
+    if not item.client_signed_at:
+        faltando.append('assinatura do cliente')
+    if faltando:
+        raise HTTPException(
+            status_code=422,
+            detail=f'Para concluir a ordem de serviço, preencha: {", ".join(faltando)}.',
+        )
 
 
-def _pdf_lines_for_order(item: ServiceOrder, client: Client | None, vehicle: Vehicle | None, tracker: Tracker | None, technician: User | None):
-    checklist_items = []
-    if isinstance(item.checklist, dict):
-        raw_items = item.checklist.get('items') or []
-        if isinstance(raw_items, list):
-            checklist_items = [str(i) for i in raw_items if str(i).strip()]
-    return [
-        f'Ordem: {item.number}',
-        f'Tipo: {item.type.value}',
-        f'Status: {item.status.value}',
-        f'Cliente: {client.name if client else "-"}',
-        f'Veículo: {vehicle.plate if vehicle else "-"}',
-        f'Rastreador: {tracker.imei if tracker else "-"}',
-        f'Técnico: {technician.name if technician else "-"}',
-        f'Agendamento: {item.scheduled_at.strftime("%d/%m/%Y %H:%M") if item.scheduled_at else "-"}',
-        f'Execução: {item.executed_at.strftime("%d/%m/%Y %H:%M") if item.executed_at else "-"}',
-        'Checklist: ' + (', '.join(checklist_items) if checklist_items else 'Não informado'),
-        'Observações: ' + (item.observations or 'Sem observações'),
-    ]
-
-
-def _build_pdf_bytes(kind: str, item: ServiceOrder, client: Client | None, vehicle: Vehicle | None, tracker: Tracker | None, technician: User | None, logs: list[ServiceOrderStatusLog] | None = None) -> bytes:
-    buffer = BytesIO()
-    pdf = canvas.Canvas(buffer, pagesize=A4)
-    pdf.setTitle(f'{kind}-{item.number}')
-    subtitle = 'Documento operacional gerado automaticamente pelo sistema'
-    title_map = {
-        'ordem_servico': 'Ordem de Serviço',
-        'termo_instalacao': 'Termo de Instalação',
-        'termo_retirada': 'Termo de Retirada de Equipamento',
-        'historico_execucao': 'Histórico de Execução',
-    }
-    y = _draw_title(pdf, title_map.get(kind, 'Documento Operacional'), subtitle)
-    pdf.setFont('Helvetica', 11)
-    if kind == 'historico_execucao' and logs is not None:
-        lines = [f'Ordem: {item.number}', f'Cliente: {client.name if client else "-"}', '']
-        for entry in logs:
-            lines.append(
-                f"{entry.created_at.strftime('%d/%m/%Y %H:%M') if entry.created_at else '-'} • {entry.previous_status.value if entry.previous_status else 'novo'} → {entry.new_status.value} • {entry.notes or 'sem observações'}"
-            )
-    else:
-        lines = _pdf_lines_for_order(item, client, vehicle, tracker, technician)
-    for line in lines:
-        for part in [line[i:i+100] for i in range(0, len(line), 100)] or ['']:
-            pdf.drawString(50, y, part)
-            y -= 18
-            if y < 60:
-                pdf.showPage()
-                y = 800
-                pdf.setFont('Helvetica', 11)
-    pdf.showPage()
-    pdf.save()
-    buffer.seek(0)
-    return buffer.getvalue()
+def _validate_signature_bytes(content: bytes) -> None:
+    if not content.startswith(b'\x89PNG\r\n\x1a\n'):
+        raise HTTPException(status_code=415, detail='A assinatura precisa ser uma imagem PNG.')
+    if len(content) > settings.max_upload_bytes:
+        raise HTTPException(status_code=413, detail='Assinatura excede o tamanho máximo permitido.')
 
 
 @router.get('/', response_model=list[ServiceOrderOut])
@@ -348,6 +315,8 @@ def update_item(
     previous_status = item.status
     for key, value in data.items():
         setattr(item, key, value)
+    if item.status == OrderStatus.COMPLETED and previous_status != OrderStatus.COMPLETED:
+        _ensure_completion_requirements(item)
     if item.status == OrderStatus.COMPLETED and item.executed_at is None:
         item.executed_at = datetime.utcnow()
     if 'status' in data and data['status'] != previous_status:
@@ -366,6 +335,8 @@ def update_status(
 ):
     item = _fetch_order_or_404(item_id, db)
     previous_status = item.status
+    if payload.status == OrderStatus.COMPLETED and previous_status != OrderStatus.COMPLETED:
+        _ensure_completion_requirements(item)
     item.status = payload.status
     if payload.notes:
         item.observations = f'{item.observations}\n\n{payload.notes}'.strip() if item.observations else payload.notes
@@ -410,45 +381,45 @@ def delete_item(item_id: int, db: Session = Depends(get_db), _: User = Depends(r
 
 
 @router.get('/{item_id}/documents', response_model=list[DocumentOut])
-def list_documents(item_id: int, db: Session = Depends(get_db), _: User = Depends(require_roles(*VIEW_ROLES))):
+def list_documents(item_id: int, include_inactive: bool = False, db: Session = Depends(get_db), _: User = Depends(require_roles(*VIEW_ROLES))):
     _fetch_order_or_404(item_id, db)
-    docs = db.scalars(
-        select(Document)
-        .where(
-            Document.reference_type == 'service_order',
-            Document.reference_id == item_id,
-            Document.active.is_(True),
-        )
-        .order_by(Document.id.desc())
-    ).all()
+    query = select(Document).where(
+        Document.reference_type == 'service_order',
+        Document.reference_id == item_id,
+    )
+    if not include_inactive:
+        query = query.where(Document.active.is_(True))
+    docs = db.scalars(query.order_by(Document.id.desc())).all()
     return [_document_to_out(doc) for doc in docs]
 
 
 @router.post('/{item_id}/documents', response_model=list[DocumentOut])
-def upload_documents(
+async def upload_documents(
     item_id: int,
     category: str = Form(...),
     files: list[UploadFile] = File(...),
     db: Session = Depends(get_db),
-    _: User = Depends(require_roles(*EDIT_ROLES)),
+    current_user: User = Depends(require_roles(*EDIT_ROLES)),
 ):
     _fetch_order_or_404(item_id, db)
     created: list[DocumentOut] = []
     for file in files:
-        content = file.file.read()
+        content_type = validate_content_type(file)
+        content = await read_limited(file)
         if not content:
             continue
         object_key = f'service-orders/{item_id}/documents/{uuid4()}-{safe_object_name(file.filename)}'
-        upload_bytes(object_key, content, file.content_type or 'application/octet-stream')
+        upload_bytes(object_key, content, content_type)
         doc = Document(
             file_name=file.filename,
             object_key=object_key,
-            content_type=file.content_type or 'application/octet-stream',
+            content_type=content_type,
             size_bytes=len(content),
             reference_type='service_order',
             reference_id=item_id,
             category=category,
             review_status=DocumentReviewStatus.SUBMITTED,
+            uploaded_by_user_id=current_user.id,
         )
         db.add(doc)
         db.flush()
@@ -515,30 +486,55 @@ def generate_document(
     current_user: User = Depends(require_roles(*EDIT_ROLES)),
 ):
     item = _fetch_order_or_404(item_id, db)
-    client, vehicle, tracker, technician = _order_context(db, item)
-    logs = None
-    if payload.kind == 'historico_execucao':
-        logs = db.scalars(select(ServiceOrderStatusLog).where(ServiceOrderStatusLog.service_order_id == item_id).order_by(ServiceOrderStatusLog.created_at.asc())).all()
-    pdf_bytes = _build_pdf_bytes(payload.kind, item, client, vehicle, tracker, technician, logs)
-    title_map = {
-        'ordem_servico': 'ordem-servico',
-        'termo_instalacao': 'termo-instalacao',
-        'termo_retirada': 'termo-retirada',
-        'historico_execucao': 'historico-execucao',
-    }
-    filename = f"{title_map.get(payload.kind, payload.kind)}-{item.number}.pdf"
+    data = montar_dados_os(payload.kind, item, db)
+
+    if payload.format == 'docx':
+        content = gerar_os_docx(data)
+        content_type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        extension = 'docx'
+    else:
+        content = gerar_os_pdf(data)
+        content_type = 'application/pdf'
+        extension = 'pdf'
+
+    filename = f"{_DOCUMENT_KINDS.get(payload.kind, payload.kind)}-{item.number}.{extension}"
     object_key = f'service-orders/{item_id}/generated/{uuid4()}-{filename}'
-    upload_bytes(object_key, pdf_bytes, 'application/pdf')
+    upload_bytes(object_key, content, content_type)
+
+    # Versionamento: o Document ativo mais recente do mesmo kind E FORMATO
+    # vira "anterior" (active=False, preservado no storage) em vez de sumir.
+    # Precisa ser por kind+formato, não só kind: PDF e DOCX da mesma "Ordem
+    # de Serviço" são dois arquivos que o usuário quer manter disponíveis ao
+    # mesmo tempo (um pra assinar/imprimir, outro editável) — não uma versão
+    # substituindo a outra. Só regenerar o MESMO formato supersede o anterior.
+    previous = db.scalar(
+        select(Document)
+        .where(
+            Document.reference_type == 'service_order',
+            Document.reference_id == item_id,
+            Document.category == payload.kind,
+            Document.content_type == content_type,
+            Document.active.is_(True),
+        )
+        .order_by(Document.version.desc())
+    )
+    version = previous.version + 1 if previous else 1
+    if previous:
+        previous.active = False
+
     document = Document(
         file_name=filename,
         object_key=object_key,
-        content_type='application/pdf',
-        size_bytes=len(pdf_bytes),
+        content_type=content_type,
+        size_bytes=len(content),
         reference_type='service_order',
         reference_id=item_id,
         category=payload.kind,
         review_status=DocumentReviewStatus.APPROVED,
         review_notes=f'Gerado automaticamente por {current_user.name}',
+        uploaded_by_user_id=current_user.id,
+        version=version,
+        supersedes_document_id=previous.id if previous else None,
     )
     db.add(document)
     db.commit()
@@ -548,12 +544,168 @@ def generate_document(
 
 @router.get('/{item_id}/pdf/{kind}')
 def stream_generated_pdf(kind: str, item_id: int, db: Session = Depends(get_db), _: User = Depends(require_roles(*VIEW_ROLES))):
-    if kind not in {'ordem_servico', 'termo_instalacao', 'termo_retirada', 'historico_execucao'}:
-        raise HTTPException(status_code=400, detail='Tipo de PDF inválido')
+    if kind not in _DOCUMENT_KINDS:
+        raise HTTPException(status_code=400, detail='Tipo de documento inválido')
     item = _fetch_order_or_404(item_id, db)
-    client, vehicle, tracker, technician = _order_context(db, item)
-    logs = None
-    if kind == 'historico_execucao':
-        logs = db.scalars(select(ServiceOrderStatusLog).where(ServiceOrderStatusLog.service_order_id == item_id).order_by(ServiceOrderStatusLog.created_at.asc())).all()
-    content = _build_pdf_bytes(kind, item, client, vehicle, tracker, technician, logs)
+    data = montar_dados_os(kind, item, db)
+    content = gerar_os_pdf(data)
     return StreamingResponse(BytesIO(content), media_type='application/pdf', headers={'Content-Disposition': f'inline; filename={kind}-{item.number}.pdf'})
+
+
+@router.get('/{item_id}/docx/{kind}')
+def stream_generated_docx(kind: str, item_id: int, db: Session = Depends(get_db), _: User = Depends(require_roles(*VIEW_ROLES))):
+    if kind not in _DOCUMENT_KINDS:
+        raise HTTPException(status_code=400, detail='Tipo de documento inválido')
+    item = _fetch_order_or_404(item_id, db)
+    data = montar_dados_os(kind, item, db)
+    content = gerar_os_docx(data)
+    return StreamingResponse(
+        BytesIO(content),
+        media_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        headers={'Content-Disposition': f'inline; filename={kind}-{item.number}.docx'},
+    )
+
+
+@router.post('/{item_id}/signature', response_model=ServiceOrderOut)
+def upload_signature(
+    item_id: int,
+    payload: SignatureIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(*EDIT_ROLES)),
+):
+    item = _fetch_order_or_404(item_id, db)
+    try:
+        content = decode_signature_image(payload.image_base64)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail='Assinatura inválida — envie um PNG em base64.') from exc
+    _validate_signature_bytes(content)
+
+    category = 'assinatura_tecnico' if payload.signer == 'technician' else 'assinatura_cliente'
+    filename = f'{category}-{item.number}.png'
+    object_key = f'service-orders/{item_id}/signatures/{uuid4()}-{filename}'
+    upload_bytes(object_key, content, 'image/png')
+    document = Document(
+        file_name=filename,
+        object_key=object_key,
+        content_type='image/png',
+        size_bytes=len(content),
+        reference_type='service_order',
+        reference_id=item_id,
+        category=category,
+        review_status=DocumentReviewStatus.APPROVED,
+        uploaded_by_user_id=current_user.id,
+    )
+    db.add(document)
+    db.flush()
+
+    now = datetime.utcnow()
+    if payload.signer == 'technician':
+        item.technician_signature_document_id = document.id
+        item.technician_signed_at = now
+    else:
+        item.client_signature_document_id = document.id
+        item.client_signed_at = now
+
+    db.commit()
+    row = _base_query(db).filter(ServiceOrder.id == item.id).first()
+    return _serialize(row)
+
+
+# ── Materiais utilizados ────────────────────────────────────────────────
+
+def _fetch_material_or_404(db: Session, item_id: int, material_id: int) -> ServiceOrderMaterial:
+    material = db.scalar(
+        select(ServiceOrderMaterial).where(
+            ServiceOrderMaterial.id == material_id,
+            ServiceOrderMaterial.service_order_id == item_id,
+            ServiceOrderMaterial.is_deleted.is_(False),
+        )
+    )
+    if not material:
+        raise HTTPException(status_code=404, detail='Material não encontrado')
+    return material
+
+
+def _material_to_out(material: ServiceOrderMaterial, db: Session) -> ServiceOrderMaterialOut:
+    product_name = None
+    if material.service_product_id:
+        product = db.get(ServiceProduct, material.service_product_id)
+        product_name = product.name if product else None
+    return ServiceOrderMaterialOut(
+        id=material.id,
+        service_order_id=material.service_order_id,
+        service_product_id=material.service_product_id,
+        service_product_name=product_name,
+        description=material.description,
+        quantity=material.quantity,
+        unit=material.unit,
+        unit_price=material.unit_price,
+        notes=material.notes,
+    )
+
+
+def _ensure_service_product(db: Session, service_product_id: int | None) -> None:
+    if not service_product_id:
+        return
+    product = db.get(ServiceProduct, service_product_id)
+    if not product or product.is_deleted:
+        raise HTTPException(status_code=404, detail='Produto/serviço do catálogo não encontrado')
+
+
+@router.get('/{item_id}/materials', response_model=list[ServiceOrderMaterialOut])
+def list_materials(item_id: int, db: Session = Depends(get_db), _: User = Depends(require_roles(*VIEW_ROLES))):
+    _fetch_order_or_404(item_id, db)
+    rows = db.scalars(
+        select(ServiceOrderMaterial)
+        .where(ServiceOrderMaterial.service_order_id == item_id, ServiceOrderMaterial.is_deleted.is_(False))
+        .order_by(ServiceOrderMaterial.id.asc())
+    ).all()
+    return [_material_to_out(m, db) for m in rows]
+
+
+@router.post('/{item_id}/materials', response_model=ServiceOrderMaterialOut)
+def create_material(
+    item_id: int,
+    payload: ServiceOrderMaterialIn,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(*EDIT_ROLES)),
+):
+    _fetch_order_or_404(item_id, db)
+    _ensure_service_product(db, payload.service_product_id)
+    material = ServiceOrderMaterial(service_order_id=item_id, **payload.model_dump())
+    db.add(material)
+    db.commit()
+    db.refresh(material)
+    return _material_to_out(material, db)
+
+
+@router.put('/{item_id}/materials/{material_id}', response_model=ServiceOrderMaterialOut)
+def update_material(
+    item_id: int,
+    material_id: int,
+    payload: ServiceOrderMaterialIn,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(*EDIT_ROLES)),
+):
+    _fetch_order_or_404(item_id, db)
+    material = _fetch_material_or_404(db, item_id, material_id)
+    _ensure_service_product(db, payload.service_product_id)
+    for key, value in payload.model_dump().items():
+        setattr(material, key, value)
+    db.commit()
+    db.refresh(material)
+    return _material_to_out(material, db)
+
+
+@router.delete('/{item_id}/materials/{material_id}')
+def delete_material(
+    item_id: int,
+    material_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(*EDIT_ROLES)),
+):
+    _fetch_order_or_404(item_id, db)
+    material = _fetch_material_or_404(db, item_id, material_id)
+    material.is_deleted = True
+    db.commit()
+    return {'message': 'Material removido com sucesso'}

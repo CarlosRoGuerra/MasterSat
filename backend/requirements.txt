@@ -24,6 +24,10 @@ chardet<6
 zeep==4.3.1
 openpyxl==3.1.5
 reportlab==4.2.2
+# Geração do DOCX da Ordem de Serviço. Pure-Python, sem dependência de
+# sistema — o PDF equivalente é gerado à parte com reportlab (dois
+# geradores independentes, sem conversão DOCX→PDF via LibreOffice).
+python-docx==1.1.2
 # Leitura de texto de PDF (validação do contrato assinado no upload). Pure-Python,
 # sem dependência de sistema. Extrai a camada de texto quando existe; em
 # escaneamentos/fotos (sem texto) retorna vazio, que é o sinal de "ilegível".

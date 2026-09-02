@@ -4,7 +4,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.security import decode_file_access_token
@@ -40,7 +40,23 @@ def view_document(document_id: int, token: str = Query(...), download: bool = Fa
 
     db: Session = SessionLocal()
     try:
-        document = db.scalar(select(Document).where(Document.id == document_id, Document.active.is_(True)))
+        # active=False cobre dois casos distintos: documento EXCLUÍDO (deve
+        # continuar escondido) e documento SUBSTITUÍDO por uma versão mais
+        # nova (deve continuar acessível — é a estratégia de reimpressão da
+        # OS: histórico completo, não só a última versão). Distingue os dois
+        # checando se algum outro Document aponta pra este via
+        # supersedes_document_id — só quem foi versionado tem essa referência.
+        document = db.scalar(
+            select(Document).where(
+                Document.id == document_id,
+                or_(
+                    Document.active.is_(True),
+                    select(Document.id)
+                    .where(Document.supersedes_document_id == document_id)
+                    .exists(),
+                ),
+            )
+        )
         if not document:
             raise HTTPException(status_code=404, detail='Documento não encontrado')
 
