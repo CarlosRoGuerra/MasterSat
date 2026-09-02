@@ -240,7 +240,11 @@ class TestServiceOrderStatusTransition:
         assert r.json()["status"] == "em_andamento"
 
     def test_in_progress_to_completed(self, http, db, ordem_servico):
+        from datetime import datetime
         ordem_servico.status = OrderStatus.IN_PROGRESS
+        ordem_servico.execution_description = "Instalação concluída, testado em campo."
+        ordem_servico.technician_signed_at = datetime.utcnow()
+        ordem_servico.client_signed_at = datetime.utcnow()
         db.commit()
         r = http.post(f"{PREFIX}/{ordem_servico.id}/status", json={
             "status": "concluida",
@@ -248,6 +252,25 @@ class TestServiceOrderStatusTransition:
         })
         assert r.status_code == 200
         assert r.json()["status"] == "concluida"
+
+    def test_completed_requires_execution_description_and_signatures(self, http, db, ordem_servico):
+        """Regra confirmada: concluir sem descrição do serviço executado e
+        as duas assinaturas retorna 422 — a OS não fica marcada como
+        'concluída' sem esse mínimo de campo."""
+        ordem_servico.status = OrderStatus.IN_PROGRESS
+        db.commit()
+        r = http.post(f"{PREFIX}/{ordem_servico.id}/status", json={"status": "concluida"})
+        assert r.status_code == 422
+        detail = r.json()["detail"]
+        assert "descrição do serviço executado" in detail
+        assert "assinatura do técnico" in detail
+        assert "assinatura do cliente" in detail
+        db.refresh(ordem_servico)
+        assert ordem_servico.status == OrderStatus.IN_PROGRESS  # não mudou
+
+    def test_completed_via_put_also_requires_gate(self, http, db, ordem_servico):
+        r = http.put(f"{PREFIX}/{ordem_servico.id}", json={"status": "concluida"})
+        assert r.status_code == 422
 
     def test_cancel_open_order(self, http, ordem_servico):
         r = http.post(f"{PREFIX}/{ordem_servico.id}/status", json={
