@@ -66,6 +66,25 @@ _METHOD_DESC: dict[str, str] = {
     'DELETE': 'Removeu',
 }
 
+# Verbo específico por sub-ação (trecho do path) — sobrepõe o verbo genérico
+# do método HTTP quando a rota não é um CRUD simples (ex.: POST .../swap não
+# "cria" nada, é uma troca). Precisa ter prioridade sobre entity_id em
+# _build_description: como praticamente toda sub-rota já tem o id logo após
+# o segmento da entidade (".../trackers/5/swap"), checar entity_id primeiro
+# faria essa lista nunca ser consultada de fato.
+_ACTION_VERBS: dict[str, str] = {
+    'link-vehicle':      'Vinculou',
+    'swap':               'Trocou',
+    'uninstall':          'Desinstalou',
+    'generate-billings':  'Gerou cobranças de',
+    'sync-flow':          'Sincronizou',
+    'sync-equipment':     'Sincronizou equipamento de',
+    'sync-chip':          'Sincronizou chip de',
+    'review':             'Revisou',
+    'timeline-pdf':       'Gerou timeline de',
+    'generate-document':  'Gerou documento de',
+}
+
 
 def _extract_entity(path: str) -> tuple[str | None, int | None]:
     segments = [s for s in path.split('/') if s and s not in ('api', 'v1')]
@@ -83,15 +102,14 @@ def _extract_entity(path: str) -> tuple[str | None, int | None]:
 
 
 def _build_description(method: str, entity_type: str | None, entity_id: int | None, path: str) -> str:
-    action = _METHOD_DESC.get(method, method)
     if not entity_type:
+        action = _METHOD_DESC.get(method, method)
         return f'{action} {path}'
+
+    action = next((v for kw, v in _ACTION_VERBS.items() if kw in path), None) or _METHOD_DESC.get(method, method)
+
     if entity_id:
         return f'{action} {entity_type} #{entity_id}'
-    for kw in ('link-vehicle', 'generate-billings', 'sync-flow', 'sync-equipment',
-               'sync-chip', 'review', 'timeline-pdf', 'uninstall', 'generate-document'):
-        if kw in path:
-            return f'{action} {entity_type} ({kw})'
     return f'{action} {entity_type}'
 
 

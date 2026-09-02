@@ -147,6 +147,8 @@ function friendlyAction(value: string) {
     created: 'Cadastro inicial',
     linked: 'Vínculo atualizado',
     unlinked: 'Desvínculo',
+    swapped_out: 'Substituído (retornou ao estoque)',
+    swapped_in: 'Instalado em substituição',
     updated: 'Dados atualizados',
     status_changed: 'Status alterado',
     deleted: 'Exclusão lógica',

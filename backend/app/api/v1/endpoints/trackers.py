@@ -1011,7 +1011,10 @@ def swap_tracker(
 
     _register_history(
         db, old_tracker,
-        action='unlinked',
+        # 'swapped_out'/'swapped_in' (em vez de 'unlinked'/'linked' genéricos)
+        # deixam explícito no histórico que foi uma TROCA, não um desvínculo
+        # avulso — os dois eventos referenciam um ao outro pelo id nas notes.
+        action='swapped_out',
         previous_vehicle_id=vehicle.id,
         new_vehicle_id=None,
         previous_client_id=vehicle.client_id,
@@ -1023,7 +1026,7 @@ def swap_tracker(
     )
     _register_history(
         db, new_tracker,
-        action='linked',
+        action='swapped_in',
         previous_vehicle_id=None,
         new_vehicle_id=vehicle.id,
         previous_client_id=None,
