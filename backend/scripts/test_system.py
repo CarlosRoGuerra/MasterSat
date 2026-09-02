@@ -6,14 +6,19 @@ Pré-requisitos:
     pip install requests
     Backend rodando em http://localhost:8000
 
-Executar:
-    python test_system.py
+Executar dentro de backend/ (lê o e-mail do admin de backend/.env; a senha
+precisa ser passada via MASTERSAT_TEST_ADMIN_PASSWORD ou INITIAL_ADMIN_PASSWORD
+em backend/.env — nunca hardcode a senha aqui, este arquivo é versionado):
+    MASTERSAT_TEST_ADMIN_PASSWORD=... python scripts/test_system.py
 """
 
-import sys
+import os
 import random
 import string
+import sys
 from datetime import date, timedelta
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 
 try:
     import requests
@@ -21,9 +26,15 @@ except ImportError:
     print("Dependência ausente. Execute: pip install requests")
     sys.exit(1)
 
-BASE_URL = "http://localhost:8000/api/v1"
-ADMIN_EMAIL = "admin@rastreamento.local"
-ADMIN_PASSWORD = "Admin@123"
+from app.core.config import settings as app_settings  # noqa: E402
+
+BASE_URL = os.environ.get("MASTERSAT_TEST_BASE_URL", "http://localhost:8000/api/v1")
+ADMIN_EMAIL = app_settings.initial_admin_email
+ADMIN_PASSWORD = os.environ.get("MASTERSAT_TEST_ADMIN_PASSWORD") or app_settings.initial_admin_password
+
+if not ADMIN_PASSWORD:
+    print("❌  Defina MASTERSAT_TEST_ADMIN_PASSWORD (ou INITIAL_ADMIN_PASSWORD em backend/.env) com a senha do admin local.")
+    sys.exit(1)
 
 # ─── Helpers visuais ──────────────────────────────────────────────────────────
 G, R, Y, C, RESET, BOLD = "\033[92m", "\033[91m", "\033[93m", "\033[96m", "\033[0m", "\033[1m"

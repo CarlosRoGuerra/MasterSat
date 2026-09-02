@@ -1,12 +1,15 @@
 """
 Teste de conectividade e operações básicas — Multiportal Web Service
-Executar na raiz do projeto:
+Executar dentro de backend/ (lê credenciais de backend/.env):
     pip install zeep requests
-    python test_multiportal.py
+    python scripts/test_multiportal.py
 """
 
+import os
 import sys
 from datetime import datetime
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 
 try:
     import requests
@@ -17,11 +20,19 @@ except ImportError:
     print("❌  Dependências ausentes. Execute: pip install zeep requests")
     sys.exit(1)
 
+from app.core.config import settings as app_settings  # noqa: E402
+
 # ─── Credenciais ──────────────────────────────────────────────────────────────
+# MP_ID/MP_SENHA vêm de backend/.env (MULTIPORTAL_ID/MULTIPORTAL_PASSWORD) —
+# nunca hardcode credencial real aqui, este arquivo é versionado no git.
 WSDL_URL  = "http://ws1.1gps.com.br:80/services/IntegracaoAdmService?wsdl"
-MP_ID     = "622"
-MP_SENHA  = "e35904f636468a59f08136083349bf46"
+MP_ID     = app_settings.multiportal_id
+MP_SENHA  = app_settings.multiportal_password
 TIMEOUT   = 30
+
+if not MP_ID or not MP_SENHA:
+    print("❌  MULTIPORTAL_ID / MULTIPORTAL_PASSWORD não configurados em backend/.env")
+    sys.exit(1)
 
 SUCCESS_CODES    = {"0", "200"}
 IDEMPOTENT_CODES = {"20", "21", "22", "40", "56", "59"}
