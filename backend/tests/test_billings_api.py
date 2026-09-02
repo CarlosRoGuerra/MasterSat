@@ -240,18 +240,23 @@ class TestGetBilling:
 
 
 # ---------------------------------------------------------------------------
-# Efeito colateral de refresh_overdue_statuses em GET (BE-05)
+# Reclassificação pendente <-> vencida NÃO é mais efeito colateral de GET (BE-05)
 #
-# Caracteriza o comportamento ATUAL antes de qualquer mudança: hoje não há
-# job de background que reclassifica pendente -> vencida, então esse UPDATE
-# roda dentro de base_query() a cada GET. Este teste documenta essa
-# dependência para que a migração para um worker (BE-05) não a quebre sem
-# perceber — se falhar depois de introduzir o worker e remover a chamada do
-# GET, é sinal de que o worker precisa estar rodando/validado antes.
+# Antes desta mudança, o UPDATE de refresh_overdue_statuses rodava dentro de
+# base_query() a cada GET (list/get_by_id/summary) — o teste antigo desta
+# classe documentava e travava esse comportamento como tripwire deliberado,
+# para o dia em que o worker de background (BE-05, ver
+# app.main._overdue_status_refresh_worker) assumisse a reclassificação: o
+# comentário original já previa que, uma vez o worker rodando/validado em
+# produção, este teste deveria falhar e ser atualizado — o que agora
+# aconteceu. GET passou a ser somente leitura; devido a due_date ter
+# granularidade de dia, até 1h de atraso do worker não afeta regra de
+# negócio nenhuma. A correção de refresh_overdue_statuses em si continua
+# coberta isoladamente em test_financial.py.
 # ---------------------------------------------------------------------------
 
-class TestOverdueStatusRefreshOnGet:
-    def test_list_updates_stale_pending_to_overdue(self, http, db, contrato):
+class TestOverdueStatusNotRefreshedOnGet:
+    def test_list_does_not_update_stale_pending(self, http, db, contrato):
         stale = Billing(
             contract_id=contrato.id,
             client_id=contrato.client_id,
@@ -269,12 +274,12 @@ class TestOverdueStatusRefreshOnGet:
         r = http.get(PREFIX + "/")
         assert r.status_code == 200
         item = next(x for x in r.json() if x["id"] == stale.id)
-        assert item["status"] == "vencida"
+        assert item["status"] == "pendente"
 
         db.refresh(stale)
-        assert stale.status == BillingStatus.OVERDUE
+        assert stale.status == BillingStatus.PENDING
 
-    def test_get_by_id_updates_stale_pending_to_overdue(self, http, db, contrato):
+    def test_get_by_id_does_not_update_stale_pending(self, http, db, contrato):
         stale = Billing(
             contract_id=contrato.id,
             client_id=contrato.client_id,
@@ -291,7 +296,10 @@ class TestOverdueStatusRefreshOnGet:
 
         r = http.get(f"{PREFIX}/{stale.id}")
         assert r.status_code == 200
-        assert r.json()["status"] == "vencida"
+        assert r.json()["status"] == "pendente"
+
+        db.refresh(stale)
+        assert stale.status == BillingStatus.PENDING
 
 
 # ---------------------------------------------------------------------------

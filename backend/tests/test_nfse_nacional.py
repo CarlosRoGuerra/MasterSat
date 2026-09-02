@@ -5,6 +5,7 @@ import base64
 import gzip
 from decimal import Decimal
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from lxml import etree
@@ -321,3 +322,53 @@ def test_emitir_bloqueia_producao_real_sem_confirmacao(monkeypatch):
     monkeypatch.setattr(settings, 'nfse_nac_producao_confirmada', False)
     with pytest.raises(NfseError, match='PRODUÇÃO'):
         emitir_nfse(None, _billing(), _client(issue_invoice='sim'))
+
+
+# --------------------------------------------------------------------------
+# Falhas de conexão (timeout / rede indisponível) — diferente das respostas
+# de erro HTTP acima (404/503/403), aqui a Sefin Nacional nem chega a
+# responder. Os 3 pontos de rede do módulo (_post, consultar_por_chave,
+# baixar_danfse) têm o mesmo `except requests.RequestException`, mas nenhum
+# tinha teste exercitando esse caminho.
+# --------------------------------------------------------------------------
+
+def test_post_timeout_raises_nfse_api_error(monkeypatch):
+    from app.services import nfse_nacional as nf
+    import requests as real_requests
+
+    monkeypatch.setattr(settings, 'nfse_nac_ambiente', 'producao_restrita')
+    monkeypatch.setattr(nf, '_par_pem_mtls', lambda: ('cert.pem', 'key.pem'))
+
+    with patch('app.services.nfse_nacional.requests') as mock_requests:
+        mock_requests.RequestException = real_requests.RequestException
+        mock_requests.post.side_effect = real_requests.Timeout('Read timed out')
+        with pytest.raises(nf.NfseApiError, match='Falha de conexão'):
+            nf._post('/nfse', {'a': 1})
+
+
+def test_consultar_por_chave_connection_error_raises_nfse_api_error(monkeypatch):
+    from app.services import nfse_nacional as nf
+    import requests as real_requests
+
+    monkeypatch.setattr(settings, 'nfse_nac_ambiente', 'producao_restrita')
+    monkeypatch.setattr(nf, '_par_pem_mtls', lambda: ('cert.pem', 'key.pem'))
+
+    with patch('app.services.nfse_nacional.requests') as mock_requests:
+        mock_requests.RequestException = real_requests.RequestException
+        mock_requests.get.side_effect = real_requests.ConnectionError('refused')
+        with pytest.raises(nf.NfseApiError, match='Falha de conexão'):
+            nf.consultar_por_chave('chave-teste')
+
+
+def test_baixar_danfse_connection_error_raises_nfse_api_error(monkeypatch):
+    from app.services import nfse_nacional as nf
+    import requests as real_requests
+
+    monkeypatch.setattr(settings, 'nfse_nac_ambiente', 'producao_restrita')
+    monkeypatch.setattr(nf, '_par_pem_mtls', lambda: ('cert.pem', 'key.pem'))
+
+    with patch('app.services.nfse_nacional.requests') as mock_requests:
+        mock_requests.RequestException = real_requests.RequestException
+        mock_requests.get.side_effect = real_requests.ConnectionError('refused')
+        with pytest.raises(nf.NfseApiError, match='Falha ao baixar o DANFSE'):
+            nf.baixar_danfse('chave-teste')

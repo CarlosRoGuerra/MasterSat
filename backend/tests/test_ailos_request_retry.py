@@ -11,7 +11,7 @@ import pytest
 from app.core.config import settings
 from app.models.ailos_api_log import AilosApiLog
 from app.services import ailos_client
-from app.services.ailos_client import AilosApiError, request
+from app.services.ailos_client import AilosApiError, AilosError, request
 
 
 @pytest.fixture(autouse=True)
@@ -132,3 +132,40 @@ class TestRequestRetry:
 
         assert excinfo.value.status_code == 401
         assert mock_requests.request.call_count == 3
+
+
+class TestRequestConnectionFailure:
+    """`request()` (chamadas de negócio: gerar/consultar boleto etc.) tem o
+    mesmo try/except de conexão que `fetch_client_token` (coberto em
+    test_ailos_client_token.py::test_connection_error_raises_ailos_error),
+    mas nunca foi exercitado neste caminho — timeout e erro de conexão viram
+    exceções não tratadas se o wrapping quebrar aqui sem ninguém notar."""
+
+    def test_timeout_raises_ailos_error_without_retry(self, db):
+        import requests as real_requests
+
+        with patch('app.services.ailos_client.requests') as mock_requests:
+            mock_requests.RequestException = real_requests.RequestException
+            mock_requests.request.side_effect = real_requests.Timeout('Read timed out')
+            with pytest.raises(AilosError) as excinfo:
+                request(db, 'GET', '/v1/test')
+
+        assert 'Falha de conexão' in str(excinfo.value)
+        # erro de transporte não é 401 — não há por que tentar de novo
+        assert mock_requests.request.call_count == 1
+
+    def test_connection_error_is_logged_with_no_status_code(self, db):
+        import requests as real_requests
+
+        with patch('app.services.ailos_client.requests') as mock_requests:
+            mock_requests.RequestException = real_requests.RequestException
+            mock_requests.request.side_effect = real_requests.ConnectionError('refused')
+            with pytest.raises(AilosError):
+                request(db, 'POST', '/v1/test', json_body={'a': 1}, billing_id=None)
+
+        log = db.query(AilosApiLog).first()
+        assert log is not None
+        assert log.success is False
+        assert log.status_code is None
+        assert log.endpoint == '/v1/test'
+        assert 'refused' in (log.error_message or '')
