@@ -644,6 +644,11 @@ export default function VeiculosPage() {
     bank: 'ailos',
   });
   const [linking, setLinking] = useState(false);
+  // Troca de rastreador instalado (substitui o equipamento, mantendo contrato/veículo)
+  const [swapTrackerOpen, setSwapTrackerOpen] = useState(false);
+  const [swapOldTracker, setSwapOldTracker] = useState<TrackerOption | null>(null);
+  const [swapForm, setSwapForm] = useState({ new_tracker_id: '', reason: '' });
+  const [swapping, setSwapping] = useState(false);
   const [error, setError] = useState('');
   const [feedback, setFeedback] = useState('');
   const [modalError, setModalError] = useState('');
@@ -819,6 +824,39 @@ export default function VeiculosPage() {
       setLinkedTrackers(updated);
     } catch (err) { setError(parseError(err)); }
     finally { setLinking(false); }
+  }
+
+  function openSwapTracker(t: TrackerOption) {
+    setSwapOldTracker(t);
+    setSwapForm({ new_tracker_id: '', reason: '' });
+    setTrackerViewOpen(false);
+    loadStockTrackers();
+    setSwapTrackerOpen(true);
+  }
+
+  async function swapTracker() {
+    if (!token || !selectedVehicle || !swapOldTracker || !swapForm.new_tracker_id) return;
+    setSwapping(true);
+    try {
+      await apiFetch(
+        `/trackers/${swapOldTracker.id}/swap`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            new_tracker_id: Number(swapForm.new_tracker_id),
+            reason: swapForm.reason,
+          }),
+        },
+        token,
+      );
+      setFeedback('Rastreador substituído com sucesso — o antigo voltou para o estoque.');
+      setSwapTrackerOpen(false);
+      setSwapOldTracker(null);
+      await loadVehicles(token);
+      const updated = await apiFetchList<TrackerOption>(`/trackers?vehicle_id=${selectedVehicle.id}`, {}, token).catch(() => []);
+      setLinkedTrackers(updated);
+    } catch (err) { setError(parseError(err)); }
+    finally { setSwapping(false); }
   }
 
   async function loadDocuments(currentToken: string, vehicleId: number) {
@@ -1366,6 +1404,54 @@ export default function VeiculosPage() {
         />
       </Modal>
 
+      {/* Modal: Trocar rastreador instalado */}
+      <Modal
+        open={swapTrackerOpen}
+        onClose={() => { setSwapTrackerOpen(false); setSwapOldTracker(null); }}
+        title="Trocar rastreador"
+        subtitle={selectedVehicle ? `${selectedVehicle.plate} · ${[selectedVehicle.brand, selectedVehicle.model].filter(Boolean).join(' ') || 'Veículo'}` : 'Substituição de equipamento'}
+        size="md"
+      >
+        <div className="space-y-6">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-700 dark:bg-slate-900/50">
+            <p className="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-600">Rastreador atual</p>
+            <p className="mt-1 font-mono font-semibold text-slate-900 dark:text-white">{swapOldTracker?.imei}</p>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              Volta para o estoque assim que a troca for confirmada — o contrato e o veículo não mudam.
+            </p>
+          </div>
+
+          <FormField label="Novo rastreador (estoque)" required>
+            <TrackerAutocomplete
+              trackers={stockTrackers}
+              value={swapForm.new_tracker_id}
+              onChange={(id) => setSwapForm((p) => ({ ...p, new_tracker_id: id }))}
+              required
+            />
+          </FormField>
+
+          <FormField label="Motivo da troca" required>
+            <textarea
+              className={fieldClass}
+              rows={3}
+              placeholder="Ex.: equipamento com defeito, troca de tecnologia…"
+              value={swapForm.reason}
+              onChange={(e) => setSwapForm((p) => ({ ...p, reason: e.target.value }))}
+            />
+          </FormField>
+
+          <div className="flex justify-end gap-2 border-t border-slate-100 pt-4 dark:border-slate-800">
+            <Button variant="secondary" onClick={() => { setSwapTrackerOpen(false); setSwapOldTracker(null); }}>Cancelar</Button>
+            <Button
+              disabled={!swapForm.new_tracker_id || swapForm.reason.trim().length < 3 || swapping}
+              onClick={swapTracker}
+            >
+              {swapping ? 'Trocando…' : 'Confirmar troca'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
       {/* ── Modal: Ver rastreadores do veículo (🟢) ─────────────────────── */}
       <Modal
         open={trackerViewOpen}
@@ -1414,18 +1500,9 @@ export default function VeiculosPage() {
                         {canEdit && (
                           <div className="flex items-center gap-1.5">
                             <button
-                              onClick={() => {
-                                setLinkForm((p) => ({
-                                  ...p,
-                                  tracker_id: String(t.id),
-                                  plan_id: t.active_plan_id ? String(t.active_plan_id) : '',
-                                }));
-                                setTrackerViewOpen(false);
-                                loadStockTrackers();
-                                setLinkTrackerOpen(true);
-                              }}
+                              onClick={() => openSwapTracker(t)}
                               className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
-                              title="Editar vínculo"
+                              title="Trocar rastreador"
                             >
                               <Pencil className="h-3.5 w-3.5" />
                             </button>
