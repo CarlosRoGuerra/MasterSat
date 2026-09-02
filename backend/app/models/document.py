@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Enum, Integer, String, Text
+from sqlalchemy import Boolean, Enum, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -22,3 +22,9 @@ class Document(Base, TimestampMixin):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     # Quem enviou o documento (data de envio vem do created_at do TimestampMixin).
     uploaded_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Versionamento (usado hoje só pelo fluxo de geração de documento da OS —
+    # client/vehicle nunca reemitem o "mesmo kind", então ficam sempre 1/NULL).
+    # Reemitir um documento marca o anterior `active=False` e aponta pra ele
+    # aqui, em vez de apagar — histórico completo, sem duplicar linha "viva".
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default='1')
+    supersedes_document_id: Mapped[int | None] = mapped_column(ForeignKey('documents.id'), nullable=True)

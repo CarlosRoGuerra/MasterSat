@@ -17,6 +17,7 @@ from app.models.password_reset_token import PasswordResetToken
 from app.models.plan import Plan
 from app.models.refresh_token import RefreshToken
 from app.models.service_order import ServiceOrder
+from app.models.service_order_material import ServiceOrderMaterial
 from app.models.service_order_status_log import ServiceOrderStatusLog
 from app.models.service_product import ServiceProduct
 from app.models.tracker import Tracker

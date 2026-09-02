@@ -57,6 +57,13 @@ class OrderStatus(str, Enum):
     CANCELED = 'cancelada'
 
 
+class OrderPriority(str, Enum):
+    LOW = 'baixa'
+    NORMAL = 'normal'
+    HIGH = 'alta'
+    URGENT = 'urgente'
+
+
 class BillingStatus(str, Enum):
     PENDING = 'pendente'
     PAID = 'paga'
