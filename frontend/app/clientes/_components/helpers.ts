@@ -1,8 +1,6 @@
 import type { BillingItem, ClientFormState, ContactItem, ContractSheetItem } from './types';
 
-export function formatCurrency(value: number) {
-  return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value ?? 0);
-}
+export { formatCurrency } from '@/lib/format';
 
 /** Valor atualizado com juros de atraso, quando o backend já o calculou. */
 export function valorComJuros(b: BillingItem): number | null {

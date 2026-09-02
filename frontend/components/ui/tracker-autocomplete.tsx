@@ -4,9 +4,15 @@ import { useEffect, useRef, useState } from 'react';
 import { Search, X } from 'lucide-react';
 import clsx from 'clsx';
 
+/**
+ * Propositalmente NÃO é `Pick<TrackerOption, ...>` de lib/domain-types: lá
+ * `imei` é `string` obrigatório (reflete o schema OpenAPI), mas este
+ * componente é usado com rastreadores que ainda podem não ter IMEI lido —
+ * ex.: app/integracao (Tracker local) e outros consumidores que modelam
+ * `imei` como opcional. Unificar os dois tipos quebraria essa distinção real.
+ */
 type TrackerOption = {
   id: number;
-  // Rastreador pode estar cadastrado sem IMEI (ainda não lido/importado).
   imei?: string | null;
   brand?: string | null;
   model?: string | null;

@@ -23,6 +23,7 @@ import { enviarBoletoEmail, enviarBoletoWhats } from '@/lib/boleto-mensagem';
 import { useAuthGuard } from '@/lib/use-auth-guard';
 import { ROUTE_ROLES } from '@/lib/route-roles';
 import { useDebouncedValue, useEffectSkipFirst } from '@/lib/use-debounced-value';
+import { formatCurrency, formatDate } from '@/lib/format';
 import type { BillingStatus, ClientOption, VehicleOption, TrackerOption } from '@/lib/domain-types';
 
 /* ── Types ──────────────────────────────────────────────────────────── */
@@ -61,7 +62,6 @@ const initialAdjustForm: AdjustFormState = { amount: '', due_date: '', justifica
 
 /* ── Helpers ────────────────────────────────────────────────────────── */
 function parseError(error: unknown) { return error instanceof Error ? error.message : 'Ocorreu um erro inesperado.'; }
-function formatCurrency(value: number) { return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value || 0); }
 function intervalLabel(months: number) { return ({ 1: 'Mensal', 3: 'Trimestral', 6: 'Semestral', 12: 'Anual' } as Record<number, string>)[months] || `${months} meses`; }
 
 /** Data (YYYY-MM-DD) somada de N meses — para a vigência do contrato a partir do início. */
@@ -70,12 +70,6 @@ function addMonthsISO(startISO: string, months: number): string {
   const d = new Date(startISO + 'T12:00:00');
   d.setMonth(d.getMonth() + months);
   return d.toISOString().slice(0, 10);
-}
-function formatDate(iso?: string | null) {
-  if (!iso) return '—';
-  // accepts "2026-05-22" or full ISO strings
-  const d = new Date(iso.length === 10 ? iso + 'T12:00:00' : iso);
-  return d.toLocaleDateString('pt-BR');
 }
 
 async function downloadProtectedFile(path: string, token: string, filename: string): Promise<void> {

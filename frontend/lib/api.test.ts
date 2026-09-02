@@ -107,4 +107,24 @@ describe('apiFetchList', () => {
 
     expect(result).toEqual([]);
   });
+
+  // COMPORTAMENTO ATUAL (não corrigido nesta rodada — ver auditoria do
+  // Financeiro/Frontend): quando o backend tem mais registros do que o
+  // `limit` pedido, `total` vem maior que `items.length`, mas apiFetchList
+  // descarta `total` e devolve só os itens truncados. Quem chama (ex.:
+  // `/clients?limit=300`) não tem como saber que a lista está incompleta —
+  // não há aviso na tela nem paginação real, só um teto fixo. Este teste
+  // apenas documenta o comportamento hoje; NÃO valida que ele é correto.
+  it('quando total > items.length (mais registros que o limite pedido), o excedente é descartado silenciosamente', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [{ id: 1 }, { id: 2 }], total: 500 }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await apiFetchList<{ id: number }>('/clients?limit=2', {}, 'token');
+
+    expect(result).toEqual([{ id: 1 }, { id: 2 }]);
+    expect(result.length).toBe(2); // não há como o chamador saber que existem mais 498 registros
+  });
 });

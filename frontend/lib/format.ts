@@ -2,6 +2,17 @@ export function onlyDigits(value: string) {
   return value.replace(/\D/g, '');
 }
 
+export function formatCurrency(value: number) {
+  return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value ?? 0);
+}
+
+/** Data curta pt-BR a partir de "YYYY-MM-DD" ou ISO completo; "—" quando ausente. */
+export function formatDate(iso?: string | null) {
+  if (!iso) return '—';
+  const d = new Date(iso.length === 10 ? iso + 'T12:00:00' : iso);
+  return d.toLocaleDateString('pt-BR');
+}
+
 export function formatCpfCnpj(value: string) {
   const digits = onlyDigits(value).slice(0, 14);
   if (digits.length <= 11) {

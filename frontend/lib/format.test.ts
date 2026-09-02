@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   formatCpfCnpj,
+  formatCurrency,
+  formatDate,
   formatPhone,
   formatZipCode,
   intervalLabel,
@@ -83,5 +85,38 @@ describe('pricePeriodSuffix', () => {
     expect(pricePeriodSuffix(1)).toBe('/mês');
     expect(pricePeriodSuffix(12)).toBe('/ano');
     expect(pricePeriodSuffix(3)).toBe(' a cada 3 meses');
+  });
+});
+
+const NBSP = ' '; // Intl.NumberFormat(pt-BR currency) usa NBSP entre R$ e o valor
+
+describe('formatCurrency', () => {
+  it('formata em real com duas casas', () => {
+    expect(formatCurrency(1234.5)).toBe(`R$${NBSP}1.234,50`);
+  });
+
+  it('trata null/undefined como zero em vez de quebrar', () => {
+    expect(formatCurrency(null as unknown as number)).toBe(`R$${NBSP}0,00`);
+    expect(formatCurrency(undefined as unknown as number)).toBe(`R$${NBSP}0,00`);
+  });
+
+  it('formata zero', () => {
+    expect(formatCurrency(0)).toBe(`R$${NBSP}0,00`);
+  });
+});
+
+describe('formatDate', () => {
+  it('formata data curta "YYYY-MM-DD" sem deslocar por fuso', () => {
+    expect(formatDate('2026-05-22')).toBe('22/05/2026');
+  });
+
+  it('aceita ISO completo com horário', () => {
+    expect(formatDate('2026-05-22T10:30:00Z')).toBe('22/05/2026');
+  });
+
+  it('retorna travessão para vazio, null ou undefined', () => {
+    expect(formatDate('')).toBe('—');
+    expect(formatDate(null)).toBe('—');
+    expect(formatDate(undefined)).toBe('—');
   });
 });
