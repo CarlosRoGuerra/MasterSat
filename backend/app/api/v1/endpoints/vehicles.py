@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_roles
+from app.api.v1.endpoints.common import get_vehicle_or_404 as _get_vehicle_or_404
 from app.core.integrity import raise_integrity_conflict
 from app.core.config import settings
 from app.core.security import create_file_access_token
@@ -94,13 +95,6 @@ def _document_to_out(document: Document) -> DocumentOut:
         url=view_url,
         download_url=download_url,
     )
-
-
-def _get_vehicle_or_404(item_id: int, db: Session) -> Vehicle:
-    obj = db.scalar(select(Vehicle).where(Vehicle.id == item_id, Vehicle.is_deleted.is_(False)))
-    if not obj:
-        raise HTTPException(status_code=404, detail='Veículo não encontrado')
-    return obj
 
 
 def _ensure_client_exists(client_id: int, db: Session) -> None:

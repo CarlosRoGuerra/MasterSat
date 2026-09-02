@@ -8,6 +8,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_roles
+from app.api.v1.endpoints.common import (
+    get_client_or_404 as _get_client_or_404,
+    get_vehicle_or_404 as _get_vehicle_or_404,
+)
 from app.core.integrity import integrity_conflict_detail, raise_integrity_conflict
 from app.db.session import get_db
 from app.models.billing import Billing
@@ -155,22 +159,6 @@ def _get_tracker_or_404(item_id: int, db: Session) -> Tracker:
     if not tracker:
         raise HTTPException(status_code=404, detail='Rastreador não encontrado')
     return tracker
-
-
-
-def _get_vehicle_or_404(vehicle_id: int, db: Session) -> Vehicle:
-    vehicle = db.scalar(select(Vehicle).where(Vehicle.id == vehicle_id, Vehicle.is_deleted.is_(False)))
-    if not vehicle:
-        raise HTTPException(status_code=404, detail='Veículo não encontrado')
-    return vehicle
-
-
-
-def _get_client_or_404(client_id: int, db: Session) -> Client:
-    client = db.scalar(select(Client).where(Client.id == client_id, Client.is_deleted.is_(False)))
-    if not client:
-        raise HTTPException(status_code=404, detail='Cliente não encontrado')
-    return client
 
 
 

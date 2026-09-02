@@ -8,13 +8,13 @@ GET  /ailos/pagadores                    → Lista pagadores cadastrados
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_roles
 from app.api.v1.endpoints.ailos_common import ALLOWED_ROLES, raise_ailos_error
+from app.api.v1.endpoints.common import get_client_or_404 as _get_client_or_404
 from app.db.session import get_db
-from app.models.client import Client
 from app.schemas.ailos import AilosPagadorIn, AilosPagadorOut
 from app.services.ailos_client import AilosApiError, AilosError
 from app.services.ailos_pagadores import (
@@ -28,13 +28,6 @@ from app.services.ailos_validators import AilosValidationError
 router = APIRouter()
 
 _AILOS_EXCEPTIONS = (AilosValidationError, AilosError, AilosApiError)
-
-
-def _get_client_or_404(client_id: int, db: Session) -> Client:
-    c = db.get(Client, client_id)
-    if not c or c.is_deleted:
-        raise HTTPException(status_code=404, detail="Cliente não encontrado")
-    return c
 
 
 @router.post('/pagadores', response_model=AilosPagadorOut)

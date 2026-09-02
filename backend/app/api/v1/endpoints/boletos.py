@@ -20,6 +20,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_roles
+from app.api.v1.endpoints.common import (
+    get_billing_or_404 as _get_billing_or_404,
+    get_client_or_404 as _get_client_or_404,
+)
 from app.core.config import settings
 from app.db.session import get_db
 from app.models.ailos_boleto import AilosBoleto
@@ -54,20 +58,6 @@ def _public_token(billing_id: int) -> str:
 def public_boleto_url(billing_id: int) -> str:
     base = (settings.backend_public_url or '').rstrip('/')
     return f'{base}{settings.api_v1_prefix}/public/boleto/{billing_id}/{_public_token(billing_id)}'
-
-
-def _get_billing_or_404(billing_id: int, db: Session) -> Billing:
-    b = db.get(Billing, billing_id)
-    if not b or b.is_deleted:
-        raise HTTPException(status_code=404, detail="Cobrança não encontrada")
-    return b
-
-
-def _get_client_or_404(client_id: int, db: Session) -> Client:
-    c = db.get(Client, client_id)
-    if not c or c.is_deleted:
-        raise HTTPException(status_code=404, detail="Cliente não encontrado")
-    return c
 
 
 def _pagador_do_billing(b: Billing, db: Session) -> Client:

@@ -144,7 +144,12 @@ def _period_label_sort_key(label: str) -> tuple:
         return (1, label)
 
 
-def base_query(db: Session, *, refresh_statuses: bool = True):
+def base_query(db: Session, *, refresh_statuses: bool = False):
+    # Reclassificação pendente<->vencida roda como worker de hora em hora (BE-05,
+    # ver main.py); due_date é granularidade de dia, então até 1h de atraso na
+    # reclassificação não afeta regra de negócio nenhuma. refresh_statuses=True
+    # fica disponível para quem realmente precisa de leitura imediatamente
+    # consistente logo após alterar o próprio status de uma cobrança.
     if refresh_statuses:
         refresh_overdue_statuses(db)
     # boleto_ailos: título registrado na Ailos (linha digitável + código de
@@ -261,7 +266,8 @@ def apply_filters(query, search: str | None, status: str | None, client_id: int 
 
 @router.get('/summary', response_model=FinancialSummary)
 def financial_summary(db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
-    refresh_overdue_statuses(db)
+    # Reclassificação pendente<->vencida roda no worker horário (BE-05) — não
+    # precisa ser refeita a cada leitura do resumo (ver base_query em cima).
     active_plans = db.query(func.count(Plan.id)).filter(Plan.is_deleted == False, Plan.active == True).scalar() or 0
     active_contracts = db.query(func.count(Contract.id)).filter(Contract.is_deleted == False, Contract.status == 'ativo').scalar() or 0
     pending_billings = db.query(func.count(Billing.id)).filter(Billing.is_deleted == False, Billing.status == BillingStatus.PENDING).scalar() or 0
@@ -737,7 +743,7 @@ def unify_billings(payload: BillingUnify, db: Session = Depends(get_db), _: obje
         b.notes = f'{b.notes} | {marker}' if b.notes else marker
         refresh_charge_items_for_billing(db, b, commit=False)
     db.commit()
-    row = base_query(db, refresh_statuses=False).filter(Billing.id == nova.id).first()
+    row = base_query(db).filter(Billing.id == nova.id).first()
     return serialize_billing(row)
 
 

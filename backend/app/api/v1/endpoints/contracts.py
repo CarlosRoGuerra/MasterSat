@@ -17,7 +17,7 @@ from app.models.plan import Plan
 from app.models.tracker import Tracker
 from app.models.vehicle import Vehicle
 from app.schemas.contract import ContractCreate, ContractOut, ContractUpdate
-from app.services.financial import cancel_open_billings_for_contract, charge_item_effective_billing_count, refresh_overdue_statuses
+from app.services.financial import cancel_open_billings_for_contract, charge_item_effective_billing_count
 
 router = APIRouter()
 
@@ -130,7 +130,8 @@ def list_items(
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL)),
 ):
-    refresh_overdue_statuses(db)
+    # Reclassificação pendente<->vencida roda no worker horário (BE-05) — não
+    # precisa ser refeita a cada listagem.
     query = db.query(Contract).filter(Contract.is_deleted == False)
     if client_id:
         query = query.filter(Contract.client_id == client_id)

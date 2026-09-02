@@ -29,7 +29,7 @@ from app.models.enums import BillingStatus
 from app.services.ailos_boletos import aplicar_dados_oficiais_ailos, resolver_pagador
 from app.services.boleto_ailos import gerar_dados_boleto
 from app.services.boleto_pdf import gerar_boleto_pdf
-from app.services.financial import refresh_overdue_statuses, valor_com_juros
+from app.services.financial import valor_com_juros
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -129,8 +129,8 @@ def listar_cobrancas(
 ):
     """Lista as cobranças em aberto (pendentes/vencidas) com os dados de boleto/Pix
     prontos para envio. Usado pelo CobraZap para puxar os boletos."""
-    refresh_overdue_statuses(db)
-
+    # Reclassificação pendente<->vencida roda no worker horário (BE-05) — não
+    # precisa ser refeita a cada chamada do webhook.
     query = (
         db.query(Billing, Client, AilosBoleto)
         .join(Client, Client.id == Billing.client_id)

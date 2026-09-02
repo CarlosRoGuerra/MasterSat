@@ -1,78 +1,51 @@
 from __future__ import annotations
 
-from calendar import monthrange
 from collections import defaultdict
 from datetime import date, datetime, timezone
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
 
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.core.timezone import hoje
 from app.models.billing import Billing
-from app.models.billing_charge_item import BillingChargeItem
 from app.models.client import Client
 from app.models.client_charge_item import ClientChargeItem
 from app.models.contract import Contract
 from app.models.enums import BillingStatus
 from app.models.plan import Plan
-from app.models.service_product import ServiceProduct
 from app.models.tracker import Tracker
 from app.models.uninstall_event import UninstallEvent
 from app.models.vehicle import Vehicle
+from app.services.billing_closure.charge_items import _pending_charge_items
+from app.services.billing_closure.recurring import (
+    _billing_due_in_month,
+    _first_cycle_charge_items,
+    _locked_contracts,
+    _prorata_fields,
+    _validate_contract_relationships,
+    _validate_locked_contract_for_closure,
+)
+from app.services.billing_closure.shared import _lock_competencia
+from app.services.billing_closure.uninstall_fees import (
+    _due_date_for_uninstall_event,
+    _pending_uninstall_events_for_month,
+    _uninstall_event_payer_client_id,
+    uninstall_fee_for_event,
+)
 from app.services.financial import (
     _quantize_amount,
     add_months,
     associate_billing_charge_item,
-    charge_item_effective_billing_count,
     contract_payer_client_id,
     decimal_to_float,
     generate_item_billings,
-    normalize_due_date,
     plan_title,
     period_label_for_date,
     refresh_overdue_statuses,
 )
 
 MIN_BILLING_AMOUNT = Decimal('5.00')
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-def _billing_due_in_month(contract: Contract, plan: Plan, reference_month: date) -> date | None:
-    interval = max(int(getattr(plan, 'billing_interval_months', 1) or 1), 1)
-    billing_day = contract.billing_day or 1
-    months_since_start = (
-        (reference_month.year - contract.start_date.year) * 12
-        + (reference_month.month - contract.start_date.month)
-    )
-    if months_since_start < 0:
-        return None
-    cycle = months_since_start // interval
-    due_date = normalize_due_date(contract.start_date, cycle, billing_day, interval)
-    # Never produce a due date that predates the contract start (billing_day < start day)
-    if due_date < contract.start_date:
-        return None
-    if due_date.year == reference_month.year and due_date.month == reference_month.month:
-        return due_date
-    return None
-
-
-def _lock_competencia(db: Session, reference_month: date) -> None:
-    """Serializa fechamentos concorrentes da MESMA competência.
-
-    Sem isto, dois fechamentos simultâneos do mesmo mês veem ``already_generated``
-    False ao mesmo tempo e ambos inserem — duplicando as cobranças. O lock de
-    transação (Postgres) segura o segundo até o primeiro comitar; em SQLite
-    (testes, serial) é no-op.
-    """
-    if db.bind is None or db.bind.dialect.name != 'postgresql':
-        return
-    # Chave estável por competência (AAAAMM) — meses diferentes não se bloqueiam.
-    chave = reference_month.year * 100 + reference_month.month
-    db.execute(text('SELECT pg_advisory_xact_lock(:k)'), {'k': chave})
 
 
 def _has_existing_billing(db: Session, contract_id: int, period_label: str) -> bool:
@@ -85,366 +58,6 @@ def _has_existing_billing(db: Session, contract_id: int, period_label: str) -> b
         # pago via carnê (cobrança duplicada).
         Billing.billing_type.in_(['recorrente', 'prorata', 'primeira_mensalidade', 'carne']),
     ).first() is not None
-
-
-def _prorata_fields(plan_price: float, start_date: date) -> tuple[bool, float, int, int]:
-    """
-    Retorna (is_prorata, billing_amount, prorated_days, days_in_month).
-    Pro-rata se aplica apenas quando o contrato começa após o dia 1 do mês.
-    """
-    if start_date.day == 1:
-        return False, plan_price, 0, 0
-    dim = monthrange(start_date.year, start_date.month)[1]
-    remaining = dim - start_date.day + 1
-    prorated = float(
-        (Decimal(str(plan_price)) * Decimal(remaining) / Decimal(dim)).quantize(
-            Decimal('0.01'), rounding=ROUND_HALF_UP
-        )
-    )
-    return True, prorated, remaining, dim
-
-
-def _apply_client_scope(query, client_column, filter_type: str, client_id: int | None):
-    """Aplica o mesmo recorte de clientes a qualquer categoria do fechamento."""
-    eligible_clients = select(Client.id).where(Client.is_deleted.is_(False))
-    if filter_type in ('pf', 'pj'):
-        eligible_clients = eligible_clients.where(Client.type == filter_type)
-    elif filter_type == 'client' and client_id is not None:
-        eligible_clients = eligible_clients.where(Client.id == client_id)
-    return query.filter(client_column.in_(eligible_clients))
-
-
-def _pending_uninstall_events_for_month(
-    db: Session,
-    reference_month: date,
-    filter_type: str = 'all',
-    client_id: int | None = None,
-) -> list[UninstallEvent]:
-    """Eventos vencidos até a competência, inclusive os esquecidos em meses anteriores.
-
-    ``skipped`` era o estado terminal usado para valores abaixo de R$ 5. Ele é
-    incluído para recuperar dados históricos e volta a ``pending`` enquanto
-    aguarda acumulação suficiente.
-    """
-    if reference_month.month == 12:
-        month_end = date(reference_month.year + 1, 1, 1)
-    else:
-        month_end = date(reference_month.year, reference_month.month + 1, 1)
-    query = (
-        db.query(UninstallEvent)
-        .filter(
-            UninstallEvent.status.in_(('pending', 'skipped')),
-            UninstallEvent.billing_id.is_(None),
-            UninstallEvent.uninstall_date < month_end,
-        )
-    )
-    return _apply_client_scope(
-        query, UninstallEvent.client_id, filter_type, client_id,
-    ).order_by(UninstallEvent.uninstall_date.asc(), UninstallEvent.id.asc()).all()
-
-
-def uninstall_fee_for_event(db: Session, event: UninstallEvent) -> tuple[Decimal, str]:
-    """Valor e título da taxa de um evento de desinstalação.
-
-    ``fee_amount`` é o valor efetivamente acordado no momento da retirada e
-    tem precedência absoluta: o produto de serviço define apenas O QUE foi
-    cobrado (título/vínculo com o catálogo), nunca QUANTO.
-
-    Antes as duas coisas eram somadas. Como a tela preenche a taxa direta com
-    o preço do produto ao selecioná-lo, escolher um serviço de desinstalação
-    cobrava o dobro de forma determinística. Somar também deixava o valor
-    refém do catálogo: mudar o preço do produto depois alterava uma cobrança
-    já negociada com o cliente.
-
-    O preço do produto só é consultado como fallback, para eventos antigos
-    gravados sem ``fee_amount``.
-    """
-    product = None
-    if event.service_product_id:
-        candidate = db.get(ServiceProduct, event.service_product_id)
-        if candidate and not candidate.is_deleted:
-            product = candidate
-
-    if event.fee_amount is not None and Decimal(str(event.fee_amount)) > 0:
-        fee_amount = Decimal(str(event.fee_amount))
-    elif product is not None:
-        fee_amount = Decimal(str(product.default_price))
-    else:
-        fee_amount = Decimal('0')
-
-    return fee_amount, (product.name if product else 'Taxa de desinstalação')
-
-
-def _due_date_for_uninstall_event(event: UninstallEvent, db: Session) -> date:
-    contract = db.get(Contract, event.contract_id) if event.contract_id else None
-    client = db.get(Client, event.client_id)
-    billing_day = (
-        (contract.billing_day if contract and contract.billing_day else None)
-        or (client.billing_day if client and client.billing_day else None)
-        or 1
-    )
-    dim = monthrange(event.uninstall_date.year, event.uninstall_date.month)[1]
-    fee_billing_day = min(billing_day, dim)
-    due = date(event.uninstall_date.year, event.uninstall_date.month, fee_billing_day)
-    if due <= event.uninstall_date:
-        due = add_months(due, 1)
-    return due
-
-
-def _uninstall_event_payer_client_id(db: Session, event: UninstallEvent) -> int:
-    """Pagador do evento, sem aceitar referência contratual inconsistente."""
-    if event.payer_client_id:
-        payer = db.get(Client, event.payer_client_id)
-        if not payer or payer.is_deleted:
-            raise ValueError(
-                f'Responsável financeiro #{event.payer_client_id} do evento '
-                f'#{event.id} não está disponível.'
-            )
-        return payer.id
-    if not event.contract_id:
-        return event.client_id
-    contract = db.get(Contract, event.contract_id)
-    if not contract or contract.is_deleted:
-        raise ValueError(f'Contrato #{event.contract_id} da desinstalação não está disponível.')
-    if contract.client_id != event.client_id:
-        raise ValueError(
-            f'Evento #{event.id} e contrato #{contract.id} pertencem a clientes diferentes.'
-        )
-    return contract_payer_client_id(db, contract)
-
-
-def _first_cycle_charge_items(
-    db: Session,
-    client_id: int,
-    contract_id: int,
-    reference_month: date,
-) -> list[dict]:
-    """
-    Retorna ChargeItems de parcela única (installment_count=1) que:
-    - Pertencem explicitamente ao contrato (itens genéricos ficam avulsos)
-    - Têm start_date dentro do mês de referência (serviços do início do contrato)
-    - Ainda não foram faturados (active=True e billing_count=0)
-
-    Esses itens serão embutidos na cobrança combinada da primeira mensalidade,
-    em vez de gerar faturas separadas.
-    """
-    month_start = reference_month.replace(day=1)
-    if reference_month.month == 12:
-        month_end = date(reference_month.year + 1, 1, 1)
-    else:
-        month_end = date(reference_month.year, reference_month.month + 1, 1)
-
-    q = db.query(ClientChargeItem).filter(
-        ClientChargeItem.is_deleted.is_(False),
-        ClientChargeItem.active.is_(True),
-        ClientChargeItem.client_id == client_id,
-        ClientChargeItem.contract_id == contract_id,
-        ClientChargeItem.installment_count == 1,
-        ClientChargeItem.start_date >= month_start,
-        ClientChargeItem.start_date < month_end,
-    )
-    result = []
-    for item in q.all():
-        billing_count = charge_item_effective_billing_count(db, item.id)
-        if billing_count > 0:
-            continue  # já faturado por outro caminho
-
-        result.append({
-            'item_id': item.id,
-            'title': item.title,
-            'amount': float(_quantize_amount(item.total_amount)),
-        })
-
-    return result
-
-
-def _effective_billing_counts_bulk(db: Session, item_ids: list[int]) -> dict[int, int]:
-    """Mesma regra de `charge_item_effective_billing_count` (financial.py), mas
-    para vários itens de uma vez — evita 1 query por item nos loops de
-    fechamento (`_pending_charge_items`), que rodam sobre todos os serviços
-    avulsos pendentes do mês.
-    """
-    if not item_ids:
-        return {}
-    billing_ids_by_item: dict[int, set[int]] = defaultdict(set)
-    direct_rows = db.query(Billing.item_id, Billing.id).filter(
-        Billing.is_deleted.is_(False),
-        Billing.status != BillingStatus.CANCELED,
-        Billing.item_id.in_(item_ids),
-    ).all()
-    for item_id, billing_id in direct_rows:
-        billing_ids_by_item[item_id].add(billing_id)
-    assoc_rows = (
-        db.query(BillingChargeItem.item_id, BillingChargeItem.billing_id)
-        .join(Billing, Billing.id == BillingChargeItem.billing_id)
-        .filter(
-            BillingChargeItem.item_id.in_(item_ids),
-            Billing.is_deleted.is_(False),
-            Billing.status != BillingStatus.CANCELED,
-        )
-        .all()
-    )
-    for item_id, billing_id in assoc_rows:
-        billing_ids_by_item[item_id].add(billing_id)
-    return {item_id: len(ids) for item_id, ids in billing_ids_by_item.items()}
-
-
-def _pending_charge_items(
-    db: Session,
-    reference_month: date,
-    exclude_ids: set[int] | None = None,
-    filter_type: str = 'all',
-    client_id: int | None = None,
-) -> list[dict]:
-    """
-    Retorna ClientChargeItems ativos cujos billings ainda não foram totalmente gerados
-    e cujo start_date é anterior ao final do mês de referência.
-    exclude_ids: item_ids já embutidos em cobranças combinadas de primeiro mês.
-    """
-    if reference_month.month == 12:
-        month_end = date(reference_month.year + 1, 1, 1)
-    else:
-        month_end = date(reference_month.year, reference_month.month + 1, 1)
-
-    query = (
-        db.query(ClientChargeItem)
-        .filter(
-            ClientChargeItem.is_deleted.is_(False),
-            ClientChargeItem.active.is_(True),
-            ClientChargeItem.start_date < month_end,
-        )
-    )
-    items = _apply_client_scope(
-        query, ClientChargeItem.client_id, filter_type, client_id,
-    ).order_by(ClientChargeItem.id.asc()).all()
-
-    candidate_items = [
-        item for item in items if not (exclude_ids and item.id in exclude_ids)
-    ]
-    billing_counts = _effective_billing_counts_bulk(db, [item.id for item in candidate_items])
-
-    client_ids = {item.client_id for item in candidate_items}
-    contract_ids = {item.contract_id for item in candidate_items if item.contract_id}
-    vehicle_ids = {item.vehicle_id for item in candidate_items if item.vehicle_id}
-    client_map = {
-        c.id: c for c in db.scalars(select(Client).where(Client.id.in_(client_ids))).all()
-    } if client_ids else {}
-    contract_map = {
-        c.id: c for c in db.scalars(select(Contract).where(Contract.id.in_(contract_ids))).all()
-    } if contract_ids else {}
-    vehicle_map = {
-        v.id: v for v in db.scalars(select(Vehicle).where(Vehicle.id.in_(vehicle_ids))).all()
-    } if vehicle_ids else {}
-
-    result = []
-    for item in candidate_items:
-        billing_count = billing_counts.get(item.id, 0)
-
-        installments = max(int(item.installment_count or 1), 1)
-        if billing_count >= installments:
-            continue
-
-        if item.contract_id:
-            item_contract = contract_map.get(item.contract_id)
-            if not item_contract or item_contract.is_deleted:
-                raise ValueError(
-                    f'Lançamento #{item.id} está ativo, mas referencia contrato '
-                    f'removido #{item.contract_id}. Reconcilie o lançamento antes do fechamento.'
-                )
-
-        client = client_map.get(item.client_id)
-        vehicle = vehicle_map.get(item.vehicle_id) if item.vehicle_id else None
-        remaining = installments - billing_count
-        total = Decimal(str(item.total_amount))
-        per_installment = (total / installments).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-
-        result.append({
-            'type': 'servico',
-            'item_id': item.id,
-            'client_id': item.client_id,
-            'client_name': client.name if client else f'Cliente #{item.client_id}',
-            'client_type': client.type if client else 'pf',
-            'vehicle_plate': vehicle.plate if vehicle else None,
-            'title': item.title,
-            'installment_count': installments,
-            'generated_count': billing_count,
-            'remaining_installments': remaining,
-            'per_installment_amount': float(per_installment),
-            'total_remaining': float(per_installment * remaining),
-            'start_date': item.start_date,
-        })
-
-    return result
-
-
-def _validate_contract_relationships(
-    contract: Contract,
-    client: Client | None,
-    plan: Plan | None,
-    vehicle: Vehicle | None,
-    tracker: Tracker | None,
-    interveniente: Client | None,
-) -> None:
-    """Falha fechada para contrato operacional com referência removida.
-
-    A validação é local ao fechamento. Referências históricas de eventos de
-    desinstalação não passam por ela e continuam podendo apontar para contrato
-    ou veículo removido.
-    """
-    if not client or client.is_deleted:
-        raise ValueError(
-            f'Contrato #{contract.id} referencia cliente removido #{contract.client_id}.'
-        )
-    if not plan or plan.is_deleted:
-        raise ValueError(
-            f'Contrato #{contract.id} referencia plano removido #{contract.plan_id}.'
-        )
-    if contract.vehicle_id and (not vehicle or vehicle.is_deleted):
-        raise ValueError(
-            f'Contrato #{contract.id} referencia veículo removido #{contract.vehicle_id}.'
-        )
-    if contract.tracker_id and (not tracker or tracker.is_deleted):
-        raise ValueError(
-            f'Contrato #{contract.id} referencia rastreador removido #{contract.tracker_id}.'
-        )
-    if contract.interveniente_client_id and (
-        not interveniente or interveniente.is_deleted
-    ):
-        raise ValueError(
-            f'Responsável financeiro #{contract.interveniente_client_id} do contrato '
-            f'#{contract.id} não está disponível.'
-        )
-
-
-def _locked_contracts(db: Session, contract_ids: set[int]) -> dict[int, Contract]:
-    """Trava, em ordem estável, somente contratos usados nesta geração."""
-    if not contract_ids:
-        return {}
-    rows = db.scalars(
-        select(Contract)
-        .where(Contract.id.in_(contract_ids))
-        .order_by(Contract.id.asc())
-        .with_for_update()
-        # O contrato pode ter sido carregado pela simulação antes de a
-        # exclusão concorrente comitar. Atualize o objeto do identity map com a
-        # versão que o SELECT FOR UPDATE acabou de serializar.
-        .execution_options(populate_existing=True)
-    ).all()
-    return {contract.id: contract for contract in rows}
-
-
-def _validate_locked_contract_for_closure(db: Session, contract: Contract) -> None:
-    client = db.get(Client, contract.client_id)
-    plan = db.get(Plan, contract.plan_id)
-    vehicle = db.get(Vehicle, contract.vehicle_id) if contract.vehicle_id else None
-    tracker = db.get(Tracker, contract.tracker_id) if contract.tracker_id else None
-    interveniente = (
-        db.get(Client, contract.interveniente_client_id)
-        if contract.interveniente_client_id else None
-    )
-    _validate_contract_relationships(
-        contract, client, plan, vehicle, tracker, interveniente,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -1022,14 +635,13 @@ def execute_closure(
     }
 
 
-
 # ---------------------------------------------------------------------------
-# Relatório de simulação de fechamento — movido para billing_closure_report.py
-# (BE-03): não toca em banco, só transforma o dict de simulate_closure em
-# texto/XLSX/PDF. Reexportado aqui porque api/v1/endpoints/billing_closure.py
-# e os testes de serviço importam esses nomes de app.services.billing_closure.
+# Relatório de simulação de fechamento — em billing_closure_report.py (BE-03):
+# não toca em banco, só transforma o dict de simulate_closure em texto/XLSX/PDF.
+# Reexportado aqui porque api/v1/endpoints/billing_closure.py e os testes de
+# serviço importam esses nomes de app.services.billing_closure.
 # ---------------------------------------------------------------------------
-from app.services.billing_closure_report import (  # noqa: F401
+from app.services.billing_closure_report import (  # noqa: F401,E402
     generate_closure_pdf,
     generate_closure_xlsx,
     montar_linhas_simulacao,
