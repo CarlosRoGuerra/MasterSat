@@ -60,6 +60,11 @@ export function statusVariant(status: string): BadgeVariant {
     descartado: 'danger',
     suspenso: 'warning',
     reenvio_solicitado: 'warning',
+    // Prioridade da Ordem de Serviço
+    baixa: 'default',
+    normal: 'info',
+    alta: 'warning',
+    urgente: 'danger',
   };
   return map[status] ?? 'default';
 }
@@ -92,6 +97,10 @@ export function statusLabel(status: string): string {
     operacional: 'Operacional',
     financeiro: 'Financeiro',
     cliente: 'Cliente',
+    baixa: 'Baixa',
+    normal: 'Normal',
+    alta: 'Alta',
+    urgente: 'Urgente',
   };
   return map[status] ?? status;
 }

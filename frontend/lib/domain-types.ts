@@ -19,6 +19,7 @@ export type TrackerStatus = components['schemas']['TrackerStatus'];
 export type BillingStatus = components['schemas']['BillingStatus'];
 export type OrderType = components['schemas']['OrderType'];
 export type OrderStatus = components['schemas']['OrderStatus'];
+export type OrderPriority = components['schemas']['OrderPriority'];
 export type DocumentReviewStatus = components['schemas']['DocumentReviewStatus'];
 export type UserRole = components['schemas']['UserRole'];
 

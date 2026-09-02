@@ -492,6 +492,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/trackers/{item_id}/swap": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Swap Tracker
+         * @description Troca o rastreador instalado por outro disponível em estoque, mantendo
+         *     veículo e contrato vigentes. O antigo volta para o estoque com o motivo
+         *     registrado; diferente da desinstalação, não gera cobrança nem encerra o
+         *     contrato — só o equipamento muda.
+         */
+        post: operations["swap_tracker_api_v1_trackers__item_id__swap_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/service-orders/": {
         parameters: {
             query?: never;
@@ -644,6 +667,76 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/service-orders/{item_id}/docx/{kind}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Stream Generated Docx */
+        get: operations["stream_generated_docx_api_v1_service_orders__item_id__docx__kind__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/service-orders/{item_id}/signature": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Upload Signature */
+        post: operations["upload_signature_api_v1_service_orders__item_id__signature_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/service-orders/{item_id}/materials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Materials */
+        get: operations["list_materials_api_v1_service_orders__item_id__materials_get"];
+        put?: never;
+        /** Create Material */
+        post: operations["create_material_api_v1_service_orders__item_id__materials_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/service-orders/{item_id}/materials/{material_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update Material */
+        put: operations["update_material_api_v1_service_orders__item_id__materials__material_id__put"];
+        post?: never;
+        /** Delete Material */
+        delete: operations["delete_material_api_v1_service_orders__item_id__materials__material_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -3288,6 +3381,18 @@ export interface components {
             /** Enviado Em */
             enviado_em?: string | null;
         };
+        /** ChecklistItem */
+        ChecklistItem: {
+            /** Description */
+            description: string;
+            /**
+             * Done
+             * @default false
+             */
+            done: boolean;
+            /** Notes */
+            notes?: string | null;
+        };
         /** ClientChargeItemCreate */
         ClientChargeItemCreate: {
             /** Client Id */
@@ -4324,6 +4429,11 @@ export interface components {
             itens: components["schemas"]["NotaListItem"][];
         };
         /**
+         * OrderPriority
+         * @enum {string}
+         */
+        OrderPriority: "baixa" | "normal" | "alta" | "urgente";
+        /**
          * OrderStatus
          * @enum {string}
          */
@@ -4620,6 +4730,8 @@ export interface components {
             type: components["schemas"]["OrderType"];
             /** @default aberta */
             status: components["schemas"]["OrderStatus"];
+            /** @default normal */
+            priority: components["schemas"]["OrderPriority"];
             /** Client Id */
             client_id: number;
             /** Vehicle Id */
@@ -4633,17 +4745,65 @@ export interface components {
             /** Executed At */
             executed_at?: string | null;
             /** Checklist */
-            checklist?: Record<string, never> | null;
+            checklist?: components["schemas"]["ChecklistItem"][] | null;
             /** Observations */
             observations?: string | null;
+            /** Problem Description */
+            problem_description?: string | null;
+            /** Execution Description */
+            execution_description?: string | null;
             /** Number */
             number?: string | null;
+        };
+        /** ServiceOrderMaterialIn */
+        ServiceOrderMaterialIn: {
+            /** Service Product Id */
+            service_product_id?: number | null;
+            /** Description */
+            description: string;
+            /**
+             * Quantity
+             * @default 1
+             */
+            quantity: number | string;
+            /** Unit */
+            unit?: string | null;
+            /** Unit Price */
+            unit_price?: number | string | null;
+            /** Notes */
+            notes?: string | null;
+        };
+        /** ServiceOrderMaterialOut */
+        ServiceOrderMaterialOut: {
+            /** Service Product Id */
+            service_product_id?: number | null;
+            /** Description */
+            description: string;
+            /**
+             * Quantity
+             * @default 1
+             */
+            quantity: string;
+            /** Unit */
+            unit?: string | null;
+            /** Unit Price */
+            unit_price?: string | null;
+            /** Notes */
+            notes?: string | null;
+            /** Id */
+            id: number;
+            /** Service Order Id */
+            service_order_id: number;
+            /** Service Product Name */
+            service_product_name?: string | null;
         };
         /** ServiceOrderOut */
         ServiceOrderOut: {
             type: components["schemas"]["OrderType"];
             /** @default aberta */
             status: components["schemas"]["OrderStatus"];
+            /** @default normal */
+            priority: components["schemas"]["OrderPriority"];
             /** Client Id */
             client_id: number;
             /** Vehicle Id */
@@ -4657,9 +4817,13 @@ export interface components {
             /** Executed At */
             executed_at?: string | null;
             /** Checklist */
-            checklist?: Record<string, never> | null;
+            checklist?: components["schemas"]["ChecklistItem"][] | null;
             /** Observations */
             observations?: string | null;
+            /** Problem Description */
+            problem_description?: string | null;
+            /** Execution Description */
+            execution_description?: string | null;
             /** Id */
             id: number;
             /** Number */
@@ -4672,6 +4836,10 @@ export interface components {
             tracker_label?: string | null;
             /** Technician Name */
             technician_name?: string | null;
+            /** Technician Signed At */
+            technician_signed_at?: string | null;
+            /** Client Signed At */
+            client_signed_at?: string | null;
             /** Created At */
             created_at?: string | null;
             /** Updated At */
@@ -4681,6 +4849,12 @@ export interface components {
         ServiceOrderPdfCreate: {
             /** Kind */
             kind: string;
+            /**
+             * Format
+             * @default pdf
+             * @enum {string}
+             */
+            format: "pdf" | "docx";
         };
         /** ServiceOrderStatusLogOut */
         ServiceOrderStatusLogOut: {
@@ -4709,6 +4883,7 @@ export interface components {
             number?: string | null;
             type?: components["schemas"]["OrderType"] | null;
             status?: components["schemas"]["OrderStatus"] | null;
+            priority?: components["schemas"]["OrderPriority"] | null;
             /** Client Id */
             client_id?: number | null;
             /** Vehicle Id */
@@ -4722,9 +4897,13 @@ export interface components {
             /** Executed At */
             executed_at?: string | null;
             /** Checklist */
-            checklist?: Record<string, never> | null;
+            checklist?: components["schemas"]["ChecklistItem"][] | null;
             /** Observations */
             observations?: string | null;
+            /** Problem Description */
+            problem_description?: string | null;
+            /** Execution Description */
+            execution_description?: string | null;
         };
         /** ServiceProductCreate */
         ServiceProductCreate: {
@@ -4814,6 +4993,16 @@ export interface components {
             remove_after_payment?: boolean | null;
             /** Auto Add On Uninstall */
             auto_add_on_uninstall?: boolean | null;
+        };
+        /** SignatureIn */
+        SignatureIn: {
+            /**
+             * Signer
+             * @enum {string}
+             */
+            signer: "technician" | "client";
+            /** Image Base64 */
+            image_base64: string;
         };
         /** TokenResponse */
         TokenResponse: {
@@ -5100,6 +5289,13 @@ export interface components {
          * @enum {string}
          */
         TrackerStatus: "em_estoque" | "instalado" | "em_manutencao" | "extraviado" | "descartado";
+        /** TrackerSwapPayload */
+        TrackerSwapPayload: {
+            /** New Tracker Id */
+            new_tracker_id: number;
+            /** Reason */
+            reason: string;
+        };
         /** TrackerUpdate */
         TrackerUpdate: {
             /** Imei */
@@ -6730,6 +6926,41 @@ export interface operations {
             };
         };
     };
+    swap_tracker_api_v1_trackers__item_id__swap_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TrackerSwapPayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_items_api_v1_service_orders__get: {
         parameters: {
             query?: {
@@ -6965,7 +7196,9 @@ export interface operations {
     };
     list_documents_api_v1_service_orders__item_id__documents_get: {
         parameters: {
-            query?: never;
+            query?: {
+                include_inactive?: boolean;
+            };
             header?: never;
             path: {
                 item_id: number;
@@ -7139,6 +7372,207 @@ export interface operations {
             path: {
                 kind: string;
                 item_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stream_generated_docx_api_v1_service_orders__item_id__docx__kind__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                kind: string;
+                item_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_signature_api_v1_service_orders__item_id__signature_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SignatureIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceOrderOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_materials_api_v1_service_orders__item_id__materials_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceOrderMaterialOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_material_api_v1_service_orders__item_id__materials_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ServiceOrderMaterialIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceOrderMaterialOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_material_api_v1_service_orders__item_id__materials__material_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: number;
+                material_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ServiceOrderMaterialIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceOrderMaterialOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_material_api_v1_service_orders__item_id__materials__material_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: number;
+                material_id: number;
             };
             cookie?: never;
         };

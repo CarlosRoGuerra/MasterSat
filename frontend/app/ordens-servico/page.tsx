@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Modal } from '@/components/ui/modal';
 import { SectionHeader } from '@/components/ui/section-header';
 import { StatCard } from '@/components/ui/stat-card';
-import { Badge, statusVariant, statusLabel } from '@/components/ui/badge';
+import { Badge, statusVariant } from '@/components/ui/badge';
 import { Table, TableHead, Th, TableBody, Tr, Td } from '@/components/ui/table';
 import { EmptyState, TableSkeleton } from '@/components/ui/empty-state';
 import { usePagination, Pagination } from '@/components/ui/pagination';
@@ -18,66 +18,30 @@ import { apiFetch, apiFetchList } from '@/lib/api';
 import { useAuthGuard } from '@/lib/use-auth-guard';
 import { ROUTE_ROLES } from '@/lib/route-roles';
 import { useDebouncedValue, useEffectSkipFirst } from '@/lib/use-debounced-value';
-import type {
-  OrderType,
-  OrderStatus,
-  DocumentReviewStatus as ReviewStatus,
-  ClientOption,
-  VehicleOption,
-  TrackerOption,
-  UserOption,
-} from '@/lib/domain-types';
-
-type ServiceOrder = {
-  id: number;
-  number: string;
-  type: OrderType;
-  status: OrderStatus;
-  client_id: number;
-  vehicle_id?: number | null;
-  tracker_id?: number | null;
-  technician_id?: number | null;
-  scheduled_at?: string | null;
-  executed_at?: string | null;
-  checklist?: { items?: string[] } | null;
-  observations?: string | null;
-  client_name?: string | null;
-  vehicle_plate?: string | null;
-  tracker_label?: string | null;
-  technician_name?: string | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-};
-
-type OrderLog = {
-  id: number;
-  previous_status?: OrderStatus | null;
-  new_status: OrderStatus;
-  notes?: string | null;
-  changed_by_id?: number | null;
-  changed_by_name?: string | null;
-  created_at?: string | null;
-};
-
-type OrderDocument = {
-  id: number;
-  file_name: string;
-  category: string;
-  review_status: ReviewStatus;
-  review_notes?: string | null;
-  url: string;
-  download_url: string;
-};
+import type { OrderType, OrderStatus, OrderPriority, ClientOption, VehicleOption, TrackerOption, UserOption } from '@/lib/domain-types';
+import { ServiceOrderDetailModal } from './_components/service-order-detail-modal';
+import {
+  ServiceOrder,
+  orderTypeOptions,
+  statusOptions,
+  priorityOptions,
+  checklistTemplates,
+  fieldClass,
+  areaClass,
+  parseError,
+  toLocalDatetimeInput,
+} from './_components/types';
 
 type OrderFormState = {
   type: OrderType;
   status: OrderStatus;
+  priority: OrderPriority;
   client_id: string;
   vehicle_id: string;
   tracker_id: string;
   technician_id: string;
   scheduled_at: string;
-  executed_at: string;
+  problem_description: string;
   observations: string;
   checklistItems: string[];
 };
@@ -85,70 +49,16 @@ type OrderFormState = {
 const initialForm: OrderFormState = {
   type: 'instalacao',
   status: 'aberta',
+  priority: 'normal',
   client_id: '',
   vehicle_id: '',
   tracker_id: '',
   technician_id: '',
   scheduled_at: '',
-  executed_at: '',
+  problem_description: '',
   observations: '',
   checklistItems: [''],
 };
-
-const fieldClass = 'w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-500 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-400 dark:focus:border-brand-400';
-const areaClass = `${fieldClass} min-h-[88px] resize-y`;
-
-const orderTypeOptions: { value: OrderType; label: string }[] = [
-  { value: 'instalacao', label: 'Instalação' },
-  { value: 'manutencao', label: 'Manutenção / troca' },
-  { value: 'retirada', label: 'Retirada' },
-  { value: 'visita_tecnica', label: 'Visita técnica / suporte' },
-];
-
-const statusOptions: { value: OrderStatus; label: string }[] = [
-  { value: 'aberta', label: 'Aberta' },
-  { value: 'em_andamento', label: 'Em andamento' },
-  { value: 'concluida', label: 'Concluída' },
-  { value: 'cancelada', label: 'Cancelada' },
-];
-
-const checklistTemplates: Record<OrderType, string[]> = {
-  instalacao: ['Confirmar cliente e veículo', 'Conferir posição e local do equipamento', 'Testar comunicação', 'Registrar fotos da instalação'],
-  manutencao: ['Validar causa da manutenção', 'Conferir chicote e alimentação', 'Executar teste funcional', 'Registrar evidência pós-serviço'],
-  retirada: ['Confirmar autorização de retirada', 'Retirar equipamento com segurança', 'Registrar estado do equipamento', 'Atualizar devolução ao estoque'],
-  visita_tecnica: ['Validar solicitação', 'Executar atendimento em campo', 'Registrar evidências', 'Formalizar conclusão'],
-};
-
-const pdfKinds = [
-  { value: 'ordem_servico', label: 'Gerar PDF da OS' },
-  { value: 'termo_instalacao', label: 'Gerar termo de instalação' },
-  { value: 'termo_retirada', label: 'Gerar termo de retirada' },
-  { value: 'historico_execucao', label: 'Gerar histórico de execução' },
-] as const;
-
-const documentCategoryOptions = ['evidencia_fotografica', 'termo_instalacao', 'termo_retirada', 'anexo_tecnico', 'outro'];
-
-function parseError(error: unknown) {
-  return error instanceof Error ? error.message : 'Ocorreu um erro inesperado.';
-}
-
-function formatDateTimeLabel(value?: string | null) {
-  if (!value) return '—';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('pt-BR');
-}
-
-function toLocalDatetimeInput(value?: string | null) {
-  if (!value) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  const tzOffset = date.getTimezoneOffset() * 60000;
-  return new Date(date.getTime() - tzOffset).toISOString().slice(0, 16);
-}
-
-function typeLabel(value: OrderType) {
-  return orderTypeOptions.find((item) => item.value === value)?.label || value;
-}
 
 function OSTable({
   orders,
@@ -157,8 +67,6 @@ function OSTable({
   canEdit,
   onDetails,
   onEdit,
-  statusOptions,
-  orderTypeOptions,
 }: {
   orders: ServiceOrder[];
   loading: boolean;
@@ -166,8 +74,6 @@ function OSTable({
   canEdit: boolean;
   onDetails: (o: ServiceOrder) => void;
   onEdit: (o: ServiceOrder) => void;
-  statusOptions: { value: string; label: string }[];
-  orderTypeOptions: { value: string; label: string }[];
 }) {
   const pg = usePagination(orders, 20);
 
@@ -183,6 +89,7 @@ function OSTable({
           <Th>Tipo</Th>
           <Th>Cliente / Veículo</Th>
           <Th>Técnico</Th>
+          <Th>Prioridade</Th>
           <Th>Status</Th>
           <Th className="w-36" />
         </TableHead>
@@ -196,6 +103,7 @@ function OSTable({
                 <p className="text-xs text-slate-500">{order.vehicle_plate ?? ''}</p>
               </Td>
               <Td className="text-sm">{order.technician_name ?? '—'}</Td>
+              <Td><Badge variant={statusVariant(order.priority)}>{priorityOptions.find((x) => x.value === order.priority)?.label ?? order.priority}</Badge></Td>
               <Td><Badge variant={statusVariant(order.status)}>{statusOptions.find((x) => x.value === order.status)?.label ?? order.status}</Badge></Td>
               <Td>
                 <div className="flex justify-end gap-1.5">
@@ -221,25 +129,20 @@ export default function ServiceOrdersPage() {
   const [vehicles, setVehicles] = useState<VehicleOption[]>([]);
   const [trackers, setTrackers] = useState<TrackerOption[]>([]);
   const [technicians, setTechnicians] = useState<UserOption[]>([]);
+  const [serviceProducts, setServiceProducts] = useState<{ id: number; name: string }[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<ServiceOrder | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const [detailsTab, setDetailsTab] = useState<'detalhes' | 'documentos' | 'historico'>('detalhes');
-  const [logs, setLogs] = useState<OrderLog[]>([]);
-  const [documents, setDocuments] = useState<OrderDocument[]>([]);
   const [form, setForm] = useState<OrderFormState>(initialForm);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
   const [clientFilter, setClientFilter] = useState('');
-  const [vehicleFilter, setVehicleFilter] = useState('');
+  const [vehicleFilter] = useState('');
   const [technicianFilter, setTechnicianFilter] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [docCategory, setDocCategory] = useState('evidencia_fotografica');
-  const [docFiles, setDocFiles] = useState<File[]>([]);
   const [error, setError] = useState('');
   const [feedback, setFeedback] = useState('');
   const [modalError, setModalError] = useState('');
@@ -274,12 +177,13 @@ export default function ServiceOrdersPage() {
       if (technicianFilter) query.set('technician_id', technicianFilter);
       query.set('limit', '200');
 
-      const [orderResult, clientResult, vehicleResult, trackerResult, userResult] = await Promise.allSettled([
+      const [orderResult, clientResult, vehicleResult, trackerResult, userResult, productResult] = await Promise.allSettled([
         apiFetch<ServiceOrder[]>(`/service-orders?${query.toString()}`, {}, currentToken),
         apiFetchList<ClientOption>('/clients?limit=200', {}, currentToken),
         apiFetchList<VehicleOption>('/vehicles?limit=500', {}, currentToken),
         apiFetchList<TrackerOption>('/trackers?limit=200', {}, currentToken),
         apiFetch<UserOption[]>('/users', {}, currentToken),
+        apiFetch<{ id: number; name: string }[]>('/service-products', {}, currentToken),
       ]);
 
       const orderResponse = orderResult.status === 'fulfilled' ? orderResult.value : [];
@@ -287,6 +191,7 @@ export default function ServiceOrdersPage() {
       const vehicleResponse = vehicleResult.status === 'fulfilled' ? vehicleResult.value : [];
       const trackerResponse = trackerResult.status === 'fulfilled' ? trackerResult.value : [];
       const userResponse = userResult.status === 'fulfilled' ? userResult.value : [];
+      const productResponse = productResult.status === 'fulfilled' ? productResult.value : [];
 
       if (orderResult.status === 'rejected') {
         throw orderResult.reason;
@@ -297,10 +202,7 @@ export default function ServiceOrdersPage() {
       setVehicles(vehicleResponse);
       setTrackers(trackerResponse);
       setTechnicians(userResponse.filter((item) => item.role === 'admin' || item.role === 'operacional'));
-      if (selectedOrder) {
-        const refreshed = orderResponse.find((item) => item.id === selectedOrder.id) || null;
-        setSelectedOrder(refreshed);
-      }
+      setServiceProducts(productResponse);
     } catch (err) {
       setError(parseError(err));
     } finally {
@@ -308,22 +210,10 @@ export default function ServiceOrdersPage() {
     }
   }
 
-  async function loadOrderDetails(currentToken: string, orderId: number) {
-    try {
-      const [logResponse, documentResponse] = await Promise.all([
-        apiFetch<OrderLog[]>(`/service-orders/${orderId}/logs`, {}, currentToken),
-        apiFetch<OrderDocument[]>(`/service-orders/${orderId}/documents`, {}, currentToken),
-      ]);
-      setLogs(logResponse);
-      setDocuments(documentResponse);
-    } catch (err) {
-      setError(parseError(err));
-    }
-  }
-
   useEffect(() => {
     if (!token) return;
     loadBaseData(token);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
   // Busca/filtros dinâmicos (sem precisar clicar em "Filtrar")
@@ -332,19 +222,9 @@ export default function ServiceOrdersPage() {
     if (token) loadBaseData(token);
   }, [searchDebounced, statusFilter, typeFilter, clientFilter, vehicleFilter, technicianFilter]);
 
-  useEffect(() => {
-    if (!token || !selectedOrder) {
-      setLogs([]);
-      setDocuments([]);
-      return;
-    }
-    loadOrderDetails(token, selectedOrder.id);
-  }, [token, selectedOrder?.id]);
-
   function resetForm() {
     setForm(initialForm);
     setIsEditing(false);
-    setDocFiles([]);
   }
 
   function openCreateModal() {
@@ -360,14 +240,15 @@ export default function ServiceOrdersPage() {
     setForm({
       type: order.type,
       status: order.status,
+      priority: order.priority,
       client_id: order.client_id ? String(order.client_id) : '',
       vehicle_id: order.vehicle_id ? String(order.vehicle_id) : '',
       tracker_id: order.tracker_id ? String(order.tracker_id) : '',
       technician_id: order.technician_id ? String(order.technician_id) : '',
       scheduled_at: toLocalDatetimeInput(order.scheduled_at),
-      executed_at: toLocalDatetimeInput(order.executed_at),
+      problem_description: order.problem_description || '',
       observations: order.observations || '',
-      checklistItems: (order.checklist?.items && order.checklist.items.length ? order.checklist.items : checklistTemplates[order.type]).map((item) => item || ''),
+      checklistItems: (order.checklist && order.checklist.length ? order.checklist.map((i) => i.description) : checklistTemplates[order.type]).map((item) => item || ''),
     });
     setModalOpen(true);
   }
@@ -393,14 +274,15 @@ export default function ServiceOrdersPage() {
       const payload = {
         type: form.type,
         status: form.status,
+        priority: form.priority,
         client_id: Number(form.client_id),
         vehicle_id: form.vehicle_id ? Number(form.vehicle_id) : null,
         tracker_id: form.tracker_id ? Number(form.tracker_id) : null,
         technician_id: form.technician_id ? Number(form.technician_id) : null,
         scheduled_at: form.scheduled_at ? new Date(form.scheduled_at).toISOString() : null,
-        executed_at: form.executed_at ? new Date(form.executed_at).toISOString() : null,
+        problem_description: form.problem_description.trim() || null,
         observations: form.observations.trim() || null,
-        checklist: { items: form.checklistItems.map((item) => item.trim()).filter(Boolean) },
+        checklist: form.checklistItems.map((item) => item.trim()).filter(Boolean).map((description) => ({ description, done: false, notes: null })),
       };
       const saved = isEditing && selectedOrder
         ? await apiFetch<ServiceOrder>(`/service-orders/${selectedOrder.id}`, { method: 'PUT', body: JSON.stringify(payload) }, token)
@@ -410,7 +292,6 @@ export default function ServiceOrdersPage() {
       resetForm();
       await loadBaseData(token);
       setSelectedOrder(saved);
-      await loadOrderDetails(token, saved.id);
     } catch (err) {
       setModalError(parseError(err));
     } finally {
@@ -418,76 +299,13 @@ export default function ServiceOrdersPage() {
     }
   }
 
-  async function updateStatus(status: OrderStatus) {
-    if (!token || !selectedOrder || !canEdit) return;
-    const notes = window.prompt('Observações desta etapa (opcional):', '') || '';
-    try {
-      const updated = await apiFetch<ServiceOrder>(`/service-orders/${selectedOrder.id}/status`, { method: 'POST', body: JSON.stringify({ status, notes: notes || null }) }, token);
-      setFeedback('Status atualizado com sucesso.');
-      setSelectedOrder(updated);
-      await loadBaseData(token);
-      await loadOrderDetails(token, selectedOrder.id);
-    } catch (err) {
-      setError(parseError(err));
-    }
-  }
-
-  async function uploadDocuments() {
-    if (!token || !selectedOrder || !docFiles.length || !canEdit) return;
-    setUploading(true);
-    setError('');
-    try {
-      const body = new FormData();
-      body.append('category', docCategory);
-      docFiles.forEach((file) => body.append('files', file));
-      await apiFetch(`/service-orders/${selectedOrder.id}/documents`, { method: 'POST', body }, token);
-      setFeedback('Arquivos enviados com sucesso.');
-      setDocFiles([]);
-      await loadOrderDetails(token, selectedOrder.id);
-    } catch (err) {
-      setError(parseError(err));
-    } finally {
-      setUploading(false);
-    }
-  }
-
-  async function generatePdf(kind: (typeof pdfKinds)[number]['value']) {
-    if (!token || !selectedOrder || !canEdit) return;
-    try {
-      await apiFetch<OrderDocument>(`/service-orders/${selectedOrder.id}/generate-document`, { method: 'POST', body: JSON.stringify({ kind }) }, token);
-      setFeedback('Documento operacional gerado com sucesso.');
-      await loadOrderDetails(token, selectedOrder.id);
-    } catch (err) {
-      setError(parseError(err));
-    }
-  }
-
-  async function reviewDocument(documentId: number, status: ReviewStatus) {
-    if (!token || !selectedOrder || !canEdit) return;
-    const notes = window.prompt('Observações da revisão (opcional):', '') || '';
-    try {
-      await apiFetch(`/service-orders/${selectedOrder.id}/documents/${documentId}/review`, { method: 'PUT', body: JSON.stringify({ review_status: status, review_notes: notes || null }) }, token);
-      setFeedback('Status do documento atualizado.');
-      await loadOrderDetails(token, selectedOrder.id);
-    } catch (err) {
-      setError(parseError(err));
-    }
-  }
-
-  async function deleteDocument(documentId: number) {
-    if (!token || !selectedOrder || !canEdit) return;
-    if (!window.confirm('Deseja remover este documento?')) return;
-    try {
-      await apiFetch(`/service-orders/${selectedOrder.id}/documents/${documentId}`, { method: 'DELETE' }, token);
-      setFeedback('Documento removido com sucesso.');
-      await loadOrderDetails(token, selectedOrder.id);
-    } catch (err) {
-      setError(parseError(err));
-    }
+  function openDetails(order: ServiceOrder) {
+    setSelectedOrder(order);
+    setDetailsOpen(true);
   }
 
   return (
-    <PageShell title="Ordens de Serviço" description="Módulo operacional com abertura via modal, checklist por tipo, histórico por etapas e documentos integrados ao padrão do sistema.">
+    <PageShell title="Ordens de Serviço" description="Módulo operacional completo: abertura via modal, checklist técnico, materiais, fotos, assinatura digital e geração de documento profissional (PDF/DOCX).">
       {(guardError || error || feedback) && (
         <div className="mb-4 space-y-3">
           {(guardError || error) ? <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{guardError || error}</p> : null}
@@ -528,7 +346,7 @@ export default function ServiceOrdersPage() {
             <Button variant="secondary" onClick={() => token && loadBaseData(token)} disabled={loading}>
               {loading ? 'Atualizando…' : 'Atualizar'}
             </Button>
-            <Button variant="ghost" onClick={() => { setSearch(''); setStatusFilter(''); setTypeFilter(''); setClientFilter(''); setVehicleFilter(''); setTechnicianFilter(''); }}>
+            <Button variant="ghost" onClick={() => { setSearch(''); setStatusFilter(''); setTypeFilter(''); setClientFilter(''); setTechnicianFilter(''); }}>
               Limpar
             </Button>
           </div>
@@ -538,18 +356,8 @@ export default function ServiceOrdersPage() {
               loading={loading}
               error={error}
               canEdit={canEdit}
-              onDetails={(o) => {
-                setSelectedOrder(o);
-                setDetailsTab('detalhes');
-                setDetailsOpen(true);
-                if (token) {
-                  apiFetch(`/service-orders/${o.id}/logs`, {}, token).then((r) => setLogs(r as OrderLog[])).catch(() => setLogs([]));
-                  apiFetch(`/service-orders/${o.id}/documents`, {}, token).then((r) => setDocuments(r as OrderDocument[])).catch(() => setDocuments([]));
-                }
-              }}
+              onDetails={openDetails}
               onEdit={fillForm}
-              statusOptions={statusOptions}
-              orderTypeOptions={orderTypeOptions}
             />
           </div>
         </Card>
@@ -563,143 +371,15 @@ export default function ServiceOrdersPage() {
         <StatCard label="Concluídas" value={stats.completed} hint="Prontas para auditoria" tone="success" icon={<CheckCircle2 className="h-5 w-5" />} />
       </section>
 
-      {/* Modal de detalhes */}
-      <Modal
+      <ServiceOrderDetailModal
         open={detailsOpen}
         onClose={() => { setDetailsOpen(false); setSelectedOrder(null); }}
-        title={selectedOrder?.number ?? ''}
-        subtitle="Ordem de Serviço"
-        size="xl"
-      >
-        {selectedOrder && (
-          <div className="space-y-4">
-            <div className="flex gap-1 border-b border-slate-100 dark:border-slate-800">
-              {(['detalhes', 'documentos', 'historico'] as const).map((tab) => (
-                <button key={tab} type="button" onClick={() => setDetailsTab(tab)}
-                  className={`px-4 py-2 text-sm font-medium transition-colors ${detailsTab === tab ? 'border-b-2 border-brand-600 text-brand-700 dark:border-brand-400 dark:text-brand-300' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
-                >
-                  {tab === 'detalhes' ? 'Detalhes' : tab === 'documentos' ? 'Documentos' : 'Histórico'}
-                </button>
-              ))}
-            </div>
-
-            {/* Detalhes */}
-            {detailsTab === 'detalhes' && (
-              <div className="space-y-4">
-                <div className="grid gap-3 sm:grid-cols-2">
-                  {[
-                    ['Status', <Badge key="s" variant={statusVariant(selectedOrder.status)}>{statusOptions.find((x) => x.value === selectedOrder.status)?.label ?? selectedOrder.status}</Badge>],
-                    ['Tipo', typeLabel(selectedOrder.type)],
-                    ['Cliente', selectedOrder.client_name ?? '—'],
-                    ['Veículo / Rastreador', [selectedOrder.vehicle_plate, selectedOrder.tracker_label].filter(Boolean).join(' • ') || '—'],
-                    ['Técnico', selectedOrder.technician_name ?? '—'],
-                    ['Agendado', formatDateTimeLabel(selectedOrder.scheduled_at)],
-                    ['Executado', formatDateTimeLabel(selectedOrder.executed_at)],
-                  ].map(([label, value]) => (
-                    <div key={String(label)} className="rounded-xl border border-slate-100 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/50">
-                      <p className="text-2xs font-semibold uppercase tracking-widest text-slate-500">{label}</p>
-                      <div className="mt-1 text-sm text-slate-800 dark:text-slate-200">{value}</div>
-                    </div>
-                  ))}
-                </div>
-                <div className="rounded-xl border border-slate-100 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/50">
-                  <p className="mb-2 text-2xs font-semibold uppercase tracking-widest text-slate-500">Checklist</p>
-                  <ul className="space-y-1 text-sm text-slate-600 dark:text-slate-300">
-                    {(selectedOrder.checklist?.items ?? []).map((item, i) => <li key={i} className="flex gap-2"><span className="text-brand-500">✓</span>{item}</li>)}
-                    {!(selectedOrder.checklist?.items?.length) && <li className="text-slate-500">Sem checklist configurado.</li>}
-                  </ul>
-                  {selectedOrder.observations && <p className="mt-3 text-sm text-slate-500">{selectedOrder.observations}</p>}
-                </div>
-                {canEdit && (
-                  <div>
-                    <p className="mb-2 text-2xs font-semibold uppercase tracking-widest text-slate-500">Alterar status</p>
-                    <div className="flex flex-wrap gap-2">
-                      {statusOptions.map((opt) => (
-                        <button key={opt.value} type="button" onClick={() => updateStatus(opt.value)}
-                          className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors border ${selectedOrder.status === opt.value ? 'bg-brand-700 text-white border-brand-700' : 'border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800'}`}
-                        >{opt.label}</button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Documentos */}
-            {detailsTab === 'documentos' && (
-              <div className="space-y-4">
-                <div className="flex flex-wrap gap-2">
-                  {pdfKinds.map((item) => <Button key={item.value} variant="secondary" onClick={() => generatePdf(item.value)} className="text-xs px-3 py-1.5">{item.label}</Button>)}
-                </div>
-                {canEdit && (
-                  <div className="flex flex-wrap gap-2">
-                    <select className={fieldClass} style={{ width: 200 }} value={docCategory} onChange={(e) => setDocCategory(e.target.value)}>
-                      {documentCategoryOptions.map((o) => <option key={o} value={o}>{o}</option>)}
-                    </select>
-                    <input type="file" multiple className={`${fieldClass} file:mr-3 file:rounded-lg file:border-0 file:bg-brand-700 file:px-3 file:py-1.5 file:text-xs file:text-white`} onChange={(e) => setDocFiles(Array.from(e.target.files || []))} />
-                    <Button disabled={!docFiles.length || uploading} onClick={uploadDocuments}>{uploading ? 'Enviando…' : 'Enviar'}</Button>
-                  </div>
-                )}
-                {documents.length === 0 ? (
-                  <EmptyState title="Sem documentos" description="Nenhum documento vinculado a esta OS." />
-                ) : (
-                  <div className="space-y-2">
-                    {documents.map((doc) => (
-                      <div key={doc.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/50">
-                        <div className="flex flex-wrap items-start justify-between gap-2">
-                          <div>
-                            <p className="text-sm font-medium text-slate-900 dark:text-white">{doc.file_name}</p>
-                            <p className="text-xs text-slate-500">{doc.category}</p>
-                          </div>
-                          <Badge variant={statusVariant(doc.review_status)}>{statusLabel(doc.review_status)}</Badge>
-                        </div>
-                        <div className="mt-2 flex flex-wrap gap-1.5">
-                          <a href={doc.url} target="_blank" rel="noreferrer" className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300">Visualizar</a>
-                          <a href={doc.download_url} target="_blank" rel="noreferrer" className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300">Baixar</a>
-                          {canEdit && (
-                            <>
-                              <button type="button" onClick={() => reviewDocument(doc.id, 'aprovado')} className="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100 dark:border-emerald-900/40 dark:bg-emerald-950/30 dark:text-emerald-400">Aprovar</button>
-                              <button type="button" onClick={() => reviewDocument(doc.id, 'reenvio_solicitado')} className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700 hover:bg-amber-100 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-400">Solicitar ajuste</button>
-                              <button type="button" onClick={() => deleteDocument(doc.id)} className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-medium text-rose-700 hover:bg-rose-100 dark:border-rose-900/40 dark:bg-rose-950/30 dark:text-rose-400">Excluir</button>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Histórico */}
-            {detailsTab === 'historico' && (
-              <div>
-                {logs.length === 0 ? (
-                  <EmptyState title="Sem histórico" description="Nenhuma mudança de status registrada." />
-                ) : (
-                  <ol className="relative border-l border-slate-200 dark:border-slate-700">
-                    {logs.map((log) => (
-                      <li key={log.id} className="mb-4 ml-5">
-                        <span className="absolute -left-[14px] flex h-7 w-7 items-center justify-center rounded-full bg-slate-100 ring-2 ring-white dark:bg-slate-800 dark:ring-slate-950">
-                          <span className="h-2 w-2 rounded-full bg-brand-500" />
-                        </span>
-                        <div className="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2 dark:border-slate-800 dark:bg-slate-950/60">
-                          <p className="text-xs font-semibold text-slate-900 dark:text-white">
-                            {log.previous_status && <><Badge variant={statusVariant(log.previous_status)}>{statusOptions.find((x) => x.value === log.previous_status)?.label}</Badge>{' → '}</>}
-                            <Badge variant={statusVariant(log.new_status)}>{statusOptions.find((x) => x.value === log.new_status)?.label}</Badge>
-                          </p>
-                          <time className="mt-0.5 block text-3xs text-slate-500">{formatDateTimeLabel(log.created_at)} · {log.changed_by_name ?? 'Sistema'}</time>
-                          {log.notes && <p className="mt-1 text-xs text-slate-500">{log.notes}</p>}
-                        </div>
-                      </li>
-                    ))}
-                  </ol>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-      </Modal>
+        orderId={selectedOrder?.id ?? null}
+        token={token ?? ''}
+        canEdit={canEdit}
+        onOrderChanged={() => token && loadBaseData(token)}
+        serviceProducts={serviceProducts}
+      />
 
       <Modal open={modalOpen} onClose={() => { setModalOpen(false); resetForm(); setModalError(''); }} title={isEditing ? 'Editar ordem de serviço' : 'Nova ordem de serviço'} description="Abra a ordem via modal, selecione o tipo de atendimento e configure o checklist conforme o serviço.">
         <form className="space-y-6" onSubmit={handleSubmit}>
@@ -712,6 +392,9 @@ export default function ServiceOrdersPage() {
             </select>
             <select className={fieldClass} value={form.status} onChange={(e) => setForm((prev) => ({ ...prev, status: e.target.value as OrderStatus }))}>
               {statusOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+            </select>
+            <select className={fieldClass} value={form.priority} onChange={(e) => setForm((prev) => ({ ...prev, priority: e.target.value as OrderPriority }))}>
+              {priorityOptions.map((item) => <option key={item.value} value={item.value}>Prioridade {item.label}</option>)}
             </select>
             <ClientAutocomplete
               clients={clients}
@@ -733,14 +416,18 @@ export default function ServiceOrdersPage() {
               {technicians.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
             </select>
             <label className="block"><span className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-300">Agendamento</span><input type="datetime-local" className={fieldClass} value={form.scheduled_at} onChange={(e) => setForm((prev) => ({ ...prev, scheduled_at: e.target.value }))} /></label>
-            <label className="block"><span className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-300">Execução</span><input type="datetime-local" className={fieldClass} value={form.executed_at} onChange={(e) => setForm((prev) => ({ ...prev, executed_at: e.target.value }))} /></label>
           </div>
+
+          <label className="block">
+            <span className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-300">Descrição do problema relatado</span>
+            <textarea className={areaClass} placeholder="O que o cliente relatou / motivo da abertura" value={form.problem_description} onChange={(e) => setForm((prev) => ({ ...prev, problem_description: e.target.value }))} />
+          </label>
 
           <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-5 dark:border-slate-800 dark:bg-slate-950/60">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <p className="text-sm font-semibold text-slate-900 dark:text-white">Checklist por tipo de serviço</p>
-                <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Use o template do tipo selecionado e ajuste os itens conforme a operação.</p>
+                <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Use o template do tipo selecionado e ajuste os itens conforme a operação — marcar como feito é na aba Checklist, dentro dos Detalhes da OS.</p>
               </div>
               <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-700 dark:border-slate-700 dark:text-slate-200 dark:hover:border-cyan-400 dark:hover:text-cyan-300" onClick={() => setForm((prev) => ({ ...prev, checklistItems: [...prev.checklistItems, ''] }))}>Adicionar item</button>
             </div>
