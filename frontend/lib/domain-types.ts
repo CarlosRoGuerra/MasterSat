@@ -26,6 +26,17 @@ export type UserRole = components['schemas']['UserRole'];
 /** Usuário autenticado — resposta de GET /auth/me. */
 export type AuthUser = components['schemas']['app__schemas__auth__UserOut'];
 
+/** Busca Global (Command Palette) — resposta de GET /search. */
+export type SearchResultItem = components['schemas']['SearchResultItem'];
+export type SearchEntity = SearchResultItem['entity'];
+export type GlobalSearchOut = components['schemas']['GlobalSearchOut'];
+
+/** Linha do Tempo do Cliente — resposta de GET /clients/{id}/timeline. */
+export type TimelineEvent = components['schemas']['TimelineEventOut'];
+export type TimelineCategory = TimelineEvent['category'];
+export type TimelineSeverity = TimelineEvent['severity'];
+export type TimelineLink = components['schemas']['TimelineLinkOut'];
+
 type ClientFull = components['schemas']['ClientOut'];
 type VehicleFull = components['schemas']['VehicleOut'];
 type TrackerFull = components['schemas']['TrackerOut'];

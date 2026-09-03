@@ -139,18 +139,6 @@ export type NfseItem = {
   titulo?: string | null;
 };
 
-export type TimelineContract = { id: number; start_date: string; plan_name?: string | null; status: string };
-export type TimelineOrder    = { id: number; number: string; type: string; status: string; executed_at?: string | null; scheduled_at?: string | null; created_at?: string | null; vehicle_plate?: string | null };
-export type TimelineBilling  = { id: number; amount: number; due_date: string; payment_date?: string | null; status: string; title?: string | null; plan_name?: string | null };
-
-export type TimelineEvent = {
-  key: string;
-  date: string;
-  kind: 'contract' | 'os' | 'billing_paid' | 'billing_overdue' | 'billing_pending';
-  title: string;
-  subtitle: string;
-};
-
 export type ClientFormState = {
   name: string;
   cpf_cnpj: string;

@@ -271,6 +271,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/clients/{item_id}/timeline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Client Timeline */
+        get: operations["client_timeline_api_v1_clients__item_id__timeline_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/clients/{item_id}/timeline-pdf": {
         parameters: {
             query?: never;
@@ -1180,6 +1197,23 @@ export interface paths {
         };
         /** View Document */
         get: operations["view_document_api_v1_documents__document_id__view_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/search/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Global Search */
+        get: operations["global_search_api_v1_search__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4068,6 +4102,39 @@ export interface components {
             /** Expires At */
             expires_at?: string | null;
         };
+        /** GlobalSearchOut */
+        GlobalSearchOut: {
+            /**
+             * Clients
+             * @default []
+             */
+            clients: components["schemas"]["SearchResultItem"][];
+            /**
+             * Vehicles
+             * @default []
+             */
+            vehicles: components["schemas"]["SearchResultItem"][];
+            /**
+             * Trackers
+             * @default []
+             */
+            trackers: components["schemas"]["SearchResultItem"][];
+            /**
+             * Service Orders
+             * @default []
+             */
+            service_orders: components["schemas"]["SearchResultItem"][];
+            /**
+             * Contracts
+             * @default []
+             */
+            contracts: components["schemas"]["SearchResultItem"][];
+            /**
+             * Documents
+             * @default []
+             */
+            documents: components["schemas"]["SearchResultItem"][];
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -4450,6 +4517,13 @@ export interface components {
             /** Total */
             total: number;
         };
+        /** Page[TimelineEventOut] */
+        Page_TimelineEventOut_: {
+            /** Items */
+            items: components["schemas"]["TimelineEventOut"][];
+            /** Total */
+            total: number;
+        };
         /** Page[TrackerOut] */
         Page_TrackerOut_: {
             /** Items */
@@ -4724,6 +4798,28 @@ export interface components {
             total_billed: number;
             /** Total Outstanding */
             total_outstanding: number;
+        };
+        /** SearchResultItem */
+        SearchResultItem: {
+            /** Id */
+            id: number;
+            /**
+             * Entity
+             * @enum {string}
+             */
+            entity: "client" | "vehicle" | "tracker" | "service_order" | "contract" | "document";
+            /** Title */
+            title: string;
+            /** Subtitle */
+            subtitle?: string | null;
+            /** Status */
+            status?: string | null;
+            /** Client Id */
+            client_id?: number | null;
+            /** Vehicle Id */
+            vehicle_id?: number | null;
+            /** Service Order Id */
+            service_order_id?: number | null;
         };
         /** ServiceOrderCreate */
         ServiceOrderCreate: {
@@ -5003,6 +5099,56 @@ export interface components {
             signer: "technician" | "client";
             /** Image Base64 */
             image_base64: string;
+        };
+        /** TimelineEventOut */
+        TimelineEventOut: {
+            /** Id */
+            id: string;
+            /**
+             * Category
+             * @enum {string}
+             */
+            category: "cliente" | "veiculo" | "rastreador" | "contrato" | "documento" | "financeiro" | "os" | "auditoria";
+            /** Type */
+            type: string;
+            /**
+             * Occurred At
+             * Format: date-time
+             */
+            occurred_at: string;
+            /** Title */
+            title: string;
+            /** Description */
+            description?: string | null;
+            /**
+             * Severity
+             * @default info
+             * @enum {string}
+             */
+            severity: "info" | "success" | "warning" | "danger";
+            /** Actor Name */
+            actor_name?: string | null;
+            link?: components["schemas"]["TimelineLinkOut"] | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: string;
+            } | null;
+        };
+        /** TimelineLinkOut */
+        TimelineLinkOut: {
+            /**
+             * Entity
+             * @enum {string}
+             */
+            entity: "client" | "vehicle" | "tracker" | "service_order" | "contract" | "document";
+            /** Id */
+            id: number;
+            /** Client Id */
+            client_id?: number | null;
+            /** Vehicle Id */
+            vehicle_id?: number | null;
+            /** Service Order Id */
+            service_order_id?: number | null;
         };
         /** TokenResponse */
         TokenResponse: {
@@ -6282,6 +6428,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DocumentDeleteOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    client_timeline_api_v1_clients__item_id__timeline_get: {
+        parameters: {
+            query?: {
+                category?: ("cliente" | "veiculo" | "rastreador" | "contrato" | "documento" | "financeiro" | "os" | "auditoria") | null;
+                skip?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                item_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_TimelineEventOut_"];
                 };
             };
             /** @description Validation Error */
@@ -8643,6 +8824,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    global_search_api_v1_search__get: {
+        parameters: {
+            query?: {
+                q?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GlobalSearchOut"];
                 };
             };
             /** @description Validation Error */

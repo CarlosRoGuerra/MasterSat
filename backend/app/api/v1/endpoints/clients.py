@@ -29,8 +29,10 @@ from app.models.service_order import ServiceOrder
 from app.models.user import User
 from app.models.vehicle import Vehicle
 from app.schemas.client import ClientCreate, ClientOut, ClientUpdate
+from app.schemas.client_timeline import TimelineCategory, TimelineEventOut
 from app.schemas.pagination import Page
 from app.schemas.document import DocumentDeleteOut, DocumentOut, DocumentReviewUpdate
+from app.services.client_timeline import run_client_timeline
 from app.services.multiportal_sync_state import (
     CLIENT_MULTIPORTAL_FIELDS,
     has_relevant_changes,
@@ -412,6 +414,19 @@ def delete_client_document(
     document.active = False
     db.commit()
     return DocumentDeleteOut(message='Documento removido com sucesso')
+
+
+@router.get('/{item_id}/timeline', response_model=Page[TimelineEventOut])
+def client_timeline(
+    item_id: int,
+    category: TimelineCategory | None = Query(default=None),
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=50),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(*VIEW_ROLES)),
+):
+    client = _get_client_or_404(item_id, db)
+    return run_client_timeline(db, current_user.role, client, category, skip, limit)
 
 
 @router.get('/{item_id}/timeline-pdf')

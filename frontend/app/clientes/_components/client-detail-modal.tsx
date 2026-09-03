@@ -3,7 +3,7 @@ import { Badge, statusLabel, statusVariant } from '@/components/ui/badge';
 import { ClientCadastroTab } from './client-cadastro-tab';
 import { ClientHistoricoTab } from './client-historico-tab';
 import { ClientDocumentosTab } from './client-documentos-tab';
-import type { Client, ClientDocument, TimelineEvent, VehicleSummary } from './types';
+import type { Client, ClientDocument, VehicleSummary } from './types';
 
 export type DetailsTab = 'cadastro' | 'historico' | 'documentos';
 
@@ -20,9 +20,11 @@ export function ClientDetailModal({
   tab,
   onTabChange,
   onClose,
-  timelineLoading,
-  timeline,
+  token,
+  canViewFinance,
+  isAdmin,
   onExportTimelinePdf,
+  onOpenBillings,
   canEdit,
   docCategory,
   onDocCategoryChange,
@@ -40,9 +42,11 @@ export function ClientDetailModal({
   tab: DetailsTab;
   onTabChange: (tab: DetailsTab) => void;
   onClose: () => void;
-  timelineLoading: boolean;
-  timeline: TimelineEvent[];
+  token: string;
+  canViewFinance: boolean;
+  isAdmin: boolean;
   onExportTimelinePdf: () => void;
+  onOpenBillings: () => void;
   canEdit: boolean;
   docCategory: string;
   onDocCategoryChange: (category: string) => void;
@@ -82,8 +86,15 @@ export function ClientDetailModal({
 
           {tab === 'cadastro' && <ClientCadastroTab client={client} vehicles={vehicles} />}
 
-          {tab === 'historico' && (
-            <ClientHistoricoTab loading={timelineLoading} events={timeline} onExportPdf={onExportTimelinePdf} />
+          {tab === 'historico' && client && (
+            <ClientHistoricoTab
+              clientId={client.id}
+              token={token}
+              canViewFinance={canViewFinance}
+              isAdmin={isAdmin}
+              onExportPdf={onExportTimelinePdf}
+              onOpenBillings={onOpenBillings}
+            />
           )}
 
           {tab === 'documentos' && (

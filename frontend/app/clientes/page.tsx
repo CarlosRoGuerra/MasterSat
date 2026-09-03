@@ -1,6 +1,7 @@
 'use client';
 
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, Suspense, useEffect, useMemo, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 import { Users, AlertTriangle, Building2, CheckCircle2, Plus, Trash2, Car, Coins, DollarSign, PawPrint, Pencil, Printer, Search } from 'lucide-react';
 
@@ -36,18 +37,12 @@ import type {
   IntervContract,
   BillingChange,
   NfseItem,
-  TimelineContract,
-  TimelineOrder,
-  TimelineBilling,
-  TimelineEvent,
   ClientFormState,
   ContractSheetItem,
   ClientSortField,
   ClientSort,
 } from './_components/types';
 import {
-  formatCurrency,
-  orderTypeLabel,
   emptyContact,
   initialForm,
   parseError,
@@ -75,12 +70,13 @@ import {
   vehicleSummariesKeys,
 } from './_components/queries';
 
-export default function ClientesPage() {
+function ClientesPageInner() {
   const { token, user, loading: guardLoading, error: guardError } = useAuthGuard(ROUTE_ROLES['/clientes'], '/login/admin');
   const canEdit = !!user && user.role !== 'financeiro';
   // Ações financeiras (boletos, interveniente, NFS-e, ficha) usam endpoints
   // restritos a admin/financeiro — esconder do operacional evita 403 no clique
   const canFinance = !!user && (user.role === 'admin' || user.role === 'financeiro');
+  const isAdmin = !!user && user.role === 'admin';
 
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [clientDocuments, setClientDocuments] = useState<ClientDocument[]>([]);
@@ -100,8 +96,6 @@ export default function ClientesPage() {
   const [docCategory, setDocCategory] = useState('cnh');
   const [docFiles, setDocFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
-  const [clientTimeline, setClientTimeline] = useState<TimelineEvent[]>([]);
-  const [timelineLoading, setTimelineLoading] = useState(false);
 
   // Ordenação + paginação da tabela (padrão do sistema de referência)
   const [clientSort, setClientSort] = useState<ClientSort>({ field: 'name', dir: 'asc' });
@@ -219,69 +213,6 @@ export default function ClientesPage() {
       setClientDocuments(response);
     } catch (err) {
       setError(parseError(err));
-    }
-  }
-
-  async function loadClientTimeline(currentToken: string, clientId: number) {
-    setTimelineLoading(true);
-    try {
-      const [contracts, orders, bills] = await Promise.allSettled([
-        apiFetch<TimelineContract[]>(`/contracts?client_id=${clientId}`, {}, currentToken),
-        apiFetch<TimelineOrder[]>(`/service-orders?client_id=${clientId}&limit=30`, {}, currentToken),
-        apiFetch<TimelineBilling[]>(`/billings?client_id=${clientId}&limit=30`, {}, currentToken),
-      ]);
-
-      const events: TimelineEvent[] = [];
-
-      if (contracts.status === 'fulfilled') {
-        for (const c of contracts.value) {
-          events.push({
-            key: `contract-${c.id}`,
-            date: c.start_date,
-            kind: 'contract',
-            title: `Contrato iniciado — ${c.plan_name || 'Plano'}`,
-            subtitle: `Status: ${c.status}`,
-          });
-        }
-      }
-
-      if (orders.status === 'fulfilled') {
-        for (const o of orders.value) {
-          events.push({
-            key: `os-${o.id}`,
-            date: o.executed_at || o.scheduled_at || o.created_at || '',
-            kind: 'os',
-            title: `OS #${o.number} — ${orderTypeLabel(o.type)}`,
-            subtitle: o.vehicle_plate ? `Veículo: ${o.vehicle_plate} • ${o.status}` : `Status: ${o.status}`,
-          });
-        }
-      }
-
-      if (bills.status === 'fulfilled') {
-        for (const b of bills.value) {
-          const kind: TimelineEvent['kind'] =
-            b.status === 'paga' ? 'billing_paid' :
-            b.status === 'vencida' ? 'billing_overdue' : 'billing_pending';
-          events.push({
-            key: `billing-${b.id}`,
-            date: b.payment_date || b.due_date,
-            kind,
-            title: `${b.title || b.plan_name || 'Cobrança'} — ${formatCurrency(b.amount)}`,
-            subtitle: b.payment_date ? `Pago em ${b.payment_date}` : `Venc. ${b.due_date}`,
-          });
-        }
-      }
-
-      const sorted = events
-        .filter((e) => e.date)
-        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-        .slice(0, 25);
-
-      setClientTimeline(sorted);
-    } catch {
-      setClientTimeline([]);
-    } finally {
-      setTimelineLoading(false);
     }
   }
 
@@ -705,12 +636,35 @@ export default function ClientesPage() {
   useEffect(() => {
     if (!token || !selectedClient) {
       setClientDocuments([]);
-      setClientTimeline([]);
       return;
     }
     loadClientDocuments(token, selectedClient.id);
-    loadClientTimeline(token, selectedClient.id);
   }, [token, selectedClient?.id]);
+
+  // Deep-link da Busca Global (Ctrl+K): "?focus=<id>" abre o cliente direto
+  // — busca o registro pelo id (não pela lista carregada, que é paginada e
+  // pode não conter o alvo) e abre o mesmo modal que o resto da tela usa.
+  // "&panel=contratos"/"documentos" já chega direto na aba/ficha certa.
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  useEffect(() => {
+    const focusId = searchParams.get('focus');
+    if (!token || !focusId) return;
+    const panel = searchParams.get('panel');
+    router.replace('/clientes');
+    apiFetch<Client>(`/clients/${focusId}`, {}, token)
+      .then((client) => {
+        if (panel === 'contratos') {
+          openContractSheet(client);
+        } else {
+          setSelectedClient(client);
+          setDetailsTab(panel === 'documentos' ? 'documentos' : 'cadastro');
+          setDetailsOpen(true);
+        }
+      })
+      .catch((err) => setError(parseError(err)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, searchParams]);
 
   const stats = useMemo(() => ({
     total: clients.length,
@@ -796,6 +750,12 @@ export default function ClientesPage() {
       contacts[index] = { ...contacts[index], [field]: value };
       return { ...prev, contacts };
     });
+  }
+
+  function openBillingsFromTimeline() {
+    if (!selectedClient) return;
+    setDetailsOpen(false);
+    openBillingsModal(selectedClient);
   }
 
   async function downloadTimelinePdf() {
@@ -1159,9 +1119,11 @@ export default function ClientesPage() {
         tab={detailsTab}
         onTabChange={setDetailsTab}
         onClose={() => { setDetailsOpen(false); setSelectedClient(null); }}
-        timelineLoading={timelineLoading}
-        timeline={clientTimeline}
+        token={token}
+        canViewFinance={canFinance}
+        isAdmin={isAdmin}
         onExportTimelinePdf={downloadTimelinePdf}
+        onOpenBillings={openBillingsFromTimeline}
         canEdit={canEdit}
         docCategory={docCategory}
         onDocCategoryChange={setDocCategory}
@@ -1294,5 +1256,16 @@ export default function ClientesPage() {
         onClose={() => { setHistoryBilling(null); setBillingChanges([]); }}
       />
     </PageShell>
+  );
+}
+
+// useSearchParams (deep-link "?focus=" da Busca Global) exige um limite de
+// Suspense — senão o build estático do Next falha com "should be wrapped in
+// a suspense boundary" ao pré-renderizar a rota.
+export default function ClientesPage() {
+  return (
+    <Suspense fallback={null}>
+      <ClientesPageInner />
+    </Suspense>
   );
 }
