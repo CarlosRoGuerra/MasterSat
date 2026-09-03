@@ -24,6 +24,7 @@ from app.api.v1.endpoints import (
     settings as settings_endpoints,
     nfse,
     plans,
+    search,
     service_products,
     service_orders,
     trackers,
@@ -45,6 +46,7 @@ api_router.include_router(contracts.router, prefix='/contracts', tags=['contract
 api_router.include_router(billings.router, prefix='/billings', tags=['billings'])
 api_router.include_router(dashboard.router, prefix='/dashboard', tags=['dashboard'])
 api_router.include_router(documents.router, prefix='/documents', tags=['documents'])
+api_router.include_router(search.router, prefix='/search', tags=['search'])
 
 api_router.include_router(integration_multiportal.router, prefix='/integrations/multiportal', tags=['integrations-multiportal'])
 api_router.include_router(integrations.router, prefix='/integrations', tags=['integrations'])

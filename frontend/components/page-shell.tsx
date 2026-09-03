@@ -3,6 +3,7 @@
 import { ReactNode, useState } from 'react';
 import { Menu } from 'lucide-react';
 import { Sidebar } from '@/components/sidebar';
+import { GlobalSearch } from '@/components/global-search';
 
 export function PageShell({
   title,
@@ -41,9 +42,10 @@ export function PageShell({
                   <p className="truncate text-body font-normal text-slate-500 dark:text-slate-400">{description}</p>
                 )}
               </div>
-              {actions && (
-                <div className="flex shrink-0 items-center gap-2">{actions}</div>
-              )}
+              <div className="flex shrink-0 items-center gap-2">
+                <GlobalSearch />
+                {actions}
+              </div>
             </div>
           </div>
         </header>

@@ -1,6 +1,7 @@
 'use client';
 
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, Suspense, useEffect, useMemo, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { AlertTriangle, ClipboardList, Clock, Wrench, CheckCircle2 } from 'lucide-react';
 
 import { ClientAutocomplete } from '@/components/ui/client-autocomplete';
@@ -120,7 +121,7 @@ function OSTable({
   );
 }
 
-export default function ServiceOrdersPage() {
+function ServiceOrdersPageInner() {
   const { token, user, loading: guardLoading, error: guardError } = useAuthGuard(ROUTE_ROLES['/ordens-servico'], '/login/admin');
   const canEdit = !!user && user.role !== 'financeiro';
 
@@ -304,6 +305,21 @@ export default function ServiceOrdersPage() {
     setDetailsOpen(true);
   }
 
+  // Deep-link da Busca Global (Ctrl+K): "?focus=<id>" abre a OS direto —
+  // busca pelo id (não pela lista carregada, que tem teto de 200 itens e
+  // pode não conter o alvo) e abre o mesmo modal de detalhes.
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  useEffect(() => {
+    const focusId = searchParams.get('focus');
+    if (!token || !focusId) return;
+    router.replace('/ordens-servico');
+    apiFetch<ServiceOrder>(`/service-orders/${focusId}`, {}, token)
+      .then((order) => openDetails(order))
+      .catch((err) => setError(parseError(err)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, searchParams]);
+
   return (
     <PageShell title="Ordens de Serviço" description="Módulo operacional completo: abertura via modal, checklist técnico, materiais, fotos, assinatura digital e geração de documento profissional (PDF/DOCX).">
       {(guardError || error || feedback) && (
@@ -452,5 +468,16 @@ export default function ServiceOrdersPage() {
         </form>
       </Modal>
     </PageShell>
+  );
+}
+
+// useSearchParams (deep-link "?focus=" da Busca Global) exige um limite de
+// Suspense — senão o build estático do Next falha com "should be wrapped in
+// a suspense boundary" ao pré-renderizar a rota.
+export default function ServiceOrdersPage() {
+  return (
+    <Suspense fallback={null}>
+      <ServiceOrdersPageInner />
+    </Suspense>
   );
 }

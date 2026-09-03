@@ -1,6 +1,7 @@
 'use client';
 
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 
 import { PageShell } from '@/components/page-shell';
 import { Card } from '@/components/ui/card';
@@ -590,7 +591,7 @@ function LinkTrackerForm({
   );
 }
 
-export default function VeiculosPage() {
+function VeiculosPageInner() {
   const { token, user, loading: guardLoading, error: guardError } = useAuthGuard(ROUTE_ROLES['/veiculos'], '/login/admin');
   const canEdit = !!user && user.role !== 'financeiro';
 
@@ -696,6 +697,25 @@ export default function VeiculosPage() {
       setPlans(plansData);
     }
   }
+
+  // Deep-link da Busca Global (Ctrl+K): "?focus=<id>" abre o veículo direto
+  // — busca pelo id (não pela lista carregada, que é limitada/filtrada e
+  // pode não conter o alvo) e reaproveita o mesmo openDetails do botão 👁️.
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  useEffect(() => {
+    const focusId = searchParams.get('focus');
+    if (!token || !focusId) return;
+    const wantDocsTab = searchParams.get('tab') === 'documentos';
+    router.replace('/veiculos');
+    apiFetch<Vehicle>(`/vehicles/${focusId}`, {}, token)
+      .then(async (vehicle) => {
+        await openDetails(vehicle);
+        if (wantDocsTab) setDetailsTab('documentos');
+      })
+      .catch((err) => setError(parseError(err)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, searchParams]);
 
   function _billingDayFromClient(vehicleClientId: number): string {
     const c = clients.find((cl) => cl.id === vehicleClientId);
@@ -1736,5 +1756,16 @@ export default function VeiculosPage() {
         </div>
       </Modal>
     </PageShell>
+  );
+}
+
+// useSearchParams (deep-link "?focus=" da Busca Global) exige um limite de
+// Suspense — senão o build estático do Next falha com "should be wrapped in
+// a suspense boundary" ao pré-renderizar a rota.
+export default function VeiculosPage() {
+  return (
+    <Suspense fallback={null}>
+      <VeiculosPageInner />
+    </Suspense>
   );
 }

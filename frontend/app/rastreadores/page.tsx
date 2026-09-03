@@ -1,6 +1,7 @@
 'use client';
 
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, Suspense, useEffect, useMemo, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { AlertTriangle, Radio, CheckCircle2, Package, Wrench } from 'lucide-react';
 
 import { PageShell } from '@/components/page-shell';
@@ -227,7 +228,7 @@ function RastreadoresTableContent({
   );
 }
 
-export default function RastreadoresPage() {
+function RastreadoresPageInner() {
   const { token, user, loading: guardLoading, error: guardError } = useAuthGuard(ROUTE_ROLES['/rastreadores'], '/login/admin');
   const canEdit = !!user && user.role !== 'financeiro';
 
@@ -330,6 +331,25 @@ export default function RastreadoresPage() {
       setVehicleTrackers([]);
     }
   }, [token, selectedTracker?.id]);
+
+  // Deep-link da Busca Global (Ctrl+K): "?focus=<id>" abre o rastreador
+  // direto — busca pelo id (não pela lista carregada, que é limitada/
+  // filtrada) e abre o mesmo modal do botão de detalhes.
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  useEffect(() => {
+    const focusId = searchParams.get('focus');
+    if (!token || !focusId) return;
+    router.replace('/rastreadores');
+    apiFetch<Tracker>(`/trackers/${focusId}`, {}, token)
+      .then((tracker) => {
+        setSelectedTracker(tracker);
+        setDetailsTab('dados');
+        setDetailsOpen(true);
+      })
+      .catch((err) => setError(parseError(err)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, searchParams]);
 
   const filteredVehicles = useMemo(() => {
     if (!form.client_id) return vehicles;
@@ -971,5 +991,16 @@ export default function RastreadoresPage() {
         </form>
       </Modal>
     </PageShell>
+  );
+}
+
+// useSearchParams (deep-link "?focus=" da Busca Global) exige um limite de
+// Suspense — senão o build estático do Next falha com "should be wrapped in
+// a suspense boundary" ao pré-renderizar a rota.
+export default function RastreadoresPage() {
+  return (
+    <Suspense fallback={null}>
+      <RastreadoresPageInner />
+    </Suspense>
   );
 }
