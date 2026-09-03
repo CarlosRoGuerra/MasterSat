@@ -48,6 +48,7 @@ import {
   parseError,
   normalizeEmail,
   parseExtraEmails,
+  sortByDueDateAsc,
   valorComJuros,
 } from './_components/helpers';
 import { ActionBtn } from './_components/action-btn';
@@ -236,7 +237,7 @@ function ClientesPageInner() {
         apiFetch<BillingItem[]>(`/billings?client_id=${client.id}&limit=100`, {}, token!).catch(() => []),
         apiFetch<CarneItem[]>(`/boletos/carne?client_id=${client.id}`, {}, token!).catch(() => []),
       ]);
-      setClientBillings(data);
+      setClientBillings(sortByDueDateAsc(data));
       setCarnes(cs);
     } finally {
       setBillingsLoading(false);
@@ -273,7 +274,7 @@ function ClientesPageInner() {
     const data = await apiFetch<BillingItem[]>(
       `/billings?client_id=${billingsModalClient.id}&limit=100`, {}, token
     ).catch(() => []);
-    setClientBillings(data);
+    setClientBillings(sortByDueDateAsc(data));
   }
 
   function openUnifyModal() {

@@ -7,6 +7,18 @@ export function valorComJuros(b: BillingItem): number | null {
   return b.valor_com_juros ?? null;
 }
 
+/**
+ * Cobranças do cliente em ordem cronológica de vencimento (mais antigo
+ * primeiro — ex.: 15/09/2026, 15/10/2026, 15/11/2026), para o modal de
+ * Cobranças. O backend (`GET /billings`) devolve por vencimento mais
+ * recente primeiro (ordem pensada pra listagem geral do financeiro,
+ * priorizando o que está vencendo agora) — aqui é reordenado só pra esta
+ * tela, sem mudar o endpoint que outras telas continuam usando.
+ */
+export function sortByDueDateAsc(items: BillingItem[]): BillingItem[] {
+  return [...items].sort((a, b) => a.due_date.localeCompare(b.due_date) || a.id - b.id);
+}
+
 export function orderTypeLabel(type: string) {
   return ({ instalacao: 'Instalação', manutencao: 'Manutenção', retirada: 'Retirada', visita_tecnica: 'Visita técnica' } as Record<string, string>)[type] ?? type;
 }
