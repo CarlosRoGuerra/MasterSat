@@ -24,6 +24,7 @@ import { useAuthGuard } from '@/lib/use-auth-guard';
 import { ROUTE_ROLES } from '@/lib/route-roles';
 import { useDebouncedValue, useEffectSkipFirst } from '@/lib/use-debounced-value';
 import { formatCurrency, formatDate } from '@/lib/format';
+import { useAssistantContextActions } from '@/lib/assistant-context';
 import type { BillingStatus, ClientOption, VehicleOption, TrackerOption } from '@/lib/domain-types';
 
 /* ── Types ──────────────────────────────────────────────────────────── */
@@ -776,6 +777,32 @@ export default function FinanceiroPage() {
       }
     }
   }, [selectedBilling, token]);
+
+  // Ações contextuais do Assistente de Ações (Ctrl+K) enquanto uma cobrança
+  // está aberta no modal de detalhes — reaproveita as mesmas funções que os
+  // botões desta tela já chamam. "Registrar pagamento"/"Ajustar" só abrem os
+  // modais existentes (o formulário continua sendo o mesmo); "Gerar boleto"
+  // não tem gate próprio hoje, então a paleta pode confirmar+acompanhar;
+  // "Cancelar" já pede justificativa via window.prompt — não duplicamos isso.
+  useAssistantContextActions(
+    canEdit && selectedBilling
+      ? [
+          { id: 'registrar-pagamento-contexto', label: 'Registrar pagamento', run: () => setReceiveModal(true) },
+          {
+            id: 'gerar-boleto-contexto',
+            label: 'Gerar boleto',
+            run: handleGerarBoleto,
+            confirm: {
+              title: 'Gerar boleto?',
+              description: `Registrar o boleto de ${formatCurrency(selectedBilling.amount)} de ${selectedBilling.payer_name ?? selectedBilling.client_name ?? 'cliente'} (venc. ${formatDate(selectedBilling.due_date)}) na Ailos?`,
+              confirmLabel: 'Gerar boleto',
+            },
+          },
+          { id: 'ajustar-cobranca-contexto', label: 'Ajustar cobrança', run: () => setAdjustModal(true) },
+          { id: 'cancelar-cobranca-contexto', label: 'Cancelar cobrança', run: handleCancel, manualFeedback: true },
+        ]
+      : [],
+  );
 
   /* ── Derived data ── */
   const visibleContracts = useMemo(() => chargeItemForm.client_id ? contracts.filter(c => c.client_id === Number(chargeItemForm.client_id)) : contracts, [contracts, chargeItemForm.client_id]);

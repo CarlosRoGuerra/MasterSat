@@ -228,8 +228,15 @@ function ServiceOrdersPageInner() {
     setIsEditing(false);
   }
 
-  function openCreateModal() {
+  function openCreateModal(prefill?: { clientId?: number; vehicleId?: number }) {
     resetForm();
+    if (prefill?.clientId || prefill?.vehicleId) {
+      setForm((prev) => ({
+        ...prev,
+        client_id: prefill.clientId ? String(prefill.clientId) : prev.client_id,
+        vehicle_id: prefill.vehicleId ? String(prefill.vehicleId) : prev.vehicle_id,
+      }));
+    }
     setModalError('');
     setModalOpen(true);
   }
@@ -311,12 +318,29 @@ function ServiceOrdersPageInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
   useEffect(() => {
+    if (!token) return;
     const focusId = searchParams.get('focus');
-    if (!token || !focusId) return;
-    router.replace('/ordens-servico');
-    apiFetch<ServiceOrder>(`/service-orders/${focusId}`, {}, token)
-      .then((order) => openDetails(order))
-      .catch((err) => setError(parseError(err)));
+
+    if (focusId) {
+      router.replace('/ordens-servico');
+      apiFetch<ServiceOrder>(`/service-orders/${focusId}`, {}, token)
+        .then((order) => openDetails(order))
+        .catch((err) => setError(parseError(err)));
+      return;
+    }
+
+    // "?assistantAction=new" — Assistente de Ações (Ctrl+K), "Nova OS",
+    // com cliente/veículo pré-preenchidos quando a tela de origem já tinha
+    // um deles em foco (ex.: dentro de /veiculos?focus=17).
+    if (searchParams.get('assistantAction') === 'new') {
+      const prefillClientId = searchParams.get('prefillClientId');
+      const prefillVehicleId = searchParams.get('prefillVehicleId');
+      router.replace('/ordens-servico');
+      openCreateModal({
+        clientId: prefillClientId ? Number(prefillClientId) : undefined,
+        vehicleId: prefillVehicleId ? Number(prefillVehicleId) : undefined,
+      });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, searchParams]);
 
@@ -335,7 +359,7 @@ function ServiceOrdersPageInner() {
           <SectionHeader
             eyebrow="Operação"
             title="Carteira de ordens"
-            actions={canEdit ? <Button onClick={openCreateModal}>Abrir OS</Button> : null}
+            actions={canEdit ? <Button onClick={() => openCreateModal()}>Abrir OS</Button> : null}
           />
           <div className="mt-4 flex flex-wrap gap-3">
             <input className={fieldClass} style={{ maxWidth: 260 }} placeholder="Buscar por OS, cliente, placa..." value={search} onChange={(e) => setSearch(e.target.value)} />

@@ -25,6 +25,7 @@ import { fetchAddressByCep } from '@/lib/cep';
 import { formatCpfCnpj, formatPhone, formatZipCode, onlyDigits } from '@/lib/format';
 import { useAuthGuard } from '@/lib/use-auth-guard';
 import { ROUTE_ROLES } from '@/lib/route-roles';
+import { useAssistantContextActions } from '@/lib/assistant-context';
 import type { DocumentReviewStatus as ReviewStatus } from '@/lib/domain-types';
 
 import type {
@@ -55,6 +56,7 @@ import { ActionBtn } from './_components/action-btn';
 import { SortTh } from './_components/sort-th';
 import { UnifyBillingModal } from './_components/unify-billing-modal';
 import { EditBillingModal } from './_components/edit-billing-modal';
+import { ReceiveBillingModal, type ReceiveBillingForm } from './_components/receive-billing-modal';
 import { BillingHistoryModal } from './_components/billing-history-modal';
 import { BillingsModal } from './_components/billings-modal';
 import { ClientDetailModal } from './_components/client-detail-modal';
@@ -176,10 +178,15 @@ function ClientesPageInner() {
   const [unifyForm, setUnifyForm] = useState({ due_date: '', amount: '', notes: '' });
   const [unifying, setUnifying] = useState(false);
 
-  // Ações do modal de boletos (alterar / histórico)
+  // Ações do modal de boletos (alterar / histórico / baixa manual)
   const [editBilling, setEditBilling] = useState<BillingItem | null>(null);
   const [editBillingForm, setEditBillingForm] = useState({ amount: '', due_date: '', justification: '' });
   const [savingBilling, setSavingBilling] = useState(false);
+  const [receiveBilling, setReceiveBilling] = useState<BillingItem | null>(null);
+  const [receiveBillingForm, setReceiveBillingForm] = useState<ReceiveBillingForm>({
+    paid_amount: '', payment_date: '', payment_method: 'pix', notes: '',
+  });
+  const [receivingBilling, setReceivingBilling] = useState(false);
   const [historyBilling, setHistoryBilling] = useState<BillingItem | null>(null);
   const [billingChanges, setBillingChanges] = useState<BillingChange[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -387,6 +394,47 @@ function ClientesPageInner() {
       alert(parseError(err));
     } finally {
       setSavingBilling(false);
+    }
+  }
+
+  function openReceiveBilling(b: BillingItem) {
+    setReceiveBilling(b);
+    setReceiveBillingForm({
+      paid_amount: String(b.amount),
+      payment_date: new Date().toISOString().slice(0, 10),
+      payment_method: 'pix',
+      notes: '',
+    });
+  }
+
+  /** Baixa manual: cliente pagou fora do sistema (dinheiro/PIX/etc.). */
+  async function saveReceiveBilling() {
+    if (!token || !receiveBilling || !canFinance) return;
+    const paidAmount = Number(receiveBillingForm.paid_amount.replace(',', '.'));
+    if (!paidAmount || paidAmount <= 0) { alert('Informe o valor pago.'); return; }
+    if (!receiveBillingForm.payment_date) { alert('Informe a data do pagamento.'); return; }
+    setReceivingBilling(true);
+    try {
+      await apiFetch(
+        `/billings/${receiveBilling.id}/receive`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            paid_amount: paidAmount,
+            payment_date: receiveBillingForm.payment_date,
+            payment_method: receiveBillingForm.payment_method,
+            notes: receiveBillingForm.notes.trim() || null,
+          }),
+        },
+        token,
+      );
+      setReceiveBilling(null);
+      setFeedback('Pagamento registrado com sucesso.');
+      await reloadClientBillings();
+    } catch (err) {
+      alert(parseError(err));
+    } finally {
+      setReceivingBilling(false);
     }
   }
 
@@ -649,23 +697,60 @@ function ClientesPageInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
   useEffect(() => {
+    if (!token) return;
     const focusId = searchParams.get('focus');
-    if (!token || !focusId) return;
-    const panel = searchParams.get('panel');
-    router.replace('/clientes');
-    apiFetch<Client>(`/clients/${focusId}`, {}, token)
-      .then((client) => {
-        if (panel === 'contratos') {
-          openContractSheet(client);
-        } else {
-          setSelectedClient(client);
-          setDetailsTab(panel === 'documentos' ? 'documentos' : 'cadastro');
-          setDetailsOpen(true);
-        }
-      })
-      .catch((err) => setError(parseError(err)));
+
+    if (focusId) {
+      const panel = searchParams.get('panel');
+      router.replace('/clientes');
+      apiFetch<Client>(`/clients/${focusId}`, {}, token)
+        .then((client) => {
+          if (panel === 'contratos') {
+            openContractSheet(client);
+          } else {
+            setSelectedClient(client);
+            setDetailsTab(panel === 'documentos' ? 'documentos' : 'cadastro');
+            setDetailsOpen(true);
+          }
+        })
+        .catch((err) => setError(parseError(err)));
+      return;
+    }
+
+    // "?assistantAction=new" — Assistente de Ações (Ctrl+K), "Novo cliente".
+    // Cliente não herda contexto de nenhuma outra entidade, então não há
+    // prefill a aplicar aqui (diferente de veículo/rastreador/OS).
+    if (searchParams.get('assistantAction') === 'new') {
+      router.replace('/clientes');
+      openCreateModal();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, searchParams]);
+
+  // Ações contextuais do Assistente de Ações (Ctrl+K) enquanto um cliente
+  // está aberto no modal de detalhes — reaproveita as mesmas funções que os
+  // botões desta tela já chamam.
+  useAssistantContextActions(
+    detailsOpen && selectedClient
+      ? [
+          { id: 'adicionar-documento-cliente', label: 'Adicionar documento', run: () => setDetailsTab('documentos') },
+          ...(canEdit
+            ? [{ id: 'editar-cliente-contexto', label: 'Editar cliente', run: () => openEditModal(selectedClient) }]
+            : []),
+          ...(canFinance
+            ? [{ id: 'ver-contrato-contexto', label: 'Ver ficha de adesão / contrato', run: () => openContractSheet(selectedClient) }]
+            : []),
+          ...(canEdit
+            ? [{
+                id: 'excluir-cliente-contexto',
+                label: 'Excluir cliente',
+                run: () => deleteClient(selectedClient),
+                manualFeedback: true,
+              }]
+            : []),
+        ]
+      : [],
+  );
 
   const stats = useMemo(() => ({
     total: clients.length,
@@ -1224,6 +1309,7 @@ function ClientesPageInner() {
         onGerarCarne={gerarCarne}
         onEditBilling={openEditBilling}
         onBillingHistory={openBillingHistory}
+        onReceiveBilling={openReceiveBilling}
         onSendEmail={sendBoletoEmail}
         onSendWhats={sendBoletoWhats}
         onBaixarPdf={baixarBoletoPdf}
@@ -1248,6 +1334,15 @@ function ClientesPageInner() {
         onFormChange={setEditBillingForm}
         onClose={() => setEditBilling(null)}
         onSave={saveEditBilling}
+      />
+
+      <ReceiveBillingModal
+        billing={receiveBilling}
+        form={receiveBillingForm}
+        saving={receivingBilling}
+        onFormChange={setReceiveBillingForm}
+        onClose={() => setReceiveBilling(null)}
+        onSave={saveReceiveBilling}
       />
 
       <BillingHistoryModal

@@ -26,6 +26,7 @@ import { formatZipCode, onlyDigits, pricePeriodSuffix } from '@/lib/format';
 import { useAuthGuard } from '@/lib/use-auth-guard';
 import { ROUTE_ROLES } from '@/lib/route-roles';
 import { VehicleOnboardingWizard } from '@/components/vehicle-onboarding-wizard';
+import { useAssistantContextActions } from '@/lib/assistant-context';
 import type { ClientOption, TrackerOption, VehicleStatus } from '@/lib/domain-types';
 
 type ServiceProductOption = { id: number; name: string; default_price: number; auto_add_on_uninstall?: boolean };
@@ -654,6 +655,7 @@ function VeiculosPageInner() {
   const [feedback, setFeedback] = useState('');
   const [modalError, setModalError] = useState('');
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [pendingWizardClientId, setPendingWizardClientId] = useState<number | undefined>(undefined);
 
   async function loadVehicles(currentToken: string) {
     setLoading(true);
@@ -695,27 +697,85 @@ function VeiculosPageInner() {
       ]);
       setLinkedTrackers(trackers);
       setPlans(plansData);
+      return trackers;
     }
+    return [];
   }
 
   // Deep-link da Busca Global (Ctrl+K): "?focus=<id>" abre o veículo direto
   // — busca pelo id (não pela lista carregada, que é limitada/filtrada e
   // pode não conter o alvo) e reaproveita o mesmo openDetails do botão 👁️.
+  // "?assistantAction=" é o mesmo mecanismo, usado pelo Assistente de Ações
+  // (global-search.tsx) para "Novo veículo" (com ou sem cliente pré-
+  // preenchido) e "Trocar rastreador" escolhido a partir de outra tela.
   const searchParams = useSearchParams();
   const router = useRouter();
   useEffect(() => {
+    if (!token) return;
     const focusId = searchParams.get('focus');
-    if (!token || !focusId) return;
-    const wantDocsTab = searchParams.get('tab') === 'documentos';
-    router.replace('/veiculos');
-    apiFetch<Vehicle>(`/vehicles/${focusId}`, {}, token)
-      .then(async (vehicle) => {
-        await openDetails(vehicle);
-        if (wantDocsTab) setDetailsTab('documentos');
-      })
-      .catch((err) => setError(parseError(err)));
+    const assistantAction = searchParams.get('assistantAction');
+
+    if (focusId) {
+      const wantDocsTab = searchParams.get('tab') === 'documentos';
+      router.replace('/veiculos');
+      apiFetch<Vehicle>(`/vehicles/${focusId}`, {}, token)
+        .then(async (vehicle) => {
+          const trackers = await openDetails(vehicle);
+          if (wantDocsTab) setDetailsTab('documentos');
+          if (assistantAction === 'trocar-rastreador') {
+            if (trackers.length === 1) {
+              openSwapTracker(trackers[0]);
+            } else {
+              setDetailsTab('rastreador');
+            }
+          }
+        })
+        .catch((err) => setError(parseError(err)));
+      return;
+    }
+
+    if (assistantAction === 'new') {
+      const prefillClientId = searchParams.get('prefillClientId');
+      router.replace('/veiculos');
+      setPendingWizardClientId(prefillClientId ? Number(prefillClientId) : undefined);
+      setWizardOpen(true);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, searchParams]);
+
+  // Ações contextuais do Assistente de Ações (Ctrl+K) enquanto um veículo
+  // está aberto no modal de detalhes — reaproveita exatamente as mesmas
+  // funções que os botões desta tela já chamam.
+  useAssistantContextActions(
+    canEdit && detailsOpen && selectedVehicle
+      ? [
+          {
+            id: 'trocar-rastreador-contexto',
+            label: 'Trocar rastreador',
+            run: () => {
+              if (linkedTrackers.length === 1) openSwapTracker(linkedTrackers[0]);
+              else setDetailsTab('rastreador');
+            },
+          },
+          {
+            id: 'nova-os-veiculo',
+            label: 'Nova OS para este veículo',
+            run: () => router.push(`/ordens-servico?assistantAction=new&prefillClientId=${selectedVehicle.client_id}&prefillVehicleId=${selectedVehicle.id}`),
+          },
+          // Exclusão de veículo é hard delete restrito a admin no backend
+          // (vehicles.py — mais estrito que o EDIT_ROLES geral) — só entra
+          // na lista quando a role realmente pode.
+          ...(user?.role === 'admin'
+            ? [{
+                id: 'excluir-veiculo-contexto',
+                label: 'Excluir veículo',
+                run: () => deleteVehicle(selectedVehicle.id),
+                manualFeedback: true,
+              }]
+            : []),
+        ]
+      : [],
+  );
 
   function _billingDayFromClient(vehicleClientId: number): string {
     const c = clients.find((cl) => cl.id === vehicleClientId);
@@ -1695,12 +1755,14 @@ function VeiculosPageInner() {
           open={wizardOpen}
           token={token}
           clients={clients}
+          initialClientId={pendingWizardClientId}
           onComplete={async () => {
             setWizardOpen(false);
+            setPendingWizardClientId(undefined);
             setFeedback('Veículo cadastrado com sucesso.');
             if (token) await loadVehicles(token);
           }}
-          onClose={() => setWizardOpen(false)}
+          onClose={() => { setWizardOpen(false); setPendingWizardClientId(undefined); }}
         />
       )}
 

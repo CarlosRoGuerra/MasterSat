@@ -1,5 +1,5 @@
 import type { Dispatch, SetStateAction } from 'react';
-import { ChevronDown, ChevronRight, Download, DollarSign, Flag, Mail, MessageCircle, Receipt, Wrench } from 'lucide-react';
+import { CheckCircle2, ChevronDown, ChevronRight, Download, DollarSign, Flag, Mail, MessageCircle, Receipt, Wrench } from 'lucide-react';
 
 import { Modal } from '@/components/ui/modal';
 import { Button } from '@/components/ui/button';
@@ -29,6 +29,7 @@ export function BillingsModal({
   onGerarCarne,
   onEditBilling,
   onBillingHistory,
+  onReceiveBilling,
   onSendEmail,
   onSendWhats,
   onBaixarPdf,
@@ -52,6 +53,7 @@ export function BillingsModal({
   onGerarCarne: () => void;
   onEditBilling: (b: BillingItem) => void;
   onBillingHistory: (b: BillingItem) => void;
+  onReceiveBilling: (b: BillingItem) => void;
   onSendEmail: (b: BillingItem) => void;
   onSendWhats: (b: BillingItem) => void;
   onBaixarPdf: (b: BillingItem) => void;
@@ -271,6 +273,7 @@ export function BillingsModal({
                       <ActionBtn color="purple" icon={Flag} title="Histórico de operações" onClick={() => onBillingHistory(b)} />
                       {isAberto && (
                         <>
+                          <ActionBtn color="yellow" icon={CheckCircle2} title="Marcar como pago (baixa manual)" onClick={() => onReceiveBilling(b)} />
                           <ActionBtn color="blue" icon={Mail} title="Enviar boleto por e-mail" onClick={() => onSendEmail(b)} />
                           <ActionBtn color="green" icon={MessageCircle} title="Enviar boleto via Whats" onClick={() => onSendWhats(b)} />
                           {b.boleto_ailos && (

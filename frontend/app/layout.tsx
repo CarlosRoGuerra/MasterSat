@@ -3,6 +3,7 @@ import type { Metadata, Viewport } from 'next';
 import { QueryProvider } from '@/components/query-provider';
 import { ThemeProvider } from '@/components/theme-provider';
 import { FloatingThemeToggle } from '@/components/theme-toggle';
+import { AssistantContextProvider } from '@/lib/assistant-context';
 
 export const viewport: Viewport = {
   themeColor: '#FFB800',
@@ -34,8 +35,10 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       <body>
         <QueryProvider>
           <ThemeProvider>
-            <FloatingThemeToggle />
-            {children}
+            <AssistantContextProvider>
+              <FloatingThemeToggle />
+              {children}
+            </AssistantContextProvider>
           </ThemeProvider>
         </QueryProvider>
       </body>

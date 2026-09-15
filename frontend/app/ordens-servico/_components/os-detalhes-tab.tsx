@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { Badge, statusVariant, statusLabel } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { apiFetch } from '@/lib/api';
+import { useAssistantContextActions } from '@/lib/assistant-context';
 import type { OrderStatus } from '@/lib/domain-types';
 import {
   ServiceOrder, statusOptions, typeLabel, formatDateTimeLabel, areaClass, parseError,
@@ -59,6 +60,36 @@ export function OsDetalhesTab({
       setChangingStatus(false);
     }
   }
+
+  // Ações contextuais do Assistente de Ações (Ctrl+K) enquanto esta aba está
+  // aberta — mesma changeStatus() que os botões abaixo já chamam. Cancelar
+  // pede confirmação com o número e o cliente da OS (nunca um "tem certeza?"
+  // genérico); Iniciar/Finalizar não são destrutivos, executam direto.
+  useAssistantContextActions(
+    canEdit
+      ? [
+          ...(order.status !== 'em_andamento' && order.status !== 'concluida' && order.status !== 'cancelada'
+            ? [{ id: 'os-iniciar', label: 'Iniciar OS', run: () => changeStatus('em_andamento') }]
+            : []),
+          ...(order.status !== 'concluida' && order.status !== 'cancelada'
+            ? [{ id: 'os-finalizar', label: 'Finalizar OS', run: () => changeStatus('concluida') }]
+            : []),
+          ...(order.status !== 'cancelada' && order.status !== 'concluida'
+            ? [{
+                id: 'os-cancelar',
+                label: 'Cancelar OS',
+                run: () => changeStatus('cancelada'),
+                confirm: {
+                  title: 'Cancelar ordem de serviço?',
+                  description: `Cancelar a OS ${order.number}${order.client_name ? ` de ${order.client_name}` : ''}? Esta ação não pode ser desfeita.`,
+                  confirmLabel: 'Cancelar OS',
+                  danger: true,
+                },
+              }]
+            : []),
+        ]
+      : [],
+  );
 
   return (
     <div className="space-y-4">

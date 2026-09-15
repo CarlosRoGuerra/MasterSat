@@ -22,6 +22,7 @@ import { apiFetch, apiFetchList } from '@/lib/api';
 import { onlyDigits, formatCpfCnpj, pricePeriodSuffix } from '@/lib/format';
 import { useAuthGuard } from '@/lib/use-auth-guard';
 import { ROUTE_ROLES } from '@/lib/route-roles';
+import { useAssistantContextActions } from '@/lib/assistant-context';
 import type { TrackerStatus, ClientOption, VehicleOption } from '@/lib/domain-types';
 
 type Tracker = {
@@ -69,6 +70,12 @@ type LoteResultado = {
 };
 type TrackerHistory = { id: number; action: string; previous_vehicle_id?: number | null; new_vehicle_id?: number | null; previous_client_id?: number | null; new_client_id?: number | null; new_status?: string | null; event_date?: string | null; notes?: string | null; created_at?: string | null };
 type ContractInfo = { id: number; plan_name?: string | null; status: string; monthly_value?: number | null; start_date?: string | null; next_due_date?: string | null };
+
+/** Resposta de GET /integrations/multiportal/trackers/{id}/query-link — mesmo formato usado em app/integracao/page.tsx (FlowOut). */
+type TrackerLinkFlow = {
+  overall_success: boolean;
+  steps: { friendly_title?: string | null; friendly_message?: string | null; success: boolean }[];
+};
 
 type TrackerFormState = {
   imei: string;
@@ -334,22 +341,75 @@ function RastreadoresPageInner() {
 
   // Deep-link da Busca Global (Ctrl+K): "?focus=<id>" abre o rastreador
   // direto — busca pelo id (não pela lista carregada, que é limitada/
-  // filtrada) e abre o mesmo modal do botão de detalhes.
+  // filtrada) e abre o mesmo modal do botão de detalhes. "?assistantAction="
+  // é o mesmo mecanismo usado pelo Assistente de Ações para "Novo
+  // rastreador" (com veículo pré-preenchido) e "Consultar rastreador".
   const searchParams = useSearchParams();
   const router = useRouter();
   useEffect(() => {
+    if (!token) return;
     const focusId = searchParams.get('focus');
-    if (!token || !focusId) return;
-    router.replace('/rastreadores');
-    apiFetch<Tracker>(`/trackers/${focusId}`, {}, token)
-      .then((tracker) => {
-        setSelectedTracker(tracker);
-        setDetailsTab('dados');
-        setDetailsOpen(true);
-      })
-      .catch((err) => setError(parseError(err)));
+    const assistantAction = searchParams.get('assistantAction');
+
+    if (focusId) {
+      router.replace('/rastreadores');
+      apiFetch<Tracker>(`/trackers/${focusId}`, {}, token)
+        .then((tracker) => {
+          setSelectedTracker(tracker);
+          setDetailsTab('dados');
+          setDetailsOpen(true);
+          if (assistantAction === 'consultar-rastreador') consultarVinculo(tracker);
+        })
+        .catch((err) => setError(parseError(err)));
+      return;
+    }
+
+    if (assistantAction === 'new') {
+      const prefillVehicleId = searchParams.get('prefillVehicleId');
+      const prefillClientId = searchParams.get('prefillClientId');
+      router.replace('/rastreadores');
+      openCreateModal({
+        vehicleId: prefillVehicleId ? Number(prefillVehicleId) : undefined,
+        clientId: prefillClientId ? Number(prefillClientId) : undefined,
+      });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, searchParams]);
+
+  const [vinculoConsulta, setVinculoConsulta] = useState<{ loading: boolean; result: TrackerLinkFlow | null; error: string }>({ loading: false, result: null, error: '' });
+
+  async function consultarVinculo(tracker: Tracker) {
+    if (!token) return;
+    setVinculoConsulta({ loading: true, result: null, error: '' });
+    try {
+      const flow = await apiFetch<TrackerLinkFlow>(`/integrations/multiportal/trackers/${tracker.id}/query-link`, {}, token);
+      setVinculoConsulta({ loading: false, result: flow, error: '' });
+    } catch (err) {
+      setVinculoConsulta({ loading: false, result: null, error: parseError(err) });
+    }
+  }
+
+  // Ações contextuais do Assistente de Ações (Ctrl+K) enquanto um
+  // rastreador está aberto no modal de detalhes.
+  useAssistantContextActions(
+    detailsOpen && selectedTracker
+      ? [
+          {
+            id: 'consultar-vinculo-contexto',
+            label: 'Consultar vínculo na Multiportal',
+            run: () => consultarVinculo(selectedTracker),
+          },
+          ...(canEdit
+            ? [{
+                id: 'excluir-rastreador-contexto',
+                label: 'Excluir rastreador',
+                run: () => { setDetailsOpen(false); deleteTracker(); },
+                manualFeedback: true,
+              }]
+            : []),
+        ]
+      : [],
+  );
 
   const filteredVehicles = useMemo(() => {
     if (!form.client_id) return vehicles;
@@ -417,8 +477,18 @@ function RastreadoresPageInner() {
     } catch (err) { setLoteError(parseError(err)); } finally { setLoteBusy(false); }
   }
 
-  function openCreateModal() {
+  function openCreateModal(prefill?: { vehicleId?: number; clientId?: number }) {
     resetForm();
+    if (prefill?.vehicleId) {
+      const vehicle = vehicles.find((v) => v.id === prefill.vehicleId);
+      setForm((prev) => ({
+        ...prev,
+        vehicle_id: String(prefill.vehicleId),
+        client_id: vehicle ? String(vehicle.client_id) : prev.client_id,
+      }));
+    } else if (prefill?.clientId) {
+      setForm((prev) => ({ ...prev, client_id: String(prefill.clientId) }));
+    }
     setModalError('');
     setModalOpen(true);
   }
@@ -595,7 +665,7 @@ function RastreadoresPageInner() {
               <div className="flex items-center gap-2">
                 {token && <ExportButton path="exports/trackers" basename="rastreadores" token={token} params={{ status: statusFilter, client_id: clientFilter }} />}
                 {canEdit && <Button variant="secondary" onClick={abrirLote}>Cadastrar em lote</Button>}
-                {canEdit && <Button onClick={openCreateModal}>Adicionar rastreador</Button>}
+                {canEdit && <Button onClick={() => openCreateModal()}>Adicionar rastreador</Button>}
               </div>
             }
           />
@@ -623,7 +693,7 @@ function RastreadoresPageInner() {
               loading={loading}
               error={error}
               canEdit={canEdit}
-              onDetails={(t) => { setSelectedTracker(t); setDetailsTab('dados'); setDetailsOpen(true); }}
+              onDetails={(t) => { setSelectedTracker(t); setDetailsTab('dados'); setDetailsOpen(true); setVinculoConsulta({ loading: false, result: null, error: '' }); }}
               onEdit={openEditModal}
             />
           </div>
@@ -686,6 +756,35 @@ function RastreadoresPageInner() {
                     <div className="mt-1 text-sm text-slate-800 dark:text-slate-200">{value}</div>
                   </div>
                 ))}
+                <div className="col-span-2 rounded-xl border border-slate-100 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/50">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-2xs font-semibold uppercase tracking-widest text-slate-500">Vínculo na Multiportal</p>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="px-3 py-1.5 text-xs"
+                      disabled={vinculoConsulta.loading}
+                      onClick={() => consultarVinculo(selectedTracker)}
+                    >
+                      {vinculoConsulta.loading ? 'Consultando…' : 'Consultar vínculo'}
+                    </Button>
+                  </div>
+                  {vinculoConsulta.error && (
+                    <p className="mt-2 text-xs text-rose-600 dark:text-rose-400">{vinculoConsulta.error}</p>
+                  )}
+                  {vinculoConsulta.result && (
+                    <div className="mt-2 space-y-1.5">
+                      <Badge variant={vinculoConsulta.result.overall_success ? 'success' : 'danger'}>
+                        {vinculoConsulta.result.overall_success ? 'Vínculo confirmado' : 'Divergência encontrada'}
+                      </Badge>
+                      {vinculoConsulta.result.steps.map((step, i) => (
+                        <p key={i} className="text-xs text-slate-600 dark:text-slate-300">
+                          {step.friendly_title ? `${step.friendly_title}: ` : ''}{step.friendly_message ?? (step.success ? 'OK' : 'Falhou')}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                </div>
                 {selectedTracker.notes && (
                   <div className="col-span-2 rounded-xl border border-slate-100 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/50">
                     <p className="text-2xs font-semibold uppercase tracking-widest text-slate-500">Observações</p>

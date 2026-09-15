@@ -152,10 +152,12 @@ interface Props {
   clients: ClientOption[];
   onComplete: () => void;
   onClose: () => void;
+  /** Pré-seleciona o cliente no passo 1 (ex.: "Novo veículo" disparado de dentro de um cliente já aberto). */
+  initialClientId?: number;
 }
 
 /* ── Wizard ─────────────────────────────────────────────────────────── */
-export function VehicleOnboardingWizard({ open, token, clients, onComplete, onClose }: Props) {
+export function VehicleOnboardingWizard({ open, token, clients, onComplete, onClose, initialClientId }: Props) {
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -206,6 +208,14 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
       apiFetch<ServiceProductOption[]>('/service-products', {}, token).catch(() => []),
     ]).then(([p, t, s]) => { setPlans(p); setStockTrackers(t); setServiceProducts(s); });
   }, [open, token]);
+
+  // Pré-seleciona o cliente só na abertura — não sobrescreve o que o usuário
+  // já tiver escolhido/trocado no meio do preenchimento do passo 1.
+  useEffect(() => {
+    if (open && initialClientId) {
+      setVf((prev) => ({ ...prev, client_id: String(initialClientId) }));
+    }
+  }, [open, initialClientId]);
 
   // Reset on close
   useEffect(() => {
