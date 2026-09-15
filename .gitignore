@@ -44,6 +44,9 @@ backend/scripts/ailos_login_gerado.json
 
 # ─── XMLs de NFS-e gerados pelo script de teste ──────────────────────────────
 backend/scripts/nfse_saida/
+
+# ─── Relatórios da POC de migração SGR (podem conter dados de cliente) ───────
+backend/scripts/sgr_saida/
 backend/certs/
 
 # ─── Artefatos gerados em testes (não versionar) ─────────────────────────────

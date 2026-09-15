@@ -182,6 +182,22 @@ class Settings(BaseSettings):
     # Purgados automaticamente após esse período (ver main.py, worker de retenção).
     ailos_log_retention_months: int = 12
 
+    # ── Migração SGR Hinova (POC read-only) ──────────────────────────────────
+    # Base real do serviço (não confundir com o host que só hospeda a
+    # documentação, api.hinova.com.br) — conforme a própria doc do SGR:
+    # "Endpoint: https://sgr.hinova.com.br/sgr/sgrv2_api/service_api/servicos".
+    sgr_base_url: str = 'https://sgr.hinova.com.br/sgr/sgrv2_api/service_api/servicos'
+    # Código da base do cliente (4 dígitos) — enviado no corpo de /headers_authorization.
+    sgr_cod_mobile: str = ''
+    sgr_username: str = ''
+    sgr_password: str = ''
+    # "chave API" gerada ao cadastrar o Fornecedor de Serviços no SGR — vai no
+    # PATH de toda chamada além da autenticação (ex.: /buscar_cliente/{chave_api}).
+    sgr_api_key: str = ''
+    sgr_timeout_seconds: int = 30
+    # Teto de clientes consultados pela POC de migração — nunca usar em lote real.
+    sgr_migration_limit: int = 10
+
     # Retenção de audit_logs (trilha de auditoria — SEC-06). Não guarda
     # payload, só quem fez o quê: user_id/user_name/user_role, method, path,
     # entity_type/id, status_code, ip_address, description. Após
