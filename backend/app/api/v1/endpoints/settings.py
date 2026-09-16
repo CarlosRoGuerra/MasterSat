@@ -9,6 +9,7 @@ Variáveis disponíveis nos templates: {NOME}, {VALOR}, {VENCIMENTO},
 """
 from __future__ import annotations
 
+import re
 import smtplib
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -68,6 +69,15 @@ def _load(db: Session) -> dict[str, str]:
         for s in db.query(SystemSetting).filter(SystemSetting.key.in_(MENSAGENS_PADRAO)).all()
     }
     return {key: saved.get(key) or padrao for key, padrao in MENSAGENS_PADRAO.items()}
+
+
+# Reusado pelo envio de boleto por e-mail (boletos.py) — mesmos templates e
+# variáveis {NOME}/{VALOR}/... que o operador edita nesta tela.
+carregar_mensagens = _load
+
+
+def render_template(tpl: str, variaveis: dict[str, str]) -> str:
+    return re.sub(r'\{(\w+)\}', lambda m: variaveis.get(m.group(1), ''), tpl)
 
 
 @router.get('/mensagens')

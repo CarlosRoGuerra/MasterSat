@@ -455,6 +455,7 @@ function ClientesPageInner() {
     if (!token || !billingsModalClient) return;
     try {
       await enviarBoletoEmail(b, billingsModalClient, token);
+      alert(`E-mail enviado para ${billingsModalClient.email}.`);
     } catch (err) {
       alert(parseError(err));
     }

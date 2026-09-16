@@ -99,6 +99,65 @@ def test_link_publico_serve_boleto_ativo(http, db, cobranca):
     assert resp.content[:4] == b'%PDF'
 
 
+# ---------------------------------------------------------------------------
+# Envio por e-mail direto do painel (sem mailto/app externo)
+# ---------------------------------------------------------------------------
+
+def test_envio_por_email_recusado_sem_registro_na_ailos(http, cobranca):
+    resp = http.post(f'/api/v1/boletos/{cobranca.id}/enviar-email')
+    assert resp.status_code == 409
+    assert 'Ailos' in resp.json()['detail']
+
+
+def test_envio_por_email_recusado_sem_email_cadastrado(http, db, cliente, cobranca):
+    cliente.email = None
+    db.commit()
+    _registrar(db, cobranca.id)
+    resp = http.post(f'/api/v1/boletos/{cobranca.id}/enviar-email')
+    assert resp.status_code == 400
+    assert 'e-mail' in resp.json()['detail'].lower()
+
+
+def test_envio_por_email_manda_pdf_anexado_pelo_smtp_configurado(http, db, cliente, cobranca, monkeypatch):
+    _registrar(db, cobranca.id)
+
+    chamadas = []
+
+    def _fake_enviar_email(db_, destinatario, assunto, corpo, html=None, anexo=None, config=None):
+        chamadas.append({'destinatario': destinatario, 'assunto': assunto, 'corpo': corpo, 'anexo': anexo})
+
+    import app.services.email_smtp as email_smtp
+    monkeypatch.setattr(email_smtp, 'enviar_email', _fake_enviar_email)
+
+    resp = http.post(f'/api/v1/boletos/{cobranca.id}/enviar-email')
+    assert resp.status_code == 200
+    assert resp.json()['message'] == f'E-mail enviado para {cliente.email}.'
+
+    assert len(chamadas) == 1
+    chamada = chamadas[0]
+    assert chamada['destinatario'] == cliente.email
+    assert 'JOÃO SILVA' in chamada['corpo']
+    nome_arquivo, conteudo, content_type = chamada['anexo']
+    assert nome_arquivo.endswith('.pdf')
+    assert conteudo[:4] == b'%PDF'
+    assert content_type == 'application/pdf'
+
+
+def test_envio_por_email_propaga_erro_de_configuracao_smtp(http, db, cobranca, monkeypatch):
+    _registrar(db, cobranca.id)
+
+    import app.services.email_smtp as email_smtp
+
+    def _fake_enviar_email(*a, **kw):
+        raise email_smtp.EmailConfigError('SMTP não configurado: informe ao menos o servidor e o e-mail remetente.')
+
+    monkeypatch.setattr(email_smtp, 'enviar_email', _fake_enviar_email)
+
+    resp = http.post(f'/api/v1/boletos/{cobranca.id}/enviar-email')
+    assert resp.status_code == 400
+    assert 'SMTP não configurado' in resp.json()['detail']
+
+
 def test_link_publico_recusa_boleto_de_cobranca_cancelada(http, db, cobranca):
     # Mesmo com o título ainda registrado na Ailos, cobrança cancelada não pode
     # continuar pagável pelo link já enviado ao cliente.

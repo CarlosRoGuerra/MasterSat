@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import re
+import smtplib
 import unicodedata
 from datetime import date
 
@@ -24,6 +25,7 @@ from app.api.v1.endpoints.common import (
     get_billing_or_404 as _get_billing_or_404,
     get_client_or_404 as _get_client_or_404,
 )
+from app.api.v1.endpoints.settings import carregar_mensagens, render_template
 from app.core.config import settings
 from app.db.session import get_db
 from app.models.ailos_boleto import AilosBoleto
@@ -366,6 +368,71 @@ def get_boleto_pdf(
         media_type="application/pdf",
         headers={"Content-Disposition": f'inline; filename="{filename}"'},
     )
+
+
+# ---------------------------------------------------------------------------
+# POST /boletos/{billing_id}/enviar-email — envia o boleto por e-mail
+# ---------------------------------------------------------------------------
+
+def _valor_brl(v) -> str:
+    return f'{float(v or 0):,.2f}'.replace(',', 'X').replace('.', ',').replace('X', '.')
+
+
+@router.post("/{billing_id}/enviar-email")
+def enviar_boleto_email(
+    billing_id: int,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    """
+    Envia o boleto por e-mail direto do painel, via SMTP configurado em
+    Configurações → E-mail, com o PDF anexado — sem depender de cliente de
+    e-mail externo na máquina do operador.
+    """
+    b = _get_billing_or_404(billing_id, db)
+    ailos_boleto = boleto_registrado(billing_id, db)
+    if ailos_boleto is None:
+        raise HTTPException(
+            status_code=409,
+            detail='Esta cobrança ainda não tem boleto emitido na Ailos, então não pode ser enviada. '
+                   'Gere o boleto na aba Ailos do Financeiro.',
+        )
+    c = _pagador_do_billing(b, db)
+    if not c.email:
+        raise HTTPException(status_code=400, detail='Cliente sem e-mail cadastrado.')
+
+    dados = dados_boleto(b, c, db, ailos_boleto)
+    pdf_bytes, filename = _montar_pdf_boleto(b, c, db, ailos_boleto)
+
+    variaveis = {
+        'NOME': (c.name or '').upper(),
+        'VALOR': _valor_brl(b.amount),
+        'VENCIMENTO': b.due_date.strftime('%d/%m/%Y') if b.due_date else '',
+        'REFERENTE': b.period_label or (b.due_date.strftime('%m/%Y') if b.due_date else ''),
+        'CODIGO_BARRAS': re.sub(r'\D', '', dados.linha_digitavel or ''),
+        'LINK_BOLETO': public_boleto_url(b.id),
+    }
+    tpl = carregar_mensagens(db)
+    assunto = render_template(tpl['msg_boleto_assunto'], variaveis)
+    corpo = render_template(tpl['msg_boleto'], variaveis)
+
+    from app.services.email_smtp import EmailConfigError, enviar_email
+    try:
+        enviar_email(
+            db,
+            destinatario=c.email,
+            assunto=assunto,
+            corpo=corpo,
+            anexo=(filename, pdf_bytes, 'application/pdf'),
+        )
+    except EmailConfigError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except smtplib.SMTPException as exc:
+        raise HTTPException(status_code=400, detail=f'Erro do servidor de e-mail: {exc}') from exc
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f'Não foi possível conectar ao servidor de e-mail: {exc}') from exc
+
+    return {'message': f'E-mail enviado para {c.email}.'}
 
 
 @router.get("/carne/{lote_id}/pdf")

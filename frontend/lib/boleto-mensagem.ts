@@ -61,11 +61,10 @@ export async function enviarBoletoWhats(b: CobrancaEnvio, cliente: ClienteEnvio,
   window.open(`https://wa.me/55${fone}?text=${encodeURIComponent(renderTemplate(tpl.msg_boleto, vars))}`, '_blank');
 }
 
-/** Abre o cliente de e-mail (mailto) com assunto e corpo preenchidos. */
+/** Envia o boleto por e-mail direto do sistema (SMTP do painel), com o PDF anexado. */
 export async function enviarBoletoEmail(b: CobrancaEnvio, cliente: ClienteEnvio, token: string) {
   if (!cliente.email) throw new Error('Cliente sem e-mail cadastrado.');
-  const { tpl, vars } = await _prepara(b, cliente, token);
-  const assunto = encodeURIComponent(renderTemplate(tpl.msg_boleto_assunto, vars));
-  const corpo = encodeURIComponent(renderTemplate(tpl.msg_boleto, vars));
-  window.location.href = `mailto:${cliente.email}?subject=${assunto}&body=${corpo}`;
+  // A checagem de "boleto_registrado" já acontece no backend; aqui só valida
+  // o e-mail antes de disparar a chamada.
+  await apiFetch<{ message: string }>(`/boletos/${b.id}/enviar-email`, { method: 'POST' }, token);
 }

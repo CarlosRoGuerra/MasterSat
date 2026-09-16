@@ -2404,7 +2404,7 @@ export default function FinanceiroPage() {
                         <Button
                           variant="secondary"
                           className="px-3 py-1.5 text-xs"
-                          onClick={async () => { try { await enviarBoletoEmail(b, envioCliente!, token!); } catch (e) { alert(e instanceof Error ? e.message : 'Erro ao enviar'); } }}
+                          onClick={async () => { try { await enviarBoletoEmail(b, envioCliente!, token!); alert(`E-mail enviado para ${envioCliente!.email}.`); } catch (e) { alert(e instanceof Error ? e.message : 'Erro ao enviar'); } }}
                         >
                           E-mail
                         </Button>

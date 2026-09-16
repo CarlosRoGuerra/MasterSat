@@ -115,9 +115,14 @@ def enviar_email(
     assunto: str,
     corpo: str,
     html: str | None = None,
+    anexo: tuple[str, bytes, str] | None = None,
     config: dict | None = None,
 ) -> None:
-    """Envia um e-mail. Levanta EmailConfigError/smtplib.* em caso de falha."""
+    """Envia um e-mail. Levanta EmailConfigError/smtplib.* em caso de falha.
+
+    ``anexo``, se informado, é ``(nome_do_arquivo, conteudo, content_type)``
+    (ex.: ``("boleto.pdf", pdf_bytes, "application/pdf")``).
+    """
     cfg = config or load_config(db)
     if not cfg['host'] or not cfg['from_email']:
         raise EmailConfigError('SMTP não configurado: informe ao menos o servidor e o e-mail remetente.')
@@ -129,6 +134,10 @@ def enviar_email(
     msg.set_content(corpo)
     if html:
         msg.add_alternative(html, subtype='html')
+    if anexo:
+        nome, conteudo, content_type = anexo
+        maintype, _, subtype = content_type.partition('/')
+        msg.add_attachment(conteudo, maintype=maintype or 'application', subtype=subtype or 'octet-stream', filename=nome)
 
     srv = _abrir_conexao(cfg)
     try:
