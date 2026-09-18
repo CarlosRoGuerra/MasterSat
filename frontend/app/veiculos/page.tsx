@@ -1234,6 +1234,7 @@ function VeiculosPageInner() {
               <option value="ativo">Ativo</option>
               <option value="sem_rastreador">Sem rastreador</option>
               <option value="retirado">Retirado</option>
+              <option value="cancelado">Cancelado</option>
               <option value="bloqueado">Bloqueado</option>
             </select>
             <div style={{ width: 260 }}>
@@ -1698,7 +1699,7 @@ function VeiculosPageInner() {
               required
             />
             <label className="flex items-center gap-2 rounded-2xl border border-slate-200 px-4 py-3 text-sm text-slate-700 dark:border-slate-700 dark:text-slate-200"><input type="checkbox" onChange={(e) => populateFromClient(form.client_id, e.target.checked)} /> Usar endereço do cliente</label>
-            <select className={fieldClass} value={form.status} onChange={(e) => setForm((prev) => ({ ...prev, status: e.target.value as VehicleStatus }))}>{['ativo','sem_rastreador','retirado','bloqueado','pendente_validacao','em_analise','aprovado','reprovado','correcao_solicitada'].map((option) => <option key={option} value={option}>{option.replace(/_/g, ' ')}</option>)}</select>
+            <select className={fieldClass} value={form.status} onChange={(e) => setForm((prev) => ({ ...prev, status: e.target.value as VehicleStatus }))}>{['ativo','sem_rastreador','retirado','cancelado','bloqueado','pendente_validacao','em_analise','aprovado','reprovado','correcao_solicitada'].map((option) => <option key={option} value={option}>{option.replace(/_/g, ' ')}</option>)}</select>
           </div>
           <div className="grid gap-4 md:grid-cols-3">
             <select className={fieldClass} value={form.sales_point} onChange={(e) => setForm((prev) => ({ ...prev, sales_point: e.target.value }))}>{salesPointOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select>

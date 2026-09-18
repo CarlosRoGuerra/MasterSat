@@ -23,6 +23,7 @@ from app.models.enums import ClientStatus, TrackerStatus, VehicleStatus
 from app.services.sgr_migration.normalize import (
     is_valid_cpf_cnpj,
     is_valid_email,
+    is_valid_plate,
     normalize_cpf_cnpj,
     normalize_email,
     normalize_phone,
@@ -118,42 +119,76 @@ CLIENT_FIELD_MAP: list[FieldMapping] = [
 ]
 
 VEHICLE_FIELD_MAP: list[FieldMapping] = [
-    FieldMapping('(resposta de /buscar_veiculo não documentada)', '-', 'nao_documentado',
-                 'a doc oficial do SGR não traz "Exemplo Retorno" para /buscar_veiculo — só os '
-                 'parâmetros de busca (cod_veiculo, cod_cliente, placa_veiculo). Os campos abaixo '
-                 'são inferidos por convenção com /buscar_cliente e precisam ser confirmados contra '
-                 'a resposta real na 1ª execução da POC'),
     FieldMapping('cod_veiculo', 'vehicle.external_id', 'nao_existe', 'MasterSat não tem coluna external_id'),
-    FieldMapping('placa_veiculo', 'vehicle.plate', 'transformacao', 'remover hífen/espaços, caixa alta'),
-    FieldMapping('chassi_veiculo', 'vehicle.chassis', 'transformacao', 'remover espaços, caixa alta'),
     FieldMapping('cod_cliente', 'vehicle.client_id', 'transformacao',
-                 'FK do SGR (cod_cliente) → resolver para o id interno do MasterSat pelo external_id do cliente'),
+                 'FK do SGR → resolver para o id interno do MasterSat pelo external_id do cliente'),
+    FieldMapping('placa_veiculo', 'vehicle.plate', 'transformacao',
+                 'remover hífen/espaços, caixa alta. ATENÇÃO: na base real há ativos SEM placa '
+                 '(máquinas pesadas — CASE580H, VOLVO220, MAQ002) usando o campo como identificador '
+                 'livre, além de erros de cadastro (nome de pessoa). O MasterSat exige placa válida '
+                 'de 7 caracteres no schema da API — decidir como tratar esses ativos'),
+    FieldMapping('chassi_veiculo', 'vehicle.chassis', 'compativel'),
+    FieldMapping('renavam_veiculo', 'vehicle.renavam', 'compativel'),
     FieldMapping('marca_veiculo', 'vehicle.brand', 'compativel'),
     FieldMapping('modelo_veiculo', 'vehicle.model', 'compativel'),
-    FieldMapping('renavam_veiculo', 'vehicle.renavam', 'compativel'),
     FieldMapping('cor_veiculo', 'vehicle.color', 'compativel'),
-    FieldMapping('situacao.descricao', 'vehicle.status', 'transformacao', 'situação SGR → VehicleStatus'),
+    FieldMapping('combustivel_veiculo', 'vehicle.fuel_type', 'compativel'),
+    FieldMapping('tipo_veiculo_veiculo', 'vehicle.type', 'compativel'),
+    FieldMapping('anofab_veiculo', 'vehicle.manufacture_year', 'transformacao', 'string → int'),
+    FieldMapping('anomod_veiculo', 'vehicle.model_year', 'transformacao', 'string → int'),
+    FieldMapping('fipe_codigo_veiculo', 'vehicle.fipe_code', 'compativel'),
+    FieldMapping('fipe_valor_veiculo', 'vehicle.fipe_value', 'transformacao', "'1.234,56' → decimal"),
+    FieldMapping('contrato_veiculo', 'vehicle.contract_number', 'compativel'),
+    FieldMapping('data_contrato_veiculo', 'vehicle.contract_date', 'transformacao', 'dd/mm/aaaa → date'),
+    FieldMapping('data_final_contrato_veiculo', 'vehicle.contract_end_date', 'transformacao', 'dd/mm/aaaa → date'),
+    FieldMapping('cep_veiculo', 'vehicle.address_zip_code', 'transformacao', 'só dígitos'),
+    FieldMapping('logradouro_veiculo', 'vehicle.address_line', 'compativel'),
+    FieldMapping('numero_veiculo', 'vehicle.address_number', 'compativel'),
+    FieldMapping('complemento_veiculo', 'vehicle.address_complement', 'compativel'),
+    FieldMapping('bairro_veiculo', 'vehicle.neighborhood', 'compativel'),
+    FieldMapping('cidade_veiculo', 'vehicle.city', 'compativel'),
+    FieldMapping('uf_veiculo', 'vehicle.state', 'compativel'),
+    FieldMapping('nome_ponto_venda', 'vehicle.sales_point', 'compativel'),
+    FieldMapping('nome_consultor_veiculo', 'vehicle.seller_consultant', 'compativel'),
+    FieldMapping('classificacao_veiculo', 'vehicle.vehicle_classification', 'compativel'),
+    FieldMapping('alerta_veiculo', 'vehicle.user_alert', 'compativel'),
+    FieldMapping('situacao_veiculo', 'vehicle.status', 'transformacao',
+                 'campo PLANO (não é objeto). Valores vistos na base real: ATIVO, CANCELADO, '
+                 'RETIRADA, CADASTRADO, TROCA DE VEICULO, INADIMPLENTE'),
+    FieldMapping('situacao_veiculo = INADIMPLENTE', 'vehicle.status', 'nao_existe',
+                 'no SGR a inadimplência é situação do VEÍCULO; no MasterSat só existe no cliente '
+                 '(ClientStatus.DELINQUENT) — exige decisão de negócio na migração definitiva'),
+    FieldMapping('km_veiculo', '-', 'nao_existe', 'MasterSat não guarda quilometragem do veículo'),
+    FieldMapping('numero_motor_veiculo', '-', 'nao_existe', 'sem coluna equivalente'),
 ]
 
+# O rastreador do MasterSat é montado com DUAS fontes: /buscar_vinculo (os
+# relacionamentos e as datas) e /buscar_rastreador (IMEI, situação, chip). O
+# vínculo sozinho NÃO tem o IMEI do equipamento — só o do chip.
 TRACKER_FIELD_MAP: list[FieldMapping] = [
-    FieldMapping('(resposta de /buscar_vinculo inconsistente com a doc)', '-', 'nao_documentado',
-                 'o "Exemplo Retorno" documentado para /buscar_vinculo tem o mesmo formato do de '
-                 '/buscar_equipamento e não menciona placa/cliente/rastreador/chip, que são justamente '
-                 'os parâmetros de busca do próprio endpoint — parece um erro de cópia na doc do '
-                 'fornecedor. O parsing usa nomes candidatos e é tolerante a variações; a forma real '
-                 'só é confirmada rodando a POC contra a API viva'),
-    FieldMapping('Imei_equipamento / imei_chip_vinculo', 'tracker.imei', 'transformacao',
-                 'usa o 1º valor não vazio entre os candidatos — confirmar qual é o IMEI do rastreador '
-                 'em si (por oposição ao IMEI do chip/SIM)'),
-    FieldMapping('Modelo.Marca.Descricao', 'tracker.brand', 'compativel'),
-    FieldMapping('Modelo.Descricao', 'tracker.model', 'compativel'),
-    FieldMapping('Situacao.Descricao', 'tracker.status', 'transformacao', 'situação SGR → TrackerStatus'),
-    FieldMapping('Ddd + Telefone (chip)', 'tracker.sim_number', 'transformacao', 'concatena ddd+telefone do chip'),
-    FieldMapping('Iccid', 'tracker.sim_iccid', 'compativel'),
-    FieldMapping('Operadora.Descricao', 'tracker.carrier', 'compativel'),
-    FieldMapping('cod_rastreador_vinculo', 'tracker.external_id', 'nao_existe', 'MasterSat não tem coluna external_id'),
-    FieldMapping('placa_vinculo / Placa', 'tracker.vehicle_id', 'transformacao',
+    FieldMapping('rastreador.imei_equipamento (/buscar_rastreador)', 'tracker.imei', 'compativel',
+                 'o IMEI NÃO está em /buscar_vinculo (lá só existe o IMEI do chip) — exige cruzar '
+                 'com /buscar_rastreador pela placa'),
+    FieldMapping('vinculo.veiculo.placa_vinculo', 'tracker.vehicle_id', 'transformacao',
                  'placa → resolver para o id interno do veículo já migrado'),
+    FieldMapping('vinculo.rastreador.cod_rastreador_vinculo', 'tracker.external_id', 'nao_existe',
+                 'MasterSat não tem coluna external_id'),
+    FieldMapping('vinculo.rastreador.equipamento.numero_equipamento_vinculo', 'tracker.serial_number', 'compativel'),
+    FieldMapping('rastreador.tipo_rastreador', 'tracker.model', 'compativel'),
+    FieldMapping('rastreador.situacao', 'tracker.status', 'transformacao',
+                 'campo PLANO. Valores vistos: ATIVO; disponibilidade (VINCULADO) é campo separado'),
+    FieldMapping('rastreador.ddd + rastreador.telefone', 'tracker.sim_number', 'transformacao',
+                 'concatena ddd+telefone do chip vinculado'),
+    FieldMapping('vinculo.rastreador.chip_equipamento.imei_chip_vinculo', 'tracker.sim_iccid', 'transformacao',
+                 'o SGR expõe o IMEI do chip; o ICCID só vem em /buscar_chip (campo iccid, '
+                 'frequentemente nulo na base real) — avaliar qual guardar'),
+    FieldMapping('vinculo.data_instalacao', 'tracker.install_date', 'transformacao', 'dd/mm/aaaa → date'),
+    FieldMapping('vinculo.valor_instalacao', 'tracker.installation_fee', 'transformacao', "'150,00' → decimal"),
+    FieldMapping('-', 'tracker.brand', 'obrigatorio_ausente',
+                 '/buscar_rastreador não traz marca/fabricante; só /buscar_equipamento '
+                 '(modelo.marca.descricao) tem — exigiria 1 chamada extra por equipamento'),
+    FieldMapping('vinculo.cod_interveniente_vinculo', 'contract.interveniente_client_id', 'transformacao',
+                 'o SGR já modela interveniente financeiro, igual ao MasterSat'),
 ]
 
 
@@ -163,6 +198,7 @@ TRACKER_FIELD_MAP: list[FieldMapping] = [
 
 _CLIENT_STATUS_MAP = {
     'ATIVO': ClientStatus.ACTIVE,
+    'CADASTRADO': ClientStatus.ACTIVE,
     'INATIVO': ClientStatus.INACTIVE,
     'INADIMPLENTE': ClientStatus.DELINQUENT,
     'SUSPENSO': ClientStatus.SUSPENDED,
@@ -170,11 +206,28 @@ _CLIENT_STATUS_MAP = {
     'CANCELADO': ClientStatus.INACTIVE,
 }
 
+# Valores confirmados na base real (campo plano `situacao_veiculo`); a doc do
+# SGR não lista o domínio e /get_situacao_veiculo exige permissão que o nosso
+# usuário de integração não tem — então esta tabela cresce por observação.
 _VEHICLE_STATUS_MAP = {
     'ATIVO': VehicleStatus.ACTIVE,
     'INATIVO': VehicleStatus.REMOVED,
+    # CANCELADO é situação de cadastro/contrato no SGR — distinto de RETIRADA
+    # (desinstalação física do equipamento). O MasterSat agora tem os dois
+    # (VehicleStatus.CANCELED vs .REMOVED); antes ambos caíam em REMOVED.
+    'CANCELADO': VehicleStatus.CANCELED,
+    'RETIRADA': VehicleStatus.REMOVED,
     'RETIRADO': VehicleStatus.REMOVED,
+    'DESINSTALADO': VehicleStatus.REMOVED,
+    'TROCA DE VEICULO': VehicleStatus.REMOVED,
+    'CADASTRADO': VehicleStatus.PENDING_VALIDATION,
     'BLOQUEADO': VehicleStatus.BLOCKED,
+    'SEM RASTREADOR': VehicleStatus.NO_TRACKER,
+    # 'INADIMPLENTE' fica DE FORA de propósito: no SGR a inadimplência é
+    # situação do VEÍCULO; no MasterSat ela existe só no cliente
+    # (ClientStatus.DELINQUENT). Decidir na migração definitiva se vira
+    # bloqueio do veículo ou inadimplência do cliente — enquanto não se
+    # decide, o relatório continua sinalizando o caso.
 }
 
 _TRACKER_STATUS_MAP = {
@@ -239,17 +292,29 @@ def map_cliente(raw: dict) -> tuple[dict, list[str]]:
     if not email_list:
         issues.append('Cliente sem e-mail cadastrado')
 
+    # Estrutura real de cada telefone: {descricao, contato, operadora, alerta,
+    # situacao} — o número fica em 'contato' (a doc não mostra este bloco).
     phone = None
     telefones_raw = ci_get(raw, 'telefone') or []
-    if isinstance(telefones_raw, list) and telefones_raw:
-        first = telefones_raw[0]
-        if isinstance(first, dict):
-            raw_phone = f"{ci_get(first, 'ddd') or ''}{ci_get(first, 'telefone', 'numero') or ''}"
-        else:
-            raw_phone = str(first)
-        phone = normalize_phone(raw_phone) or None
+    if isinstance(telefones_raw, list):
+        for item in telefones_raw:
+            numero = ci_get(item, 'contato') if isinstance(item, dict) else item
+            phone = normalize_phone(str(numero or '')) or None
+            if phone:
+                break
     if not phone:
         issues.append('Cliente sem telefone cadastrado')
+
+    # contatos[] = pessoas de contato: {descricao, contato, operadora, nome}
+    contacts = []
+    for item in (ci_get(raw, 'contatos') or []):
+        if not isinstance(item, dict):
+            continue
+        contacts.append({
+            'name': ci_get(item, 'nome'),
+            'phone': normalize_phone(str(ci_get(item, 'contato') or '')) or None,
+            'role': ci_get(item, 'descricao'),
+        })
 
     birth_raw = ci_get(raw, 'data_nascimento_cliente')
     birth = parse_br_date(birth_raw)
@@ -270,6 +335,7 @@ def map_cliente(raw: dict) -> tuple[dict, list[str]]:
         'email': email_list[0] if email_list else None,
         'extra_emails': email_list[1:] or None,
         'phone': phone,
+        'contacts': contacts or None,
         'zip_code': only_digits(ci_get(endereco, 'cep')) or None,
         'address_line': ci_get(endereco, 'logradouro'),
         'address_number': ci_get(endereco, 'numero'),
@@ -287,27 +353,75 @@ def map_cliente(raw: dict) -> tuple[dict, list[str]]:
 # Veículo — resposta do /buscar_veiculo não documentada (ver VEHICLE_FIELD_MAP)
 # ---------------------------------------------------------------------------
 
+def _to_int(value) -> int | None:
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_decimal_br(value) -> float | None:
+    """'1.234,56' / '0,00' (formato do SGR) -> float."""
+    if value in (None, ''):
+        return None
+    txt = str(value).strip().replace('.', '').replace(',', '.')
+    try:
+        return float(txt)
+    except ValueError:
+        return None
+
+
 def map_veiculo(raw: dict) -> tuple[dict, list[str]]:
     issues: list[str] = []
 
-    plate_raw = ci_get(raw, 'placa_veiculo', 'placa')
+    plate_raw = ci_get(raw, 'placa_veiculo')
     plate = normalize_plate(plate_raw) if plate_raw else ''
     if not plate:
-        issues.append('Veículo sem placa identificável na resposta (campo não encontrado — ver nota de documentação)')
+        issues.append('Veículo sem placa na resposta')
+    elif not is_valid_plate(plate):
+        # Na base real isto não é só erro de digitação: máquinas pesadas
+        # (retroescavadeira, escavadeira) são rastreadas sem placa e o SGR usa
+        # o campo como identificador livre. O MasterSat exige placa válida de
+        # 7 caracteres no schema da API — ver relatório de compatibilidade.
+        issues.append(f"Placa fora do padrão brasileiro: '{plate}' (máquina sem placa ou erro de cadastro)")
 
-    situacao = ci_get(raw, 'situacao')
-    status, status_issues = _map_status(ci_get(situacao, 'descricao'), _VEHICLE_STATUS_MAP, VehicleStatus.ACTIVE, 'veículo')
+    status, status_issues = _map_status(
+        ci_get(raw, 'situacao_veiculo'), _VEHICLE_STATUS_MAP, VehicleStatus.ACTIVE, 'veículo',
+    )
     issues.extend(status_issues)
+
+    contract_date = parse_br_date(ci_get(raw, 'data_contrato_veiculo'))
+    contract_end = parse_br_date(ci_get(raw, 'data_final_contrato_veiculo'))
 
     mapped = {
         'external_id': ci_get(raw, 'cod_veiculo'),
         'client_external_id': ci_get(raw, 'cod_cliente'),
         'plate': plate or None,
-        'chassis': ci_get(raw, 'chassi_veiculo', 'chassi'),
-        'brand': ci_get(raw, 'marca_veiculo', 'marca'),
-        'model': ci_get(raw, 'modelo_veiculo', 'modelo'),
-        'renavam': ci_get(raw, 'renavam_veiculo', 'renavam'),
-        'color': ci_get(raw, 'cor_veiculo', 'cor'),
+        'chassis': ci_get(raw, 'chassi_veiculo'),
+        'renavam': ci_get(raw, 'renavam_veiculo'),
+        'brand': ci_get(raw, 'marca_veiculo'),
+        'model': ci_get(raw, 'modelo_veiculo'),
+        'color': ci_get(raw, 'cor_veiculo'),
+        'fuel_type': ci_get(raw, 'combustivel_veiculo'),
+        'type': ci_get(raw, 'tipo_veiculo_veiculo'),
+        'manufacture_year': _to_int(ci_get(raw, 'anofab_veiculo')),
+        'model_year': _to_int(ci_get(raw, 'anomod_veiculo')),
+        'fipe_code': ci_get(raw, 'fipe_codigo_veiculo'),
+        'fipe_value': _to_decimal_br(ci_get(raw, 'fipe_valor_veiculo')),
+        'contract_number': ci_get(raw, 'contrato_veiculo'),
+        'contract_date': contract_date.isoformat() if contract_date else None,
+        'contract_end_date': contract_end.isoformat() if contract_end else None,
+        'address_zip_code': only_digits(ci_get(raw, 'cep_veiculo')) or None,
+        'address_line': ci_get(raw, 'logradouro_veiculo'),
+        'address_number': ci_get(raw, 'numero_veiculo'),
+        'address_complement': ci_get(raw, 'complemento_veiculo'),
+        'neighborhood': ci_get(raw, 'bairro_veiculo'),
+        'city': ci_get(raw, 'cidade_veiculo'),
+        'state': ci_get(raw, 'uf_veiculo'),
+        'sales_point': ci_get(raw, 'nome_ponto_venda'),
+        'seller_consultant': ci_get(raw, 'nome_consultor_veiculo'),
+        'vehicle_classification': ci_get(raw, 'classificacao_veiculo'),
+        'user_alert': ci_get(raw, 'alerta_veiculo'),
         'status': status.value,
     }
     return mapped, issues
@@ -317,33 +431,51 @@ def map_veiculo(raw: dict) -> tuple[dict, list[str]]:
 # Rastreador/equipamento — a partir do registro de vínculo (ver TRACKER_FIELD_MAP)
 # ---------------------------------------------------------------------------
 
-def map_tracker(raw: dict) -> tuple[dict, list[str]]:
+def map_tracker(vinculo: dict, rastreador: dict | None = None) -> tuple[dict, list[str]]:
+    """Monta o rastreador do MasterSat a partir do registro de vínculo.
+
+    O vínculo traz os relacionamentos (veículo/rastreador/equipamento/chip) e
+    as datas de instalação, mas NÃO o IMEI do equipamento — só o do chip. O
+    IMEI real vem de /buscar_rastreador (`rastreador`, opcional aqui), que é
+    o único endpoint com IMEI, situação e placa no mesmo registro.
+    """
     issues: list[str] = []
+    rastreador = rastreador or {}
 
-    imei = ci_get(raw, 'imei_equipamento', 'imei_chip_vinculo', 'imei_chip')
+    rast_vinc = ci_get(vinculo, 'rastreador') or {}
+    equip_vinc = ci_get(rast_vinc, 'equipamento') or {}
+    chip_vinc = ci_get(rast_vinc, 'chip_equipamento') or {}
+    veic_vinc = ci_get(vinculo, 'veiculo') or {}
+
+    imei = ci_get(rastreador, 'imei_equipamento')
     if not imei:
-        issues.append('Equipamento sem IMEI identificável na resposta (ver nota de documentação)')
+        issues.append('Rastreador sem IMEI (não encontrado em /buscar_rastreador para esta placa)')
 
-    modelo = ci_get(raw, 'modelo') or {}
-    marca = ci_get(modelo, 'marca') or {}
+    status, status_issues = _map_status(
+        ci_get(rastreador, 'situacao'), _TRACKER_STATUS_MAP, TrackerStatus.INSTALLED, 'rastreador',
+    )
+    if rastreador:
+        issues.extend(status_issues)
 
-    situacao = ci_get(raw, 'situacao')
-    status, status_issues = _map_status(ci_get(situacao, 'descricao'), _TRACKER_STATUS_MAP, TrackerStatus.INSTALLED, 'rastreador')
-    issues.extend(status_issues)
+    sim_number = normalize_phone(
+        f"{ci_get(rastreador, 'ddd') or ''}{ci_get(rastreador, 'telefone') or ''}"
+    ) or None
 
-    sim_ddd = ci_get(raw, 'ddd')
-    sim_numero = ci_get(raw, 'telefone')
-    sim_number = normalize_phone(f'{sim_ddd or ""}{sim_numero or ""}') or None
+    install_date = parse_br_date(ci_get(vinculo, 'data_instalacao'))
 
     mapped = {
-        'external_id': ci_get(raw, 'cod_equipamento', 'cod_rastreador_vinculo', 'cod_rastreador'),
-        'vehicle_plate': normalize_plate(ci_get(raw, 'placa', 'placa_vinculo') or '') or None,
+        'external_id': ci_get(rast_vinc, 'cod_rastreador_vinculo') or ci_get(vinculo, 'cod_rastreador_vinculo'),
+        'vinculo_external_id': ci_get(vinculo, 'cod_vinculo'),
+        'equipment_external_id': ci_get(rast_vinc, 'cod_equipamento_vinculo'),
+        'chip_external_id': ci_get(rast_vinc, 'cod_chip_vinculo'),
+        'vehicle_plate': normalize_plate(ci_get(veic_vinc, 'placa_vinculo') or '') or None,
         'imei': imei,
-        'brand': ci_get(marca, 'descricao') or ci_get(raw, 'marca'),
-        'model': ci_get(modelo, 'descricao') or ci_get(raw, 'modelo'),
+        'serial_number': ci_get(equip_vinc, 'numero_equipamento_vinculo') or ci_get(rastreador, 'numero_equipamento'),
+        'model': ci_get(rastreador, 'tipo_rastreador'),
         'sim_number': sim_number,
-        'sim_iccid': ci_get(raw, 'iccid'),
-        'carrier': ci_get(ci_get(raw, 'operadora') or {}, 'descricao'),
+        'sim_imei': ci_get(chip_vinc, 'imei_chip_vinculo') or ci_get(rastreador, 'imei_chip'),
+        'install_date': install_date.isoformat() if install_date else None,
+        'installation_fee': _to_decimal_br(ci_get(vinculo, 'valor_instalacao')),
         'status': status.value,
     }
     return mapped, issues

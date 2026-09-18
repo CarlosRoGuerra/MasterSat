@@ -57,7 +57,7 @@ type DocEntry = {
 };
 
 type VehicleStatus =
-  | 'ativo' | 'sem_rastreador' | 'retirado' | 'bloqueado'
+  | 'ativo' | 'sem_rastreador' | 'retirado' | 'cancelado' | 'bloqueado'
   | 'pendente_validacao' | 'em_analise' | 'aprovado' | 'reprovado' | 'correcao_solicitada';
 
 type VehicleFormState = {
@@ -618,7 +618,7 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
                     value={vf.status}
                     onChange={e => setVf(prev => ({ ...prev, status: e.target.value as VehicleStatus }))}
                   >
-                    {(['ativo','sem_rastreador','retirado','bloqueado','pendente_validacao','em_analise','aprovado','reprovado','correcao_solicitada'] as const).map(s => (
+                    {(['ativo','sem_rastreador','retirado','cancelado','bloqueado','pendente_validacao','em_analise','aprovado','reprovado','correcao_solicitada'] as const).map(s => (
                       <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>
                     ))}
                   </select>

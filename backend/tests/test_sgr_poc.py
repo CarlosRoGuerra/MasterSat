@@ -15,13 +15,19 @@ from app.services.sgr_migration.poc import check_connectivity, run_poc
 
 
 class FakeClient:
-    def __init__(self, clientes, veiculos_por_cliente, vinculos_por_placa, veiculo_erro_para=None):
+    def __init__(self, clientes, veiculos_por_cliente, vinculos_por_placa,
+                 veiculo_erro_para=None, rastreadores=None):
         self._clientes = clientes
         self._veiculos_por_cliente = veiculos_por_cliente
         self._vinculos_por_placa = vinculos_por_placa
         self._veiculo_erro_para = veiculo_erro_para or set()
+        self._rastreadores = rastreadores or []
         self.request_count = 0
         self.request_log: list[RequestLogEntry] = []
+
+    def buscar_rastreadores(self, total=200, indice=0):
+        self._track('/buscar_rastreador')
+        return self._rastreadores
 
     def _track(self, path):
         self.request_count += 1
@@ -134,9 +140,13 @@ class TestRunPocRelationships:
         )
         result = run_poc(client, limit=10)
 
-        # 1 (clientes) + 1 (veiculos do cliente 1) + 1 (vinculo da placa AAA1111)
-        assert result.request_count == 3
-        assert [e.path for e in result.request_log] == ['/buscar_cliente', '/buscar_veiculo', '/buscar_vinculo']
+        # 1 (clientes) + 1 (rastreadores em lote) + 1 (veiculos do cliente 1)
+        # + 1 (vinculo da placa AAA1111). O lote de rastreadores é 1 chamada
+        # só, independente de quantos veículos existam.
+        assert result.request_count == 4
+        assert [e.path for e in result.request_log] == [
+            '/buscar_cliente', '/buscar_rastreador', '/buscar_veiculo', '/buscar_vinculo',
+        ]
 
     def test_never_fetches_more_clients_than_the_limit(self):
         client = FakeClient(clientes=[CLIENTE_A, CLIENTE_B], veiculos_por_cliente={}, vinculos_por_placa={})

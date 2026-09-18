@@ -151,30 +151,67 @@ class TestMapVeiculo:
 
 
 class TestMapTracker:
-    def test_maps_from_equipamento_shaped_payload(self):
-        raw = {
-            'Cod_equipamento': '234',
-            'Imei_equipamento': '355488020902005',
-            'Modelo': {'Descricao': 'ST310', 'Marca': {'Descricao': 'SUNTECH'}},
-            'Situacao': {'Descricao': 'ATIVO'},
-        }
-        mapped, issues = map_tracker(raw)
+    """Formas REAIS capturadas da API (a doc do fornecedor mostrava o exemplo
+    de /buscar_equipamento no lugar do de /buscar_vinculo)."""
+
+    VINCULO = {
+        'cod_vinculo': '2',
+        'cod_rastreador_vinculo': '3',
+        'data_instalacao': '31/07/2024',
+        'valor_instalacao': '150,00',
+        'rastreador': {
+            'cod_rastreador_vinculo': '3',
+            'cod_equipamento_vinculo': '259',
+            'cod_chip_vinculo': '3',
+            'equipamento': {'numero_equipamento_vinculo': '912992'},
+            'chip_equipamento': {'imei_chip_vinculo': '8955170000000005334'},
+        },
+        'veiculo': {'placa_vinculo': 'GRA4982', 'chassi_vinculo': '9BD1234'},
+    }
+
+    RASTREADOR = {
+        'cod_rastreador': '1',
+        'situacao': 'ATIVO',
+        'disponibilidade': 'VINCULADO',
+        'tipo_rastreador': 'NAO INFORMADO',
+        'numero_equipamento': '7931096',
+        'imei_equipamento': '355488020902005',
+        'ddd': '55',
+        'telefone': '999990864',
+        'placa': 'GRA4982',
+    }
+
+    def test_links_vehicle_equipment_and_chip_from_vinculo(self):
+        mapped, _issues = map_tracker(self.VINCULO, self.RASTREADOR)
+        assert mapped['vehicle_plate'] == 'GRA4982'
+        assert mapped['external_id'] == '3'
+        assert mapped['equipment_external_id'] == '259'
+        assert mapped['chip_external_id'] == '3'
+        assert mapped['vinculo_external_id'] == '2'
+
+    def test_imei_comes_from_rastreador_not_from_vinculo(self):
+        # O vínculo só tem o IMEI do CHIP; o do equipamento vem do rastreador.
+        mapped, issues = map_tracker(self.VINCULO, self.RASTREADOR)
         assert mapped['imei'] == '355488020902005'
-        assert mapped['brand'] == 'SUNTECH'
-        assert mapped['model'] == 'ST310'
-        assert mapped['status'] == TrackerStatus.INSTALLED.value
+        assert mapped['sim_imei'] == '8955170000000005334'
         assert not any('IMEI' in i for i in issues)
 
-    def test_missing_imei_is_flagged(self):
-        mapped, issues = map_tracker({'Situacao': {'Descricao': 'ATIVO'}})
+    def test_missing_rastreador_flags_absent_imei(self):
+        mapped, issues = map_tracker(self.VINCULO, None)
         assert mapped['imei'] is None
         assert any('IMEI' in i for i in issues)
+        # o vínculo sozinho ainda resolve os relacionamentos
+        assert mapped['vehicle_plate'] == 'GRA4982'
 
-    def test_case_insensitive_key_lookup(self):
-        # A doc mistura PascalCase (rastreador/vinculo) e snake_case (cliente).
-        raw = {'imei_equipamento': '123456789'}
-        mapped, _issues = map_tracker(raw)
-        assert mapped['imei'] == '123456789'
+    def test_maps_install_date_and_fee(self):
+        mapped, _issues = map_tracker(self.VINCULO, self.RASTREADOR)
+        assert mapped['install_date'] == '2024-07-31'
+        assert mapped['installation_fee'] == 150.0
+
+    def test_maps_status_and_sim_number(self):
+        mapped, _issues = map_tracker(self.VINCULO, self.RASTREADOR)
+        assert mapped['status'] == TrackerStatus.INSTALLED.value
+        assert mapped['sim_number'] == '55999990864'
 
 
 class TestCiGet:

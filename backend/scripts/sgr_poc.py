@@ -32,6 +32,15 @@ import json
 import os
 import sys
 
+# O relatório usa 🟢/🟡/🔴 e acentuação; o console do Windows abre em cp1252 e
+# estoura UnicodeEncodeError ao imprimir. errors='replace' garante que um
+# terminal limitado degrade o caractere em vez de derrubar a execução.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding='utf-8', errors='replace')
+    except (AttributeError, OSError):  # stream redirecionado/sem suporte
+        pass
+
 _BACKEND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
 # Garante que 'app' é encontrado independente de onde o script for chamado.
 sys.path.insert(0, _BACKEND_DIR)

@@ -24,6 +24,7 @@ class VehicleStatus(str, Enum):
     ACTIVE = 'ativo'
     NO_TRACKER = 'sem_rastreador'
     REMOVED = 'retirado'
+    CANCELED = 'cancelado'
     BLOCKED = 'bloqueado'
 
 

@@ -5668,7 +5668,7 @@ export interface components {
          * VehicleStatus
          * @enum {string}
          */
-        VehicleStatus: "pendente_validacao" | "em_analise" | "aprovado" | "reprovado" | "correcao_solicitada" | "ativo" | "sem_rastreador" | "retirado" | "bloqueado";
+        VehicleStatus: "pendente_validacao" | "em_analise" | "aprovado" | "reprovado" | "correcao_solicitada" | "ativo" | "sem_rastreador" | "retirado" | "cancelado" | "bloqueado";
         /** VehicleUpdate */
         VehicleUpdate: {
             /** Client Id */

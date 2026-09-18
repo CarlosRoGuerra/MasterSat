@@ -26,19 +26,32 @@ KNOWN_LIMITATIONS = [
     'escopo desta etapa).',
     'Equipamentos são descobertos só a partir da placa de cada veículo (filtro placa_vinculo em '
     '/buscar_vinculo) — "equipamento sem veículo" não é observável por essa via.',
-    '/buscar_veiculo e /buscar_vinculo não têm "Exemplo Retorno" confiável na doc oficial do SGR '
-    '(ver mapping.py); os nomes de campo usados no parsing são a melhor inferência possível e '
-    'devem ser confirmados no primeiro run real contra a API.',
+    'Os nomes de campo de /buscar_veiculo e /buscar_vinculo foram descobertos inspecionando a API '
+    'real (a doc do fornecedor não traz exemplo de resposta do primeiro e mostra um exemplo errado '
+    'no segundo). O domínio de situações é observado da amostra — valores fora dos 10 clientes '
+    'lidos podem existir e aparecerão como "situação sem mapeamento conhecido".',
+    'O IMEI do rastreador exige cruzar /buscar_vinculo com /buscar_rastreador pela placa; o índice '
+    'é paginado até 15 páginas de 200. Numa base maior que ~3.000 rastreadores, os excedentes '
+    'ficariam sem IMEI e seriam sinalizados no relatório.',
 ]
 
 
 def _overall_symbol(field_map: list[FieldMapping]) -> str:
+    """Veredito da entidade pela VIABILIDADE da migração, não pela contagem
+    bruta de campos.
+
+    Campo do SGR sem equivalente no MasterSat (`nao_existe`, ex.: km do
+    veículo) NÃO derruba o veredito: é dado que simplesmente não migra, e
+    isso é uma decisão aceitável — ele continua listado na tabela. O que
+    pesa é não saber a estrutura (bloqueia) ou o MasterSat exigir um campo
+    que a origem não fornece (exige decisão antes de migrar).
+    """
     if any(f.situacao == 'nao_documentado' for f in field_map):
         return SITUACAO_SYMBOL['nao_documentado']
     if any(f.situacao == 'obrigatorio_ausente' for f in field_map):
         return SITUACAO_SYMBOL['obrigatorio_ausente']
-    if any(f.situacao == 'nao_existe' for f in field_map):
-        return SITUACAO_SYMBOL['nao_existe']
+    if any(f.situacao == 'transformacao' for f in field_map):
+        return SITUACAO_SYMBOL['transformacao']
     return SITUACAO_SYMBOL['compativel']
 
 
@@ -130,6 +143,7 @@ def build_report(result: PocRunResult) -> dict:
                     'placa': v.mapped.get('plate'),
                     'marca': v.mapped.get('brand'),
                     'modelo': v.mapped.get('model'),
+                    'situacao': v.mapped.get('status'),
                     'issues': v.issues,
                     'equipamentos': [
                         {

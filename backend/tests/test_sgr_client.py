@@ -200,7 +200,7 @@ class TestPaginationParams:
         session = FakeSession([_auth_resp(), _resp(200, {'Error': 'false', 'Data': []})])
         client = SGRClient(session=session)
         client.buscar_clientes(total=10, indice=0)
-        assert session.calls[-1]['params'] == {'total': 10, 'indice': 0}
+        assert session.calls[-1]['params'] == {'cliente': '1234', 'total': 10, 'indice': 0}
 
     def test_buscar_veiculos_por_cliente_filters_by_cod_cliente(self):
         session = FakeSession([_auth_resp(), _resp(200, {'Error': 'false', 'Data': []})])
@@ -216,11 +216,21 @@ class TestPaginationParams:
         params = session.calls[-1]['params']
         assert params['placa_vinculo'] == 'ABC1234'
 
+    def test_sends_cod_mobile_as_cliente_param_on_every_call(self):
+        # Sem 'cliente=<codMobile>' na query, a API real responde 401 "Código
+        # de cliente inválido" em TODOS os endpoints. Não está documentado em
+        # endpoint nenhum da apidoc do fornecedor — e um header codMobile é
+        # ignorado, só a query funciona.
+        session = FakeSession([_auth_resp(), _resp(200, {'Error': 'false', 'Data': []})])
+        client = SGRClient(session=session)
+        client.buscar_clientes(total=10)
+        assert session.calls[-1]['params']['cliente'] == '1234'
+
     def test_empty_params_are_omitted(self):
         session = FakeSession([_auth_resp(), _resp(200, {'Error': 'false', 'Data': []})])
         client = SGRClient(session=session)
         client.get('/buscar_cliente', {'cod_cliente': None, 'total': 10})
-        assert session.calls[-1]['params'] == {'total': 10}
+        assert session.calls[-1]['params'] == {'cliente': '1234', 'total': 10}
 
 
 class TestExtractData:

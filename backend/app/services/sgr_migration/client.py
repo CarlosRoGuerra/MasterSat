@@ -20,6 +20,14 @@ Autenticação (conforme doc oficial, grupo "autenticacao" /headers_authorizatio
   3. Toda chamada além da autenticação usa a "chave API" (gerada ao cadastrar
      o Fornecedor de Serviços no SGR — distinta do codMobile) como segmento
      de PATH: ``/buscar_cliente/{chave_api}``.
+  4. **NÃO DOCUMENTADO**: o codMobile precisa ser reenviado em TODA chamada,
+     na query string como ``cliente=<codMobile>``. Sem isso a API responde
+     401 "Código de cliente inválido" em todos os endpoints — inclusive nas
+     tabelas de domínio —, o que NÃO é falta de permissão (essa devolve outra
+     mensagem, explícita: "Você não tem permissão para a função X"). Só a
+     query funciona: um header ``codMobile`` é ignorado (verificado em sessão
+     isolada). A apidoc não cita esse parâmetro em endpoint nenhum; foi
+     descoberto testando contra a API real.
 
 Apenas métodos GET (consulta) são implementados — de propósito. Esta POC é
 somente leitura; não existem wrappers para os endpoints de inserir/editar do
@@ -227,7 +235,9 @@ class SGRClient:
         self._ensure_authenticated()
         self._require_config()
         url = f'{settings.sgr_base_url.rstrip("/")}{path}/{settings.sgr_api_key}'
-        clean_params = {k: v for k, v in (params or {}).items() if v not in (None, '')}
+        # 'cliente' (codMobile) em TODA chamada — ver item 4 do docstring do módulo.
+        clean_params = {'cliente': settings.sgr_cod_mobile}
+        clean_params.update({k: v for k, v in (params or {}).items() if v not in (None, '')})
         headers = {'Accept': 'application/json', **self._auth_headers}
 
         resp = self._send('GET', url, context=path, headers=headers, params=clean_params)
@@ -269,4 +279,11 @@ class SGRClient:
 
     def buscar_equipamento(self, cod_equipamento) -> list[dict]:
         body = self.get('/buscar_equipamento', {'cod_equipamento': cod_equipamento})
+        return self.extract_data(body)
+
+    def buscar_rastreadores(self, total: int = 200, indice: int = 0) -> list[dict]:
+        """Rastreadores em lote. Este endpoint é o único que traz IMEI do
+        equipamento, situação e PLACA no mesmo registro — por isso a POC
+        indexa o resultado por placa em vez de fazer 1 chamada por veículo."""
+        body = self.get('/buscar_rastreador', {'total': total, 'indice': indice})
         return self.extract_data(body)
