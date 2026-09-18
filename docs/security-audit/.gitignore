@@ -1,0 +1,2 @@
+# Ambiente isolado usado só para gerar o PDF localmente — nunca versionar.
+.venv/
