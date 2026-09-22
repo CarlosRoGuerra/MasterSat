@@ -10,7 +10,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from app.services.sgr_migration.client import RequestLogEntry, SGRApiError, SGRClient
-from app.services.sgr_migration.mapping import ci_get, map_cliente, map_tracker, map_veiculo
+from app.services.sgr_migration.mapping import (
+    build_vencimento_index,
+    ci_get,
+    map_boleto,
+    map_cliente,
+    map_contrato,
+    map_plano,
+    map_tracker,
+    map_veiculo,
+)
 from app.services.sgr_migration.normalize import normalize_plate
 
 
@@ -19,6 +28,10 @@ class TrackerNode:
     raw: dict
     mapped: dict
     issues: list[str]
+    # O mesmo registro de vínculo vira duas coisas no MasterSat: o rastreador
+    # (acima) e o contrato — no SGR é ele quem guarda plano, vencimento e
+    # cobrança. Ver map_contrato() em mapping.py.
+    contract: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -36,6 +49,10 @@ class ClientNode:
     issues: list[str]
     vehicles: list[VehicleNode] = field(default_factory=list)
     fetch_failed: bool = False
+    # Histórico de cobrança já achatado: 1 entrada por linha de discriminação
+    # do boleto (ver map_boleto). Fica no cliente, e não no veículo, porque no
+    # SGR o boleto é consolidado por cliente.
+    billings: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -44,6 +61,8 @@ class PocRunResult:
     clients: list[ClientNode]
     request_count: int
     request_log: list[RequestLogEntry]
+    plans: list[dict] = field(default_factory=list)
+    plan_issues: list[str] = field(default_factory=list)
 
 
 def check_connectivity(client: SGRClient) -> dict:
@@ -91,6 +110,7 @@ def build_tracker_index(client: SGRClient) -> dict[str, dict]:
 
 def _fetch_trackers_for_vehicle(
     client: SGRClient, plate: str, issues: list[str], tracker_index: dict[str, dict],
+    vencimento_index: dict[str, int] | None = None,
 ) -> list[TrackerNode]:
     trackers: list[TrackerNode] = []
     try:
@@ -100,12 +120,15 @@ def _fetch_trackers_for_vehicle(
         return trackers
     for link in vinculos_raw:
         tmapped, tissues = map_tracker(link, tracker_index.get(plate))
-        trackers.append(TrackerNode(raw=link, mapped=tmapped, issues=tissues))
+        contract, cissues = map_contrato(link, vencimento_index or {})
+        tissues.extend(cissues)
+        trackers.append(TrackerNode(raw=link, mapped=tmapped, issues=tissues, contract=contract))
     return trackers
 
 
 def _fetch_vehicles_for_client(
     client: SGRClient, cod_cliente, issues: list[str], tracker_index: dict[str, dict],
+    vencimento_index: dict[str, int] | None = None,
 ) -> list[VehicleNode]:
     vehicles: list[VehicleNode] = []
     if not cod_cliente:
@@ -120,7 +143,10 @@ def _fetch_vehicles_for_client(
     for vraw in veiculos_raw:
         vmapped, vissues = map_veiculo(vraw)
         plate = vmapped.get('plate')
-        trackers = _fetch_trackers_for_vehicle(client, plate, vissues, tracker_index) if plate else []
+        trackers = (
+            _fetch_trackers_for_vehicle(client, plate, vissues, tracker_index, vencimento_index)
+            if plate else []
+        )
         if not trackers:
             vissues.append('Veículo sem equipamento/rastreador vinculado')
         vehicles.append(VehicleNode(raw=vraw, mapped=vmapped, issues=vissues, trackers=trackers))
@@ -130,10 +156,83 @@ def _fetch_vehicles_for_client(
     return vehicles
 
 
-def run_poc(client: SGRClient, limit: int) -> PocRunResult:
+def _fetch_planos(client: SGRClient) -> tuple[list[dict], list[str], dict[str, int]]:
+    """Planos e índice de vencimentos — tabelas de domínio, 1 chamada cada.
+
+    Os planos saem de DUAS fontes: /get_grupo_mensalidade e /get_grupo_adesao.
+    Apesar dos nomes, elas são duas visões da MESMA lista de grupos, e o
+    `cod_grupo_vinculo` do vínculo aponta para qualquer uma — a numeração não
+    se repete entre elas. Confirmado com dado real: 16 veículos do cliente
+    ADIR FREITAG têm cod_grupo_vinculo=5, que só existe na tabela de adesão
+    ('MASTER ESPECIAL 49,99'), e a discriminação dos boletos de 06, 07 e
+    08/2026 cobra exatamente R$ 49,99 por placa. Buscar só a mensalidade
+    deixaria esses contratos sem plano.
+    """
+    planos: list[dict] = []
+    issues: list[str] = []
+    vistos: set[str] = set()
+
+    for rotulo, metodo in (
+        ('/get_grupo_mensalidade', client.get_grupo_mensalidade),
+        ('/get_grupo_adesao', client.get_grupo_adesao),
+    ):
+        try:
+            grupos = metodo()
+        except SGRApiError as exc:
+            issues.append(f'Falha ao buscar os planos ({rotulo}): {exc}')
+            continue
+        for grupo in grupos:
+            mapped, gissues = map_plano(grupo)
+            codigo = str(mapped.get('external_id') or '')
+            if codigo and codigo in vistos:
+                continue  # mensalidade tem precedência: é lida primeiro
+            vistos.add(codigo)
+            planos.append(mapped)
+            issues.extend(gissues)
+
+    vencimento_index: dict[str, int] = {}
+    try:
+        vencimento_index = build_vencimento_index(client.get_vencimento())
+    except SGRApiError as exc:
+        issues.append(f'Falha ao buscar os vencimentos (/get_vencimento): {exc}')
+
+    return planos, issues, vencimento_index
+
+
+def _fetch_boletos(client: SGRClient, cpf_cnpj: str, issues: list[str]) -> list[dict]:
+    """Histórico de cobrança do cliente, achatado por linha de discriminação.
+
+    Uma chamada por cliente: /buscar_boletos (sem CPF) responde 500 no
+    servidor deles, então não dá para varrer tudo de uma vez. O CPF vai sem
+    máscara — com máscara a API devolve lista vazia sem erro nenhum.
+    """
+    if not cpf_cnpj:
+        return []
+    try:
+        boletos = client.buscar_boletos_cliente(cpf_cnpj)
+    except SGRApiError as exc:
+        issues.append(f'Falha ao buscar o histórico de boletos: {exc}')
+        return []
+
+    achatado: list[dict] = []
+    for boleto in boletos:
+        linhas = ci_get(boleto, 'discriminacao') or []
+        for item in linhas or [None]:
+            mapped, bissues = map_boleto(boleto, item)
+            # Linha zerada é ruído do SGR: todo boleto traz uma cópia da placa
+            # com valor 0,00 ao lado da cobrança real.
+            if mapped.get('amount') in (None, 0, 0.0):
+                continue
+            achatado.append(mapped)
+            issues.extend(bissues)
+    return achatado
+
+
+def run_poc(client: SGRClient, limit: int, com_boletos: bool = False) -> PocRunResult:
     """ETAPAS 6/7 — busca exatamente `limit` clientes e caminha os relacionamentos."""
     clients_raw = client.buscar_clientes(total=limit, indice=0)
     tracker_index = build_tracker_index(client)
+    planos, plan_issues, vencimento_index = _fetch_planos(client)
 
     nodes: list[ClientNode] = []
     for raw in clients_raw:
@@ -143,12 +242,19 @@ def run_poc(client: SGRClient, limit: int) -> PocRunResult:
             nodes.append(ClientNode(raw=raw, mapped={}, issues=[f'Falha ao mapear cliente: {exc}'], fetch_failed=True))
             continue
 
-        vehicles = _fetch_vehicles_for_client(client, ci_get(raw, 'cod_cliente'), issues, tracker_index)
-        nodes.append(ClientNode(raw=raw, mapped=mapped, issues=issues, vehicles=vehicles))
+        vehicles = _fetch_vehicles_for_client(
+            client, ci_get(raw, 'cod_cliente'), issues, tracker_index, vencimento_index,
+        )
+        billings = _fetch_boletos(client, mapped.get('cpf_cnpj'), issues) if com_boletos else []
+        nodes.append(ClientNode(
+            raw=raw, mapped=mapped, issues=issues, vehicles=vehicles, billings=billings,
+        ))
 
     return PocRunResult(
         limit=limit,
         clients=nodes,
         request_count=client.request_count,
         request_log=list(client.request_log),
+        plans=planos,
+        plan_issues=plan_issues,
     )

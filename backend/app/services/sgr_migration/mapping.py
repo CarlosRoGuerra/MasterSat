@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from app.models.enums import ClientStatus, TrackerStatus, VehicleStatus
+from app.models.enums import BillingStatus, ClientStatus, TrackerStatus, VehicleStatus
 from app.services.sgr_migration.normalize import (
     is_valid_cpf_cnpj,
     is_valid_email,
@@ -479,3 +479,244 @@ def map_tracker(vinculo: dict, rastreador: dict | None = None) -> tuple[dict, li
         'status': status.value,
     }
     return mapped, issues
+
+
+# ---------------------------------------------------------------------------
+# Plano e contrato — a partir de /get_grupo_mensalidade e do VÍNCULO
+#
+# Descoberto testando a API real (21/09): o contrato do SGR não está no
+# cliente nem no veículo (esses campos vêm vazios) e o módulo de vendas nunca
+# foi usado. Quem guarda a cobrança é o vínculo, e o valor mensal vem de
+# /get_grupo_mensalidade pelo `cod_grupo_vinculo`.
+# ---------------------------------------------------------------------------
+
+PLAN_FIELD_MAP: list[FieldMapping] = [
+    FieldMapping('grupo_mensalidade.cod_grupo_mensalidade', 'plan.external_id', 'nao_existe',
+                 'MasterSat não tem coluna external_id — a chave natural usada é o nome do plano'),
+    FieldMapping('grupo_mensalidade.descricao', 'plan.name', 'compativel',
+                 "ex.: 'MENSALIDADE 64,99' (o valor está embutido no nome, no padrão deles)"),
+    FieldMapping('grupo_mensalidade.valor', 'plan.price', 'transformacao', "'64,99' → decimal"),
+    FieldMapping('-', 'plan.billing_interval_months', 'obrigatorio_ausente',
+                 'o grupo de mensalidade não declara periodicidade; assumido mensal (1) — '
+                 'o SGR tem /get_periodo, mas ele não é referenciado pelo vínculo'),
+]
+
+CONTRACT_FIELD_MAP: list[FieldMapping] = [
+    FieldMapping('vinculo.cod_vinculo', 'contract.external_id', 'nao_existe',
+                 'sem external_id no MasterSat — dedup por (cliente, veículo)'),
+    FieldMapping('vinculo.veiculo.placa_vinculo', 'contract.vehicle_id', 'transformacao',
+                 'placa → id interno do veículo já migrado'),
+    FieldMapping('veiculo.cod_cliente', 'contract.client_id', 'transformacao',
+                 'o vínculo não traz o cliente: vem do veículo ao qual a placa pertence'),
+    FieldMapping('vinculo.cod_grupo_vinculo', 'contract.plan_id', 'transformacao',
+                 'código do grupo → Plano criado a partir de /get_grupo_mensalidade'),
+    FieldMapping('vinculo.cod_vencimento_vinculo', 'contract.billing_day', 'transformacao',
+                 "código → dia do mês via /get_vencimento (ex.: 127 → 15). 'último dia mês' → 31"),
+    FieldMapping('vinculo.data_instalacao', 'contract.start_date', 'transformacao',
+                 'dd/mm/aaaa → date; sem ela cai para data_vinculo'),
+    FieldMapping('vinculo.valor_instalacao', 'contract.installation_fee', 'transformacao', "'150,00' → decimal"),
+    FieldMapping('vinculo.gerar_cobranca', 'contract.status', 'transformacao',
+                 "'S' → 'ativo', 'N' → 'inativo'"),
+    FieldMapping('vinculo.cod_interveniente_vinculo + interveniente.cpf', 'contract.interveniente_client_id',
+                 'transformacao', 'CPF do interveniente → id do cliente correspondente, se já migrado'),
+    FieldMapping('-', 'contract.billing_modality', 'transformacao',
+                 "sempre 'boleto': formato_boleto_cliente = 'U' (boleto único) em toda a base lida"),
+    FieldMapping('vinculo.acrescimo / desconto', '-', 'nao_existe',
+                 'MasterSat não tem acréscimo/desconto por contrato — sinalizado, não migrado'),
+    FieldMapping('vinculo.produtos[]', '-', 'nao_existe',
+                 'cobranças avulsas/negociações do SGR; viram histórico de boleto, não contrato'),
+]
+
+# 'último dia mês' não é um número — o MasterSat guarda billing_day como int.
+_ULTIMO_DIA = 31
+
+
+def map_plano(grupo: dict) -> tuple[dict, list[str]]:
+    """/get_grupo_mensalidade ou /get_grupo_adesao → Plan do MasterSat.
+
+    As duas tabelas têm o mesmo formato e mudam só o nome da chave
+    (cod_grupo_mensalidade / cod_grupo_adesao) — ver _fetch_planos() em
+    poc.py sobre por que as duas precisam ser lidas.
+    """
+    issues: list[str] = []
+    descricao = ci_get(grupo, 'descricao')
+    preco = _to_decimal_br(ci_get(grupo, 'valor'))
+    if not descricao:
+        issues.append('Grupo sem descrição')
+    if preco is None:
+        issues.append(f"Grupo '{descricao}' sem valor utilizável")
+    return {
+        'external_id': ci_get(grupo, 'cod_grupo_mensalidade', 'cod_grupo_adesao', 'cod_grupo'),
+        'name': descricao,
+        'price': preco,
+        'billing_interval_months': 1,
+    }, issues
+
+
+def build_vencimento_index(registros: list[dict]) -> dict[str, int]:
+    """/get_vencimento → {cod_vencimento: dia_do_mes}."""
+    index: dict[str, int] = {}
+    for reg in registros or []:
+        codigo = ci_get(reg, 'cod_vencimento')
+        descricao = str(ci_get(reg, 'descricao') or '').strip()
+        if not codigo:
+            continue
+        if descricao.isdigit():
+            index[str(codigo)] = int(descricao)
+        elif 'último' in descricao.lower() or 'ultimo' in descricao.lower():
+            index[str(codigo)] = _ULTIMO_DIA
+    return index
+
+
+def map_contrato(vinculo: dict, vencimento_index: dict[str, int]) -> tuple[dict, list[str]]:
+    """Vínculo do SGR → Contract do MasterSat."""
+    issues: list[str] = []
+    veic_vinc = ci_get(vinculo, 'veiculo') or {}
+    interveniente = ci_get(vinculo, 'interveniente') or {}
+
+    grupo = ci_get(vinculo, 'cod_grupo_vinculo')
+    if not grupo:
+        issues.append('Vínculo sem cod_grupo_vinculo — não dá para saber o plano')
+
+    cod_venc = ci_get(vinculo, 'cod_vencimento_vinculo')
+    billing_day = vencimento_index.get(str(cod_venc)) if cod_venc else None
+    if cod_venc and billing_day is None:
+        issues.append(f"Código de vencimento '{cod_venc}' não está em /get_vencimento")
+
+    # data_instalacao é a que reflete o início da prestação do serviço;
+    # data_vinculo costuma ser a data do registro (às vezes o dia de hoje).
+    start = parse_br_date(ci_get(vinculo, 'data_instalacao')) or parse_br_date(ci_get(vinculo, 'data_vinculo'))
+    if not start:
+        issues.append('Vínculo sem data de instalação nem data de vínculo — contrato ficaria sem início')
+
+    gerar = str(ci_get(vinculo, 'gerar_cobranca') or '').strip().upper()
+    if gerar not in ('S', 'N', ''):
+        issues.append(f"gerar_cobranca com valor inesperado: '{gerar}'")
+
+    if ci_get(vinculo, 'acrescimo') or ci_get(vinculo, 'desconto'):
+        issues.append('Vínculo tem acréscimo/desconto que o MasterSat não modela por contrato')
+
+    return {
+        'external_id': ci_get(vinculo, 'cod_vinculo'),
+        'vehicle_plate': normalize_plate(ci_get(veic_vinc, 'placa_vinculo') or '') or None,
+        'plan_external_id': str(grupo) if grupo else None,
+        'billing_day': billing_day,
+        'start_date': start.isoformat() if start else None,
+        'installation_fee': _to_decimal_br(ci_get(vinculo, 'valor_instalacao')),
+        'status': 'inativo' if gerar == 'N' else 'ativo',
+        'interveniente_cpf': only_digits(ci_get(interveniente, 'cpf')) or None,
+        'billing_modality': 'boleto',
+    }, issues
+
+
+# ---------------------------------------------------------------------------
+# Histórico de cobrança — /buscar_boletos_cliente → Billing
+#
+# No SGR o boleto é CONSOLIDADO por cliente (formato_boleto_cliente = 'U'):
+# um documento cobre vários veículos, e `discriminacao[]` detalha o valor de
+# cada placa. No MasterSat a divisão é a mesma, só que ao contrário: `billings`
+# guarda a cobrança item a item e o boleto bancário (ailos_boletos) é emitido
+# depois, 1 para 1 com a cobrança. Por isso cada LINHA da discriminação vira
+# um Billing, e não o boleto inteiro — é o que preserva o valor por veículo e
+# mantém a soma igual à do documento original.
+# ---------------------------------------------------------------------------
+
+BILLING_FIELD_MAP: list[FieldMapping] = [
+    FieldMapping('boleto.cod_boleto', 'billing.external_id', 'nao_existe',
+                 'sem external_id no MasterSat — dedup por (cliente, nosso_numero, veículo, competência)'),
+    FieldMapping('discriminacao[].valor', 'billing.amount', 'transformacao', "'49,99' → decimal"),
+    FieldMapping('discriminacao[].placa', 'billing.vehicle_id', 'transformacao',
+                 'placa → id do veículo migrado; sem discriminação o Billing fica sem veículo'),
+    FieldMapping('discriminacao[].mes_referente', 'billing.period_label', 'compativel', "ex.: '08/2026'"),
+    FieldMapping('boleto.data_vencimento', 'billing.due_date', 'transformacao', 'dd/mm/aaaa → date'),
+    FieldMapping('boleto.data_pagamento', 'billing.payment_date', 'transformacao', 'dd/mm/aaaa → date'),
+    FieldMapping('boleto.forma_pagamento', 'billing.payment_method', 'compativel'),
+    FieldMapping('boleto.nosso_numero', 'billing.receipt_number', 'compativel'),
+    FieldMapping('boleto.parcela', 'billing.installment_number/_total', 'transformacao', "'1 de 10' → (1, 10)"),
+    FieldMapping('boleto.situacao.descricao', 'billing.status', 'transformacao',
+                 'as 8 situações do SGR → os 4 status do MasterSat (ver _BILLING_STATUS_MAP)'),
+    FieldMapping('boleto.valor_pagamento', 'billing.paid_amount', 'transformacao',
+                 'é do documento inteiro; numa cobrança consolidada não dá para atribuir por '
+                 'placa, então só é preenchido quando o boleto tem uma linha só'),
+    FieldMapping('boleto.linha_digitavel / cod_barras', '-', 'nao_existe',
+                 'no MasterSat isso vive em ailos_boletos, que é da emissão via Ailos — '
+                 'boleto histórico do SGR não tem contrapartida lá'),
+    FieldMapping('boleto.numero_nf', '-', 'nao_existe', 'MasterSat não guarda NF na cobrança'),
+]
+
+# O SGR tem 8 situações observadas na base real; o MasterSat tem 4.
+_BILLING_STATUS_MAP = {
+    'BAIXADO': BillingStatus.PAID,
+    'BAIXADO COM PENDÊNCIA': BillingStatus.PAID,
+    'BAIXADO COM PENDENCIA': BillingStatus.PAID,
+    'PAGO': BillingStatus.PAID,
+    'ABERTO': BillingStatus.PENDING,
+    'APROVADO': BillingStatus.PENDING,
+    'CANCELADO': BillingStatus.CANCELED,
+    'REMOVIDO': BillingStatus.CANCELED,
+    'NEGADO': BillingStatus.CANCELED,
+    # NEGOCIADO = a dívida virou outro boleto (parcelamento). Cancelar aqui
+    # evita contar a mesma dívida duas vezes; o boleto novo entra sozinho.
+    'NEGOCIADO': BillingStatus.CANCELED,
+}
+
+
+def _parse_parcela(valor) -> tuple[int | None, int | None]:
+    """'1 de 10' → (1, 10). Formato observado na base real."""
+    texto = str(valor or '').strip().lower()
+    if ' de ' not in texto:
+        return None, None
+    inicio, _, fim = texto.partition(' de ')
+    return _to_int(inicio), _to_int(fim)
+
+
+def map_boleto(boleto: dict, item: dict | None = None) -> tuple[dict, list[str]]:
+    """Um boleto do SGR (ou uma linha da sua discriminação) → Billing.
+
+    `item` é uma entrada de `discriminacao[]`. Quando vem, o valor, a placa e
+    a competência saem dela; o resto (datas, situação, nosso número) é sempre
+    do documento, que é o que o cliente efetivamente recebeu.
+    """
+    issues: list[str] = []
+
+    if item is not None:
+        amount = _to_decimal_br(ci_get(item, 'valor'))
+        placa = normalize_plate(ci_get(item, 'placa') or '') or None
+        periodo = ci_get(item, 'mes_referente') or ci_get(boleto, 'mes_referente')
+    else:
+        amount = _to_decimal_br(ci_get(boleto, 'valor'))
+        placa = None
+        periodo = ci_get(boleto, 'mes_referente')
+
+    situacao = ci_get(ci_get(boleto, 'situacao') or {}, 'descricao')
+    status, status_issues = _map_status(situacao, _BILLING_STATUS_MAP, BillingStatus.PENDING, 'boleto')
+    issues.extend(status_issues)
+
+    vencimento = parse_br_date(ci_get(boleto, 'data_vencimento'))
+    if not vencimento:
+        issues.append(f"Boleto #{ci_get(boleto, 'cod_boleto')} sem data de vencimento utilizável")
+    pagamento = parse_br_date(ci_get(boleto, 'data_pagamento'))
+
+    numero, total_parcelas = _parse_parcela(ci_get(boleto, 'parcela'))
+
+    # valor_pagamento é do documento todo. Só dá para atribuir a uma cobrança
+    # quando ela É o documento (boleto de uma linha só) — ratear por placa
+    # inventaria um dado que o SGR não fornece.
+    linhas = ci_get(boleto, 'discriminacao') or []
+    pago = _to_decimal_br(ci_get(boleto, 'valor_pagamento')) if len(linhas) <= 1 else None
+
+    return {
+        'external_id': ci_get(boleto, 'cod_boleto'),
+        'amount': amount,
+        'vehicle_plate': placa,
+        'period_label': periodo,
+        'due_date': vencimento.isoformat() if vencimento else None,
+        'payment_date': pagamento.isoformat() if pagamento else None,
+        'paid_amount': pago,
+        'payment_method': ci_get(boleto, 'forma_pagamento'),
+        'receipt_number': ci_get(boleto, 'nosso_numero'),
+        'installment_number': numero,
+        'installment_total': total_parcelas,
+        'status': status.value,
+        'title': f"Boleto SGR {ci_get(boleto, 'nosso_numero') or ci_get(boleto, 'cod_boleto')}",
+    }, issues

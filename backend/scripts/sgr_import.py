@@ -60,6 +60,8 @@ def main() -> int:
     parser.add_argument('--apply', action='store_true', help='Grava de verdade (sem isto é só simulação)')
     parser.add_argument('--permitir-banco-remoto', action='store_true',
                         help='Libera --apply em banco não-local. Use com MUITA atenção.')
+    parser.add_argument('--boletos', action='store_true',
+                        help='Traz também o histórico de cobrança (1 chamada a mais por cliente)')
     args = parser.parse_args()
 
     limit = args.limit or settings.sgr_migration_limit
@@ -79,7 +81,7 @@ def main() -> int:
     print('Lendo do SGR (somente leitura)...')
     sgr = SGRClient()
     try:
-        resultado = run_poc(sgr, limit)
+        resultado = run_poc(sgr, limit, com_boletos=args.boletos)
     except (SGRError, SGRApiError) as exc:
         print(f'FALHA ao ler o SGR: {exc}')
         return 1
@@ -100,6 +102,10 @@ def main() -> int:
     print(f'CLIENTES     {rotulo}: {stats.clients_created} | já existiam: {stats.clients_reused} | ignorados: {stats.clients_skipped}')
     print(f'VEÍCULOS     {rotulo}: {stats.vehicles_created} | já existiam: {stats.vehicles_reused} | ignorados: {stats.vehicles_skipped}')
     print(f'RASTREADORES {rotulo}: {stats.trackers_created} | já existiam: {stats.trackers_reused} | ignorados: {stats.trackers_skipped}')
+    print(f'PLANOS       {rotulo}: {stats.plans_created} | já existiam: {stats.plans_reused} | ignorados: {stats.plans_skipped}')
+    print(f'CONTRATOS    {rotulo}: {stats.contracts_created} | já existiam: {stats.contracts_reused} | ignorados: {stats.contracts_skipped}')
+    if args.boletos:
+        print(f'COBRANÇAS    {rotulo}: {stats.billings_created} | já existiam: {stats.billings_reused} | ignorados: {stats.billings_skipped}')
 
     if stats.skips:
         print(f'\nIGNORADOS ({len(stats.skips)}):')

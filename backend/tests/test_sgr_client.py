@@ -118,6 +118,17 @@ class TestAuthentication:
         with pytest.raises(SGRAuthenticationError):
             client.authenticate()
 
+    def test_401_with_msg_body_surfaces_real_reason(self):
+        # Confirmado contra a API real: um 401 pode não ter nada a ver com
+        # credencial errada (ex.: "Restrição de data: você não tem permissão
+        # para acessar o sistema hoje"). Sem isso a causa real fica escondida.
+        session = FakeSession([
+            _resp(401, {'error': True, 'msg': 'Restrição de data: você não tem permissão para acessar o sistema hoje.'}),
+        ])
+        client = SGRClient(session=session)
+        with pytest.raises(SGRAuthenticationError, match='Restrição de data'):
+            client.authenticate()
+
     def test_get_triggers_authentication_lazily(self):
         session = FakeSession([_auth_resp(), _resp(200, {'Error': 'false', 'Data': []})])
         client = SGRClient(session=session)
@@ -215,6 +226,46 @@ class TestPaginationParams:
         client.buscar_vinculos_por_placa('ABC1234')
         params = session.calls[-1]['params']
         assert params['placa_vinculo'] == 'ABC1234'
+
+    def test_buscar_vendas_sends_cod_venda_and_ultima_atualizacao(self):
+        session = FakeSession([_auth_resp(), _resp(200, {'Error': 'false', 'Data': []})])
+        client = SGRClient(session=session)
+        client.buscar_vendas(cod_venda=99, ultima_atualizacao='2020-01-01')
+        params = session.calls[-1]['params']
+        assert params['cod_venda'] == 99
+        assert params['ultima_atualizacao'] == '2020-01-01'
+
+    def test_get_vencimento_sends_cod_cliente(self):
+        session = FakeSession([_auth_resp(), _resp(200, {'Error': 'false', 'Data': []})])
+        client = SGRClient(session=session)
+        client.get_vencimento(cod_cliente=1)
+        assert session.calls[-1]['params']['cod_cliente'] == 1
+
+    def test_buscar_boletos_cliente_limpa_a_mascara_do_cpf(self):
+        # Com máscara o SGR devolve 0 boletos sem erro nenhum — o que já fez
+        # parecer que clientes com 57 boletos não tinham nenhum.
+        session = FakeSession([_auth_resp(), _resp(200, {'Error': 'false', 'Data': []})])
+        client = SGRClient(session=session)
+        client.buscar_boletos_cliente('063.234.889-57')
+        assert session.calls[-1]['params']['cpf_cnpj'] == '06323488957'
+
+    def test_buscar_boletos_cliente_repassa_filtros_de_data(self):
+        session = FakeSession([_auth_resp(), _resp(200, {'Error': 'false', 'Data': []})])
+        client = SGRClient(session=session)
+        client.buscar_boletos_cliente('06323488957', data_emissao_inicio='01/01/2020')
+        assert session.calls[-1]['params']['data_emissao_inicio'] == '01/01/2020'
+
+    def test_buscar_boletos_abertos_cliente_limpa_a_mascara_do_cpf(self):
+        session = FakeSession([_auth_resp(), _resp(200, {'Error': 'false', 'Data': []})])
+        client = SGRClient(session=session)
+        client.buscar_boletos_abertos_cliente('17.968.067/0001-17')
+        assert session.calls[-1]['params']['cpf_cnpj'] == '17968067000117'
+
+    def test_get_grupo_mensalidade_pagina(self):
+        session = FakeSession([_auth_resp(), _resp(200, {'Error': 'false', 'Data': []})])
+        client = SGRClient(session=session)
+        client.get_grupo_mensalidade(total=50)
+        assert session.calls[-1]['params']['total'] == 50
 
     def test_sends_cod_mobile_as_cliente_param_on_every_call(self):
         # Sem 'cliente=<codMobile>' na query, a API real responde 401 "Código

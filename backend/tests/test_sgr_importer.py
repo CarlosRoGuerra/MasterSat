@@ -4,17 +4,25 @@ sobrescreve dado que já está no MasterSat.
 """
 from __future__ import annotations
 
+from decimal import Decimal
+
 from app.models.client import Client
+from app.models.contract import Contract
 from app.models.enums import ClientStatus, TrackerStatus, VehicleStatus
+from app.models.plan import Plan
 from app.models.tracker import Tracker
 from app.models.vehicle import Vehicle
 from app.services.sgr_migration.importer import import_poc_result
 from app.services.sgr_migration.poc import ClientNode, PocRunResult, TrackerNode, VehicleNode
 
 
-def _resultado(client_over=None, vehicle_over=None, tracker_over=None, com_tracker=True):
+def _resultado(client_over=None, vehicle_over=None, tracker_over=None, com_tracker=True,
+               contract_over=None, planos=None):
+    contrato = {'plan_external_id': '17', 'billing_day': 15, 'start_date': '2018-06-01',
+                'status': 'ativo', 'billing_modality': 'boleto', 'installation_fee': 150.0,
+                'vehicle_plate': 'ABC1234', **(contract_over or {})}
     tracker = TrackerNode(
-        raw={}, issues=[],
+        raw={}, issues=[], contract=contrato,
         mapped={'imei': '355488020902005', 'serial_number': '912992', 'model': 'ST310',
                 'status': TrackerStatus.INSTALLED.value, 'sim_number': '55999990864',
                 'install_date': '2024-07-31', 'installation_fee': 150.0, **(tracker_over or {})},
@@ -34,7 +42,13 @@ def _resultado(client_over=None, vehicle_over=None, tracker_over=None, com_track
                 'phone': '5547999990000', 'city': 'JOINVILLE', 'state': 'SC',
                 **(client_over or {})},
     )
-    return PocRunResult(limit=10, clients=[client], request_count=0, request_log=[])
+    return PocRunResult(
+        limit=10, clients=[client], request_count=0, request_log=[],
+        plans=planos if planos is not None else [
+            {'external_id': '17', 'name': 'MENSALIDADE 64,99', 'price': 64.99,
+             'billing_interval_months': 1},
+        ],
+    )
 
 
 class TestDryRun:
@@ -165,3 +179,64 @@ class TestIdempotencia:
         stats = import_poc_result(db, _resultado(), dry_run=False)
         assert stats.vehicles_reused == 1
         assert db.query(Vehicle).count() == 1
+
+
+class TestPlanosEContratos:
+    def test_cria_plano_e_contrato_ligados_ao_cliente_e_veiculo(self, db):
+        stats = import_poc_result(db, _resultado(), dry_run=False)
+
+        assert stats.plans_created == 1
+        assert stats.contracts_created == 1
+
+        contrato = db.query(Contract).one()
+        plano = db.query(Plan).one()
+        veiculo = db.query(Vehicle).one()
+        assert contrato.plan_id == plano.id
+        assert contrato.vehicle_id == veiculo.id
+        assert contrato.client_id == veiculo.client_id
+        assert contrato.billing_day == 15
+        assert plano.price == Decimal('64.99')
+
+    def test_grupo_que_so_existe_na_tabela_de_adesao_vira_contrato(self, db):
+        # Caso real: 16 veículos de um cliente usam cod_grupo_vinculo=5, que
+        # não está em /get_grupo_mensalidade, só em /get_grupo_adesao. Ler uma
+        # tabela só deixaria todos esses contratos de fora.
+        stats = import_poc_result(db, _resultado(
+            contract_over={'plan_external_id': '5'},
+            planos=[{'external_id': '5', 'name': 'MASTER ESPECIAL 49,99', 'price': 49.99,
+                     'billing_interval_months': 1}],
+        ), dry_run=False)
+
+        assert stats.contracts_created == 1
+        assert db.query(Contract).one().plan_id == db.query(Plan).one().id
+
+    def test_grupo_desconhecido_nao_cria_contrato_e_e_reportado(self, db):
+        stats = import_poc_result(db, _resultado(
+            contract_over={'plan_external_id': '999'},
+        ), dry_run=False)
+
+        assert stats.contracts_created == 0
+        assert stats.contracts_skipped == 1
+        assert any('999' in motivo for motivo in stats.skips)
+        assert db.query(Contract).count() == 0
+
+    def test_contrato_sem_data_de_inicio_e_ignorado(self, db):
+        stats = import_poc_result(db, _resultado(
+            contract_over={'start_date': None},
+        ), dry_run=False)
+
+        assert stats.contracts_skipped == 1
+        assert db.query(Contract).count() == 0
+
+    def test_rodar_duas_vezes_nao_duplica_plano_nem_contrato(self, db):
+        import_poc_result(db, _resultado(), dry_run=False)
+        stats = import_poc_result(db, _resultado(), dry_run=False)
+
+        assert stats.plans_reused == 1
+        assert stats.contracts_reused == 1
+        assert db.query(Plan).count() == 1
+        assert db.query(Contract).count() == 1
+
+    def test_gerar_cobranca_nao_vira_contrato_inativo(self, db):
+        import_poc_result(db, _resultado(contract_over={'status': 'inativo'}), dry_run=False)
+        assert db.query(Contract).one().status == 'inativo'

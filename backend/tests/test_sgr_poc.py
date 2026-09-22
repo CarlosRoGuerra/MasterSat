@@ -16,18 +16,34 @@ from app.services.sgr_migration.poc import check_connectivity, run_poc
 
 class FakeClient:
     def __init__(self, clientes, veiculos_por_cliente, vinculos_por_placa,
-                 veiculo_erro_para=None, rastreadores=None):
+                 veiculo_erro_para=None, rastreadores=None, grupos=None, vencimentos=None,
+                 grupos_adesao=None):
         self._clientes = clientes
         self._veiculos_por_cliente = veiculos_por_cliente
         self._vinculos_por_placa = vinculos_por_placa
         self._veiculo_erro_para = veiculo_erro_para or set()
         self._rastreadores = rastreadores or []
+        self._grupos = grupos or []
+        self._grupos_adesao = grupos_adesao or []
+        self._vencimentos = vencimentos or []
         self.request_count = 0
         self.request_log: list[RequestLogEntry] = []
 
     def buscar_rastreadores(self, total=200, indice=0):
         self._track('/buscar_rastreador')
         return self._rastreadores
+
+    def get_grupo_mensalidade(self, total=200, indice=0):
+        self._track('/get_grupo_mensalidade')
+        return self._grupos
+
+    def get_grupo_adesao(self, total=200, indice=0):
+        self._track('/get_grupo_adesao')
+        return self._grupos_adesao
+
+    def get_vencimento(self, cod_cliente=None):
+        self._track('/get_vencimento')
+        return self._vencimentos
 
     def _track(self, path):
         self.request_count += 1
@@ -140,12 +156,14 @@ class TestRunPocRelationships:
         )
         result = run_poc(client, limit=10)
 
-        # 1 (clientes) + 1 (rastreadores em lote) + 1 (veiculos do cliente 1)
-        # + 1 (vinculo da placa AAA1111). O lote de rastreadores é 1 chamada
-        # só, independente de quantos veículos existam.
-        assert result.request_count == 4
+        # 1 (clientes) + 1 (rastreadores em lote) + 3 (tabelas de domínio:
+        # grupos de mensalidade, grupos de adesão e vencimentos) + 1 (veiculos
+        # do cliente 1) + 1 (vinculo da placa AAA1111). As tabelas de domínio
+        # são 1 chamada cada, independente de quantos clientes/veículos existam.
+        assert result.request_count == 7
         assert [e.path for e in result.request_log] == [
-            '/buscar_cliente', '/buscar_rastreador', '/buscar_veiculo', '/buscar_vinculo',
+            '/buscar_cliente', '/buscar_rastreador', '/get_grupo_mensalidade', '/get_grupo_adesao',
+            '/get_vencimento', '/buscar_veiculo', '/buscar_vinculo',
         ]
 
     def test_never_fetches_more_clients_than_the_limit(self):

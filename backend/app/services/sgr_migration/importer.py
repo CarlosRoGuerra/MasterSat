@@ -23,8 +23,11 @@ from datetime import date, datetime
 
 from sqlalchemy.orm import Session
 
+from app.models.billing import Billing
 from app.models.client import Client
-from app.models.enums import ClientStatus, TrackerStatus, VehicleStatus
+from app.models.contract import Contract
+from app.models.enums import BillingStatus, ClientStatus, TrackerStatus, VehicleStatus
+from app.models.plan import Plan
 from app.models.tracker import Tracker
 from app.models.vehicle import Vehicle
 from app.services.sgr_migration.normalize import is_valid_plate
@@ -42,6 +45,15 @@ class ImportStats:
     trackers_created: int = 0
     trackers_reused: int = 0
     trackers_skipped: int = 0
+    plans_created: int = 0
+    plans_reused: int = 0
+    plans_skipped: int = 0
+    contracts_created: int = 0
+    contracts_reused: int = 0
+    contracts_skipped: int = 0
+    billings_created: int = 0
+    billings_reused: int = 0
+    billings_skipped: int = 0
     skips: list[str] = field(default_factory=list)
 
     def skip(self, motivo: str) -> None:
@@ -209,6 +221,176 @@ def _import_client(db: Session, node: ClientNode, stats: ImportStats) -> Client 
     return client
 
 
+def _import_plans(db: Session, result: PocRunResult, stats: ImportStats) -> dict[str, Plan]:
+    """Cria os Planos vindos de /get_grupo_mensalidade.
+
+    Chave natural: o NOME do plano (coluna unique em plans). O retorno é um
+    índice cod_grupo_mensalidade -> Plan, que é como o vínculo referencia o
+    plano (`cod_grupo_vinculo`).
+    """
+    por_codigo: dict[str, Plan] = {}
+    for mapped in result.plans:
+        nome = mapped.get('name')
+        codigo = str(mapped.get('external_id') or '')
+        if not nome or mapped.get('price') is None:
+            stats.plans_skipped += 1
+            stats.skip(f'plano SGR #{codigo}: sem nome ou sem valor — obrigatórios no MasterSat')
+            continue
+
+        existente = (
+            db.query(Plan).filter(Plan.name == nome, Plan.is_deleted.is_(False)).first()
+        )
+        if existente:
+            stats.plans_reused += 1
+            por_codigo[codigo] = existente
+            continue
+
+        plano = Plan(
+            name=_trunc(nome, 120),
+            price=mapped['price'],
+            billing_interval_months=mapped.get('billing_interval_months') or 1,
+            description='Importado do SGR (Hinova).',
+            active=True,
+        )
+        db.add(plano)
+        db.flush()
+        stats.plans_created += 1
+        por_codigo[codigo] = plano
+    return por_codigo
+
+
+def _find_contract(db: Session, client_id: int, vehicle_id: int) -> Contract | None:
+    """Dedup de contrato.
+
+    Sem external_id nos models, a chave possível é (cliente, veículo): no SGR
+    a cobrança é configurada por vínculo, e um veículo ativo tem um vínculo
+    vigente. Se um dia existir mais de um contrato por veículo (renovação
+    registrada como novo vínculo), esta regra reaproveita o primeiro em vez
+    de duplicar — que é o comportamento seguro para um importador.
+    """
+    return (
+        db.query(Contract)
+        .filter(
+            Contract.client_id == client_id,
+            Contract.vehicle_id == vehicle_id,
+            Contract.is_deleted.is_(False),
+        )
+        .first()
+    )
+
+
+def _import_contract(
+    db: Session,
+    contrato: dict,
+    client_id: int,
+    vehicle_id: int,
+    tracker_id: int | None,
+    plano_por_codigo: dict[str, Plan],
+    stats: ImportStats,
+    placa: str,
+) -> None:
+    plan_code = contrato.get('plan_external_id')
+    plano = plano_por_codigo.get(str(plan_code)) if plan_code else None
+    if plano is None:
+        stats.contracts_skipped += 1
+        stats.skip(
+            f'contrato do veículo {placa}: grupo de mensalidade {plan_code!r} não existe em '
+            f'/get_grupo_mensalidade (plano descontinuado?) — contrato não criado'
+        )
+        return
+
+    if not contrato.get('start_date'):
+        stats.contracts_skipped += 1
+        stats.skip(f'contrato do veículo {placa}: sem data de início (obrigatória no MasterSat)')
+        return
+
+    if _find_contract(db, client_id, vehicle_id):
+        stats.contracts_reused += 1
+        return
+
+    interveniente_id = None
+    cpf_interveniente = contrato.get('interveniente_cpf')
+    if cpf_interveniente:
+        outro = _find_client(db, cpf_interveniente)
+        # Interveniente igual ao próprio cliente é o caso normal no SGR e no
+        # MasterSat significa "sem interveniente" (a coluna fica nula).
+        if outro and outro.id != client_id:
+            interveniente_id = outro.id
+
+    db.add(Contract(
+        client_id=client_id,
+        vehicle_id=vehicle_id,
+        tracker_id=tracker_id,
+        plan_id=plano.id,
+        interveniente_client_id=interveniente_id,
+        start_date=_to_date(contrato.get('start_date')),
+        billing_day=contrato.get('billing_day'),
+        status=contrato.get('status') or 'ativo',
+        billing_modality=contrato.get('billing_modality') or 'boleto',
+        installation_fee=contrato.get('installation_fee'),
+        notes='Importado do SGR (Hinova).',
+    ))
+    db.flush()
+    stats.contracts_created += 1
+
+
+def _import_billings(db: Session, node: ClientNode, client_id: int, stats: ImportStats) -> None:
+    """Grava o histórico de cobrança do cliente.
+
+    Cada entrada já vem achatada por linha de discriminação (ver
+    _fetch_boletos). O veículo é resolvido pela placa; quando a placa não foi
+    migrada (máquina sem placa no padrão), a cobrança entra sem veículo em vez
+    de ser descartada — o valor continua fazendo parte do histórico do cliente.
+
+    Dedup por (cliente, nosso_numero, veículo, competência): é o que
+    identifica uma linha de cobrança do SGR sem termos external_id.
+    """
+    for mapped in node.billings:
+        if mapped.get('amount') is None or not mapped.get('due_date'):
+            stats.billings_skipped += 1
+            stats.skip(
+                f"cobrança SGR #{mapped.get('external_id')}: sem valor ou sem vencimento"
+            )
+            continue
+
+        placa = mapped.get('vehicle_plate')
+        veiculo = _find_vehicle(db, placa) if placa else None
+
+        existente = (
+            db.query(Billing)
+            .filter(
+                Billing.client_id == client_id,
+                Billing.receipt_number == mapped.get('receipt_number'),
+                Billing.vehicle_id == (veiculo.id if veiculo else None),
+                Billing.period_label == mapped.get('period_label'),
+                Billing.is_deleted.is_(False),
+            )
+            .first()
+        )
+        if existente:
+            stats.billings_reused += 1
+            continue
+
+        db.add(Billing(
+            client_id=client_id,
+            vehicle_id=veiculo.id if veiculo else None,
+            title=_trunc(mapped.get('title'), 160),
+            billing_type='recorrente',
+            amount=mapped['amount'],
+            due_date=_to_date(mapped.get('due_date')),
+            payment_date=_to_date(mapped.get('payment_date')),
+            paid_amount=mapped.get('paid_amount'),
+            payment_method=_trunc(mapped.get('payment_method'), 40),
+            receipt_number=_trunc(mapped.get('receipt_number'), 40),
+            installment_number=mapped.get('installment_number'),
+            installment_total=mapped.get('installment_total'),
+            period_label=_trunc(mapped.get('period_label'), 20),
+            status=BillingStatus(mapped.get('status') or BillingStatus.PENDING.value),
+            notes='Importado do SGR (Hinova).',
+        ))
+        stats.billings_created += 1
+
+
 def import_poc_result(db: Session, result: PocRunResult, dry_run: bool = True) -> ImportStats:
     """Insere no MasterSat os clientes/veículos/rastreadores já lidos do SGR.
 
@@ -217,6 +399,7 @@ def import_poc_result(db: Session, result: PocRunResult, dry_run: bool = True) -
     constraint, sem deixar nada no banco.
     """
     stats = ImportStats()
+    plano_por_codigo = _import_plans(db, result, stats)
 
     for node in result.clients:
         if node.fetch_failed:
@@ -257,18 +440,33 @@ def import_poc_result(db: Session, result: PocRunResult, dry_run: bool = True) -
 
             for tnode in vnode.trackers:
                 imei = tnode.mapped.get('imei')
+                tracker = _find_tracker(db, imei) if imei else None
                 if not imei:
                     stats.trackers_skipped += 1
                     stats.skip(
                         f"rastreador do veículo {plate}: sem IMEI (obrigatório no MasterSat)"
                     )
-                    continue
-                if _find_tracker(db, imei):
+                elif tracker:
                     stats.trackers_reused += 1
-                    continue
-                db.add(_build_tracker(tnode.mapped, client.id, vehicle.id))
-                db.flush()
-                stats.trackers_created += 1
+                else:
+                    tracker = _build_tracker(tnode.mapped, client.id, vehicle.id)
+                    db.add(tracker)
+                    db.flush()
+                    stats.trackers_created += 1
+
+                # O contrato sai do MESMO registro de vínculo que gera o
+                # rastreador, e não depende de ele ter entrado: no SGR existe
+                # veículo com cobrança ativa cujo equipamento está sem IMEI.
+                if tnode.contract:
+                    _import_contract(
+                        db, tnode.contract, client.id, vehicle.id,
+                        tracker.id if tracker else None,
+                        plano_por_codigo, stats, plate,
+                    )
+
+        # Por último: o histórico de cobrança precisa dos veículos já gravados
+        # para resolver a placa de cada linha da discriminação do boleto.
+        _import_billings(db, node, client.id, stats)
 
     if dry_run:
         db.rollback()

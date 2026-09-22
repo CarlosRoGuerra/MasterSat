@@ -32,6 +32,18 @@ Autenticação (conforme doc oficial, grupo "autenticacao" /headers_authorizatio
 Apenas métodos GET (consulta) são implementados — de propósito. Esta POC é
 somente leitura; não existem wrappers para os endpoints de inserir/editar do
 SGR.
+
+JANELA DE ACESSO (descoberto na prática, não está em doc nenhuma): a conta de
+integração só autentica em dia útil e em horário comercial. Fora disso o SGR
+responde 401 — o mesmo código de credencial inválida —, e a causa real só
+aparece no campo `msg` do corpo:
+  - sábado/domingo: "Restrição de data: Você não tem permissão para acessar o
+    sistema hoje."
+  - de madrugada:   "Restrição de horário: Você não tem permissão para acessar
+    o sistema no momento."
+É por isso que _raise_for_status() repassa o `msg`: sem ele, os dois casos
+viram "credencial recusada" e se perde muito tempo procurando erro onde não
+tem. Importação em lote precisa ser agendada dentro dessa janela.
 """
 from __future__ import annotations
 
@@ -157,23 +169,40 @@ class SGRClient:
         return resp
 
     @staticmethod
-    def _raise_for_status(resp: requests.Response, context: str) -> None:
+    def _extract_msg(resp: requests.Response) -> str | None:
+        """Best-effort: o SGR devolve {"error":true,"msg":"..."} mesmo em 401/403
+        (ex.: "Restrição de data: você não tem permissão para acessar o sistema
+        hoje" — não tem nada a ver com credencial errada). Sem isso a causa real
+        fica escondida atrás de uma mensagem genérica de "credencial recusada"."""
+        try:
+            body = resp.json()
+        except ValueError:
+            return None
+        if not isinstance(body, dict):
+            return None
+        msg = _ci_get(body, 'msg', 'message', 'mensagem')
+        return str(msg) if msg else None
+
+    @classmethod
+    def _raise_for_status(cls, resp: requests.Response, context: str) -> None:
+        msg = cls._extract_msg(resp)
+        detail = f' — {msg}' if msg else ''
         if resp.status_code in (401, 403):
             raise SGRAuthenticationError(
-                f'SGR recusou a credencial/chave de API ({context}): HTTP {resp.status_code}',
+                f'SGR recusou a credencial/chave de API ({context}): HTTP {resp.status_code}{detail}',
                 status_code=resp.status_code,
             )
         if resp.status_code == 404:
-            raise SGRNotFoundError(f'Recurso não encontrado no SGR ({context})', status_code=404)
+            raise SGRNotFoundError(f'Recurso não encontrado no SGR ({context}){detail}', status_code=404)
         if resp.status_code == 429:
-            raise SGRRateLimitError(f'Limite de requisições do SGR atingido ({context})', status_code=429)
+            raise SGRRateLimitError(f'Limite de requisições do SGR atingido ({context}){detail}', status_code=429)
         if resp.status_code >= 500:
             raise SGRServerError(
-                f'Erro no servidor do SGR ({context}): HTTP {resp.status_code}', status_code=resp.status_code,
+                f'Erro no servidor do SGR ({context}): HTTP {resp.status_code}{detail}', status_code=resp.status_code,
             )
         if resp.status_code >= 400:
             raise SGRApiError(
-                f'Erro ao consultar o SGR ({context}): HTTP {resp.status_code}', status_code=resp.status_code,
+                f'Erro ao consultar o SGR ({context}): HTTP {resp.status_code}{detail}', status_code=resp.status_code,
             )
 
     @staticmethod
@@ -286,4 +315,130 @@ class SGRClient:
         equipamento, situação e PLACA no mesmo registro — por isso a POC
         indexa o resultado por placa em vez de fazer 1 chamada por veículo."""
         body = self.get('/buscar_rastreador', {'total': total, 'indice': indice})
+        return self.extract_data(body)
+
+    def buscar_vendas(
+        self, cod_venda=None, ultima_atualizacao=None, total: int = 200, indice: int = 0,
+    ) -> list[dict]:
+        """GET /buscar_venda — é onde o SGR guarda o que no MasterSat vira
+        Plano/Contrato: valor_parcela, quantidade_parcela, forma_pagamento,
+        vencimento e periodo, vinculados a placa_veiculo/cpf (conforme a doc
+        viva em https://api.hinova.com.br/api/sgr/servico/doc/, grupo
+        vendaBuscar).
+
+        CONFIRMADO contra a API real em 21/09: `cod_venda` é mesmo
+        obrigatório — sem ele (só com `ultima_atualizacao`) o servidor
+        devolve 500, não uma lista. E, ao contrário do resto do módulo, aqui
+        não basta chave natural: nos ~30 veículos de 9 clientes reais
+        testados, só 1 tinha `contrato_veiculo` preenchido (o candidato mais
+        óbvio a cod_venda) — e mesmo esse não bateu com nenhuma venda
+        existente (0 registros). Ou seja: pra maioria dos veículos já
+        migrados HOJE NÃO EXISTE, nos dados que conseguimos ler, um jeito de
+        descobrir o cod_venda correspondente. Perguntar pra Hinova qual é o
+        campo/endpoint certo pra achar a venda de um veículo antes de tentar
+        usar isto em massa.
+        """
+        body = self.get('/buscar_venda', {
+            'cod_venda': cod_venda,
+            'ultima_atualizacao': ultima_atualizacao,
+            'total': total,
+            'indice': indice,
+        })
+        return self.extract_data(body)
+
+    # ONDE MORA O "CONTRATO" DO SGR (confirmado em 21/09 contra a API real)
+    #
+    # Não é no cliente nem no veículo: `numero_contrato_cliente` e
+    # `contrato_veiculo` vêm vazios em praticamente toda a base, e o módulo de
+    # vendas nunca foi usado (/buscar_venda devolve lista vazia). O contrato
+    # mora no VÍNCULO (/buscar_vinculo), que esta POC já busca para montar o
+    # rastreador. Além do equipamento, o vínculo traz todo o lado financeiro
+    # que vira Contract no MasterSat:
+    #   cod_grupo_vinculo ......... o plano -> valor em /get_grupo_mensalidade
+    #   cod_vencimento_vinculo .... dia de vencimento -> /get_vencimento
+    #   gerar_cobranca ('S'/'N') .. se o vínculo gera cobrança
+    #   cod_interveniente_vinculo + interveniente{nome,cpf} .. responsável financeiro
+    #   cod_banco_vinculo / formato_geracao_boleto ........... banco e formato
+    #   mes_inicio_cobranca / mes_final_carne / mes_referente  ciclo de cobrança
+    #   acrescimo / desconto (+ mes_*) ....................... ajustes de valor
+    #   produtos[] ...... cobranças avulsas/negociações, NÃO a mensalidade
+    #   valor_instalacao / data_instalacao
+    # A cobrança é consolidada por cliente (formato_boleto_cliente = 'U' em
+    # todos os clientes lidos), mas configurada por vínculo — um boleto cobre
+    # vários veículos, e `discriminacao[]` do boleto detalha o valor por placa.
+
+    def get_vencimento(self, cod_cliente=None) -> list[dict]:
+        """GET /get_vencimento — dia de vencimento. Confirmado: 15 registros,
+        {'descricao': '10', 'cod_vencimento': '126'}. Traduz o
+        `cod_vencimento_vinculo` do vínculo para o dia do mês."""
+        body = self.get('/get_vencimento', {'cod_cliente': cod_cliente})
+        return self.extract_data(body)
+
+    def get_grupo_mensalidade(self, total: int = 200, indice: int = 0) -> list[dict]:
+        """GET /get_grupo_mensalidade — OS PLANOS, com valor. Confirmado:
+        {'cod_grupo_mensalidade': '17', 'descricao': 'MENSALIDADE 64,99',
+        'valor': '64,99'}. É o que traduz o `cod_grupo_vinculo` de cada
+        vínculo no valor mensal — a peça central para montar Plan/Contract.
+
+        Note que /get_plano (nome mais óbvio) existe mas está SEM permissão
+        para o nosso usuário; este aqui está liberado e resolve o problema."""
+        body = self.get('/get_grupo_mensalidade', {'total': total, 'indice': indice})
+        return self.extract_data(body)
+
+    def get_grupo_adesao(self, total: int = 200, indice: int = 0) -> list[dict]:
+        """GET /get_grupo_adesao — taxas de adesão, mesmo formato do grupo de
+        mensalidade (ex.: {'cod_grupo_adesao': '20', 'descricao':
+        'ANUAL 749,99', 'valor': '749,99'})."""
+        body = self.get('/get_grupo_adesao', {'total': total, 'indice': indice})
+        return self.extract_data(body)
+
+    def get_condicao_pagamento(self, total: int = 200, indice: int = 0) -> list[dict]:
+        """GET /get_condicao_pagamento — formas de pagamento (confirmado:
+        cheque, BOLETO, cartao, Dinheiro). Substitui /get_forma_pagamento,
+        que existe mas está sem permissão para o nosso usuário."""
+        body = self.get('/get_condicao_pagamento', {'total': total, 'indice': indice})
+        return self.extract_data(body)
+
+    def buscar_boletos_cliente(
+        self, cpf_cnpj: str, total: int = 200, indice: int = 0, **filtros,
+    ) -> list[dict]:
+        """GET /buscar_boletos_cliente — HISTÓRICO DE COBRANÇA do cliente.
+
+        ATENÇÃO: `cpf_cnpj` tem que ir SÓ COM DÍGITOS. O SGR devolve o CPF
+        mascarado ('063.234.889-57') em /buscar_cliente, e mandar de volta
+        com máscara faz este endpoint responder 0 registros — sem erro
+        nenhum, o que dá a falsa impressão de que o cliente não tem boleto.
+        Com os dígitos limpos, o mesmo cliente devolveu 57 boletos.
+
+        Cada boleto traz cod_boleto, nosso_numero, parcela ('1 de 10'),
+        mes_referente, valor, valor_pagamento, forma_pagamento, as datas
+        (emissão, vencimento, vencimento_original, pagamento, crédito no
+        banco), numero_nf, tipo_boleto, dados bancários, situacao.descricao
+        (BAIXADO / ABERTO / CANCELADO / NEGADO / NEGOCIADO / APROVADO /
+        REMOVIDO / BAIXADO COM PENDÊNCIA), placas[] e — o mais útil para
+        conferência — `discriminacao[]`, com valor, mês e PLACA de cada item
+        dentro do boleto consolidado.
+
+        `filtros` aceita os recortes documentados: data_emissao_inicio/_fim,
+        data_vencimento_inicio/_fim, data_pagamento_inicio/_fim,
+        data_credito_banco_inicio/_fim, cod_boleto, nosso_numero, numero_nf
+        (datas em dd/mm/aaaa). O endpoint irmão /buscar_boletos (todos os
+        boletos, sem cpf) responde HTTP 500 no servidor deles — por isso a
+        varredura tem que ser cliente a cliente.
+        """
+        digitos = ''.join(ch for ch in str(cpf_cnpj or '') if ch.isdigit())
+        body = self.get('/buscar_boletos_cliente', {
+            'cpf_cnpj': digitos, 'total': total, 'indice': indice, **filtros,
+        })
+        return self.extract_data(body)
+
+    def buscar_boletos_abertos_cliente(
+        self, cpf_cnpj: str, total: int = 200, indice: int = 0, **filtros,
+    ) -> list[dict]:
+        """GET /buscar_boletos_abertos_cliente — só os boletos em aberto do
+        cliente. Mesma regra do CPF sem máscara de buscar_boletos_cliente."""
+        digitos = ''.join(ch for ch in str(cpf_cnpj or '') if ch.isdigit())
+        body = self.get('/buscar_boletos_abertos_cliente', {
+            'cpf_cnpj': digitos, 'total': total, 'indice': indice, **filtros,
+        })
         return self.extract_data(body)
