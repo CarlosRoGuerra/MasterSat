@@ -111,6 +111,10 @@ class BillingOut(BillingBase):
     # Há boleto REGISTRADO na Ailos? Só então existe PDF para baixar/enviar —
     # sem registro o título não é pagável no banco.
     boleto_ailos: bool = False
+    # Dados do boleto de origem, para cobrança migrada do SGR. O boleto
+    # bancário some do SGR depois de baixado, então é isto que a tela de
+    # detalhes tem para mostrar.
+    sgr_payload: dict | None = None
 
     model_config = {'from_attributes': True}
 

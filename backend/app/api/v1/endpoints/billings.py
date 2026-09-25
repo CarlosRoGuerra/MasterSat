@@ -218,6 +218,7 @@ def serialize_billing(row) -> BillingOut:
         notes=billing.notes,
         paid_amount=decimal_to_float(billing.paid_amount) if billing.paid_amount is not None else None,
         receipt_number=billing.receipt_number,
+        sgr_payload=billing.sgr_payload,
         period_label=billing.period_label,
         client_name=client_name,
         payer_name=payer_name,

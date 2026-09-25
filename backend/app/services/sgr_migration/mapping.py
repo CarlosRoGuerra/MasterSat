@@ -645,13 +645,24 @@ BILLING_FIELD_MAP: list[FieldMapping] = [
 ]
 
 # O SGR tem 8 situações observadas na base real; o MasterSat tem 4.
+#
+# ATENÇÃO: estas situações dizem o que ACONTECEU com o documento, não se ele
+# continua devido. 'APROVADO' é só "registrado no banco", e a base real tem
+# boletos de 2019 e 2023 parados nesse status. Quem decide o que ainda é
+# dívida é /buscar_boletos_abertos_cliente (parâmetro `em_aberto` de
+# map_boleto); PENDING aqui é apenas um candidato, que vira CANCELED se o
+# SGR não listar o boleto como aberto.
 _BILLING_STATUS_MAP = {
     'BAIXADO': BillingStatus.PAID,
     'BAIXADO COM PENDÊNCIA': BillingStatus.PAID,
     'BAIXADO COM PENDENCIA': BillingStatus.PAID,
     'PAGO': BillingStatus.PAID,
     'ABERTO': BillingStatus.PENDING,
-    'APROVADO': BillingStatus.PENDING,
+    # APROVADO é só "registrado no banco", NÃO dívida: aparece 33-34 vezes por
+    # ano em 2019 e 2023, enquanto ABERTO aparece 2 vezes nos mesmos anos.
+    # Confirmado cruzando 6 boletos ABERTO de 09/2026 com
+    # /buscar_boletos_abertos_cliente: 6 de 6 conferem, nenhum APROVADO entra.
+    'APROVADO': BillingStatus.CANCELED,
     'CANCELADO': BillingStatus.CANCELED,
     'REMOVIDO': BillingStatus.CANCELED,
     'NEGADO': BillingStatus.CANCELED,
@@ -659,6 +670,35 @@ _BILLING_STATUS_MAP = {
     # evita contar a mesma dívida duas vezes; o boleto novo entra sozinho.
     'NEGOCIADO': BillingStatus.CANCELED,
 }
+
+
+# `produto` só vem na discriminação do endpoint GERAL (/buscar_boletos) — o
+# /buscar_boletos_cliente não devolve esse campo. É o que permite separar
+# mensalidade de taxa e de avulso; sem ele tudo entrava como 'recorrente'.
+# Produtos observados na base real (jun-set/2026, 2.700+ itens).
+_PRODUTO_BILLING_TYPE = (
+    ('DESCONTO PRORATA', 'prorata'),
+    ('PRORATA', 'prorata'),
+    ('DESINSTALA', 'taxa_desinstalacao'),
+    ('INSTALA', 'taxa_instalacao'),  # depois de DESINSTALA: 'INSTALA' é prefixo dele
+    ('MENSALIDADE', 'recorrente'),
+)
+
+
+def map_billing_type(produto) -> str:
+    """Produto do SGR → billing_type do MasterSat.
+
+    O que não é mensalidade, taxa nem prorata (tarifa bancária, acordo,
+    fechamento, avulso) entra como 'avulsa' — é cobrança pontual, e tratar
+    como recorrente distorceria qualquer leitura de receita recorrente.
+    """
+    texto = str(produto or '').strip().upper()
+    if not texto:
+        return 'recorrente'
+    for marca, tipo in _PRODUTO_BILLING_TYPE:
+        if marca in texto:
+            return tipo
+    return 'avulsa'
 
 
 def _parse_parcela(valor) -> tuple[int | None, int | None]:
@@ -670,12 +710,18 @@ def _parse_parcela(valor) -> tuple[int | None, int | None]:
     return _to_int(inicio), _to_int(fim)
 
 
-def map_boleto(boleto: dict, item: dict | None = None) -> tuple[dict, list[str]]:
+def map_boleto(
+    boleto: dict, item: dict | None = None, em_aberto: bool | None = None,
+) -> tuple[dict, list[str]]:
     """Um boleto do SGR (ou uma linha da sua discriminação) → Billing.
 
     `item` é uma entrada de `discriminacao[]`. Quando vem, o valor, a placa e
     a competência saem dela; o resto (datas, situação, nosso número) é sempre
     do documento, que é o que o cliente efetivamente recebeu.
+
+    `em_aberto` vem de /buscar_boletos_abertos_cliente e é o que decide se a
+    cobrança continua devida — a `situacao` do boleto não serve para isso
+    (ver _BILLING_STATUS_MAP).
     """
     issues: list[str] = []
 
@@ -683,14 +729,24 @@ def map_boleto(boleto: dict, item: dict | None = None) -> tuple[dict, list[str]]
         amount = _to_decimal_br(ci_get(item, 'valor'))
         placa = normalize_plate(ci_get(item, 'placa') or '') or None
         periodo = ci_get(item, 'mes_referente') or ci_get(boleto, 'mes_referente')
+        produto = ci_get(item, 'produto')
     else:
         amount = _to_decimal_br(ci_get(boleto, 'valor'))
         placa = None
         periodo = ci_get(boleto, 'mes_referente')
+        produto = ci_get(boleto, 'tipo_boleto')
 
     situacao = ci_get(ci_get(boleto, 'situacao') or {}, 'descricao')
-    status, status_issues = _map_status(situacao, _BILLING_STATUS_MAP, BillingStatus.PENDING, 'boleto')
+    status, status_issues = _map_status(situacao, _BILLING_STATUS_MAP, BillingStatus.CANCELED, 'boleto')
     issues.extend(status_issues)
+    if em_aberto is not None:
+        # Só o fluxo por cliente precisa desse override, porque lá a lista de
+        # abertos vem de outro endpoint. Vindo do /buscar_boletos geral, a
+        # própria `situacao` já distingue ABERTO de APROVADO, e em_aberto=None
+        # deixa o mapa decidir.
+        status = BillingStatus.PENDING if em_aberto else (
+            BillingStatus.CANCELED if status == BillingStatus.PENDING else status
+        )
 
     vencimento = parse_br_date(ci_get(boleto, 'data_vencimento'))
     if not vencimento:
@@ -704,12 +760,59 @@ def map_boleto(boleto: dict, item: dict | None = None) -> tuple[dict, list[str]]
     # inventaria um dado que o SGR não fornece.
     linhas = ci_get(boleto, 'discriminacao') or []
     pago = _to_decimal_br(ci_get(boleto, 'valor_pagamento')) if len(linhas) <= 1 else None
+    # No SGR, boleto não pago vem com valor_pagamento '0,00'. No MasterSat
+    # isso é ausência de pagamento (None): o schema BillingOut exige
+    # paid_amount > 0, e gravar 0.0 faz a LISTAGEM INTEIRA de cobranças
+    # responder 500 — não só o registro ruim.
+    if not pago:
+        pago = None
 
     return {
         'external_id': ci_get(boleto, 'cod_boleto'),
+        'client_external_id': ci_get(boleto, 'cod_cliente'),
         'amount': amount,
         'vehicle_plate': placa,
         'period_label': periodo,
+        'produto': produto,
+        'billing_type': map_billing_type(produto),
+        # Documento do boleto: o SGR só devolve isto enquanto a situação é
+        # ABERTO. Depois de BAIXADO/REMOVIDO os três campos vêm vazios — o que
+        # comprova a quitação é a baixa (data_pagamento/valor_pagamento), não
+        # o documento. Exige linha_digitavel='S' na consulta.
+        # Registro do boleto de origem, para a tela de detalhes. Guarda o
+        # documento inteiro (não só os campos que viraram coluna): é o que
+        # sobra de "boleto" depois que o SGR baixa e deixa de servir o PDF.
+        'sgr_payload': {
+            'cod_boleto': ci_get(boleto, 'cod_boleto'),
+            'nosso_numero': ci_get(boleto, 'nosso_numero'),
+            'tipo_boleto': ci_get(boleto, 'tipo_boleto'),
+            'parcela': ci_get(boleto, 'parcela'),
+            'mes_referente': ci_get(boleto, 'mes_referente'),
+            'valor': ci_get(boleto, 'valor'),
+            'valor_pagamento': ci_get(boleto, 'valor_pagamento'),
+            'forma_pagamento': ci_get(boleto, 'forma_pagamento'),
+            'data_emissao': ci_get(boleto, 'data_emissao'),
+            'data_vencimento': ci_get(boleto, 'data_vencimento'),
+            'data_vencimento_original': ci_get(boleto, 'data_vencimento_original'),
+            'data_pagamento': ci_get(boleto, 'data_pagamento'),
+            'data_credito_banco': ci_get(boleto, 'data_credito_banco'),
+            'formato_geracao_boleto': ci_get(boleto, 'formato_geracao_boleto'),
+            'numero_nf': ci_get(boleto, 'numero_nf'),
+            'matriz_filial': ci_get(boleto, 'matriz_filial'),
+            'interveniente': ci_get(boleto, 'interveniente'),
+            'situacao': ci_get(ci_get(boleto, 'situacao') or {}, 'descricao'),
+            'placas': ci_get(boleto, 'placas'),
+            'discriminacao': ci_get(boleto, 'discriminacao'),
+            'produto': produto,
+            'codigo_banco': ci_get(boleto, 'codigo_banco'),
+            'linha_digitavel': ci_get(boleto, 'linha_digitavel'),
+            'cod_barras': ci_get(boleto, 'cod_barras'),
+            'pix_copia_cola': ci_get(boleto, 'pix_copia_cola'),
+        },
+        'linha_digitavel': ci_get(boleto, 'linha_digitavel'),
+        'cod_barras': ci_get(boleto, 'cod_barras'),
+        'pix_copia_cola': ci_get(boleto, 'pix_copia_cola'),
+        'link_boleto': ci_get(boleto, 'link'),
         'due_date': vencimento.isoformat() if vencimento else None,
         'payment_date': pagamento.isoformat() if pagamento else None,
         'paid_amount': pago,
@@ -718,5 +821,12 @@ def map_boleto(boleto: dict, item: dict | None = None) -> tuple[dict, list[str]]
         'installment_number': numero,
         'installment_total': total_parcelas,
         'status': status.value,
-        'title': f"Boleto SGR {ci_get(boleto, 'nosso_numero') or ci_get(boleto, 'cod_boleto')}",
+        # A placa entra no título porque é o que distingue as linhas de um
+        # boleto consolidado. Sem ela, duas placas que não foram migradas
+        # (máquina sem placa no padrão) viram cobranças indistinguíveis e a
+        # deduplicação do importador colapsaria valores que são reais.
+        'title': (
+            f"Boleto SGR {ci_get(boleto, 'nosso_numero') or ci_get(boleto, 'cod_boleto')}"
+            + (f' - {ci_get(item, "placa")}' if item is not None and ci_get(item, 'placa') else '')
+        ),
     }, issues

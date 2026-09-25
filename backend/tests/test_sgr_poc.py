@@ -8,6 +8,8 @@ depender de rede nem da forma exata dos payloads reais.
 """
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
 
 from app.services.sgr_migration.client import RequestLogEntry, SGRApiError
@@ -179,3 +181,49 @@ class TestCheckConnectivity:
         assert result['autenticado'] is True
         assert result['registros_retornados'] == 1
         assert result['requisicoes'] == 2  # authenticate + get
+
+
+class TestVarreduraPorPeriodo:
+    """Um mês que falha some INTEIRO do histórico. Isso precisa falhar alto:
+    foi assim que 846 cobranças sumiram sem ninguém perceber."""
+
+    class ClienteInstavel:
+        def __init__(self, falhar_em=(), falhas_antes_de_ok=0):
+            self.falhar_em = set(falhar_em)
+            self.falhas_antes_de_ok = falhas_antes_de_ok
+            self.tentativas: dict[str, int] = {}
+
+        def buscar_boletos_periodo(self, inicio, fim, campo='vencimento', linha_digitavel=False):
+            mes = inicio[:7]
+            self.tentativas[mes] = self.tentativas.get(mes, 0) + 1
+            if mes in self.falhar_em:
+                raise SGRApiError('indisponível', status_code=502)
+            if self.tentativas[mes] <= self.falhas_antes_de_ok:
+                raise SGRApiError('timeout', status_code=None)
+            return [{'cod_boleto': f'{mes}-1', 'cod_cliente': '7'}]
+
+    def test_mes_que_falha_sempre_interrompe_a_importacao(self):
+        from app.services.sgr_migration.poc import SGRIncompleteScan, fetch_boletos_por_periodo
+
+        cliente = self.ClienteInstavel(falhar_em={'2026-02'})
+        with pytest.raises(SGRIncompleteScan, match='02/2026'):
+            fetch_boletos_por_periodo(cliente, date(2026, 1, 1), date(2026, 3, 1), [])
+
+    def test_falha_passageira_e_repetida_ate_dar_certo(self, monkeypatch):
+        from app.services.sgr_migration import poc as poc_mod
+
+        monkeypatch.setattr(poc_mod, '_ESPERA_ENTRE_TENTATIVAS', 0)
+        cliente = self.ClienteInstavel(falhas_antes_de_ok=2)
+        por_cliente = poc_mod.fetch_boletos_por_periodo(cliente, date(2026, 1, 1), date(2026, 1, 1), [])
+
+        assert len(por_cliente['7']) == 1
+        assert cliente.tentativas['2026-01'] == 3
+
+    def test_indexa_por_cod_cliente(self, monkeypatch):
+        from app.services.sgr_migration import poc as poc_mod
+
+        monkeypatch.setattr(poc_mod, '_ESPERA_ENTRE_TENTATIVAS', 0)
+        por_cliente = poc_mod.fetch_boletos_por_periodo(
+            self.ClienteInstavel(), date(2026, 1, 1), date(2026, 3, 1), [],
+        )
+        assert len(por_cliente['7']) == 3  # jan, fev, mar

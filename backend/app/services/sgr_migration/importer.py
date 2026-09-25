@@ -20,11 +20,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.models.billing import Billing
 from app.models.client import Client
+from app.models.document import Document
 from app.models.contract import Contract
 from app.models.enums import BillingStatus, ClientStatus, TrackerStatus, VehicleStatus
 from app.models.plan import Plan
@@ -54,6 +57,12 @@ class ImportStats:
     billings_created: int = 0
     billings_reused: int = 0
     billings_skipped: int = 0
+    invoices_created: int = 0
+    invoices_reused: int = 0
+    invoices_skipped: int = 0
+    boletos_created: int = 0
+    boletos_reused: int = 0
+    boletos_skipped: int = 0
     skips: list[str] = field(default_factory=list)
 
     def skip(self, motivo: str) -> None:
@@ -91,6 +100,23 @@ def _cep_valido(value) -> str | None:
     """CEP só entra com exatamente 8 dígitos (regra do schema da API)."""
     digits = ''.join(filter(str.isdigit, str(value or '')))
     return digits if len(digits) == 8 else None
+
+
+def _valor_pago_valido(value) -> float | None:
+    """paid_amount só entra se for > 0 (regra do schema BillingOut).
+
+    O SGR manda valor_pagamento '0,00' em boleto não pago, o que no MasterSat
+    é ausência de pagamento. Gravar 0.0 não estraga só aquele registro: o
+    schema valida na RESPOSTA, então a LISTAGEM INTEIRA de cobranças passa a
+    responder 500 (mesmo efeito que o RENAVAM placeholder teve no /vehicles).
+    """
+    if value in (None, ''):
+        return None
+    try:
+        numero = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numero if numero > 0 else None
 
 
 def _to_date(value) -> date | None:
@@ -334,7 +360,9 @@ def _import_contract(
     stats.contracts_created += 1
 
 
-def _import_billings(db: Session, node: ClientNode, client_id: int, stats: ImportStats) -> None:
+def _import_billings(
+    db: Session, node: ClientNode, client_id: int, stats: ImportStats, dry_run: bool,
+) -> None:
     """Grava o histórico de cobrança do cliente.
 
     Cada entrada já vem achatada por linha de discriminação (ver
@@ -342,8 +370,12 @@ def _import_billings(db: Session, node: ClientNode, client_id: int, stats: Impor
     migrada (máquina sem placa no padrão), a cobrança entra sem veículo em vez
     de ser descartada — o valor continua fazendo parte do histórico do cliente.
 
-    Dedup por (cliente, nosso_numero, veículo, competência): é o que
-    identifica uma linha de cobrança do SGR sem termos external_id.
+    Dedup por (cliente, nosso_numero, título, competência, valor). O título
+    carrega a placa de origem (ver map_boleto), e sem ela duas linhas de
+    placas diferentes que não foram migradas ficariam idênticas e uma seria
+    descartada — perdendo valor real. O valor entra na chave porque a mesma
+    placa aparece mais de uma vez no mesmo boleto quando há ajuste (ex.:
+    mensalidade 49,99, desconto -41,65 e serviço 120,00 no mesmo documento).
     """
     for mapped in node.billings:
         if mapped.get('amount') is None or not mapped.get('due_date'):
@@ -353,16 +385,35 @@ def _import_billings(db: Session, node: ClientNode, client_id: int, stats: Impor
             )
             continue
 
+        if mapped['amount'] <= 0:
+            # Linha de desconto/abatimento dentro do boleto consolidado. O
+            # MasterSat não modela cobrança negativa (BillingOut exige
+            # amount > 0) e gravar assim derruba a listagem inteira. Fica de
+            # fora e é reportado: a soma das cobranças do cliente vai ficar
+            # maior que a do boleto original nesses casos.
+            stats.billings_skipped += 1
+            stats.skip(
+                f"cobrança SGR #{mapped.get('external_id')} ({mapped.get('period_label')}): "
+                f"valor negativo {mapped['amount']} (desconto/abatimento) — o MasterSat não "
+                f"comporta cobrança negativa"
+            )
+            continue
+
         placa = mapped.get('vehicle_plate')
         veiculo = _find_vehicle(db, placa) if placa else None
+        # O contrato daquele veículo é o que liga a cobrança ao plano na tela
+        # do financeiro; sem ele a listagem mostra a cobrança sem plano nem
+        # status de contrato.
+        contrato = _find_contract(db, client_id, veiculo.id) if veiculo else None
 
         existente = (
             db.query(Billing)
             .filter(
                 Billing.client_id == client_id,
                 Billing.receipt_number == mapped.get('receipt_number'),
-                Billing.vehicle_id == (veiculo.id if veiculo else None),
+                Billing.title == mapped.get('title'),
                 Billing.period_label == mapped.get('period_label'),
+                Billing.amount == mapped['amount'],
                 Billing.is_deleted.is_(False),
             )
             .first()
@@ -371,24 +422,229 @@ def _import_billings(db: Session, node: ClientNode, client_id: int, stats: Impor
             stats.billings_reused += 1
             continue
 
+        # 'ABERTO' no SGR não diz se já venceu — quem classifica isso no
+        # MasterSat é o status VENCIDA, que é o que as telas de pendência e
+        # inadimplência filtram. Sem esta conversão, cobrança vencida importada
+        # fica invisível nessas telas.
+        status = BillingStatus(mapped.get('status') or BillingStatus.PENDING.value)
+        vencimento = _to_date(mapped.get('due_date'))
+        if status == BillingStatus.PENDING and vencimento and vencimento < date.today():
+            status = BillingStatus.OVERDUE
+
         db.add(Billing(
             client_id=client_id,
+            contract_id=contrato.id if contrato else None,
             vehicle_id=veiculo.id if veiculo else None,
             title=_trunc(mapped.get('title'), 160),
-            billing_type='recorrente',
+            billing_type=mapped.get('billing_type') or 'recorrente',
             amount=mapped['amount'],
             due_date=_to_date(mapped.get('due_date')),
             payment_date=_to_date(mapped.get('payment_date')),
-            paid_amount=mapped.get('paid_amount'),
+            paid_amount=_valor_pago_valido(mapped.get('paid_amount')),
             payment_method=_trunc(mapped.get('payment_method'), 40),
             receipt_number=_trunc(mapped.get('receipt_number'), 40),
             installment_number=mapped.get('installment_number'),
             installment_total=mapped.get('installment_total'),
             period_label=_trunc(mapped.get('period_label'), 20),
-            status=BillingStatus(mapped.get('status') or BillingStatus.PENDING.value),
-            notes='Importado do SGR (Hinova).',
+            status=status,
+            sgr_payload=mapped.get('sgr_payload'),
+            notes=_nota_cobranca(mapped),
         ))
+        # A sessão é autoflush=False: sem o flush, a consulta de dedup acima
+        # não enxerga o que acabou de ser inserido e o mesmo boleto entra
+        # várias vezes dentro de uma única execução.
+        db.flush()
         stats.billings_created += 1
+
+        _import_boleto_pdf(db, mapped, client_id, stats, dry_run)
+
+
+_NFSE_CATEGORIA = 'nota_fiscal'
+_BOLETO_CATEGORIA = 'boleto'
+
+
+def _nota_cobranca(mapped: dict) -> str:
+    """Observação da cobrança, com a linha digitável quando o boleto está aberto.
+
+    A linha digitável e o código de barras não têm coluna própria em
+    `billings` (no MasterSat isso vive em ailos_boletos, que é da emissão
+    pelo Ailos e não comporta boleto de outra origem). Guardar na observação
+    mantém o dado acessível sem forçar um modelo que não é dele.
+    """
+    partes = ['Importado do SGR (Hinova).']
+    if mapped.get('linha_digitavel'):
+        partes.append(f"Linha digitável (SGR): {mapped['linha_digitavel']}")
+    if mapped.get('cod_barras'):
+        partes.append(f"Código de barras (SGR): {mapped['cod_barras']}")
+    if mapped.get('pix_copia_cola'):
+        partes.append(f"PIX copia e cola (SGR): {mapped['pix_copia_cola']}")
+    if len(partes) > 1:
+        partes.append(
+            'ATENÇÃO: boleto emitido pelo SGR e ainda em aberto lá — não reenviar '
+            'sem confirmar que a cobrança não foi reemitida por aqui.'
+        )
+    return '\n'.join(partes)
+
+
+def _import_boleto_pdf(
+    db: Session, mapped: dict, client_id: int, stats: ImportStats, dry_run: bool,
+) -> None:
+    """Baixa o PDF do boleto em aberto e guarda como documento do cliente.
+
+    Só existe para boleto ABERTO: depois de baixado o SGR não devolve mais
+    `link`. Um boleto por documento — a mesma URL se repete nas várias linhas
+    de discriminação, por isso a deduplicação é pelo nome do arquivo.
+    """
+    url = mapped.get('link_boleto')
+    if not url:
+        return
+
+    nome_arquivo = f"boleto-sgr-{mapped.get('external_id')}.pdf"
+    ja_existe = (
+        db.query(Document)
+        .filter(
+            Document.reference_type == 'client',
+            Document.reference_id == client_id,
+            Document.category == _BOLETO_CATEGORIA,
+            Document.file_name == nome_arquivo,
+            Document.active.is_(True),
+        )
+        .first()
+    )
+    if ja_existe:
+        stats.boletos_reused += 1
+        return
+
+    if dry_run:
+        stats.boletos_created += 1
+        return
+
+    import requests
+
+    from app.services.storage import upload_bytes
+
+    try:
+        resposta = requests.get(url, timeout=settings.sgr_timeout_seconds)
+        resposta.raise_for_status()
+        conteudo = resposta.content
+    except requests.RequestException as exc:
+        stats.boletos_skipped += 1
+        stats.skip(f"boleto {mapped.get('external_id')}: falha ao baixar o PDF ({type(exc).__name__})")
+        return
+
+    if not conteudo.startswith(b'%PDF'):
+        stats.boletos_skipped += 1
+        stats.skip(f"boleto {mapped.get('external_id')}: o link não devolveu um PDF")
+        return
+
+    object_key = f'clients/{client_id}/documents/{uuid4()}-{nome_arquivo}'
+    try:
+        upload_bytes(object_name=object_key, content=conteudo, content_type='application/pdf')
+    except Exception as exc:  # noqa: BLE001 — falha de storage não aborta a migração
+        stats.boletos_skipped += 1
+        stats.skip(f"boleto {mapped.get('external_id')}: falha ao gravar no storage ({type(exc).__name__})")
+        return
+
+    db.add(Document(
+        file_name=nome_arquivo,
+        object_key=object_key,
+        content_type='application/pdf',
+        size_bytes=len(conteudo),
+        reference_type='client',
+        reference_id=client_id,
+        category=_BOLETO_CATEGORIA,
+        active=True,
+    ))
+    db.flush()
+    stats.boletos_created += 1
+
+
+def _import_invoices(
+    db: Session, node: ClientNode, client_id: int, stats: ImportStats, dry_run: bool,
+) -> None:
+    """Guarda o XML da NFS-e como documento do cliente.
+
+    Não usa a tabela nfse_notas de propósito: lá `billing_id` é único (uma
+    nota por cobrança), e no SGR uma nota cobre o boleto consolidado inteiro
+    — que aqui virou várias cobranças, uma por placa. Escolher uma delas para
+    receber a nota inventaria um vínculo que não existe.
+
+    O arquivo é baixado de um gateway de terceiros (o SGR só devolve a URL),
+    então cada download pode falhar sozinho sem derrubar a importação.
+
+    Em `dry_run` nada é baixado nem enviado ao storage: o rollback desfaz as
+    linhas do banco, mas não removeria o objeto já gravado no MinIO — a
+    simulação deixaria lixo atrás de si.
+    """
+    if not node.invoices:
+        return
+
+    if dry_run:
+        stats.invoices_created += len(node.invoices)
+        return
+
+    import requests  # local: só a importação de notas depende de rede aqui
+
+    from app.services.storage import upload_bytes
+
+    for nota in node.invoices:
+        numero = nota.get('numero_nf')
+        nome_arquivo = f'nfse-{numero}.xml'
+
+        if not nota.get('url'):
+            stats.invoices_skipped += 1
+            stats.skip(f"nota fiscal {numero}: {nota.get('erro') or 'sem XML disponível'}")
+            continue
+
+        ja_existe = (
+            db.query(Document)
+            .filter(
+                Document.reference_type == 'client',
+                Document.reference_id == client_id,
+                Document.category == _NFSE_CATEGORIA,
+                Document.file_name == nome_arquivo,
+                Document.active.is_(True),
+            )
+            .first()
+        )
+        if ja_existe:
+            stats.invoices_reused += 1
+            continue
+
+        try:
+            resposta = requests.get(nota['url'], timeout=settings.sgr_timeout_seconds)
+            resposta.raise_for_status()
+            conteudo = resposta.content
+        except requests.RequestException as exc:
+            stats.invoices_skipped += 1
+            stats.skip(f'nota fiscal {numero}: falha ao baixar o XML ({type(exc).__name__})')
+            continue
+
+        if not conteudo:
+            stats.invoices_skipped += 1
+            stats.skip(f'nota fiscal {numero}: XML veio vazio')
+            continue
+
+        object_key = f'clients/{client_id}/documents/{uuid4()}-{nome_arquivo}'
+        try:
+            upload_bytes(object_name=object_key, content=conteudo, content_type='application/xml')
+        except Exception as exc:  # noqa: BLE001 — falha de storage não pode abortar a migração
+            stats.invoices_skipped += 1
+            stats.skip(f'nota fiscal {numero}: falha ao gravar no storage ({type(exc).__name__})')
+            continue
+
+        db.add(Document(
+            file_name=nome_arquivo,
+            object_key=object_key,
+            content_type='application/xml',
+            size_bytes=len(conteudo),
+            reference_type='client',
+            reference_id=client_id,
+            category=_NFSE_CATEGORIA,
+            active=True,
+        ))
+        db.flush()
+        stats.invoices_created += 1
 
 
 def import_poc_result(db: Session, result: PocRunResult, dry_run: bool = True) -> ImportStats:
@@ -466,7 +722,8 @@ def import_poc_result(db: Session, result: PocRunResult, dry_run: bool = True) -
 
         # Por último: o histórico de cobrança precisa dos veículos já gravados
         # para resolver a placa de cada linha da discriminação do boleto.
-        _import_billings(db, node, client.id, stats)
+        _import_billings(db, node, client.id, stats, dry_run)
+        _import_invoices(db, node, client.id, stats, dry_run)
 
     if dry_run:
         db.rollback()

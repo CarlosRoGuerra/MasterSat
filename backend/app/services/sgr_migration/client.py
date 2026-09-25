@@ -57,6 +57,9 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 _PATH_AUTH = '/headers_authorization'
+# A varredura de boletos com linha digitável é a consulta mais pesada da API
+# deles — 30s não bastam nos meses cheios de boleto aberto.
+_TIMEOUT_BOLETOS = 120
 
 
 # ---------------------------------------------------------------------------
@@ -156,9 +159,13 @@ class SGRClient:
         # Nunca registra query params/corpo aqui — podem conter CPF/placa/etc.
         self.request_log.append(RequestLogEntry(method=method, path=path, status_code=status_code))
 
-    def _send(self, method: str, url: str, *, context: str, **kwargs) -> requests.Response:
+    def _send(
+        self, method: str, url: str, *, context: str, timeout: int | None = None, **kwargs,
+    ) -> requests.Response:
         try:
-            resp = self.session.request(method, url, timeout=settings.sgr_timeout_seconds, **kwargs)
+            resp = self.session.request(
+                method, url, timeout=timeout or settings.sgr_timeout_seconds, **kwargs,
+            )
         except requests.Timeout as exc:
             self._track(method, context, None)
             raise SGRConnectionError(f'Timeout ao consultar o SGR ({context})') from exc
@@ -259,7 +266,10 @@ class SGRClient:
 
     # -- consultas genéricas ---------------------------------------------------
 
-    def get(self, path: str, params: dict | None = None, *, retry_auth: bool = True) -> dict:
+    def get(
+        self, path: str, params: dict | None = None, *, retry_auth: bool = True,
+        timeout: int | None = None,
+    ) -> dict:
         """GET {base}{path}/{chave_api} com os headers de autenticação."""
         self._ensure_authenticated()
         self._require_config()
@@ -269,13 +279,13 @@ class SGRClient:
         clean_params.update({k: v for k, v in (params or {}).items() if v not in (None, '')})
         headers = {'Accept': 'application/json', **self._auth_headers}
 
-        resp = self._send('GET', url, context=path, headers=headers, params=clean_params)
+        resp = self._send('GET', url, context=path, headers=headers, params=clean_params, timeout=timeout)
 
         if resp.status_code in (401, 403) and retry_auth:
             # Token pode ter expirado no meio da execução — reautentica 1x.
             self._auth_headers = {}
             self.authenticate()
-            return self.get(path, params, retry_auth=False)
+            return self.get(path, params, retry_auth=False, timeout=timeout)
 
         self._raise_for_status(resp, context=path)
         return self._parse_json(resp, context=path)
@@ -431,6 +441,74 @@ class SGRClient:
             'cpf_cnpj': digitos, 'total': total, 'indice': indice, **filtros,
         })
         return self.extract_data(body)
+
+    _PAGINA_BOLETOS = 50  # teto do endpoint: pedir mais não traz mais
+
+    def buscar_boletos_periodo(
+        self, data_inicio: str, data_fim: str, campo: str = 'vencimento', linha_digitavel: bool = False,
+    ) -> list[dict]:
+        """GET /buscar_boletos — boletos de TODOS os clientes num período.
+
+        Duas regras não óbvias, que estão só nas notas em <small> da doc e
+        fazem o endpoint responder 500 quando desrespeitadas:
+          - as datas vão em ISO (aaaa-mm-dd); no formato brasileiro dá 500;
+          - o intervalo é de no máximo 1 MÊS, e o par início/fim é
+            obrigatório (por emissão, vencimento, pagamento ou crédito).
+
+        Vale mais que /buscar_boletos_cliente para migração: além de cobrir a
+        base inteira sem 1 chamada por cliente, traz `cod_cliente` no próprio
+        boleto e, na discriminação, `produto` e `situacao_veiculo` — que a
+        versão por cliente não devolve. `linha_digitavel=True` acrescenta o
+        `pix_copia_cola`.
+
+        `campo` escolhe a data usada no filtro: 'vencimento', 'emissao',
+        'pagamento' ou 'credito_banco'.
+        """
+        prefixo = {
+            'vencimento': 'data_vencimento',
+            'emissao': 'data_emissao',
+            'pagamento': 'data_pagamento',
+            'credito_banco': 'data_credito_banco',
+        }[campo]
+
+        coletados: list[dict] = []
+        indice = 0
+        while True:
+            params = {
+                f'{prefixo}_inicio': data_inicio,
+                f'{prefixo}_fim': data_fim,
+                'total': self._PAGINA_BOLETOS,
+                'indice': indice,
+            }
+            if linha_digitavel:
+                params['linha_digitavel'] = 'S'
+            # Gerar linha digitável e PIX é caro do lado deles: os meses com
+            # muitos boletos em aberto (os futuros) estouravam o timeout
+            # padrão de 30s de forma consistente.
+            body = self.get('/buscar_boletos', params, timeout=_TIMEOUT_BOLETOS)
+            lote = self.extract_data(body)
+            coletados.extend(lote)
+            if len(lote) < self._PAGINA_BOLETOS:
+                break
+            indice += self._PAGINA_BOLETOS
+        return coletados
+
+    def buscar_xml_nota_fiscal(self, cod_boleto) -> str | None:
+        """GET /buscar_xml_nota_fiscal — devolve a URL do XML da NFS-e do
+        boleto (o arquivo fica num gateway de terceiros, não no SGR).
+
+        É o único caminho que funciona para nota fiscal: o endpoint de
+        listagem, /buscar_notas_fiscais, responde 500 ("Undefined index:
+        numero" em ApiNFController.php) ou estoura o tempo, em todas as
+        combinações de parâmetro testadas. Como já temos o cod_boleto de
+        cada boleto, a listagem não faz falta.
+        """
+        registros = self.extract_data(self.get('/buscar_xml_nota_fiscal', {'cod_boleto': cod_boleto}))
+        for registro in registros:
+            url = _ci_get(registro, 'xml') if isinstance(registro, dict) else None
+            if url:
+                return str(url)
+        return None
 
     def buscar_boletos_abertos_cliente(
         self, cpf_cnpj: str, total: int = 200, indice: int = 0, **filtros,

@@ -6,9 +6,11 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from app.models.billing import Billing
 from app.models.client import Client
 from app.models.contract import Contract
-from app.models.enums import ClientStatus, TrackerStatus, VehicleStatus
+from app.models.document import Document
+from app.models.enums import BillingStatus, ClientStatus, TrackerStatus, VehicleStatus
 from app.models.plan import Plan
 from app.models.tracker import Tracker
 from app.models.vehicle import Vehicle
@@ -240,3 +242,193 @@ class TestPlanosEContratos:
     def test_gerar_cobranca_nao_vira_contrato_inativo(self, db):
         import_poc_result(db, _resultado(contract_over={'status': 'inativo'}), dry_run=False)
         assert db.query(Contract).one().status == 'inativo'
+
+
+class TestHistoricoDeCobranca:
+    def _com_boleto(self, **over):
+        boleto = {'external_id': '7370', 'amount': 49.99, 'vehicle_plate': 'ABC1234',
+                  'period_label': '08/2026', 'due_date': '2026-08-15', 'payment_date': None,
+                  'paid_amount': None, 'payment_method': None, 'receipt_number': '211558',
+                  'installment_number': 1, 'installment_total': 10, 'status': 'pendente',
+                  'title': 'Boleto SGR 211558', **over}
+        resultado = _resultado()
+        resultado.clients[0].billings = [boleto]
+        return resultado
+
+    def test_cobranca_e_ligada_ao_contrato_do_veiculo(self, db):
+        # Sem contract_id a tela do financeiro não consegue mostrar o plano
+        # nem o status do contrato da cobrança.
+        import_poc_result(db, self._com_boleto(), dry_run=False)
+
+        billing = db.query(Billing).one()
+        contrato = db.query(Contract).one()
+        assert billing.contract_id == contrato.id
+        assert billing.vehicle_id == contrato.vehicle_id
+
+    def test_pendente_ja_vencida_entra_como_vencida(self, db):
+        # 'ABERTO' no SGR não distingue vencido; as telas de pendência e
+        # inadimplência do MasterSat filtram por VENCIDA.
+        import_poc_result(db, self._com_boleto(
+            status='pendente', due_date='2020-01-10',
+        ), dry_run=False)
+
+        assert db.query(Billing).one().status == BillingStatus.OVERDUE
+
+    def test_pendente_a_vencer_continua_pendente(self, db):
+        import_poc_result(db, self._com_boleto(
+            status='pendente', due_date='2099-01-10',
+        ), dry_run=False)
+
+        assert db.query(Billing).one().status == BillingStatus.PENDING
+
+    def test_boleto_pago_nao_vira_vencido(self, db):
+        import_poc_result(db, self._com_boleto(
+            status='paga', due_date='2020-01-10', payment_date='2020-01-09',
+        ), dry_run=False)
+
+        assert db.query(Billing).one().status == BillingStatus.PAID
+
+    def test_cobranca_sem_veiculo_conhecido_entra_no_cliente(self, db):
+        # Máquina sem placa no padrão não é migrada, mas o valor continua
+        # fazendo parte do histórico do cliente.
+        import_poc_result(db, self._com_boleto(vehicle_plate='CASE580H'), dry_run=False)
+
+        billing = db.query(Billing).one()
+        assert billing.vehicle_id is None
+        assert billing.contract_id is None
+        assert billing.client_id == db.query(Client).one().id
+
+    def test_rodar_duas_vezes_nao_duplica_cobranca(self, db):
+        import_poc_result(db, self._com_boleto(), dry_run=False)
+        stats = import_poc_result(db, self._com_boleto(), dry_run=False)
+
+        assert stats.billings_reused == 1
+        assert db.query(Billing).count() == 1
+
+    def test_placas_nao_migradas_no_mesmo_boleto_nao_colapsam(self, db):
+        # Caso real (boleto 11751): um boleto consolidado com várias placas,
+        # três delas máquinas sem placa no padrão. Todas caem com vehicle_id
+        # nulo, e uma chave de dedup sem a placa de origem descartaria duas
+        # cobranças de R$ 44,99 que existem de verdade.
+        resultado = _resultado()
+        resultado.clients[0].billings = [
+            {'external_id': '11751', 'amount': 44.99, 'vehicle_plate': p,
+             'period_label': '07/2019', 'due_date': '2019-08-15', 'payment_date': None,
+             'paid_amount': None, 'payment_method': None, 'receipt_number': '11751',
+             'installment_number': None, 'installment_total': None, 'status': 'paga',
+             'title': f'Boleto SGR 11751 - {p}'}
+            for p in ('MAQ2501', 'MAQ2502', 'MAQ2503')
+        ]
+        stats = import_poc_result(db, resultado, dry_run=False)
+
+        assert stats.billings_created == 3
+        assert db.query(Billing).count() == 3
+
+    def test_mesma_placa_com_ajustes_no_mesmo_boleto_mantem_as_linhas(self, db):
+        # Caso real (MGU2E86 em 07/2026): mensalidade, desconto e serviço no
+        # mesmo documento, mesma placa e mesma competência. As duas linhas
+        # positivas entram; o desconto fica de fora e é reportado.
+        resultado = _resultado()
+        resultado.clients[0].billings = [
+            {'external_id': '19133', 'amount': valor, 'vehicle_plate': 'ABC1234',
+             'period_label': '07/2026', 'due_date': '2026-07-15', 'payment_date': None,
+             'paid_amount': None, 'payment_method': None, 'receipt_number': '19133',
+             'installment_number': None, 'installment_total': None, 'status': 'paga',
+             'title': 'Boleto SGR 19133 - ABC1234'}
+            for valor in (49.99, -41.65, 120.00)
+        ]
+        stats = import_poc_result(db, resultado, dry_run=False)
+
+        assert stats.billings_created == 2
+        assert stats.billings_skipped == 1
+        assert any('negativo' in motivo for motivo in stats.skips)
+        assert sorted(float(b.amount) for b in db.query(Billing).all()) == [49.99, 120.0]
+
+    def test_boleto_nao_pago_entra_sem_valor_pago(self, db):
+        # O SGR manda valor_pagamento '0,00' em boleto não pago. Gravar 0.0
+        # viola BillingOut (paid_amount > 0) e derruba a LISTAGEM inteira de
+        # cobranças com 500 — não apenas o registro ruim.
+        import_poc_result(db, self._com_boleto(paid_amount=0.0), dry_run=False)
+        assert db.query(Billing).one().paid_amount is None
+
+    def test_toda_cobranca_importada_serializa_na_api(self, db):
+        """Trava de regressão: o que o importador grava, a listagem devolve."""
+        from app.api.v1.endpoints.billings import base_query, serialize_billing
+
+        resultado = self._com_boleto()
+        resultado.clients[0].billings.append({
+            **resultado.clients[0].billings[0],
+            'amount': -41.65, 'paid_amount': 0.0, 'title': 'Boleto SGR 211558 - ABC1234 (ajuste)',
+        })
+        import_poc_result(db, resultado, dry_run=False)
+
+        linhas = base_query(db).all()
+        assert linhas
+        for linha in linhas:
+            serialize_billing(linha)
+
+
+class TestNotasFiscais:
+    def _com_nota(self, **over):
+        resultado = _resultado()
+        resultado.clients[0].invoices = [
+            {'cod_boleto': '10200', 'numero_nf': '2210', 'data_emissao': '01/06/2022',
+             'url': 'https://gateway.exemplo/nf/2210/xml', 'erro': None, **over},
+        ]
+        return resultado
+
+    def test_nota_sem_xml_e_contabilizada_como_ignorada(self, db):
+        # O SGR devolve resposta inválida para algumas notas. Antes isso virava
+        # só um aviso interno e a nota sumia do resumo sem explicação.
+        stats = import_poc_result(db, self._com_nota(
+            url=None, erro='SGRInvalidResponseError ao pedir o XML ao SGR',
+        ), dry_run=False)
+
+        assert stats.invoices_created == 0
+        assert stats.invoices_skipped == 1
+        assert any('2210' in motivo for motivo in stats.skips)
+
+    def test_dry_run_nao_baixa_nem_grava_no_storage(self, db):
+        # O rollback desfaz o banco, mas não removeria o objeto do MinIO.
+        stats = import_poc_result(db, self._com_nota(), dry_run=True)
+        assert stats.invoices_created == 1
+        assert db.query(Document).count() == 0
+
+
+class TestDocumentoDoBoleto:
+    """O SGR só devolve link/linha digitável enquanto o boleto está ABERTO;
+    depois de baixado não há mais documento, só a baixa."""
+
+    def _com_boleto(self, **over):
+        boleto = {'external_id': '17946', 'amount': 64.99, 'vehicle_plate': 'ABC1234',
+                  'period_label': '09/2026', 'due_date': '2026-09-10', 'payment_date': None,
+                  'paid_amount': None, 'payment_method': None, 'receipt_number': '17946',
+                  'installment_number': None, 'installment_total': None, 'status': 'pendente',
+                  'title': 'Boleto SGR 17946 - ABC1234', **over}
+        resultado = _resultado()
+        resultado.clients[0].billings = [boleto]
+        return resultado
+
+    def test_boleto_aberto_guarda_linha_digitavel_na_cobranca(self, db):
+        import_poc_result(db, self._com_boleto(
+            linha_digitavel='34191.09685 07422.520937 75008.900005 6 15650000006499',
+            cod_barras='34191096850742252093775008900005615650000006499',
+        ), dry_run=False)
+
+        notes = db.query(Billing).one().notes
+        assert 'Linha digitável (SGR)' in notes
+        assert '34191.09685' in notes
+        # o aviso evita que alguém reenvie um boleto que o SGR ainda cobra
+        assert 'não reenviar' in notes
+
+    def test_boleto_pago_nao_ganha_aviso_de_reenvio(self, db):
+        import_poc_result(db, self._com_boleto(), dry_run=False)
+        notes = db.query(Billing).one().notes
+        assert notes == 'Importado do SGR (Hinova).'
+
+    def test_pdf_do_boleto_nao_e_baixado_em_dry_run(self, db):
+        stats = import_poc_result(db, self._com_boleto(
+            link_boleto='https://sgr.exemplo/boleto/abc?download=true',
+        ), dry_run=True)
+        assert stats.boletos_created == 1
+        assert db.query(Document).count() == 0

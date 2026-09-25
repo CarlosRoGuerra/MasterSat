@@ -7,7 +7,10 @@ diagnóstico gerado por report.py.
 """
 from __future__ import annotations
 
+from calendar import monthrange
 from dataclasses import dataclass, field
+from datetime import date
+from time import sleep
 
 from app.services.sgr_migration.client import RequestLogEntry, SGRApiError, SGRClient
 from app.services.sgr_migration.mapping import (
@@ -53,6 +56,10 @@ class ClientNode:
     # do boleto (ver map_boleto). Fica no cliente, e não no veículo, porque no
     # SGR o boleto é consolidado por cliente.
     billings: list[dict] = field(default_factory=list)
+    # Notas fiscais do cliente: {'cod_boleto', 'numero_nf', 'data_emissao',
+    # 'url'}. Uma NF cobre o boleto consolidado inteiro, por isso fica aqui e
+    # não junto de uma cobrança específica.
+    invoices: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -199,21 +206,138 @@ def _fetch_planos(client: SGRClient) -> tuple[list[dict], list[str], dict[str, i
     return planos, issues, vencimento_index
 
 
-def _fetch_boletos(client: SGRClient, cpf_cnpj: str, issues: list[str]) -> list[dict]:
-    """Histórico de cobrança do cliente, achatado por linha de discriminação.
+def _fetch_boletos(client: SGRClient, cpf_cnpj: str, issues: list[str]) -> tuple[list[dict], list[dict]]:
+    """Histórico de cobrança do cliente: (cobranças achatadas, boletos crus).
 
     Uma chamada por cliente: /buscar_boletos (sem CPF) responde 500 no
     servidor deles, então não dá para varrer tudo de uma vez. O CPF vai sem
     máscara — com máscara a API devolve lista vazia sem erro nenhum.
+
+    Os boletos crus voltam junto porque a nota fiscal é buscada a partir
+    deles (ver _fetch_notas_fiscais), sem repetir a consulta.
     """
     if not cpf_cnpj:
-        return []
+        return [], []
     try:
         boletos = client.buscar_boletos_cliente(cpf_cnpj)
     except SGRApiError as exc:
         issues.append(f'Falha ao buscar o histórico de boletos: {exc}')
-        return []
+        return [], []
 
+    # A situação do boleto NÃO diz o que continua em aberto: 'APROVADO'
+    # significa apenas registrado, e na base real há boletos de 2019 e 2023
+    # ainda com esse status. Tratá-los como dívida inflaria a inadimplência
+    # e poderia gerar cobrança indevida. Quem responde isso é
+    # /buscar_boletos_abertos_cliente, e é ele a fonte da verdade aqui.
+    try:
+        abertos = {
+            str(ci_get(b, 'cod_boleto'))
+            for b in client.buscar_boletos_abertos_cliente(cpf_cnpj)
+            if ci_get(b, 'cod_boleto')
+        }
+    except SGRApiError as exc:
+        issues.append(
+            f'Falha ao confirmar quais boletos estão em aberto ({exc}) — '
+            f'as cobranças em aberto deste cliente NÃO foram importadas como dívida'
+        )
+        abertos = set()
+
+    achatado: list[dict] = []
+    for boleto in boletos:
+        linhas = ci_get(boleto, 'discriminacao') or []
+        for item in linhas or [None]:
+            mapped, bissues = map_boleto(boleto, item, em_aberto=str(ci_get(boleto, 'cod_boleto')) in abertos)
+            # Linha zerada é ruído do SGR: todo boleto traz uma cópia da placa
+            # com valor 0,00 ao lado da cobrança real.
+            if mapped.get('amount') in (None, 0, 0.0):
+                continue
+            achatado.append(mapped)
+            issues.extend(bissues)
+    return achatado, boletos
+
+
+# A API do SGR oscila (já respondeu 502 e estourou timeout de 30s no meio de
+# uma varredura). Tentar de novo com espera crescente evita perder um mês
+# inteiro do histórico por causa de uma falha passageira.
+_TENTATIVAS_POR_MES = 3
+_ESPERA_ENTRE_TENTATIVAS = 5  # segundos, multiplicados pela tentativa
+
+
+class SGRIncompleteScan(RuntimeError):
+    """A varredura não cobriu todos os meses pedidos.
+
+    É erro, não aviso: uma importação com meses faltando gera um histórico
+    financeiro silenciosamente incompleto, que ninguém descobre olhando a
+    tela — foi assim que 846 cobranças sumiram sem ninguém notar.
+    """
+
+
+def _meses(inicio: date, fim: date):
+    """Gera (primeiro_dia, ultimo_dia) de cada mês do intervalo.
+
+    O /buscar_boletos aceita no máximo 1 mês por consulta, então a varredura
+    é obrigatoriamente mês a mês.
+    """
+    atual = date(inicio.year, inicio.month, 1)
+    ultimo = date(fim.year, fim.month, 1)
+    while atual <= ultimo:
+        yield atual, date(atual.year, atual.month, monthrange(atual.year, atual.month)[1])
+        atual = date(atual.year + (atual.month == 12), atual.month % 12 + 1, 1)
+
+
+def fetch_boletos_por_periodo(
+    client: SGRClient, inicio: date, fim: date, issues: list[str],
+) -> dict[str, list[dict]]:
+    """Boletos de TODA a base no período, indexados por cod_cliente.
+
+    Substitui a varredura cliente a cliente: uma passada mês a mês cobre os
+    520 clientes (um ano de histórico saiu em ~40 requisições), e ainda traz
+    campos que a versão por cliente não devolve — `cod_cliente` no boleto e
+    `produto`/`situacao_veiculo` em cada item da discriminação.
+    """
+    por_cliente: dict[str, list[dict]] = {}
+    falhas: list[str] = []
+
+    for mes_inicio, mes_fim in _meses(inicio, fim):
+        lote = None
+        for tentativa in range(_TENTATIVAS_POR_MES):
+            try:
+                # linha_digitavel=True é o que traz link/linha/código de barras
+                # dos boletos ainda em aberto (ver map_boleto).
+                lote = client.buscar_boletos_periodo(
+                    mes_inicio.isoformat(), mes_fim.isoformat(), linha_digitavel=True,
+                )
+                break
+            except SGRApiError as exc:
+                if tentativa == _TENTATIVAS_POR_MES - 1:
+                    falhas.append(f'{mes_inicio:%m/%Y} ({exc})')
+                else:
+                    sleep(_ESPERA_ENTRE_TENTATIVAS * (tentativa + 1))
+
+        for boleto in lote or []:
+            cod_cliente = ci_get(boleto, 'cod_cliente')
+            if cod_cliente:
+                por_cliente.setdefault(str(cod_cliente), []).append(boleto)
+
+    if falhas:
+        # Um mês que falha some INTEIRO do histórico. Isso não pode virar só
+        # um aviso no meio do relatório: quem roda a migração precisa saber
+        # que o resultado está incompleto e quais meses refazer.
+        raise SGRIncompleteScan(
+            f'{len(falhas)} mês(es) não puderam ser lidos e ficariam de fora do histórico: '
+            + ', '.join(falhas[:12])
+            + (f' ... e mais {len(falhas) - 12}' if len(falhas) > 12 else '')
+        )
+    return por_cliente
+
+
+def achatar_boletos(boletos: list[dict], issues: list[str]) -> list[dict]:
+    """Boletos crus → uma cobrança por linha de discriminação.
+
+    `em_aberto` fica em None de propósito: vindo do /buscar_boletos a própria
+    `situacao` distingue ABERTO (dívida) de APROVADO (só registrado), o que
+    dispensa a consulta extra de boletos abertos por cliente.
+    """
     achatado: list[dict] = []
     for boleto in boletos:
         linhas = ci_get(boleto, 'discriminacao') or []
@@ -228,11 +352,54 @@ def _fetch_boletos(client: SGRClient, cpf_cnpj: str, issues: list[str]) -> list[
     return achatado
 
 
-def run_poc(client: SGRClient, limit: int, com_boletos: bool = False) -> PocRunResult:
+def _fetch_notas_fiscais(client: SGRClient, boletos: list[dict], issues: list[str]) -> list[dict]:
+    """URL do XML da NFS-e de cada boleto que tem nota.
+
+    Uma chamada por boleto COM nota — na amostra real, 51 notas em 10
+    clientes, concentradas nos que têm nota_fiscal_cliente = 'S'. Os boletos
+    sem `numero_nf` são pulados sem gastar requisição.
+    """
+    notas: list[dict] = []
+    for boleto in boletos:
+        numero_nf = ci_get(boleto, 'numero_nf')
+        cod_boleto = ci_get(boleto, 'cod_boleto')
+        if not numero_nf or not cod_boleto:
+            continue
+        # Nota sem URL entra na lista com url=None em vez de sumir: assim o
+        # importador a contabiliza como ignorada e o motivo aparece no resumo.
+        # Antes isso virava só um aviso interno, e a diferença entre 51 notas
+        # existentes e 49 importadas passava despercebida.
+        try:
+            url = client.buscar_xml_nota_fiscal(cod_boleto)
+            motivo = None if url else 'o SGR não devolveu XML para esta nota'
+        except SGRApiError as exc:
+            url, motivo = None, f'{type(exc).__name__} ao pedir o XML ao SGR'
+
+        if motivo:
+            issues.append(f'Nota fiscal {numero_nf} (boleto {cod_boleto}): {motivo}')
+        notas.append({
+            'cod_boleto': str(cod_boleto),
+            'numero_nf': str(numero_nf),
+            'data_emissao': ci_get(boleto, 'data_emissao'),
+            'url': url,
+            'erro': motivo,
+        })
+    return notas
+
+
+def run_poc(
+    client: SGRClient, limit: int, com_boletos: bool = False, com_notas: bool = False,
+    periodo: tuple[date, date] | None = None,
+) -> PocRunResult:
     """ETAPAS 6/7 — busca exatamente `limit` clientes e caminha os relacionamentos."""
     clients_raw = client.buscar_clientes(total=limit, indice=0)
     tracker_index = build_tracker_index(client)
     planos, plan_issues, vencimento_index = _fetch_planos(client)
+
+    # Uma varredura só para a base inteira, em vez de 1 chamada por cliente.
+    boletos_por_cliente: dict[str, list[dict]] = {}
+    if (com_boletos or com_notas) and periodo:
+        boletos_por_cliente = fetch_boletos_por_periodo(client, periodo[0], periodo[1], plan_issues)
 
     nodes: list[ClientNode] = []
     for raw in clients_raw:
@@ -245,9 +412,21 @@ def run_poc(client: SGRClient, limit: int, com_boletos: bool = False) -> PocRunR
         vehicles = _fetch_vehicles_for_client(
             client, ci_get(raw, 'cod_cliente'), issues, tracker_index, vencimento_index,
         )
-        billings = _fetch_boletos(client, mapped.get('cpf_cnpj'), issues) if com_boletos else []
+        billings: list[dict] = []
+        invoices: list[dict] = []
+        if com_boletos or com_notas:
+            if periodo:
+                boletos_crus = boletos_por_cliente.get(str(ci_get(raw, 'cod_cliente') or ''), [])
+                billings = achatar_boletos(boletos_crus, issues) if com_boletos else []
+            else:
+                billings, boletos_crus = _fetch_boletos(client, mapped.get('cpf_cnpj'), issues)
+                if not com_boletos:
+                    billings = []
+            if com_notas:
+                invoices = _fetch_notas_fiscais(client, boletos_crus, issues)
         nodes.append(ClientNode(
-            raw=raw, mapped=mapped, issues=issues, vehicles=vehicles, billings=billings,
+            raw=raw, mapped=mapped, issues=issues, vehicles=vehicles,
+            billings=billings, invoices=invoices,
         ))
 
     return PocRunResult(

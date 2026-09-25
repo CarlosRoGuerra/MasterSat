@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from datetime import date
 from urllib.parse import urlsplit
 
 _BACKEND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
@@ -37,12 +38,16 @@ for _stream in (sys.stdout, sys.stderr):
 # Fora do container, 'db' não resolve — o padrão aponta para o Postgres local
 # publicado em 127.0.0.1:5432 (mesmo padrão dos outros scripts).
 os.environ.setdefault('DATABASE_URL', 'postgresql+psycopg://postgres:postgres@localhost:5432/rastreamento')
+# Mesma história para o MinIO (--notas grava o XML da nota fiscal lá): dentro
+# do compose o host é 'minio', que não resolve aqui fora e faz o upload falhar
+# com MaxRetryError depois de já ter baixado o arquivo.
+os.environ.setdefault('MINIO_ENDPOINT', 'localhost:9000')
 
 from app.core.config import settings  # noqa: E402
 from app.db.session import SessionLocal  # noqa: E402
 from app.services.sgr_migration.client import SGRApiError, SGRClient, SGRError  # noqa: E402
 from app.services.sgr_migration.importer import import_poc_result  # noqa: E402
-from app.services.sgr_migration.poc import run_poc  # noqa: E402
+from app.services.sgr_migration.poc import SGRIncompleteScan, run_poc  # noqa: E402
 
 _HOSTS_LOCAIS = {'localhost', '127.0.0.1', '::1', 'db'}
 
@@ -62,9 +67,24 @@ def main() -> int:
                         help='Libera --apply em banco não-local. Use com MUITA atenção.')
     parser.add_argument('--boletos', action='store_true',
                         help='Traz também o histórico de cobrança (1 chamada a mais por cliente)')
+    parser.add_argument('--notas', action='store_true',
+                        help='Baixa o XML das notas fiscais e guarda como documento do cliente')
+    parser.add_argument('--de', type=str, default=None, metavar='AAAA-MM',
+                        help='Início do período de cobranças (usa a varredura por período, mais eficiente)')
+    parser.add_argument('--ate', type=str, default=None, metavar='AAAA-MM',
+                        help='Fim do período de cobranças')
     args = parser.parse_args()
 
     limit = args.limit or settings.sgr_migration_limit
+
+    periodo = None
+    if args.de and args.ate:
+        ano_i, mes_i = (int(x) for x in args.de.split('-'))
+        ano_f, mes_f = (int(x) for x in args.ate.split('-'))
+        periodo = (date(ano_i, mes_i, 1), date(ano_f, mes_f, 1))
+    elif args.de or args.ate:
+        print('RECUSADO: --de e --ate andam juntos.')
+        return 1
     host, banco = _banco_descricao()
     local = host in _HOSTS_LOCAIS
 
@@ -81,7 +101,12 @@ def main() -> int:
     print('Lendo do SGR (somente leitura)...')
     sgr = SGRClient()
     try:
-        resultado = run_poc(sgr, limit, com_boletos=args.boletos)
+        resultado = run_poc(sgr, limit, com_boletos=args.boletos, com_notas=args.notas, periodo=periodo)
+    except SGRIncompleteScan as exc:
+        print(f'ABORTADO — varredura incompleta: {exc}')
+        print('Nada foi gravado. Um mês faltando deixaria o histórico financeiro')
+        print('incompleto sem aviso na tela — rode de novo quando o SGR estabilizar.')
+        return 1
     except (SGRError, SGRApiError) as exc:
         print(f'FALHA ao ler o SGR: {exc}')
         return 1
@@ -106,6 +131,11 @@ def main() -> int:
     print(f'CONTRATOS    {rotulo}: {stats.contracts_created} | já existiam: {stats.contracts_reused} | ignorados: {stats.contracts_skipped}')
     if args.boletos:
         print(f'COBRANÇAS    {rotulo}: {stats.billings_created} | já existiam: {stats.billings_reused} | ignorados: {stats.billings_skipped}')
+    if args.notas:
+        print(f'NOTAS FISCAIS {rotulo}: {stats.invoices_created} | já existiam: {stats.invoices_reused} | ignoradas: {stats.invoices_skipped}')
+    if args.boletos and (stats.boletos_created or stats.boletos_reused or stats.boletos_skipped):
+        print(f'PDF DE BOLETO {rotulo}: {stats.boletos_created} | já existiam: {stats.boletos_reused} | ignorados: {stats.boletos_skipped}'
+              '   (só dos boletos em aberto — o SGR não guarda o documento dos já baixados)')
 
     if stats.skips:
         print(f'\nIGNORADOS ({len(stats.skips)}):')

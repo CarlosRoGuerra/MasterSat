@@ -38,7 +38,44 @@ type Plan = { id: number; name: string; price: number; description?: string | nu
 type ServiceProduct = { id: number; name: string; category: string; default_price: number; description?: string | null; active: boolean; allow_installments: boolean; remove_after_payment: boolean; auto_add_on_uninstall: boolean };
 type Contract = { id: number; client_id: number; plan_id: number; vehicle_id?: number | null; tracker_id?: number | null; start_date: string; end_date?: string | null; status: string; billing_day?: number | null; payment_method?: string | null; notes?: string | null; installation_fee?: number | null; uninstall_fee?: number | null; signed?: boolean | null; signed_at?: string | null; client_name?: string | null; plan_name?: string | null; vehicle_plate?: string | null; tracker_identifier?: string | null; monthly_value?: number | null; open_billings: number; next_due_date?: string | null };
 type ChargeItem = { id: number; client_id: number; contract_id?: number | null; vehicle_id?: number | null; tracker_id?: number | null; service_product_id?: number | null; title: string; description?: string | null; quantity: number; unit_price: number; total_amount: number; installment_count: number; start_date: string; active: boolean; remove_after_payment: boolean; completed_at?: string | null; status: string; client_name?: string | null; vehicle_plate?: string | null; tracker_identifier?: string | null; service_product_name?: string | null; open_installments: number };
-type Billing = { id: number; contract_id?: number | null; client_id: number; payer_client_id?: number | null; item_id?: number | null; vehicle_id?: number | null; tracker_id?: number | null; title?: string | null; billing_type: string; installment_number?: number | null; installment_total?: number | null; amount: number; due_date: string; status: BillingStatus; payment_date?: string | null; payment_method?: string | null; notes?: string | null; paid_amount?: number | null; receipt_number?: string | null; period_label?: string | null; client_name?: string | null; payer_name?: string | null; vehicle_plate?: string | null; tracker_identifier?: string | null; plan_name?: string | null; contract_status?: string | null; overdue_days: number };
+// Dados do boleto como o SGR devolvia. A cobrança migrada não tem boleto
+// bancário para baixar: o SGR deixa de servir o documento depois de baixado,
+// então estes campos são o registro que sobra dele.
+/** Linha digitável/PIX só aparecem em boleto aberto, e servem para copiar. */
+function CopiavelSgr({ rotulo, valor }: { rotulo: string; valor: string }) {
+  const [copiado, setCopiado] = useState(false);
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white p-2 dark:border-slate-700 dark:bg-slate-900">
+      <p className="text-2xs font-semibold uppercase tracking-widest text-slate-500">{rotulo}</p>
+      <div className="mt-1 flex items-start justify-between gap-2">
+        <code className="break-all text-xs text-slate-800 dark:text-slate-200">{valor}</code>
+        <button
+          type="button"
+          onClick={() => { navigator.clipboard.writeText(valor).then(() => { setCopiado(true); setTimeout(() => setCopiado(false), 2000); }).catch(() => {}); }}
+          className="shrink-0 text-xs font-semibold text-brand-700 hover:underline dark:text-brand-400"
+        >
+          {copiado ? 'Copiado' : 'Copiar'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+type SgrPayload = {
+  cod_boleto?: string | null; nosso_numero?: string | null; tipo_boleto?: string | null;
+  parcela?: string | null; mes_referente?: string | null; valor?: string | null;
+  valor_pagamento?: string | null; forma_pagamento?: string | null;
+  data_emissao?: string | null; data_vencimento?: string | null;
+  data_vencimento_original?: string | null; data_pagamento?: string | null;
+  data_credito_banco?: string | null; formato_geracao_boleto?: string | null;
+  numero_nf?: string | null; matriz_filial?: string | null; interveniente?: string | null;
+  situacao?: string | null; codigo_banco?: string | null;
+  linha_digitavel?: string | null; cod_barras?: string | null; pix_copia_cola?: string | null;
+  placas?: string[] | null;
+  discriminacao?: { valor?: string; produto?: string; placa?: string; mes_referente?: string }[] | null;
+};
+
+type Billing = { id: number; contract_id?: number | null; client_id: number; payer_client_id?: number | null; item_id?: number | null; vehicle_id?: number | null; tracker_id?: number | null; title?: string | null; billing_type: string; installment_number?: number | null; installment_total?: number | null; amount: number; due_date: string; status: BillingStatus; payment_date?: string | null; payment_method?: string | null; notes?: string | null; paid_amount?: number | null; receipt_number?: string | null; period_label?: string | null; client_name?: string | null; payer_name?: string | null; vehicle_plate?: string | null; tracker_identifier?: string | null; plan_name?: string | null; contract_status?: string | null; overdue_days: number; sgr_payload?: SgrPayload | null };
 type Summary = { active_plans: number; active_contracts: number; pending_billings: number; overdue_billings: number; pending_amount: number; overdue_amount: number; paid_this_month: number };
 type RevenueItem = { label: string; total_received: number; total_billed: number; total_outstanding: number };
 type DelinquentItem = { client_id: number; client_name: string; total_open: number; overdue_count: number };
@@ -1932,6 +1969,77 @@ export default function FinanceiroPage() {
                 <Button variant="secondary" onClick={() => { if (!token) return; downloadProtectedFile(`/billings/${selectedBilling.id}/receipt`, token, `recibo-${selectedBilling.receipt_number ?? selectedBilling.id}.pdf`).catch(e => setError(parseError(e))); }}>Baixar recibo</Button>
               )}
             </div>
+
+            {/* ── Boleto de origem (SGR) ──
+                Cobrança migrada não tem boleto bancário para baixar: o SGR só
+                serve o PDF enquanto o boleto está aberto. O que resta é este
+                registro, que é o que o cliente pede quando quer "o boleto". */}
+            {selectedBilling.sgr_payload && (
+              <div className="rounded-xl border border-slate-100 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/50">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-2xs font-semibold uppercase tracking-widest text-slate-500">Boleto de origem (SGR)</p>
+                  {selectedBilling.sgr_payload.situacao && (
+                    <Badge variant="default">{selectedBilling.sgr_payload.situacao}</Badge>
+                  )}
+                </div>
+
+                <div className="mt-3 grid gap-x-6 gap-y-1.5 text-sm sm:grid-cols-2">
+                  {([
+                    ['Nº do boleto', selectedBilling.sgr_payload.cod_boleto],
+                    ['Nosso número', selectedBilling.sgr_payload.nosso_numero],
+                    ['Tipo', selectedBilling.sgr_payload.tipo_boleto],
+                    ['Parcela', selectedBilling.sgr_payload.parcela],
+                    ['Competência', selectedBilling.sgr_payload.mes_referente],
+                    ['Valor', selectedBilling.sgr_payload.valor && `R$ ${selectedBilling.sgr_payload.valor}`],
+                    ['Valor pago', selectedBilling.sgr_payload.valor_pagamento && `R$ ${selectedBilling.sgr_payload.valor_pagamento}`],
+                    ['Forma de pagamento', selectedBilling.sgr_payload.forma_pagamento],
+                    ['Emissão', selectedBilling.sgr_payload.data_emissao],
+                    ['Vencimento', selectedBilling.sgr_payload.data_vencimento],
+                    ['Vencimento original', selectedBilling.sgr_payload.data_vencimento_original],
+                    ['Pagamento', selectedBilling.sgr_payload.data_pagamento],
+                    ['Crédito no banco', selectedBilling.sgr_payload.data_credito_banco],
+                    ['Nota fiscal', selectedBilling.sgr_payload.numero_nf],
+                    ['Responsável financeiro', selectedBilling.sgr_payload.interveniente],
+                    ['Filial', selectedBilling.sgr_payload.matriz_filial],
+                  ] as [string, string | null | undefined][])
+                    .filter(([, valor]) => valor)
+                    .map(([rotulo, valor]) => (
+                      <div key={rotulo} className="flex justify-between gap-3 border-b border-slate-100 py-1 last:border-0 dark:border-slate-800">
+                        <span className="text-slate-500">{rotulo}</span>
+                        <span className="text-right font-medium text-slate-800 dark:text-slate-200">{valor}</span>
+                      </div>
+                    ))}
+                </div>
+
+                {!!selectedBilling.sgr_payload.discriminacao?.length && (
+                  <div className="mt-3">
+                    <p className="text-2xs font-semibold uppercase tracking-widest text-slate-500">Discriminação do boleto</p>
+                    <div className="mt-1 space-y-1 text-sm">
+                      {selectedBilling.sgr_payload.discriminacao.map((item, i) => (
+                        <div key={`${item.placa}-${i}`} className="flex justify-between gap-3 text-slate-700 dark:text-slate-300">
+                          <span>{item.placa ?? '—'}{item.produto ? ` · ${item.produto}` : ''}</span>
+                          <span className="font-medium">R$ {item.valor}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {(selectedBilling.sgr_payload.linha_digitavel || selectedBilling.sgr_payload.pix_copia_cola) && (
+                  <div className="mt-3 space-y-2">
+                    {selectedBilling.sgr_payload.linha_digitavel && (
+                      <CopiavelSgr rotulo="Linha digitável" valor={selectedBilling.sgr_payload.linha_digitavel} />
+                    )}
+                    {selectedBilling.sgr_payload.pix_copia_cola && (
+                      <CopiavelSgr rotulo="PIX copia e cola" valor={selectedBilling.sgr_payload.pix_copia_cola} />
+                    )}
+                    <p className="text-xs text-amber-700 dark:text-amber-500">
+                      Boleto ainda em aberto no SGR — confirme que a cobrança não foi reemitida aqui antes de reenviar ao cliente.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* ── NFS-e (Joinville) ── */}
             <div className="rounded-xl border border-slate-100 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/50">

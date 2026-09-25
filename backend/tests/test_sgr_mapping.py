@@ -225,3 +225,38 @@ class TestCiGet:
 
     def test_first_matching_candidate_wins(self):
         assert ci_get({'b': '2'}, 'a', 'b') == '2'
+
+
+class TestMapBoletoEmAberto:
+    """A situação do boleto não diz se ele ainda é devido — quem diz é
+    /buscar_boletos_abertos_cliente. Tratar 'APROVADO' de 2019 como dívida
+    inflaria a inadimplência e poderia gerar cobrança indevida."""
+
+    BOLETO = {
+        'cod_boleto': '11751', 'nosso_numero': '11751', 'valor': '44,99',
+        'mes_referente': '07/2019', 'data_vencimento': '15/08/2019',
+        'situacao': {'descricao': 'APROVADO'},
+    }
+
+    def test_aprovado_fora_da_lista_de_abertos_nao_vira_divida(self):
+        from app.models.enums import BillingStatus
+        from app.services.sgr_migration.mapping import map_boleto
+
+        mapped, _ = map_boleto(self.BOLETO, em_aberto=False)
+        assert mapped['status'] == BillingStatus.CANCELED.value
+
+    def test_boleto_listado_como_aberto_vira_pendente(self):
+        from app.models.enums import BillingStatus
+        from app.services.sgr_migration.mapping import map_boleto
+
+        mapped, _ = map_boleto(self.BOLETO, em_aberto=True)
+        assert mapped['status'] == BillingStatus.PENDING.value
+
+    def test_baixado_continua_pago_mesmo_fora_da_lista(self):
+        from app.models.enums import BillingStatus
+        from app.services.sgr_migration.mapping import map_boleto
+
+        mapped, _ = map_boleto(
+            {**self.BOLETO, 'situacao': {'descricao': 'BAIXADO'}}, em_aberto=False,
+        )
+        assert mapped['status'] == BillingStatus.PAID.value

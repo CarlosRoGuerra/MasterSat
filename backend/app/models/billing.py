@@ -1,5 +1,5 @@
 from datetime import date
-from sqlalchemy import Date, Enum, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import JSON, Date, Enum, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import SoftDeleteMixin, TimestampMixin
@@ -36,3 +36,7 @@ class Billing(Base, TimestampMixin, SoftDeleteMixin):
     paid_amount: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
     receipt_number: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     period_label: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
+    # Registro do boleto como o SGR devolve, para cobrança migrada. O boleto
+    # bancário em si deixa de existir lá depois de baixado, então estes
+    # campos são o que resta como documento de origem.
+    sgr_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
