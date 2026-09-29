@@ -139,6 +139,37 @@ def period_label_for_date(reference: date, interval_months: int = 1) -> str:
     return reference.strftime('%m/%Y')
 
 
+# Tipos de cobrança que "ocupam" um mês de um contrato: são a mensalidade
+# daquele período, em qualquer forma que ela tenha assumido. Não inclui
+# taxa_instalacao/taxa_desinstalacao/avulsa/item — essas são cobranças
+# paralelas e podem coexistir com a mensalidade do mesmo período.
+#
+# Única fonte da verdade para "esse contrato já tem cobrança neste mês?" —
+# usada tanto pelo fechamento mensal (não gerar por cima de um carnê) quanto
+# pelo parcelamento manual (não gerar carnê por cima de um mês já fechado).
+# As duas listas divergentes já causaram cobrança duplicada em produção.
+RECURRING_BILLING_TYPES = ('recorrente', 'prorata', 'primeira_mensalidade', 'carne')
+
+
+def existing_recurring_periods(
+    db: Session, contract_id: int | None, period_labels: Iterable[str],
+) -> set[str]:
+    """Dentre os period_labels informados, quais já têm mensalidade/carnê/
+    pró-rata lançados para este contrato (RECURRING_BILLING_TYPES)."""
+    labels = {label for label in period_labels if label}
+    if not labels or not contract_id:
+        return set()
+    rows = db.scalars(
+        select(Billing.period_label).where(
+            Billing.is_deleted.is_(False),
+            Billing.contract_id == contract_id,
+            Billing.period_label.in_(labels),
+            Billing.billing_type.in_(RECURRING_BILLING_TYPES),
+        )
+    ).all()
+    return set(rows)
+
+
 def plan_title(plan) -> str:
     """Título da cobrança a partir do plano, sem duplicar a palavra 'Plano'
     ("Plano Plano TESTE" quando o nome do plano já começa com 'Plano')."""

@@ -39,6 +39,7 @@ from app.services.financial import (
     associate_billing_charge_item,
     contract_payer_client_id,
     decimal_to_float,
+    existing_recurring_periods,
     generate_item_billings,
     plan_title,
     period_label_for_date,
@@ -49,15 +50,13 @@ MIN_BILLING_AMOUNT = Decimal('5.00')
 
 
 def _has_existing_billing(db: Session, contract_id: int, period_label: str) -> bool:
-    return db.query(Billing).filter(
-        Billing.is_deleted.is_(False),
-        Billing.contract_id == contract_id,
-        Billing.period_label == period_label,
-        # 'carne': parcela de carnê já cobre o mês — sem isto o fechamento
-        # mensal gerava uma mensalidade recorrente POR CIMA de um mês já
-        # pago via carnê (cobrança duplicada).
-        Billing.billing_type.in_(['recorrente', 'prorata', 'primeira_mensalidade', 'carne']),
-    ).first() is not None
+    # RECURRING_BILLING_TYPES inclui 'carne': parcela de carnê já cobre o mês
+    # — sem isto o fechamento mensal gerava uma mensalidade recorrente POR
+    # CIMA de um mês já pago via carnê (cobrança duplicada). A mesma lista é
+    # usada por /billings/parcelar (ver app.services.financial) para a
+    # direção oposta — carnê não pode ser gerado por cima de um mês que o
+    # fechamento já cobrou.
+    return bool(existing_recurring_periods(db, contract_id, [period_label]))
 
 
 # ---------------------------------------------------------------------------

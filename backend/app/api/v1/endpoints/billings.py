@@ -48,6 +48,7 @@ from app.services.financial import (
     add_months,
     charge_item_payer_client_id,
     decimal_to_float,
+    existing_recurring_periods,
     generate_receipt_number,
     lock_charge_items_for_billings,
     lock_billings_for_update,
@@ -512,7 +513,12 @@ def parcelar_contrato(payload: ParcelarContratoIn, db: Session = Depends(get_db)
     """Cria N parcelas (boletos) de um contrato — vincula ao plano do veículo e à
     quantidade de parcelas — para depois virarem carnê. Cada parcela vale o valor
     do plano (ou o valor informado), com vencimentos mensais."""
-    contract = db.get(Contract, payload.contract_id)
+    # Trava o contrato: fecha a corrida com um fechamento mensal concorrente
+    # para o MESMO contrato (mesmo padrão de _locked_contracts em
+    # billing_closure/recurring.py) — sem isto, um fechamento em andamento
+    # podia comitar a mensalidade de um mês entre a checagem de conflito
+    # abaixo e a criação das parcelas do carnê.
+    contract = db.query(Contract).filter(Contract.id == payload.contract_id).with_for_update().first()
     if not contract or contract.is_deleted:
         raise HTTPException(status_code=404, detail='Contrato não encontrado')
     plan = db.get(Plan, contract.plan_id)
@@ -536,6 +542,23 @@ def parcelar_contrato(payload: ParcelarContratoIn, db: Session = Depends(get_db)
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     total = payload.num_parcelas
+    period_labels = [add_months(primeiro, i).strftime('%m/%Y') for i in range(total)]
+
+    # Sem isto, um contrato que já teve a mensalidade de um mês gerada pelo
+    # fechamento (ou por um carnê anterior) ganhava uma SEGUNDA cobrança do
+    # mesmo mês ao gerar/regerar o carnê — cobrança duplicada em produção.
+    conflitos = existing_recurring_periods(db, contract.id, period_labels)
+    if conflitos:
+        meses_em_ordem = [p for p in period_labels if p in conflitos]
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                'Este contrato já tem cobrança de mensalidade lançada para: '
+                + ', '.join(meses_em_ordem)
+                + '. Cancele essas cobranças ou ajuste o primeiro vencimento antes de gerar o carnê.'
+            ),
+        )
+
     criados: list[Billing] = []
     for i in range(total):
         venc = add_months(primeiro, i)
@@ -552,7 +575,7 @@ def parcelar_contrato(payload: ParcelarContratoIn, db: Session = Depends(get_db)
             amount=valor,
             due_date=venc,
             status=BillingStatus.PENDING if venc >= date.today() else BillingStatus.OVERDUE,
-            period_label=venc.strftime('%m/%Y'),
+            period_label=period_labels[i],
             payment_method=getattr(contract, 'payment_method', None) or 'boleto',
         )
         db.add(b)

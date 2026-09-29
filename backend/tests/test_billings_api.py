@@ -224,6 +224,74 @@ class TestParcelarContrato:
         assert all(row['payer_client_id'] == outro_cliente.id for row in r.json())
         assert all(row['payer_name'] == outro_cliente.name for row in r.json())
 
+    def test_refuses_when_month_already_has_recorrente_billing(
+        self, http, db, contrato, billing_pendente,
+    ):
+        """Regressão: contrato que já teve a mensalidade de um mês gerada
+        pelo fechamento não pode ganhar uma parcela de carnê do MESMO mês
+        por cima — foi assim que produção duplicou a cobrança de clientes
+        de carnê."""
+        # billing_pendente (conftest) já ocupa 12/2099 neste contrato.
+        # num_parcelas mínimo do schema é 2 — a 2ª parcela (01/2100) não
+        # conflita, mas o lote inteiro deve ser recusado mesmo assim.
+        r = http.post(PREFIX + '/parcelar', json={
+            'contract_id': contrato.id,
+            'num_parcelas': 2,
+            'primeiro_vencimento': '2099-12-05',
+        })
+
+        assert r.status_code == 409
+        assert '12/2099' in r.json()['detail']
+        assert '01/2100' not in r.json()['detail']
+        assert db.query(Billing).filter(
+            Billing.contract_id == contrato.id, Billing.billing_type == 'carne',
+        ).count() == 0
+
+    def test_refuses_entire_batch_when_any_month_conflicts(
+        self, http, db, contrato, billing_pendente,
+    ):
+        # 3 parcelas cobrindo 11/2099, 12/2099 e 01/2100 — só a do meio
+        # colide com billing_pendente (12/2099). Recusa o lote inteiro: criar
+        # só 2 das 3 parcelas deixaria um carnê furado, mais confuso do que
+        # simplesmente pedir para o operador resolver o mês em conflito antes.
+        r = http.post(PREFIX + '/parcelar', json={
+            'contract_id': contrato.id,
+            'num_parcelas': 3,
+            'primeiro_vencimento': '2099-11-10',
+        })
+
+        assert r.status_code == 409
+        assert db.query(Billing).filter(
+            Billing.contract_id == contrato.id, Billing.billing_type == 'carne',
+        ).count() == 0
+
+    def test_does_not_conflict_with_non_recurring_billing_types(
+        self, http, db, contrato,
+    ):
+        """Uma cobrança avulsa (taxa de instalação, serviço) no mesmo mês
+        não é a mensalidade daquele mês — não deve bloquear o carnê."""
+        avulsa = Billing(
+            contract_id=contrato.id,
+            client_id=contrato.client_id,
+            amount=Decimal('50.00'),
+            due_date=date(2099, 12, 20),
+            status=BillingStatus.PENDING,
+            billing_type='taxa_instalacao',
+            period_label='12/2099',
+            title='Taxa de instalação',
+        )
+        db.add(avulsa)
+        db.commit()
+
+        r = http.post(PREFIX + '/parcelar', json={
+            'contract_id': contrato.id,
+            'num_parcelas': 2,
+            'primeiro_vencimento': '2099-12-05',
+        })
+
+        assert r.status_code == 200
+        assert len(r.json()) == 2
+
 # ---------------------------------------------------------------------------
 # GET /{id}
 # ---------------------------------------------------------------------------

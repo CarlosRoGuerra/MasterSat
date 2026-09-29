@@ -22,6 +22,7 @@ from app.models.enums import BillingStatus
 from app.models.plan import Plan
 from app.services.financial import (
     add_months,
+    existing_recurring_periods,
     generate_monthly_billings,
     normalize_due_date,
     period_label_for_date,
@@ -119,6 +120,76 @@ class TestPeriodLabelForDate:
 
     def test_annual(self):
         assert period_label_for_date(date(2025, 6, 1), 12) == "2025"
+
+
+# ---------------------------------------------------------------------------
+# existing_recurring_periods
+#
+# Fonte única da verdade para "esse contrato já tem mensalidade neste mês?",
+# usada tanto pelo fechamento (não duplicar sobre um carnê) quanto pelo
+# parcelamento manual (não gerar carnê sobre um mês já fechado). As duas
+# listas divergentes já causaram cobrança duplicada em produção.
+# ---------------------------------------------------------------------------
+
+class TestExistingRecurringPeriods:
+    def _make_billing(self, db, contract_id, client_id, period_label, billing_type):
+        b = Billing(
+            contract_id=contract_id,
+            client_id=client_id,
+            amount=Decimal("100.00"),
+            due_date=date(2099, 1, 1),
+            status=BillingStatus.PENDING,
+            billing_type=billing_type,
+            period_label=period_label,
+        )
+        db.add(b)
+        db.commit()
+        return b
+
+    def test_finds_recorrente(self, db, contrato):
+        self._make_billing(db, contrato.id, contrato.client_id, "06/2099", "recorrente")
+        assert existing_recurring_periods(db, contrato.id, ["06/2099", "07/2099"]) == {"06/2099"}
+
+    def test_finds_carne(self, db, contrato):
+        self._make_billing(db, contrato.id, contrato.client_id, "06/2099", "carne")
+        assert existing_recurring_periods(db, contrato.id, ["06/2099"]) == {"06/2099"}
+
+    def test_finds_prorata_and_primeira_mensalidade(self, db, contrato):
+        self._make_billing(db, contrato.id, contrato.client_id, "06/2099", "prorata")
+        self._make_billing(db, contrato.id, contrato.client_id, "07/2099", "primeira_mensalidade")
+        assert existing_recurring_periods(
+            db, contrato.id, ["06/2099", "07/2099"],
+        ) == {"06/2099", "07/2099"}
+
+    def test_ignores_non_recurring_types(self, db, contrato):
+        # Taxa de instalação/desinstalação e cobrança avulsa não são a
+        # mensalidade do mês — podem coexistir com ela.
+        self._make_billing(db, contrato.id, contrato.client_id, "06/2099", "taxa_instalacao")
+        assert existing_recurring_periods(db, contrato.id, ["06/2099"]) == set()
+
+    def test_ignores_other_contract(self, db, contrato, cliente):
+        outro = Contract(
+            client_id=cliente.id, plan_id=contrato.plan_id,
+            start_date=date(2024, 1, 1), status="ativo", billing_day=1,
+        )
+        db.add(outro)
+        db.commit()
+        db.refresh(outro)
+        self._make_billing(db, outro.id, cliente.id, "06/2099", "recorrente")
+
+        assert existing_recurring_periods(db, contrato.id, ["06/2099"]) == set()
+
+    def test_ignores_soft_deleted(self, db, contrato):
+        b = self._make_billing(db, contrato.id, contrato.client_id, "06/2099", "recorrente")
+        b.is_deleted = True
+        db.commit()
+        assert existing_recurring_periods(db, contrato.id, ["06/2099"]) == set()
+
+    def test_empty_labels_returns_empty_without_querying(self, db, contrato):
+        assert existing_recurring_periods(db, contrato.id, []) == set()
+
+    def test_no_contract_id_returns_empty(self, db):
+        assert existing_recurring_periods(db, None, ["06/2099"]) == set()
 
 
 # ---------------------------------------------------------------------------
