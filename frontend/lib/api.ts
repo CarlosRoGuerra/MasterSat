@@ -3,7 +3,20 @@ import { clearSession } from './auth';
 export const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
 
 function buildApiUrl(path: string) {
-  return `${API_URL.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
+  const [rawPath, query] = path.replace(/^\/+/, '').split('?');
+  let cleanPath = rawPath.replace(/\/+$/, '');
+  // Rotas de listagem/criação são sempre definidas com barra final no backend
+  // (@router.get('/'), @router.post('/')) — um único segmento sem barra
+  // ('clients', 'trackers'...) dispara um redirect 307 do FastAPI. Esse
+  // redirect quebra o CORS no navegador (falha só lá, curl segue e "funciona"),
+  // então evitamos o redirect de vez adicionando a barra aqui. Não mexe em
+  // caminhos com mais de um segmento ('clients/123', 'billings/reports/...'),
+  // que são rotas definidas sem barra final.
+  if (cleanPath && !cleanPath.includes('/')) {
+    cleanPath += '/';
+  }
+  const url = `${API_URL.replace(/\/+$/, '')}/${cleanPath}`;
+  return query ? `${url}?${query}` : url;
 }
 
 function loginPathForCurrentPage() {
@@ -159,4 +172,16 @@ export interface Page<T> {
 export async function apiFetchList<T>(path: string, options: RequestInit = {}, token?: string): Promise<T[]> {
   const page = await apiFetch<Page<T>>(path, options, token);
   return page.items;
+}
+
+/** Percorre skip/limit até trazer todos os registros — `pageSize` não pode
+ *  passar do `le=` do endpoint (clients: 300, vehicles/trackers: 500). */
+export async function apiFetchAll<T>(path: string, token?: string, pageSize = 500): Promise<T[]> {
+  const sep = path.includes('?') ? '&' : '?';
+  const all: T[] = [];
+  for (let skip = 0; ; skip += pageSize) {
+    const page = await apiFetch<Page<T>>(`${path}${sep}skip=${skip}&limit=${pageSize}`, {}, token);
+    all.push(...page.items);
+    if (page.items.length < pageSize || all.length >= page.total) return all;
+  }
 }

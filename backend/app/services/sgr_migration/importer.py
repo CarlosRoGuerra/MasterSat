@@ -33,6 +33,7 @@ from app.models.enums import BillingStatus, ClientStatus, TrackerStatus, Vehicle
 from app.models.plan import Plan
 from app.models.tracker import Tracker
 from app.models.vehicle import Vehicle
+from app.services.financial import RECURRING_BILLING_TYPES, existing_recurring_periods
 from app.services.sgr_migration.normalize import is_valid_plate
 from app.services.sgr_migration.poc import ClientNode, PocRunResult
 
@@ -57,6 +58,9 @@ class ImportStats:
     billings_created: int = 0
     billings_reused: int = 0
     billings_skipped: int = 0
+    # Reemissões canceladas/removidas de uma mensalidade cujo mês já tem o
+    # boleto que valeu (ver _import_billings) — só contagem, sem 1 aviso cada.
+    billings_replaced: int = 0
     invoices_created: int = 0
     invoices_reused: int = 0
     invoices_skipped: int = 0
@@ -376,8 +380,15 @@ def _import_billings(
     descartada — perdendo valor real. O valor entra na chave porque a mesma
     placa aparece mais de uma vez no mesmo boleto quando há ajuste (ex.:
     mensalidade 49,99, desconto -41,65 e serviço 120,00 no mesmo documento).
+
+    Um mês de contrato comporta UMA mensalidade (índice único
+    uq_billings_contract_period_recurring). No SGR o mesmo mês costuma ter
+    vários boletos — reemissões e trocas de carnê (caso real: ARV0682 em
+    03/2021 com 5888 REMOVIDO, 5950 CANCELADO, 7761 REMOVIDO e 7787 pago).
+    Os boletos são processados do melhor para o pior (pago > aberto >
+    cancelado, mais novo primeiro), então o que ocupa o mês é o que valeu.
     """
-    for mapped in node.billings:
+    for mapped in sorted(node.billings, key=_prioridade_no_mes):
         if mapped.get('amount') is None or not mapped.get('due_date'):
             stats.billings_skipped += 1
             stats.skip(
@@ -431,12 +442,32 @@ def _import_billings(
         if status == BillingStatus.PENDING and vencimento and vencimento < date.today():
             status = BillingStatus.OVERDUE
 
+        billing_type = mapped.get('billing_type') or 'recorrente'
+        notas = _nota_cobranca(mapped)
+        periodo = mapped.get('period_label')
+        if (
+            contrato and periodo and billing_type in RECURRING_BILLING_TYPES
+            and existing_recurring_periods(db, contrato.id, [periodo])
+        ):
+            if status == BillingStatus.CANCELED:
+                stats.billings_replaced += 1
+                continue
+            # Segundo boleto pago/aberto no mesmo mês: dinheiro real que não
+            # pode sumir, mas também não pode virar uma 2ª mensalidade.
+            billing_type = 'avulsa'
+            notas = (f'Mensalidade {periodo} em duplicidade no SGR — o mês já tem outra '
+                     f'cobrança lançada; importada como avulsa. {notas}')
+            stats.skip(
+                f"cobrança SGR {mapped.get('title')} ({periodo}): 2º boleto "
+                f"{status.value} para o mesmo mês do contrato — importado como avulsa, confira"
+            )
+
         db.add(Billing(
             client_id=client_id,
             contract_id=contrato.id if contrato else None,
             vehicle_id=veiculo.id if veiculo else None,
             title=_trunc(mapped.get('title'), 160),
-            billing_type=mapped.get('billing_type') or 'recorrente',
+            billing_type=billing_type,
             amount=mapped['amount'],
             due_date=_to_date(mapped.get('due_date')),
             payment_date=_to_date(mapped.get('payment_date')),
@@ -448,7 +479,7 @@ def _import_billings(
             period_label=_trunc(mapped.get('period_label'), 20),
             status=status,
             sgr_payload=mapped.get('sgr_payload'),
-            notes=_nota_cobranca(mapped),
+            notes=notas,
         ))
         # A sessão é autoflush=False: sem o flush, a consulta de dedup acima
         # não enxerga o que acabou de ser inserido e o mesmo boleto entra
@@ -457,6 +488,21 @@ def _import_billings(
         stats.billings_created += 1
 
         _import_boleto_pdf(db, mapped, client_id, stats, dry_run)
+
+
+_RANK_STATUS = {
+    BillingStatus.PAID.value: 0,
+    BillingStatus.PENDING.value: 1,
+    BillingStatus.OVERDUE.value: 1,
+}
+
+
+def _prioridade_no_mes(mapped: dict) -> tuple:
+    try:
+        cod = -int((mapped.get('sgr_payload') or {}).get('cod_boleto') or 0)
+    except (TypeError, ValueError):
+        cod = 0
+    return (_RANK_STATUS.get(mapped.get('status') or '', 2), cod)
 
 
 _NFSE_CATEGORIA = 'nota_fiscal'

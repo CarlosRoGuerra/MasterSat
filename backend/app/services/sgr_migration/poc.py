@@ -70,6 +70,16 @@ class PocRunResult:
     request_log: list[RequestLogEntry]
     plans: list[dict] = field(default_factory=list)
     plan_issues: list[str] = field(default_factory=list)
+    # Clientes lidos do SGR mas fora do escopo da migração (situação não é
+    # ATIVO/INADIMPLENTE) — {situação: quantidade}. Não entram em `clients`
+    # nem geram veículo/contrato/cobrança; ficam só como contagem para o
+    # relatório, para "10 clientes" não virar silenciosamente "6 clientes"
+    # sem explicação nenhuma.
+    clients_out_of_scope: dict[str, int] = field(default_factory=dict)
+    # Mesma ideia para veículos: {situação: quantidade} dos que não são
+    # ATIVO/INADIMPLENTE. As cobranças antigas dessas placas continuam vindo
+    # no histórico do cliente (entram sem veículo — ver _import_billings).
+    vehicles_out_of_scope: dict[str, int] = field(default_factory=dict)
 
 
 def check_connectivity(client: SGRClient) -> dict:
@@ -133,9 +143,19 @@ def _fetch_trackers_for_vehicle(
     return trackers
 
 
+# No SGR a inadimplência é situação do VEÍCULO (ver _VEHICLE_STATUS_MAP) —
+# veículo INADIMPLENTE continua rastreado e cobrado, então entra junto.
+_SITUACOES_VEICULO_MIGRAVEIS = {'ATIVO', 'ATIVADO', 'INADIMPLENTE'}
+
+
+def _situacao_veiculo(raw: dict) -> str:
+    return str(ci_get(raw, 'situacao_veiculo') or '(sem situação)').strip().upper()
+
+
 def _fetch_vehicles_for_client(
     client: SGRClient, cod_cliente, issues: list[str], tracker_index: dict[str, dict],
     vencimento_index: dict[str, int] | None = None,
+    fora_do_escopo: dict[str, int] | None = None,
 ) -> list[VehicleNode]:
     vehicles: list[VehicleNode] = []
     if not cod_cliente:
@@ -148,6 +168,11 @@ def _fetch_vehicles_for_client(
         return vehicles
 
     for vraw in veiculos_raw:
+        situacao = _situacao_veiculo(vraw)
+        if situacao not in _SITUACOES_VEICULO_MIGRAVEIS:
+            if fora_do_escopo is not None:
+                fora_do_escopo[situacao] = fora_do_escopo.get(situacao, 0) + 1
+            continue
         vmapped, vissues = map_veiculo(vraw)
         plate = vmapped.get('plate')
         trackers = (
@@ -159,7 +184,7 @@ def _fetch_vehicles_for_client(
         vehicles.append(VehicleNode(raw=vraw, mapped=vmapped, issues=vissues, trackers=trackers))
 
     if not vehicles:
-        issues.append('Cliente sem veículo cadastrado')
+        issues.append('Cliente sem veículo ativo' if veiculos_raw else 'Cliente sem veículo cadastrado')
     return vehicles
 
 
@@ -387,12 +412,62 @@ def _fetch_notas_fiscais(client: SGRClient, boletos: list[dict], issues: list[st
     return notas
 
 
+_PAGINA_CLIENTES = 200
+
+# Só migramos cliente com contrato em vigor ou em cobrança — quem já
+# cancelou, foi suspenso ou nunca chegou a ativar não deveria gerar
+# contrato/cobrança no MasterSat. 'ATIVADO' é tratado como sinônimo de
+# 'ATIVO': apareceu 1 vez em 520 clientes reais e tudo indica erro de
+# digitação do mesmo estado — excluir esse único cliente por causa de uma
+# letra a mais seria mais arbitrário do que incluir.
+_SITUACOES_MIGRAVEIS = {'ATIVO', 'ATIVADO', 'INADIMPLENTE'}
+
+
+def _situacao_cliente(raw: dict) -> str:
+    situacao = ci_get(raw, 'situacao')
+    return str(ci_get(situacao, 'descricao') or '(sem situação)').strip().upper()
+
+
+def _clientes_elegiveis(
+    client: SGRClient, limit: int, fora_do_escopo: dict[str, int],
+) -> list[dict]:
+    """Pagina /buscar_cliente até juntar `limit` clientes com situação
+    migrável (ver _SITUACOES_MIGRAVEIS), pulando os demais sem gastar
+    requisição com os veículos/vínculos/boletos deles.
+
+    `limit` conta clientes ELEGÍVEIS, não lidos: na base real (~59% ativo,
+    ~33% cancelado), pedir 10 lê bem mais que 10 até juntar 10 utilizáveis.
+    """
+    elegiveis: list[dict] = []
+    indice = 0
+    while len(elegiveis) < limit:
+        lote = client.buscar_clientes(total=_PAGINA_CLIENTES, indice=indice)
+        if not lote:
+            break
+        for raw in lote:
+            situacao = _situacao_cliente(raw)
+            if situacao in _SITUACOES_MIGRAVEIS:
+                elegiveis.append(raw)
+                if len(elegiveis) >= limit:
+                    break
+            else:
+                fora_do_escopo[situacao] = fora_do_escopo.get(situacao, 0) + 1
+        if len(lote) < _PAGINA_CLIENTES:
+            break
+        indice += _PAGINA_CLIENTES
+    return elegiveis
+
+
 def run_poc(
     client: SGRClient, limit: int, com_boletos: bool = False, com_notas: bool = False,
     periodo: tuple[date, date] | None = None,
 ) -> PocRunResult:
-    """ETAPAS 6/7 — busca exatamente `limit` clientes e caminha os relacionamentos."""
-    clients_raw = client.buscar_clientes(total=limit, indice=0)
+    """ETAPAS 6/7 — busca `limit` clientes ATIVOS/INADIMPLENTES e caminha os
+    relacionamentos. Cliente cancelado/suspenso/inativo/só cadastrado é
+    contado em `clients_out_of_scope` e não entra na migração."""
+    fora_do_escopo: dict[str, int] = {}
+    veiculos_fora: dict[str, int] = {}
+    clients_raw = _clientes_elegiveis(client, limit, fora_do_escopo)
     tracker_index = build_tracker_index(client)
     planos, plan_issues, vencimento_index = _fetch_planos(client)
 
@@ -411,6 +486,7 @@ def run_poc(
 
         vehicles = _fetch_vehicles_for_client(
             client, ci_get(raw, 'cod_cliente'), issues, tracker_index, vencimento_index,
+            veiculos_fora,
         )
         billings: list[dict] = []
         invoices: list[dict] = []
@@ -436,4 +512,6 @@ def run_poc(
         request_log=list(client.request_log),
         plans=planos,
         plan_issues=plan_issues,
+        clients_out_of_scope=fora_do_escopo,
+        vehicles_out_of_scope=veiculos_fora,
     )

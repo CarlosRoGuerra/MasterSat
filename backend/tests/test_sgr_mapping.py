@@ -7,7 +7,9 @@ não foi inventado.
 from __future__ import annotations
 
 from app.models.enums import ClientStatus, TrackerStatus, VehicleStatus
-from app.services.sgr_migration.mapping import ci_get, map_cliente, map_tracker, map_veiculo
+from app.services.sgr_migration.mapping import (
+    ci_get, map_billing_type, map_cliente, map_tracker, map_veiculo,
+)
 
 CLIENTE_DOC_EXAMPLE = {
     "cod_cliente": "11946",
@@ -80,6 +82,18 @@ class TestMapCliente:
         assert mapped['email'] == 'carlos.silva@hinova.com.br'
         assert mapped['extra_emails'] is None
 
+    def test_contato_sem_nome_usa_descricao_e_valida_no_schema(self):
+        from app.schemas.client import ContactItem
+        raw = {**CLIENTE_DOC_EXAMPLE, 'contatos': [
+            {'descricao': 'CELULAR', 'contato': '(47) 99999-8888', 'nome': None},
+            {'descricao': 'RECADO', 'contato': None, 'nome': None},
+            {'descricao': None, 'contato': '4733334444', 'nome': None},
+        ]}
+        mapped, _issues = map_cliente(raw)
+        assert [c['name'] for c in mapped['contacts']] == ['CELULAR', 'Contato']
+        for c in mapped['contacts']:
+            ContactItem.model_validate(c)
+
     def test_parses_iso_birth_date(self):
         mapped, _issues = map_cliente(CLIENTE_DOC_EXAMPLE)
         assert mapped['birth_date'] == '1995-03-10'
@@ -148,6 +162,34 @@ class TestMapVeiculo:
     def test_default_status_is_active_when_no_situacao(self):
         mapped, _issues = map_veiculo({'placa_veiculo': 'ABC1234'})
         assert mapped['status'] == VehicleStatus.ACTIVE.value
+
+    def test_ano_fora_da_faixa_e_descartado(self):
+        # Caso real (STGT50): anofab/anomod = '2' derrubava GET /vehicles com 500.
+        mapped, issues = map_veiculo({'placa_veiculo': 'STGT50', 'anofab_veiculo': '2', 'anomod_veiculo': '2020'})
+        assert mapped['manufacture_year'] is None
+        assert mapped['model_year'] == 2020
+        assert any('manufacture_year' in i for i in issues)
+
+    def test_campos_invalidos_descartados_e_resultado_valida_no_schema(self):
+        from app.schemas.vehicle import VehicleOut
+        raw = {
+            'placa_veiculo': 'ABC1234', 'chassi_veiculo': '123', 'renavam_veiculo': '12',
+            'cep_veiculo': '8922', 'uf_veiculo': 'SANTA CATARINA', 'fipe_valor_veiculo': '-10,00',
+            'data_contrato_veiculo': '10/05/2024', 'data_final_contrato_veiculo': '01/01/2024',
+        }
+        mapped, _issues = map_veiculo(raw)
+        for campo in ('chassis', 'renavam', 'address_zip_code', 'state', 'fipe_value', 'contract_end_date'):
+            assert mapped[campo] is None, campo
+        VehicleOut.model_validate({**mapped, 'id': 1, 'client_id': 1})
+
+    def test_campos_validos_nao_sao_tocados(self):
+        raw = {'placa_veiculo': 'ABC1234', 'chassi_veiculo': '9BWZZZ377VT004251', 'uf_veiculo': 'SC',
+               'anofab_veiculo': '2019', 'anomod_veiculo': '2020'}
+        mapped, issues = map_veiculo(raw)
+        assert mapped['chassis'] == '9BWZZZ377VT004251'
+        assert mapped['state'] == 'SC'
+        assert mapped['manufacture_year'] == 2019
+        assert not any('descartado' in i for i in issues)
 
 
 class TestMapTracker:
@@ -260,3 +302,40 @@ class TestMapBoletoEmAberto:
             {**self.BOLETO, 'situacao': {'descricao': 'BAIXADO'}}, em_aberto=False,
         )
         assert mapped['status'] == BillingStatus.PAID.value
+
+
+class TestMapBillingType:
+    """Regressão: 'MENSALIDADE EM ABERTO 15/01/2025 EM 5X' (dívida antiga
+    renegociada em parcelas) caiu como 'recorrente' por conter a substring
+    'MENSALIDADE' -- e colidiu com a mensalidade normal da MESMA placa no
+    MESMO mês (caso real: ABR EXPRESS, boleto 1738, R$ 90,98 + R$ 64,99),
+    duplicando a cobrança do contrato."""
+
+    def test_mensalidade_normal_e_recorrente(self):
+        assert map_billing_type('MENSALIDADE') == 'recorrente'
+
+    def test_mensalidade_em_aberto_parcelada_e_avulsa(self):
+        assert map_billing_type('MENSALIDADE EM ABERTO 15/01/2025 EM 5X') == 'avulsa'
+        assert map_billing_type('MENSALIDADE EM ABERTO 15/02/2026 EM 5X') == 'avulsa'
+
+    def test_prorata(self):
+        assert map_billing_type('DESCONTO PRORATA') == 'prorata'
+
+    def test_instalacao_e_desinstalacao(self):
+        assert map_billing_type('INSTALAÇÃO PADRÃO') == 'taxa_instalacao'
+        assert map_billing_type('DESINSTALAÇÃO EXTERNA') == 'taxa_desinstalacao'
+
+    def test_desconto_simples_sem_prorata_e_avulsa(self):
+        # 'DESCONTO' sozinho (sem 'PRORATA') não é a mesma coisa
+        assert map_billing_type('DESCONTO') == 'avulsa'
+
+    def test_produtos_sem_regra_especifica_sao_avulsa(self):
+        assert map_billing_type('Tarifas bancária') == 'avulsa'
+        assert map_billing_type('TROCA DE VEICULO') == 'avulsa'
+        assert map_billing_type('AVULSO') == 'avulsa'
+
+    def test_produto_vazio_e_recorrente(self):
+        # Sem produto nenhum (linha única do boleto, sem discriminação) —
+        # mantém o comportamento anterior à introdução deste campo.
+        assert map_billing_type(None) == 'recorrente'
+        assert map_billing_type('') == 'recorrente'

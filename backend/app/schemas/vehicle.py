@@ -1,8 +1,30 @@
+import re
 from datetime import date
 
 from pydantic import BaseModel, field_validator, model_validator
 
 from app.models.enums import VehicleStatus
+
+def _plate_valida(value: str) -> bool:
+    """7 caracteres: só o tamanho, como sempre foi aqui — NÃO aplica a regex
+    oficial (Mercosul/antiga) que o importador do SGR usa. Essa regex é uma
+    guarda de QUALIDADE para dado que vem de fora (rejeitar 'ALESSANDRO',
+    'CASE580H'); aplicá-la aqui apertaria retroativamente o cadastro manual e
+    quebraria a listagem de qualquer placa de 7 caracteres já existente fora
+    do padrão oficial (achado testando: 'ABCD123'/'EFGH567' já cadastrados).
+
+    5-6 caracteres: NOVO — identificador livre de máquina sem placa oficial
+    (ex.: 'VIO17', 'MAQ002'), desde que tenha letra E dígito — barra nome de
+    pessoa digitado por engano (ex.: 'GEISON')."""
+    if len(value) == 7:
+        return True
+    if len(value) in (5, 6):
+        return (
+            bool(re.fullmatch(r'[A-Z0-9]+', value))
+            and any(c.isalpha() for c in value)
+            and any(c.isdigit() for c in value)
+        )
+    return False
 
 
 class VehicleBase(BaseModel):
@@ -42,7 +64,7 @@ class VehicleBase(BaseModel):
     @classmethod
     def normalize_plate(cls, value: str) -> str:
         value = value.strip().upper().replace('-', '').replace(' ', '')
-        if len(value) != 7:
+        if not _plate_valida(value):
             raise ValueError('Placa inválida')
         return value
 
@@ -161,7 +183,7 @@ class VehicleUpdate(BaseModel):
         if value is None or value == '':
             return None
         value = value.strip().upper().replace('-', '').replace(' ', '')
-        if len(value) != 7:
+        if not _plate_valida(value):
             raise ValueError('Placa inválida')
         return value
 

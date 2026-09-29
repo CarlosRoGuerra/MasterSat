@@ -298,6 +298,52 @@ class TestHistoricoDeCobranca:
         assert billing.contract_id is None
         assert billing.client_id == db.query(Client).one().id
 
+    def _mes_com_reemissoes(self, boletos):
+        resultado = _resultado()
+        resultado.clients[0].billings = [
+            {'amount': 59.99, 'vehicle_plate': 'ABC1234', 'period_label': '03/2021',
+             'due_date': '2021-04-12', 'payment_date': None, 'paid_amount': None,
+             'payment_method': None, 'installment_number': 1, 'installment_total': 1,
+             'billing_type': 'recorrente', 'title': f'Boleto SGR {cod} - ABC1234',
+             'receipt_number': cod, 'status': status, 'sgr_payload': {'cod_boleto': cod}}
+            for cod, status in boletos
+        ]
+        return resultado
+
+    def test_reemissoes_canceladas_do_mes_nao_viram_segunda_mensalidade(self, db):
+        # Caso real (ARV0682, 03/2021): 3 reemissões canceladas/removidas e 1
+        # pago no mesmo mês — gravar todos como mensalidade violava
+        # uq_billings_contract_period_recurring e abortava a importação.
+        # O pago vem por ÚLTIMO de propósito: é ele que tem de ficar.
+        stats = import_poc_result(db, self._mes_com_reemissoes([
+            ('5888', 'cancelada'), ('5950', 'cancelada'), ('7761', 'cancelada'), ('7787', 'paga'),
+        ]), dry_run=False)
+
+        billing = db.query(Billing).one()
+        assert billing.receipt_number == '7787'
+        assert billing.status == BillingStatus.PAID
+        assert billing.billing_type == 'recorrente'
+        assert stats.billings_replaced == 3
+
+    def test_mes_so_com_canceladas_fica_com_a_mais_recente(self, db):
+        import_poc_result(db, self._mes_com_reemissoes([
+            ('5950', 'cancelada'), ('7761', 'cancelada'),
+        ]), dry_run=False)
+
+        assert db.query(Billing).one().receipt_number == '7761'
+
+    def test_segundo_boleto_pago_no_mesmo_mes_entra_como_avulsa(self, db):
+        # Pagamento em duplicidade é dinheiro real: não some, mas também não
+        # pode ocupar o mês como uma 2ª mensalidade.
+        stats = import_poc_result(db, self._mes_com_reemissoes([
+            ('7787', 'paga'), ('7790', 'paga'),
+        ]), dry_run=False)
+
+        tipos = {b.receipt_number: b.billing_type for b in db.query(Billing).all()}
+        assert tipos == {'7790': 'recorrente', '7787': 'avulsa'}
+        assert any('duplicidade' in (b.notes or '') for b in db.query(Billing).all())
+        assert any('confira' in motivo for motivo in stats.skips)
+
     def test_rodar_duas_vezes_nao_duplica_cobranca(self, db):
         import_poc_result(db, self._com_boleto(), dry_run=False)
         stats = import_poc_result(db, self._com_boleto(), dry_run=False)

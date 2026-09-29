@@ -65,8 +65,8 @@ def main() -> int:
     parser.add_argument('--apply', action='store_true', help='Grava de verdade (sem isto é só simulação)')
     parser.add_argument('--permitir-banco-remoto', action='store_true',
                         help='Libera --apply em banco não-local. Use com MUITA atenção.')
-    parser.add_argument('--boletos', action='store_true',
-                        help='Traz também o histórico de cobrança (1 chamada a mais por cliente)')
+    parser.add_argument('--sem-boletos', action='store_true',
+                        help='NÃO traz o histórico financeiro (por padrão ele vem junto)')
     parser.add_argument('--notas', action='store_true',
                         help='Baixa o XML das notas fiscais e guarda como documento do cliente')
     parser.add_argument('--de', type=str, default=None, metavar='AAAA-MM',
@@ -85,11 +85,21 @@ def main() -> int:
     elif args.de or args.ate:
         print('RECUSADO: --de e --ate andam juntos.')
         return 1
+    if args.sem_boletos and periodo:
+        print('RECUSADO: --de/--ate definem o período do histórico financeiro — não combinam com --sem-boletos.')
+        return 1
+    com_boletos = not args.sem_boletos
     host, banco = _banco_descricao()
     local = host in _HOSTS_LOCAIS
 
     print(f'Banco de destino: {banco}  ({"LOCAL" if local else "REMOTO"})')
-    print(f'Origem: SGR Hinova · {limit} cliente(s)')
+    print(f'Origem: SGR Hinova · {limit} cliente(s) · só veículos ativos/inadimplentes')
+    if not com_boletos:
+        print('Histórico financeiro: NÃO (--sem-boletos)')
+    elif periodo:
+        print(f'Histórico financeiro: {args.de} até {args.ate}')
+    else:
+        print('Histórico financeiro: completo (1 consulta por cliente)')
     print(f'Modo: {"GRAVANDO (--apply)" if args.apply else "SIMULAÇÃO (dry-run) — nada será gravado"}')
     print()
 
@@ -101,7 +111,7 @@ def main() -> int:
     print('Lendo do SGR (somente leitura)...')
     sgr = SGRClient()
     try:
-        resultado = run_poc(sgr, limit, com_boletos=args.boletos, com_notas=args.notas, periodo=periodo)
+        resultado = run_poc(sgr, limit, com_boletos=com_boletos, com_notas=args.notas, periodo=periodo)
     except SGRIncompleteScan as exc:
         print(f'ABORTADO — varredura incompleta: {exc}')
         print('Nada foi gravado. Um mês faltando deixaria o histórico financeiro')
@@ -110,7 +120,17 @@ def main() -> int:
     except (SGRError, SGRApiError) as exc:
         print(f'FALHA ao ler o SGR: {exc}')
         return 1
-    print(f'  {len(resultado.clients)} cliente(s) lidos em {resultado.request_count} requisição(ões).')
+    print(f'  {len(resultado.clients)} cliente(s) elegível(is) (ativo/inadimplente) '
+          f'em {resultado.request_count} requisição(ões).')
+    if resultado.clients_out_of_scope:
+        total_fora = sum(resultado.clients_out_of_scope.values())
+        detalhe = ', '.join(f'{sit}: {n}' for sit, n in sorted(resultado.clients_out_of_scope.items()))
+        print(f'  {total_fora} cliente(s) fora do escopo, não migrado(s): {detalhe}')
+    if resultado.vehicles_out_of_scope:
+        total_fora = sum(resultado.vehicles_out_of_scope.values())
+        detalhe = ', '.join(f'{sit}: {n}' for sit, n in sorted(resultado.vehicles_out_of_scope.items()))
+        print(f'  {total_fora} veículo(s) não ativo(s), não migrado(s): {detalhe}')
+        print('  (as cobranças antigas dessas placas continuam no histórico do cliente)')
     print()
 
     db = SessionLocal()
@@ -129,11 +149,14 @@ def main() -> int:
     print(f'RASTREADORES {rotulo}: {stats.trackers_created} | já existiam: {stats.trackers_reused} | ignorados: {stats.trackers_skipped}')
     print(f'PLANOS       {rotulo}: {stats.plans_created} | já existiam: {stats.plans_reused} | ignorados: {stats.plans_skipped}')
     print(f'CONTRATOS    {rotulo}: {stats.contracts_created} | já existiam: {stats.contracts_reused} | ignorados: {stats.contracts_skipped}')
-    if args.boletos:
+    if com_boletos:
         print(f'COBRANÇAS    {rotulo}: {stats.billings_created} | já existiam: {stats.billings_reused} | ignorados: {stats.billings_skipped}')
+        if stats.billings_replaced:
+            print(f'             {stats.billings_replaced} reemissão(ões) cancelada(s) de mensalidade puladas '
+                  '(o mês já tem o boleto que valeu)')
     if args.notas:
         print(f'NOTAS FISCAIS {rotulo}: {stats.invoices_created} | já existiam: {stats.invoices_reused} | ignoradas: {stats.invoices_skipped}')
-    if args.boletos and (stats.boletos_created or stats.boletos_reused or stats.boletos_skipped):
+    if com_boletos and (stats.boletos_created or stats.boletos_reused or stats.boletos_skipped):
         print(f'PDF DE BOLETO {rotulo}: {stats.boletos_created} | já existiam: {stats.boletos_reused} | ignorados: {stats.boletos_skipped}'
               '   (só dos boletos em aberto — o SGR não guarda o documento dos já baixados)')
 

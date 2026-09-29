@@ -15,12 +15,13 @@ import { BillingDayInput } from '@/components/ui/billing-day-input';
 import { useDebouncedValue, useEffectSkipFirst } from '@/lib/use-debounced-value';
 import { Table, TableHead, Th, TableBody, Tr, Td } from '@/components/ui/table';
 import { EmptyState, TableSkeleton } from '@/components/ui/empty-state';
+import { usePagination, Pagination } from '@/components/ui/pagination';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { FormField, FormGrid } from '@/components/ui/form-field';
 import { Eye, DollarSign, ClipboardList, Pencil, CreditCard, Zap, Building2, Banknote, FileText as FileBillet, Search, X, AlertTriangle, Car, CheckCircle2, MapPin, Undo2 } from 'lucide-react';
 import { ExportButton } from '@/components/ui/export-button';
-import { apiFetch, apiFetchList } from '@/lib/api';
+import { apiFetch, apiFetchAll, apiFetchList } from '@/lib/api';
 import { fetchAddressByCep } from '@/lib/cep';
 import { formatZipCode, onlyDigits, pricePeriodSuffix } from '@/lib/format';
 import { useAuthGuard } from '@/lib/use-auth-guard';
@@ -665,11 +666,10 @@ function VeiculosPageInner() {
       if (search.trim()) query.set('search', search.trim());
       if (statusFilter) query.set('status', statusFilter);
       if (clientFilter) query.set('client_id', clientFilter);
-      query.set('limit', '300');
 
       const [vehicleResponse, clientResponse, contractResponse, serviceProductResponse] = await Promise.all([
-        apiFetchList<Vehicle>(`/vehicles?${query.toString()}`, {}, currentToken),
-        apiFetchList<ClientOption>('/clients?limit=300', {}, currentToken),
+        apiFetchAll<Vehicle>(`/vehicles?${query.toString()}`, currentToken),
+        apiFetchAll<ClientOption>('/clients', currentToken, 300),
         apiFetch<ContractOption[]>('/contracts', {}, currentToken).catch(() => []),
         apiFetch<ServiceProductOption[]>('/service-products', {}, currentToken).catch(() => []),
       ]);
@@ -956,6 +956,7 @@ function VeiculosPageInner() {
   // Busca/filtros dinâmicos (sem precisar clicar em "Filtrar")
   const searchDebounced = useDebouncedValue(search);
   useEffectSkipFirst(() => {
+    pg.setPage(1);
     if (token) loadVehicles(token);
   }, [searchDebounced, statusFilter, clientFilter]);
 
@@ -973,6 +974,10 @@ function VeiculosPageInner() {
     withoutTracker: vehicles.filter((item) => item.status === 'sem_rastreador').length,
     removed: vehicles.filter((item) => item.status === 'retirado').length,
   }), [vehicles]);
+
+  const [pageSize, setPageSize] = useState(25);
+  const pg = usePagination(vehicles, pageSize);
+  const clientNameById = useMemo(() => new Map(clients.map((c) => [c.id, c.name])), [clients]);
 
   function resetForm() {
     setForm(initialForm);
@@ -1227,7 +1232,19 @@ function VeiculosPageInner() {
               </div>
             }
           />
-          <div className="mt-4 flex flex-wrap gap-3">
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <div className="flex shrink-0 items-center gap-2">
+              <select
+                className={fieldClass}
+                style={{ width: 80 }}
+                value={pageSize}
+                onChange={(e) => { setPageSize(Number(e.target.value)); pg.setPage(1); }}
+                aria-label="Resultados por página"
+              >
+                {[10, 25, 50, 100].map((n) => <option key={n} value={n}>{n}</option>)}
+              </select>
+              <span className="whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">por página</span>
+            </div>
             <input className={fieldClass} style={{ maxWidth: 280 }} placeholder="Buscar por placa, chassi ou modelo" value={search} onChange={(e) => setSearch(e.target.value)} />
             <select className={fieldClass} style={{ width: 180 }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
               <option value="">Todos os status</option>
@@ -1258,6 +1275,7 @@ function VeiculosPageInner() {
             ) : vehicles.length === 0 ? (
               <EmptyState title="Nenhum veículo encontrado" description="Ajuste os filtros ou cadastre o primeiro veículo." action={canEdit ? <Button onClick={() => setWizardOpen(true)}>Adicionar veículo</Button> : undefined} />
             ) : (
+              <>
               <Table>
                 <TableHead>
                   <Th>Placa</Th>
@@ -1267,8 +1285,8 @@ function VeiculosPageInner() {
                   <Th className="w-44" />
                 </TableHead>
                 <TableBody>
-                  {vehicles.map((vehicle) => {
-                    const client = clients.find((c) => c.id === vehicle.client_id);
+                  {pg.slice.map((vehicle) => {
+                    const clientName = clientNameById.get(vehicle.client_id);
                     return (
                       <Tr key={vehicle.id}>
                         <Td className="font-mono font-semibold">{vehicle.plate}</Td>
@@ -1276,7 +1294,7 @@ function VeiculosPageInner() {
                           <p>{[vehicle.brand, vehicle.model].filter(Boolean).join(' ')}</p>
                           <p className="text-xs text-slate-500">{vehicle.model_year ?? vehicle.manufacture_year ?? '—'} · {vehicle.type ?? '—'}</p>
                         </Td>
-                        <Td>{client?.name ?? '—'}</Td>
+                        <Td>{clientName ?? '—'}</Td>
                         <Td><Badge variant={statusVariant(vehicle.status)}>{statusLabel(vehicle.status)}</Badge></Td>
                         <Td>
                           <div className="flex justify-end gap-1">
@@ -1321,6 +1339,11 @@ function VeiculosPageInner() {
                   })}
                 </TableBody>
               </Table>
+              <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+                {`Mostrando de ${pg.start} até ${pg.end} de ${pg.total} registro(s)`}
+              </p>
+              <Pagination {...pg} onPage={pg.setPage} className="mt-1" />
+              </>
             )}
           </div>
         </Card>

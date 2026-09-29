@@ -217,7 +217,16 @@ class SGRClient:
         try:
             body = resp.json()
         except ValueError as exc:
-            raise SGRInvalidResponseError(f'Resposta do SGR não é JSON válido ({context})') from exc
+            # Sem o trecho do corpo, "não é JSON válido" esconde a causa real.
+            # Já vimos HTTP 200 com corpo HTML de erro interno deles (ex.:
+            # "Can't connect to local MySQL server" — banco deles fora do ar,
+            # nem a autenticação funciona). Prévia curta: é página de erro do
+            # servidor deles, não dado de cliente — mas trunca por segurança.
+            preview = (resp.text or '').strip().replace('\n', ' ')[:200]
+            detalhe = f' — corpo da resposta: {preview}' if preview else ''
+            raise SGRInvalidResponseError(
+                f'Resposta do SGR não é JSON válido ({context}){detalhe}'
+            ) from exc
         if not isinstance(body, dict):
             raise SGRInvalidResponseError(f'Formato de resposta inesperado do SGR ({context})')
         error_flag = _ci_get(body, 'error')

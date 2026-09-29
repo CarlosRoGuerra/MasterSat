@@ -80,8 +80,30 @@ def normalize_plate(value: str | None) -> str:
     return value.strip().upper().replace('-', '').replace(' ', '')
 
 
+_PLATE_OFICIAL = re.compile(r'[A-Z]{3}[0-9][A-Z0-9][0-9]{2}')  # Mercosul/antiga, sempre 7
+
+
 def is_valid_plate(plate: str) -> bool:
-    return bool(re.fullmatch(r'[A-Z]{3}[0-9][A-Z0-9][0-9]{2}', plate))
+    """7 caracteres: formato oficial (Mercosul ou antigo), validado por regex.
+
+    5 ou 6 caracteres: o SGR também usa o campo como identificador livre em
+    máquinas pesadas sem placa oficial — casos reais na base: 'VIO17' (5),
+    'MAQ002' e 'GIGA01' (6). Para esse tamanho aceitamos qualquer combinação
+    alfanumérica que tenha PELO MENOS uma letra e um dígito (como todos os
+    exemplos reais têm) — isso deixa esses códigos passarem sem abrir mão da
+    guarda contra erro de cadastro: 'GEISON' (nome de pessoa, só letras) e
+    'ALESSANDRO'/'CASE580H'/'VOLVO220' (fora da faixa de tamanho) continuam
+    de fora.
+    """
+    if len(plate) == 7:
+        return bool(_PLATE_OFICIAL.fullmatch(plate))
+    if len(plate) in (5, 6):
+        return (
+            bool(re.fullmatch(r'[A-Z0-9]+', plate))
+            and any(c.isalpha() for c in plate)
+            and any(c.isdigit() for c in plate)
+        )
+    return False
 
 
 def normalize_email(value: str | None) -> str:

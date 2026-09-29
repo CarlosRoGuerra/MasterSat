@@ -81,8 +81,45 @@ class TestPlate:
     def test_valid_mercosul_plate(self):
         assert is_valid_plate('ABC1D23') is True
 
-    def test_invalid_plate_shape(self):
-        assert is_valid_plate('AB123') is False
+    def test_invalid_plate_shape_7_chars(self):
+        # 7 caracteres continua exigindo o formato oficial (Mercosul/antiga)
+        # — não vira "qualquer coisa com 7 caracteres".
+        assert is_valid_plate('ABCDEFG') is False
+
+    # -- 5/6 caracteres: identificador livre de máquina sem placa oficial --
+    # Casos reais da base do SGR (heavy equipment rastreado sem placa).
+
+    def test_5_chars_real_example_accepted(self):
+        assert is_valid_plate('VIO17') is True
+
+    def test_6_chars_real_examples_accepted(self):
+        assert is_valid_plate('MAQ002') is True
+        assert is_valid_plate('GIGA01') is True
+
+    def test_6_chars_letters_only_rejected(self):
+        # 'GEISON' é nome de pessoa digitado no campo placa, não um código de
+        # máquina — sem dígito nenhum, continua sendo erro de cadastro.
+        assert is_valid_plate('GEISON') is False
+
+    def test_5_chars_digits_only_rejected(self):
+        assert is_valid_plate('12345') is False
+
+    def test_4_chars_rejected(self):
+        # Curto demais mesmo com letra+dígito — fora da faixa 5-7.
+        assert is_valid_plate('AB12') is False
+
+    def test_8_chars_rejected(self):
+        # 'CASE580H'/'VOLVO220' reais na base — marca/modelo, não placa.
+        assert is_valid_plate('CASE580H') is False
+        assert is_valid_plate('VOLVO220') is False
+
+    def test_10_chars_person_name_rejected(self):
+        assert is_valid_plate('ALESSANDRO') is False
+
+    def test_lowercase_not_accepted(self):
+        # is_valid_plate espera a entrada já normalizada (normalize_plate
+        # roda antes, no mapeamento) — minúscula não é uma forma válida.
+        assert is_valid_plate('vio17') is False
 
 
 class TestEmail:

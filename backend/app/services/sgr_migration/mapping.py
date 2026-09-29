@@ -19,7 +19,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from pydantic import ValidationError
+
 from app.models.enums import BillingStatus, ClientStatus, TrackerStatus, VehicleStatus
+from app.schemas.vehicle import VehicleBase
 from app.services.sgr_migration.normalize import (
     is_valid_cpf_cnpj,
     is_valid_email,
@@ -310,10 +313,18 @@ def map_cliente(raw: dict) -> tuple[dict, list[str]]:
     for item in (ci_get(raw, 'contatos') or []):
         if not isinstance(item, dict):
             continue
+        # ContactItem.name é obrigatório; no SGR 'nome' costuma vir null quando
+        # o contato é só um telefone — e um único contato sem nome derruba a
+        # listagem inteira de clientes (500 na serialização de ClientOut).
+        nome_contato = str(ci_get(item, 'nome') or '').strip()
+        descricao = str(ci_get(item, 'descricao') or '').strip()
+        contact_phone = normalize_phone(str(ci_get(item, 'contato') or '')) or None
+        if not nome_contato and not contact_phone:
+            continue
         contacts.append({
-            'name': ci_get(item, 'nome'),
-            'phone': normalize_phone(str(ci_get(item, 'contato') or '')) or None,
-            'role': ci_get(item, 'descricao'),
+            'name': nome_contato or descricao or 'Contato',
+            'phone': contact_phone,
+            'role': descricao or None,
         })
 
     birth_raw = ci_get(raw, 'data_nascimento_cliente')
@@ -424,7 +435,39 @@ def map_veiculo(raw: dict) -> tuple[dict, list[str]]:
         'user_alert': ci_get(raw, 'alerta_veiculo'),
         'status': status.value,
     }
+    _descartar_campos_fora_do_schema(mapped, issues)
     return mapped, issues
+
+
+# Campos opcionais que o VehicleOut valida na SAÍDA: o importador grava direto
+# no model (sem passar pelo schema), então um único valor fora da regra
+# (ex.: ano 2, chassi curto) faz GET /vehicles responder 500 para todo mundo.
+_VEHICLE_CAMPOS_SANEAVEIS = (
+    'chassis', 'renavam', 'address_zip_code', 'state',
+    'manufacture_year', 'model_year', 'fipe_value',
+)
+
+
+def _descartar_campos_fora_do_schema(mapped: dict, issues: list[str]) -> None:
+    dados = {'client_id': 0, **mapped}
+    for _ in range(len(_VEHICLE_CAMPOS_SANEAVEIS) + 1):
+        try:
+            VehicleBase.model_validate(dados)
+            return
+        except ValidationError as exc:
+            ruins = set()
+            for err in exc.errors():
+                campo = err['loc'][0] if err['loc'] else None
+                if campo in _VEHICLE_CAMPOS_SANEAVEIS and dados.get(campo) is not None:
+                    ruins.add(campo)
+                elif campo is None and dados.get('contract_end_date'):
+                    ruins.add('contract_end_date')  # fim do contrato antes do início
+            if not ruins:
+                return  # sobra só placa inválida — tratada à parte
+            for campo in sorted(ruins):
+                issues.append(f"{campo} inválido descartado: {dados[campo]!r}")
+                mapped[campo] = None
+                dados[campo] = None
 
 
 # ---------------------------------------------------------------------------
@@ -681,6 +724,13 @@ _PRODUTO_BILLING_TYPE = (
     ('PRORATA', 'prorata'),
     ('DESINSTALA', 'taxa_desinstalacao'),
     ('INSTALA', 'taxa_instalacao'),  # depois de DESINSTALA: 'INSTALA' é prefixo dele
+    # ANTES de 'MENSALIDADE': 'MENSALIDADE EM ABERTO 15/01/2025 EM 5X' é uma
+    # dívida antiga renegociada em parcelas — não a mensalidade do mês
+    # corrente, mesmo vindo com mes_referente do mês atual. Confirmado com
+    # dado real: cliente ABR EXPRESS, boleto 1738, tinha essa linha (R$
+    # 90,98) E a mensalidade normal (R$ 64,99) da MESMA placa no MESMO mês —
+    # as duas caindo em 'recorrente' duplicava a cobrança do contrato.
+    ('MENSALIDADE EM ABERTO', 'avulsa'),
     ('MENSALIDADE', 'recorrente'),
 )
 

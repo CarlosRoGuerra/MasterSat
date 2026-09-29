@@ -179,6 +179,21 @@ class TestGetErrorHandling:
         with pytest.raises(SGRInvalidResponseError):
             client.get('/buscar_cliente')
 
+    def test_invalid_json_includes_body_preview_in_message(self):
+        # Confirmado contra a API real: HTTP 200 com corpo HTML de erro
+        # interno deles ("Can't connect to local MySQL server" — banco
+        # deles fora do ar). Sem o trecho do corpo, a mensagem genérica
+        # "não é JSON válido" escondia essa causa.
+        corpo = "Error in exception handler: SQLSTATE[HY000] [2002] Can't connect to local MySQL server"
+        client, _ = self._client_with(_resp(200, json_raises=True, text=corpo))
+        with pytest.raises(SGRInvalidResponseError, match='MySQL'):
+            client.get('/buscar_cliente')
+
+    def test_invalid_json_without_body_does_not_crash(self):
+        client, _ = self._client_with(_resp(200, json_raises=True, text=''))
+        with pytest.raises(SGRInvalidResponseError):
+            client.get('/buscar_cliente')
+
     def test_error_true_flag_raises_invalid_response(self):
         client, _ = self._client_with(_resp(200, {'Error': 'true'}))
         with pytest.raises(SGRInvalidResponseError):
