@@ -1188,6 +1188,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/billings/{item_id}/liberar-competencia": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Release Period
+         * @description Devolve o mês de uma mensalidade cancelada para nova cobrança (carnê ou
+         *     fechamento). Cancelada continua ocupando o mês até isto ser feito.
+         */
+        post: operations["release_period_api_v1_billings__item_id__liberar_competencia_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/dashboard/": {
         parameters: {
             query?: never;
@@ -3154,6 +3175,16 @@ export interface components {
              * @default false
              */
             confirmar_boleto_ailos: boolean;
+            /**
+             * Liberar Competencia
+             * @default false
+             */
+            liberar_competencia: boolean;
+            /**
+             * Reverter Substituicao
+             * @default false
+             */
+            reverter_substituicao: boolean;
         };
         /** BillingChangeLogOut */
         BillingChangeLogOut: {
@@ -3295,6 +3326,15 @@ export interface components {
             boleto_ailos: boolean;
             /** Sgr Payload */
             sgr_payload?: Record<string, never> | null;
+            /** Competencia */
+            competencia?: string | null;
+            /**
+             * Competencia Liberada
+             * @default false
+             */
+            competencia_liberada: boolean;
+            /** Substituted By Id */
+            substituted_by_id?: number | null;
         };
         /** BillingReceive */
         BillingReceive: {
@@ -3309,6 +3349,14 @@ export interface components {
             payment_method: string;
             /** Notes */
             notes?: string | null;
+        };
+        /**
+         * BillingReleasePeriod
+         * @description Libera o mês de uma mensalidade já cancelada para nova cobrança.
+         */
+        BillingReleasePeriod: {
+            /** Justificativa */
+            justificativa: string;
         };
         /**
          * BillingStatus
@@ -8730,7 +8778,10 @@ export interface operations {
     };
     delete_item_api_v1_billings__item_id__delete: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Obrigatório para remover boleto único/negociação: reabre as cobranças que ele substituiu. */
+                reverter_substituicao?: boolean;
+            };
             header?: never;
             path: {
                 item_id: number;
@@ -8806,6 +8857,41 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["BillingCancel"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    release_period_api_v1_billings__item_id__liberar_competencia_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BillingReleasePeriod"];
             };
         };
         responses: {

@@ -20,6 +20,7 @@ import { CarneTrackingModal, useCarneTracking } from '@/components/carne-trackin
 import { API_URL, apiFetch, apiFetchList } from '@/lib/api';
 import { entregarArquivo, nomeArquivoCliente } from '@/lib/arquivo';
 import { enviarBoletoEmail, enviarBoletoWhats } from '@/lib/boleto-mensagem';
+import { cancelarComConfirmacoes } from '@/lib/cancelamento-cobranca';
 import { useAuthGuard } from '@/lib/use-auth-guard';
 import { ROUTE_ROLES } from '@/lib/route-roles';
 import { useDebouncedValue, useEffectSkipFirst } from '@/lib/use-debounced-value';
@@ -75,7 +76,7 @@ type SgrPayload = {
   discriminacao?: { valor?: string; produto?: string; placa?: string; mes_referente?: string }[] | null;
 };
 
-type Billing = { id: number; contract_id?: number | null; client_id: number; payer_client_id?: number | null; item_id?: number | null; vehicle_id?: number | null; tracker_id?: number | null; title?: string | null; billing_type: string; installment_number?: number | null; installment_total?: number | null; amount: number; due_date: string; status: BillingStatus; payment_date?: string | null; payment_method?: string | null; notes?: string | null; paid_amount?: number | null; receipt_number?: string | null; period_label?: string | null; client_name?: string | null; payer_name?: string | null; vehicle_plate?: string | null; tracker_identifier?: string | null; plan_name?: string | null; contract_status?: string | null; overdue_days: number; sgr_payload?: SgrPayload | null };
+type Billing = { id: number; contract_id?: number | null; client_id: number; payer_client_id?: number | null; item_id?: number | null; vehicle_id?: number | null; tracker_id?: number | null; title?: string | null; billing_type: string; installment_number?: number | null; installment_total?: number | null; amount: number; due_date: string; status: BillingStatus; payment_date?: string | null; payment_method?: string | null; notes?: string | null; paid_amount?: number | null; receipt_number?: string | null; period_label?: string | null; competencia?: string | null; competencia_liberada?: boolean; substituted_by_id?: number | null; client_name?: string | null; payer_name?: string | null; vehicle_plate?: string | null; tracker_identifier?: string | null; plan_name?: string | null; contract_status?: string | null; overdue_days: number; sgr_payload?: SgrPayload | null };
 type Summary = { active_plans: number; active_contracts: number; pending_billings: number; overdue_billings: number; pending_amount: number; overdue_amount: number; paid_this_month: number };
 type RevenueItem = { label: string; total_received: number; total_billed: number; total_outstanding: number };
 type DelinquentItem = { client_id: number; client_name: string; total_open: number; overdue_count: number };
@@ -100,6 +101,8 @@ const initialAdjustForm: AdjustFormState = { amount: '', due_date: '', justifica
 
 /* ── Helpers ────────────────────────────────────────────────────────── */
 function parseError(error: unknown) { return error instanceof Error ? error.message : 'Ocorreu um erro inesperado.'; }
+// Tipos que ocupam o mês do contrato (backend: RECURRING_BILLING_TYPES).
+const TIPOS_MENSALIDADE = ['recorrente', 'prorata', 'primeira_mensalidade', 'carne'];
 function intervalLabel(months: number) { return ({ 1: 'Mensal', 3: 'Trimestral', 6: 'Semestral', 12: 'Anual' } as Record<number, string>)[months] || `${months} meses`; }
 
 /** Data (YYYY-MM-DD) somada de N meses — para a vigência do contrato a partir do início. */
@@ -1240,26 +1243,50 @@ export default function FinanceiroPage() {
     if (!token || !selectedBilling || !canEdit) return;
     const reason = window.prompt('Informe a justificativa para cancelamento:', '');
     if (!reason) return;
+    // Mensalidade cancelada continua ocupando o mês (o fechamento não recobra).
+    // Liberar é decisão explícita: permite cobrar o mês de novo no carnê.
+    const liberar_competencia = TIPOS_MENSALIDADE.includes(selectedBilling.billing_type)
+      && !!selectedBilling.contract_id
+      && window.confirm(
+        `Liberar a competência ${selectedBilling.period_label ?? ''} para ser cobrada de novo (carnê ou fechamento)?\n\n`
+        + 'OK = liberar. Cancelar = o mês continua dado como cobrado (ex.: dispensa, negociação).',
+      );
     setProcessing(true);
     try {
-      const cancelar = (confirmar_boleto_ailos: boolean) => apiFetch(
-        `/billings/${selectedBilling.id}/cancel`,
-        { method: 'POST', body: JSON.stringify({ reason, confirmar_boleto_ailos }) },
+      // Boleto registrado ou título que substitui outros: o backend pede
+      // confirmação (409) e a chamada é repetida só se o operador aceitar.
+      const { cancelada, flags } = await cancelarComConfirmacoes(
+        (confirmacoes) => apiFetch(
+          `/billings/${selectedBilling.id}/cancel`,
+          { method: 'POST', body: JSON.stringify({ reason, liberar_competencia, ...confirmacoes }) },
+          token,
+        ),
+        (mensagem) => window.confirm(mensagem),
+      );
+      if (!cancelada) return;
+      setFeedback(flags.reverter_substituicao
+        ? 'Cobrança cancelada; as cobranças que ela substituía foram reabertas.'
+        : 'Cobrança cancelada com sucesso.');
+      await loadData(token);
+    } catch (err) { setError(parseError(err)); } finally { setProcessing(false); }
+  }
+
+  async function handleLiberarCompetencia() {
+    if (!token || !selectedBilling || !canEdit) return;
+    const justificativa = window.prompt(
+      `Liberar a competência ${selectedBilling.period_label ?? ''} desta cobrança cancelada para nova cobrança? Informe o motivo:`,
+      '',
+    );
+    if (!justificativa || justificativa.trim().length < 3) return;
+    setProcessing(true);
+    try {
+      const atualizada = await apiFetch<Billing>(
+        `/billings/${selectedBilling.id}/liberar-competencia`,
+        { method: 'POST', body: JSON.stringify({ justificativa: justificativa.trim() }) },
         token,
       );
-      try {
-        await cancelar(false);
-      } catch (err) {
-        // Há boleto registrado na Ailos: avisa e só prossegue se confirmado.
-        const e = err as Error & { status?: number; detail?: any };
-        if (e.status === 409 && e.detail?.code === 'boleto_ailos_registrado') {
-          if (!window.confirm(e.detail.message)) { setProcessing(false); return; }
-          await cancelar(true);
-        } else {
-          throw err;
-        }
-      }
-      setFeedback('Cobrança cancelada com sucesso.');
+      setSelectedBilling(atualizada);
+      setFeedback(`Competência ${atualizada.period_label ?? ''} liberada: o mês pode ser cobrado de novo.`);
       await loadData(token);
     } catch (err) { setError(parseError(err)); } finally { setProcessing(false); }
   }
@@ -1935,6 +1962,8 @@ export default function FinanceiroPage() {
                 ['Vencimento', selectedBilling.due_date],
                 ['Veículo', selectedBilling.vehicle_plate ?? '—'],
                 ['Período', selectedBilling.period_label ?? '—'],
+                ...(selectedBilling.substituted_by_id ? [['Substituída por', `Cobrança #${selectedBilling.substituted_by_id}`] as [string, string]] : []),
+                ...(selectedBilling.competencia_liberada ? [['Competência', 'Liberada para nova cobrança'] as [string, string]] : []),
                 ...(selectedBilling.installment_number ? [['Parcela', `${selectedBilling.installment_number}/${selectedBilling.installment_total}`] as [string, string]] : []),
                 ...(selectedBilling.paid_amount != null ? [['Valor pago', formatCurrency(selectedBilling.paid_amount)] as [string, string]] : []),
               ] as [string, React.ReactNode][]).map(([label, value]) => (
@@ -1953,6 +1982,12 @@ export default function FinanceiroPage() {
               <Button disabled={!canEdit || processing || selectedBilling.status === 'paga' || selectedBilling.status === 'cancelada'} onClick={() => setReceiveModal(true)}>Registrar pagamento</Button>
               <Button variant="secondary" disabled={!canEdit || processing || selectedBilling.status === 'cancelada'} onClick={() => setAdjustModal(true)}>Ajustar cobrança</Button>
               <Button variant="danger" disabled={!canEdit || processing || selectedBilling.status === 'cancelada'} onClick={handleCancel}>Cancelar</Button>
+              {/* Original substituída também mostra: se o substituto ainda vale, o
+                  backend recusa explicando; se foi removido (legado), libera. */}
+              {selectedBilling.status === 'cancelada' && !selectedBilling.competencia_liberada
+                && !!selectedBilling.contract_id && TIPOS_MENSALIDADE.includes(selectedBilling.billing_type) && (
+                <Button variant="secondary" disabled={!canEdit || processing} onClick={handleLiberarCompetencia}>Liberar competência</Button>
+              )}
               {(selectedBilling.status === 'pendente' || selectedBilling.status === 'vencida') && token && (
                 <Button variant="secondary" disabled={!canEdit || boletoLoading} onClick={handleGerarBoleto}>
                   {boletoLoading ? 'Gerando…' : '🔑 Gerar boleto (Ailos)'}
