@@ -217,7 +217,9 @@ class TestResetPassword:
         from uuid import uuid4
         token_str = uuid4().hex
         expires = datetime.now(timezone.utc) + (timedelta(hours=-1) if expired else timedelta(hours=1))
-        t = PasswordResetToken(user_id=user.id, token=token_str, expires_at=expires)
+        # O banco guarda só o SHA-256 do token (SEC-05); o texto puro vai no e-mail.
+        from app.services.password_reset import hash_reset_token
+        t = PasswordResetToken(user_id=user.id, token_hash=hash_reset_token(token_str), expires_at=expires)
         db.add(t)
         db.commit()
         return token_str

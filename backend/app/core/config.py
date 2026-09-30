@@ -26,6 +26,12 @@ class Settings(BaseSettings):
     # docs/seguranca/sessoes-e-credenciais.md.
     refresh_reuse_grace_seconds: int = 15
     password_reset_expire_minutes: int = 30
+    # Reset por e-mail (SEC-05): no máximo N pedidos por conta na janela;
+    # acima disso nada é emitido (resposta continua a mesma).
+    password_reset_max_per_window: int = 3
+    password_reset_window_minutes: int = 15
+    # Tentativas de envio do e-mail de reset (SMTP do painel), com espera crescente.
+    password_reset_email_attempts: int = 3
     # Produção: sempre False — nunca retorna token de reset no response
     debug_return_reset_token: bool = False
     # Swagger/OpenAPI: desabilitado por padrão (não expor a superfície da API em produção)
@@ -182,6 +188,8 @@ class Settings(BaseSettings):
     rate_limit_default: str = '200/minute'
     rate_limit_login: str = '5/minute'
     rate_limit_exports: str = '10/minute'
+    # /auth/forgot-password por IP (o limite por conta é à parte, acima)
+    rate_limit_forgot_password: str = '5/minute'
 
     # Retenção de logs de integração Ailos (request/response mascarados —
     # segredos, CPF/CNPJ, nome e endereço; valores e datas ficam em texto

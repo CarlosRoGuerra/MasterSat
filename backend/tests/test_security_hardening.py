@@ -268,8 +268,9 @@ class TestResetPasswordDerrubaSessao:
             str(user.id), datetime.now(timezone.utc) - timedelta(minutes=1)
         )
 
+        from app.services.password_reset import hash_reset_token
         db.add(PasswordResetToken(
-            user_id=user.id, token="tok-reset",
+            user_id=user.id, token_hash=hash_reset_token("tok-reset"),
             expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
         ))
         db.commit()

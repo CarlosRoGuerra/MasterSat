@@ -1,7 +1,6 @@
 from datetime import datetime, timedelta, timezone
-from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
 from jose import JWTError, jwt
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
@@ -19,9 +18,14 @@ from app.core.security import (
 from app.db.session import get_db
 from app.models.client import Client
 from app.models.enums import ClientStatus, UserRole
-from app.models.password_reset_token import PasswordResetToken
 from app.models.refresh_token import RefreshToken
 from app.models.user import User
+from app.services.password_reset import (
+    MENSAGEM_GENERICA,
+    consumir_token,
+    entregar_email_reset,
+    solicitar_reset,
+)
 from app.schemas.auth import (
     ForgotPasswordRequest,
     ForgotPasswordResponse,
@@ -281,64 +285,56 @@ def logout(request: Request, response: Response, db: Session = Depends(get_db)):
 
 
 @router.post('/forgot-password', response_model=ForgotPasswordResponse)
-def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db)):
-    # Resposta IDÊNTICA exista ou não o e-mail — não revela quais e-mails têm
-    # conta (evita enumeração de usuários).
-    generic_message = 'Se o e-mail existir, você receberá as instruções de redefinição.'
+@limiter.limit(settings.rate_limit_forgot_password)
+def forgot_password(
+    request: Request,
+    payload: ForgotPasswordRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """Envia o link de redefinição por e-mail (SEC-05).
 
-    user = db.scalar(select(User).where(User.email == payload.email, User.is_deleted.is_(False)))
-    if not user:
-        return ForgotPasswordResponse(message=generic_message)
+    Resposta IDÊNTICA para e-mail existente, inexistente, inativo ou acima
+    do limite por conta — não revela quais e-mails têm conta. O envio roda
+    depois da resposta (services/password_reset.py), então o SMTP também
+    não altera o tempo de resposta."""
+    emitido = solicitar_reset(db, payload.email)
+    if emitido is None:
+        return ForgotPasswordResponse(message=MENSAGEM_GENERICA)
 
-    db.query(PasswordResetToken).filter(
-        PasswordResetToken.user_id == user.id,
-        PasswordResetToken.used_at.is_(None),
-    ).update({'used_at': datetime.now(timezone.utc)})
-
-    expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.password_reset_expire_minutes)
-    reset_token = uuid4().hex
-    token_row = PasswordResetToken(user_id=user.id, token=reset_token, expires_at=expires_at)
-    db.add(token_row)
-    db.commit()
-
+    row, _user, token = emitido
+    background_tasks.add_task(entregar_email_reset, row.id, token)
     return ForgotPasswordResponse(
-        message=generic_message,
+        message=MENSAGEM_GENERICA,
         # Só em modo debug (desligado em produção) o token volta no response.
-        reset_token=reset_token if settings.debug_return_reset_token else None,
-        expires_at=expires_at if settings.debug_return_reset_token else None,
+        reset_token=token if settings.debug_return_reset_token else None,
+        expires_at=row.expires_at if settings.debug_return_reset_token else None,
     )
 
 
 @router.post('/reset-password')
 def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db)):
-    reset_row = db.scalar(select(PasswordResetToken).where(PasswordResetToken.token == payload.token))
-    if not reset_row or reset_row.used_at is not None:
-        raise HTTPException(status_code=400, detail='Token de redefinição inválido')
-
-    # expires_at pode voltar SEM tzinfo (o driver nem sempre preserva o fuso);
-    # comparar naive com aware estoura TypeError e virava 500 no lugar do 400.
-    expira_em = reset_row.expires_at
-    if expira_em.tzinfo is None:
-        expira_em = expira_em.replace(tzinfo=timezone.utc)
-    if expira_em < datetime.now(timezone.utc):
-        raise HTTPException(status_code=400, detail='Token de redefinição expirado')
-
-    user = db.get(User, reset_row.user_id)
-    if not user or user.is_deleted:
-        raise HTTPException(status_code=404, detail='Usuário não encontrado')
+    """Troca a senha com o token do e-mail. Uso único: o consumo é um UPDATE
+    condicional, então dois envios simultâneos do mesmo token não trocam a
+    senha duas vezes. Conta excluída/inativa não é reativada por aqui."""
+    try:
+        _row, user = consumir_token(db, payload.token)
+    except ValueError as exc:
+        if str(exc) == 'expirado':
+            raise HTTPException(status_code=400, detail='Token de redefinição expirado') from exc
+        raise HTTPException(status_code=400, detail='Token de redefinição inválido') from exc
 
     user.password_hash = get_password_hash(payload.new_password)
     # Derruba TODA sessao anterior: sem isto, um refresh token roubado seguia
     # valido por ate 7 dias depois da troca de senha — a senha nova nao
     # expulsava o invasor. tokens_valid_from cobre os access tokens já
     # emitidos (via 'iat'); a revogação abaixo cobre os refresh tokens
-    # rastreados nesta tabela, reforçando o mesmo corte.
+    # rastreados nesta tabela e, pelo 'sid', os access das mesmas sessões.
     user.tokens_valid_from = datetime.now(timezone.utc)
     db.query(RefreshToken).filter(
         RefreshToken.user_id == user.id,
         RefreshToken.revoked_at.is_(None),
     ).update({'revoked_at': datetime.now(timezone.utc)}, synchronize_session=False)
-    reset_row.used_at = datetime.now(timezone.utc)
     db.commit()
 
     return {'message': 'Senha redefinida com sucesso.'}
