@@ -218,10 +218,14 @@ class BillingChangeLogOut(BaseModel):
 
 
 class RevenueReportItem(BaseModel):
+    """Bases (PROD-01): emitido/aberto/recebido_by_due por VENCIMENTO,
+    total_received por data de PAGAMENTO (caixa). Canceladas fora."""
+
     label: str
     total_received: float
     total_billed: float
     total_outstanding: float
+    total_received_by_due: float = 0.0
 
 
 class DelinquentClientItem(BaseModel):

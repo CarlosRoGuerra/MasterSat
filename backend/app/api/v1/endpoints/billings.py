@@ -333,17 +333,48 @@ def financial_summary(db: Session = Depends(get_db), _: object = Depends(require
 
 @router.get('/reports/revenue', response_model=list[RevenueReportItem])
 def revenue_report(period: str = Query(default='monthly', pattern='^(monthly|quarterly|annual)$'), db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
-    rows = db.query(Billing).filter(Billing.is_deleted == False).all()
-    buckets: dict[str, dict[str, float]] = defaultdict(lambda: {'total_received': 0.0, 'total_billed': 0.0, 'total_outstanding': 0.0})
+    """Série do gráfico "Faturamento mensal" do Financeiro (PROD-01).
+
+    Cada campo tem UMA base temporal (docs/financeiro/dicionario-metricas.md):
+
+    * ``total_billed`` — emitido: valor das cobranças NÃO canceladas, pelo
+      mês de VENCIMENTO;
+    * ``total_outstanding`` — em aberto (pendente/vencida), pelo VENCIMENTO;
+    * ``total_received_by_due`` — quanto do emitido naquele vencimento já foi
+      pago (mesma base do emitido: dá a taxa de recebimento);
+    * ``total_received`` — CAIXA: valor pago, pelo mês do PAGAMENTO.
+
+    Antes, cobrança cancelada somava no emitido (consolidação e negociação
+    contavam a dívida duas vezes) e o emitido de cobrança paga ia para o mês
+    do pagamento, misturando as bases no mesmo campo.
+    """
+    rows = db.query(Billing).filter(
+        Billing.is_deleted == False,  # noqa: E712
+        Billing.status != BillingStatus.CANCELED,
+    ).all()
+    campos = ('total_received', 'total_billed', 'total_outstanding', 'total_received_by_due')
+    buckets: dict[str, dict[str, Decimal]] = defaultdict(lambda: {k: Decimal('0.00') for k in campos})
     for row in rows:
-        reference = row.payment_date or row.due_date
-        label = period_bucket(reference, period)
-        buckets[label]['total_billed'] += decimal_to_float(row.amount)
+        vencimento = period_bucket(row.due_date, period)
+        buckets[vencimento]['total_billed'] += Decimal(str(row.amount))
         if row.status == BillingStatus.PAID:
-            buckets[label]['total_received'] += decimal_to_float(row.paid_amount or row.amount)
+            recebido = Decimal(str(row.paid_amount if row.paid_amount is not None else row.amount))
+            buckets[vencimento]['total_received_by_due'] += recebido
+            buckets[period_bucket(row.payment_date or row.due_date, period)]['total_received'] += recebido
         elif row.status in (BillingStatus.PENDING, BillingStatus.OVERDUE):
-            buckets[label]['total_outstanding'] += decimal_to_float(row.amount)
-    return [RevenueReportItem(label=label, **{k: round(v, 2) for k, v in totals.items()}) for label, totals in sorted(buckets.items())]
+            buckets[vencimento]['total_outstanding'] += Decimal(str(row.amount))
+    return [
+        RevenueReportItem(label=label, **{k: decimal_to_float(v) for k, v in totals.items()})
+        for label, totals in sorted(buckets.items(), key=lambda kv: _bucket_sort_key(kv[0]))
+    ]
+
+
+def _bucket_sort_key(label: str) -> tuple:
+    """'MM/AAAA' ordena por ano e mês (texto invertia a virada do ano)."""
+    if '/' in label:
+        mes, ano = label.split('/', 1)
+        return (ano, mes)
+    return (label[:4], label)
 
 
 @router.get('/reports/delinquent', response_model=list[DelinquentClientItem])
