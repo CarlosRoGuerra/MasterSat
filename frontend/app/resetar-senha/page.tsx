@@ -56,11 +56,11 @@ function ResetPasswordForm() {
   return (
     <AuthShell
       title="Redefinir senha"
-      subtitle="Informe o token gerado e a nova senha de acesso."
+      subtitle="Defina a nova senha. O código já vem preenchido pelo link recebido por e-mail."
       roleLabel="Acesso"
     >
       <form onSubmit={handleSubmit} className="space-y-4">
-        <FormField label="Token">
+        <FormField label="Código do e-mail">
           <Input value={token} onChange={(e) => setToken(e.target.value)} />
         </FormField>
         <FormField label="Nova senha">
