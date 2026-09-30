@@ -132,9 +132,14 @@ class TestRefresh:
         r = http_unauth.post(PREFIX + "/refresh")
         assert r.status_code == 401
 
-    def test_reused_rotated_token_is_rejected_and_revokes_family(self, http_unauth, db):
+    def test_reused_rotated_token_is_rejected_and_revokes_family(self, http_unauth, db, monkeypatch):
         """Reuso de um refresh token já rotacionado é o sinal de token roubado:
-        a família inteira (incluindo o token novo, legítimo) é revogada."""
+        a família inteira (incluindo o token novo, legítimo) é revogada.
+
+        Fora da janela de disputa entre abas (REFRESH_REUSE_GRACE_SECONDS);
+        dentro dela a resposta é 409 — ver test_fase01_refresh_rotacao.py."""
+        from app.core.config import settings
+        monkeypatch.setattr(settings, "refresh_reuse_grace_seconds", 0)
         user = _create_user(db)
         login_r = http_unauth.post(PREFIX + "/login", json={"email": user.email, "password": "Senha@123"})
         old_token = login_r.cookies["refresh_token"]

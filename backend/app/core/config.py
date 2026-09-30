@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     algorithm: str = 'HS256'
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
+    # Janela (s) em que reapresentar um refresh JÁ rotacionado é tratado como
+    # disputa entre abas (409, sem emitir nada e sem revogar). Depois dela, é
+    # reuso de token vazado: a família inteira é revogada. Ver
+    # docs/seguranca/sessoes-e-credenciais.md.
+    refresh_reuse_grace_seconds: int = 15
     password_reset_expire_minutes: int = 30
     # Produção: sempre False — nunca retorna token de reset no response
     debug_return_reset_token: bool = False

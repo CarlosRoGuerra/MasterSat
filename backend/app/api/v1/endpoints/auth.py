@@ -3,7 +3,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from jose import JWTError, jwt
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -61,8 +61,8 @@ def _clear_refresh_cookie(response: Response) -> None:
     response.delete_cookie(key=REFRESH_COOKIE_NAME, path=REFRESH_COOKIE_PATH)
 
 
-def _issue_refresh_token(db: Session, user_id: int, family: str | None = None) -> tuple[str, str]:
-    """Emite (e persiste o estado de) um refresh token novo. Retorna (token, jti).
+def _issue_refresh_token(db: Session, user_id: int, family: str | None = None) -> tuple[str, str, str]:
+    """Emite (e persiste o estado de) um refresh token novo. Retorna (token, jti, family).
 
     family=None → login novo, começa uma família. family=<existente> → é uma
     ROTAÇÃO dentro do /refresh (ver _rotate_refresh_token).
@@ -70,7 +70,7 @@ def _issue_refresh_token(db: Session, user_id: int, family: str | None = None) -
     token, jti, family = create_refresh_token(str(user_id), family=family)
     expires_at = datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days)
     db.add(RefreshToken(user_id=user_id, jti=jti, family=family, expires_at=expires_at))
-    return token, jti
+    return token, jti, family
 
 
 def _revoke_family(db: Session, family: str) -> None:
@@ -80,8 +80,41 @@ def _revoke_family(db: Session, family: str) -> None:
     ).update({'revoked_at': datetime.now(timezone.utc)}, synchronize_session=False)
 
 
-def _rotate_refresh_token(db: Session, token: str) -> tuple[User, str]:
-    """Valida um refresh token, detecta reuso e rotaciona. Retorna (user, novo_token).
+def _aware(value: datetime | None) -> datetime | None:
+    if value is not None and value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def _refresh_ja_usado(db: Session, row_id: int, family: str) -> HTTPException:
+    """Decide o que fazer com um refresh que já foi trocado por um sucessor.
+
+    - rotacionado há menos de REFRESH_REUSE_GRACE_SECONDS: duas abas do mesmo
+      navegador renovaram juntas com o mesmo cookie. Uma venceu; esta perde
+      com 409 — nada é emitido e nada é revogado. O navegador já recebeu o
+      cookie do vencedor, então a aba tenta de novo e segue logada.
+    - depois disso (ou revogado): reuso de token antigo = sinal de vazamento.
+      A família inteira é revogada e todos daquela sessão fazem novo login.
+    """
+    row = db.get(RefreshToken, row_id)
+    db.refresh(row)
+    rotated_at = _aware(row.rotated_at)
+    if (
+        row.revoked_at is None
+        and rotated_at is not None
+        and datetime.now(timezone.utc) - rotated_at <= timedelta(seconds=settings.refresh_reuse_grace_seconds)
+    ):
+        return HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail='Sessão renovada em outra aba. Tente novamente.',
+        )
+    _revoke_family(db, family)
+    db.commit()
+    return HTTPException(status_code=401, detail='Sessão expirada. Faça login novamente.')
+
+
+def _rotate_refresh_token(db: Session, token: str) -> tuple[User, str, str]:
+    """Valida um refresh token, detecta reuso e rotaciona. Retorna (user, novo_token, family).
 
     Reuso = apresentar um jti que já tem replaced_by_jti (foi rotacionado) ou
     já está revoked_at (família comprometida/logout). É o sinal de que um
@@ -89,6 +122,13 @@ def _rotate_refresh_token(db: Session, token: str) -> tuple[User, str]:
     inteira é revogada, forçando novo login em todos os dispositivos daquela
     sessão. Sem isto, rotacionar sozinho não detecta token roubado, só atrasa
     o problema.
+
+    Consumo único (SEC-02): o pai é marcado com um UPDATE condicional
+    (compare-and-set em replaced_by_jti IS NULL). No PostgreSQL, duas
+    rotações simultâneas do mesmo token se serializam nessa linha: a segunda
+    espera o commit da primeira, reavalia o WHERE e altera 0 linhas — só uma
+    ganha sucessor. Antes, as duas liam "não usado" e ambas emitiam filhos
+    válidos (bifurcação da sessão).
     """
     credenciais_invalidas = HTTPException(status_code=401, detail='Sessão expirada. Faça login novamente.')
     try:
@@ -114,20 +154,36 @@ def _rotate_refresh_token(db: Session, token: str) -> tuple[User, str]:
         raise credenciais_invalidas
 
     if row.revoked_at is not None or row.replaced_by_jti is not None:
-        _revoke_family(db, row.family)
-        db.commit()
+        raise _refresh_ja_usado(db, row.id, row.family)
+
+    if _aware(row.expires_at) < datetime.now(timezone.utc):
         raise credenciais_invalidas
 
-    expira_em = row.expires_at
-    if expira_em.tzinfo is None:
-        expira_em = expira_em.replace(tzinfo=timezone.utc)
-    if expira_em < datetime.now(timezone.utc):
-        raise credenciais_invalidas
+    new_token, new_jti, family = create_refresh_token(str(user.id), family=row.family)
+    agora = datetime.now(timezone.utc)
+    consumido = db.execute(
+        update(RefreshToken)
+        .where(
+            RefreshToken.id == row.id,
+            RefreshToken.replaced_by_jti.is_(None),
+            RefreshToken.revoked_at.is_(None),
+        )
+        .values(replaced_by_jti=new_jti, rotated_at=agora)
+        .execution_options(synchronize_session=False)
+    ).rowcount
+    if consumido != 1:
+        # Outra requisição consumiu este token entre o SELECT e o UPDATE.
+        db.rollback()
+        raise _refresh_ja_usado(db, row.id, row.family)
 
-    new_token, new_jti = _issue_refresh_token(db, user.id, family=family)
-    row.replaced_by_jti = new_jti
+    db.add(RefreshToken(
+        user_id=user.id,
+        jti=new_jti,
+        family=family,
+        expires_at=agora + timedelta(days=settings.refresh_token_expire_days),
+    ))
     db.commit()
-    return user, new_token
+    return user, new_token, family
 
 
 def build_full_address(payload: RegisterClientRequest) -> str:
@@ -153,7 +209,7 @@ def login(request: Request, response: Response, payload: LoginRequest, db: Sessi
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='O acesso de clientes foi desativado. Utilize o painel administrativo.')
     role_value = user.role.value if hasattr(user.role, 'value') else str(user.role)
 
-    refresh_token, _jti = _issue_refresh_token(db, user.id)
+    refresh_token, _jti, _family = _issue_refresh_token(db, user.id)
     db.commit()
     _set_refresh_cookie(response, refresh_token)
 
@@ -175,7 +231,7 @@ def refresh(request: Request, response: Response, db: Session = Depends(get_db))
     if not token:
         raise HTTPException(status_code=401, detail='Sessão expirada. Faça login novamente.')
 
-    user, new_refresh_token = _rotate_refresh_token(db, token)
+    user, new_refresh_token, _family = _rotate_refresh_token(db, token)
     _set_refresh_cookie(response, new_refresh_token)
 
     role_value = user.role.value if hasattr(user.role, 'value') else str(user.role)
