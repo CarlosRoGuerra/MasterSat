@@ -142,6 +142,47 @@ WHERE position('substituição pela cobrança #' || b.alvo_id::text || ' reverti
 # coluna). O upgrade seguinte as devolve e apaga a tabela.
 _TABELA_LIBERADAS = 'fase02_competencias_liberadas'
 
+def _ocupantes(fn: str) -> str:
+    """Mensalidades que ocupam (contrato, competência) e se cada uma é efetiva:
+    não cancelada, ou cancelada porque foi substituída (a dívida existe)."""
+    return f"""
+    sub AS ({_SQL_SUBSTITUICAO_DERIVADA}),
+    ocupantes AS (
+        SELECT b.id, b.contract_id, {fn}(b.period_label) AS competencia, b.period_label,
+               b.status::text AS status, b.amount,
+               (b.status <> 'CANCELED' OR sub.substituto IS NOT NULL) AS efetiva
+        FROM billings b
+        LEFT JOIN sub ON sub.id = b.id
+        WHERE b.is_deleted = false AND b.contract_id IS NOT NULL
+          AND b.billing_type IN {_RECURRING}
+          AND {fn}(b.period_label) IS NOT NULL
+    ),
+    grupos AS (
+        SELECT contract_id, competencia,
+               COUNT(*) FILTER (WHERE efetiva) AS efetivas,
+               MAX(id) FILTER (WHERE NOT efetiva) AS ultima_cancelada
+        FROM ocupantes
+        GROUP BY contract_id, competencia
+        HAVING COUNT(*) > 1
+    )"""
+
+
+# Canceladas simples que dividem o mês com outra cobrança (o índice textual
+# antigo deixava '9/2026' cancelada ao lado de '09/2026' viva). O mês já foi
+# recobrado: a migration as marca como liberadas — sem cancelar, apagar ou
+# mudar valor — e registra no histórico. Fica UMA ocupante por mês: a efetiva,
+# ou, se todas estão canceladas, a mais recente.
+def _sql_canceladas_redundantes(fn: str) -> str:
+    return f"""
+    WITH {_ocupantes(fn)}
+    SELECT o.id, o.contract_id, o.competencia, o.period_label, o.status
+    FROM ocupantes o
+    JOIN grupos g USING (contract_id, competencia)
+    WHERE g.efetivas <= 1 AND NOT o.efetiva
+      AND NOT (g.efetivas = 0 AND o.id = g.ultima_cancelada)
+    ORDER BY o.id"""
+
+
 # Cada verificação: (código, descrição, SQL que devolve as linhas violadoras,
 # bloqueia?). As bloqueantes são exatamente as que fariam um índice/CHECK desta
 # migration falhar. As demais são inventário para o saneamento.
@@ -149,21 +190,20 @@ def _verificacoes(fn: str) -> list[tuple[str, str, str, bool]]:
     return [
         (
             'mensalidade_duplicada',
-            'Mais de uma mensalidade/pró-rata/1ª cobrança/carnê não removida para o mesmo '
-            'contrato e competência (canceladas inclusive — elas ocupam o mês)',
+            'Duas ou mais mensalidades EFETIVAS (não canceladas, ou canceladas por '
+            'substituição) para o mesmo contrato e competência — dupla cobrança',
             f"""
-            SELECT contract_id, {fn}(period_label) AS competencia,
-                   array_agg(id ORDER BY id) AS ids,
-                   array_agg(period_label ORDER BY id) AS rotulos,
-                   array_agg(status::text ORDER BY id) AS status,
-                   array_agg(amount::text ORDER BY id) AS valores
-            FROM billings
-            WHERE is_deleted = false AND contract_id IS NOT NULL
-              AND billing_type IN {_RECURRING}
-              AND {fn}(period_label) IS NOT NULL
-            GROUP BY contract_id, {fn}(period_label)
-            HAVING COUNT(*) > 1
-            ORDER BY contract_id, 2
+            WITH {_ocupantes(fn)}
+            SELECT o.contract_id, o.competencia,
+                   array_agg(o.id ORDER BY o.id) AS ids,
+                   array_agg(o.period_label ORDER BY o.id) AS rotulos,
+                   array_agg(o.status ORDER BY o.id) AS status,
+                   array_agg(o.amount::text ORDER BY o.id) AS valores
+            FROM ocupantes o
+            JOIN grupos g USING (contract_id, competencia)
+            WHERE g.efetivas > 1
+            GROUP BY o.contract_id, o.competencia
+            ORDER BY o.contract_id, o.competencia
             """,
             True,
         ),
@@ -190,12 +230,12 @@ def _verificacoes(fn: str) -> list[tuple[str, str, str, bool]]:
         ),
         (
             'cobranca_valor_invalido',
-            'Cobrança com valor ≤ 0 ou valor pago ≤ 0',
+            'Cobrança não removida com valor ≤ 0, ou qualquer cobrança com valor pago ≤ 0',
             """
             SELECT id, amount::text AS valor, paid_amount::text AS valor_pago,
                    status::text AS status, is_deleted
             FROM billings
-            WHERE amount <= 0 OR paid_amount <= 0
+            WHERE (amount <= 0 AND NOT is_deleted) OR paid_amount <= 0
             ORDER BY id
             """,
             True,
@@ -213,12 +253,13 @@ def _verificacoes(fn: str) -> list[tuple[str, str, str, bool]]:
         ),
         (
             'servico_avulso_invalido',
-            'Serviço avulso com quantidade/parcelas < 1 ou preço/total ≤ 0',
+            'Serviço avulso não removido com quantidade/parcelas < 1 ou preço/total ≤ 0',
             """
             SELECT id, quantity, installment_count, unit_price::text AS preco,
                    total_amount::text AS total, is_deleted
             FROM client_charge_items
-            WHERE quantity < 1 OR installment_count < 1 OR unit_price <= 0 OR total_amount <= 0
+            WHERE NOT is_deleted
+              AND (quantity < 1 OR installment_count < 1 OR unit_price <= 0 OR total_amount <= 0)
             ORDER BY id
             """,
             True,
@@ -233,6 +274,14 @@ def _verificacoes(fn: str) -> list[tuple[str, str, str, bool]]:
             ORDER BY id
             """,
             True,
+        ),
+        (
+            'cancelada_redundante_liberada',
+            'Cancelada simples que divide o mês com outra cobrança do contrato — a '
+            'migration marca como competência liberada (sem alterar valor/status) e '
+            'registra no histórico',
+            _sql_canceladas_redundantes(fn),
+            False,
         ),
         (
             'mensalidade_sem_competencia',
@@ -372,6 +421,24 @@ def upgrade() -> None:
         ))
         op.drop_table(_TABELA_LIBERADAS)
 
+    bind.execute(sa.text(f"""
+        WITH redundantes AS ({_sql_canceladas_redundantes('mastersat_competencia')}),
+        liberadas AS (
+            UPDATE billings b
+            SET competencia_liberada = true,
+                notes = COALESCE(b.notes || ' | ', '')
+                        || 'Competência liberada na migração da Fase 02: o mês já tinha outra cobrança do contrato.'
+            FROM redundantes r
+            WHERE b.id = r.id
+            RETURNING b.id
+        )
+        INSERT INTO billing_change_logs (billing_id, field_name, previous_value, new_value, justification)
+        SELECT id, 'competencia_liberada', 'false', 'true',
+               'Migração e5c2a9d71f04: cancelada que dividia o mês com outra cobrança do contrato '
+               '(o índice textual antigo aceitava rótulos equivalentes).'
+        FROM liberadas
+    """))
+
     op.execute(_SQL_FUNCAO_TRIGGER)
     op.execute(_SQL_TRIGGER)
 
@@ -400,7 +467,9 @@ def upgrade() -> None:
     # ela cobria (rótulo canônico ⇒ mesma competência).
     op.drop_index('uq_billings_contract_period_recurring', table_name='billings')
 
-    op.create_check_constraint('ck_billings_amount_positivo', 'billings', 'amount > 0')
+    # Exceção nominal: cobrança/serviço REMOVIDO não é validado — é histórico,
+    # e remover (soft delete) é justamente o saneamento de um valor inválido.
+    op.create_check_constraint('ck_billings_amount_positivo', 'billings', 'is_deleted OR amount > 0')
     op.create_check_constraint(
         'ck_billings_paid_amount_positivo', 'billings', 'paid_amount IS NULL OR paid_amount > 0',
     )
@@ -417,10 +486,10 @@ def upgrade() -> None:
         'ck_billings_substituida_cancelada', 'billings',
         "substituted_by_id IS NULL OR (status = 'CANCELED' AND substituted_by_id <> id)",
     )
-    op.create_check_constraint('ck_client_charge_items_quantidade', 'client_charge_items', 'quantity >= 1')
-    op.create_check_constraint('ck_client_charge_items_parcelas', 'client_charge_items', 'installment_count >= 1')
-    op.create_check_constraint('ck_client_charge_items_preco_positivo', 'client_charge_items', 'unit_price > 0')
-    op.create_check_constraint('ck_client_charge_items_total_positivo', 'client_charge_items', 'total_amount > 0')
+    op.create_check_constraint('ck_client_charge_items_quantidade', 'client_charge_items', 'is_deleted OR quantity >= 1')
+    op.create_check_constraint('ck_client_charge_items_parcelas', 'client_charge_items', 'is_deleted OR installment_count >= 1')
+    op.create_check_constraint('ck_client_charge_items_preco_positivo', 'client_charge_items', 'is_deleted OR unit_price > 0')
+    op.create_check_constraint('ck_client_charge_items_total_positivo', 'client_charge_items', 'is_deleted OR total_amount > 0')
     op.create_check_constraint('ck_billing_charge_items_amount_positivo', 'billing_charge_items', 'amount > 0')
 
 

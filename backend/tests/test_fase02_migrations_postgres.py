@@ -228,14 +228,51 @@ def test_preflight_aborta_com_ids_e_nao_altera_nada(banco):
         assert conn.execute(text("SELECT count(*) FROM pg_proc WHERE proname = 'mastersat_competencia'")).scalar_one() == 0
         assert conn.execute(text('SELECT count(*) FROM billings')).scalar_one() == 5
 
-    # Saneamento documentado: a paga fica; a pendente duplicada é removida
-    # (soft delete); a parcela repetida é cancelada; o valor zero é corrigido.
+    # Saneamento documentado (docs/financeiro/saneamento-fase-02.md): a paga
+    # fica; a pendente duplicada e a cobrança de valor zero são removidas
+    # (soft delete — a linha continua lá); a parcela repetida é cancelada.
     with banco.begin() as conn:
-        conn.execute(text('UPDATE billings SET is_deleted = true WHERE id = :id'), {'id': a})
+        conn.execute(text('UPDATE billings SET is_deleted = true WHERE id IN (:a, :z)'), {'a': a, 'z': zero})
         conn.execute(text("UPDATE billings SET status = 'CANCELED' WHERE id = :id"), {'id': p2})
-        conn.execute(text('UPDATE billings SET amount = 0.01 WHERE id = :id'), {'id': zero})
     _alembic(banco, 'upgrade', 'head')
     assert _revisao(banco) == FASE02
+    with banco.connect() as conn:
+        assert conn.execute(text('SELECT count(*) FROM billings')).scalar_one() == 5
+
+
+def test_cancelada_redundante_e_liberada_pela_migration_sem_bloquear(banco):
+    """O índice textual antigo deixava '9/2026' cancelada ao lado de '09/2026'
+    viva. Não é dupla cobrança: o mês já foi recobrado. A migration marca a
+    cancelada como liberada (sem mudar valor/status) em vez de parar o deploy."""
+    _alembic(banco, 'upgrade', ANTERIOR)
+    with banco.begin() as conn:
+        ids = _seed_base(conn)
+        cancelada = _billing(conn, ids, period_label='9/2026', status='CANCELED')
+        viva = _billing(conn, ids, period_label='09/2026', status='PAID', paid_amount=50)
+        # Mês só com canceladas: fica a mais recente ocupando.
+        antiga = _billing(conn, ids, period_label='10/2026', status='CANCELED', due_date=date(2026, 10, 10))
+        recente = _billing(conn, ids, period_label='2026-10', status='CANCELED', due_date=date(2026, 10, 10))
+        # Original consolidada + mensalidade viva no mesmo mês = dupla cobrança
+        # de verdade: continua bloqueando (testado em test_preflight_aborta...).
+
+    spec = importlib.util.spec_from_file_location('preflight_fase02', BACKEND / 'scripts' / 'preflight_fase02.py')
+    modulo = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(modulo)
+    inventario = {v['codigo']: v for v in modulo.executar(banco)}
+    assert inventario['mensalidade_duplicada']['total'] == 0
+    assert [l['id'] for l in inventario['cancelada_redundante_liberada']['linhas']] == [cancelada, antiga]
+
+    _alembic(banco, 'upgrade', 'head')
+    with banco.connect() as conn:
+        linhas = {r.id: r for r in conn.execute(text(
+            'SELECT id, status::text AS status, amount, competencia_liberada FROM billings'))}
+        logs = conn.execute(text(
+            "SELECT billing_id FROM billing_change_logs WHERE field_name = 'competencia_liberada' ORDER BY billing_id"
+        )).scalars().all()
+    assert linhas[cancelada].competencia_liberada and linhas[antiga].competencia_liberada
+    assert not linhas[viva].competencia_liberada and not linhas[recente].competencia_liberada
+    assert linhas[cancelada].status == 'CANCELED' and linhas[cancelada].amount == 50
+    assert logs == [cancelada, antiga]
 
 
 def test_script_de_preflight_nao_altera_o_banco(banco):

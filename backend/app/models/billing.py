@@ -60,7 +60,9 @@ class Billing(Base, TimestampMixin, SoftDeleteMixin):
                 "is_deleted = 0 AND (status <> 'CANCELED' OR substituted_by_id IS NOT NULL)"
             ),
         ),
-        CheckConstraint('amount > 0', name='ck_billings_amount_positivo'),
+        # Removida não é validada: é histórico, e remover é o saneamento de
+        # valor inválido legado (ver migration e5c2a9d71f04).
+        CheckConstraint('is_deleted OR amount > 0', name='ck_billings_amount_positivo'),
         CheckConstraint('paid_amount IS NULL OR paid_amount > 0', name='ck_billings_paid_amount_positivo'),
         CheckConstraint(
             'installment_number IS NULL OR (installment_number >= 1 AND '

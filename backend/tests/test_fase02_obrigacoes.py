@@ -527,6 +527,13 @@ class TestChecks:
         with pytest.raises(IntegrityError):
             db.commit()
 
+    def test_removida_com_valor_legado_nao_bloqueia(self, db, contrato):
+        # Exceção nominal: removida é histórico; remover é o saneamento.
+        db.add(Billing(contract_id=contrato.id, client_id=contrato.client_id, amount=Decimal('-0.01'),
+                       due_date=date(2099, 1, 1), billing_type='item', status=BillingStatus.PENDING,
+                       is_deleted=True))
+        db.commit()
+
     def test_substituida_precisa_estar_cancelada(self, db, contrato, billing_pendente):
         from sqlalchemy.exc import IntegrityError
 
