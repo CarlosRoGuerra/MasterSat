@@ -664,10 +664,28 @@ def _ailos_baixa_automatica():
                     _alerta_admin('✅ Conciliação Ailos NORMALIZADA — baixa de boletos pagos voltou.', logger)
                     ja_alertado = False
                 falhas_seguidas = 0
-                if res.get('baixados'):
-                    logger.info(
-                        'Conciliação Ailos: %s baixado(s) de %s consultado(s).',
-                        res['baixados'], res['consultados'],
+                # Métricas de cada rodada (FIN-05): progresso da carteira,
+                # erros individuais e atraso da consulta mais antiga.
+                logger.info(
+                    'Conciliação Ailos: %s consultado(s), %s baixado(s), %s erro(s), %s desfecho(s) '
+                    'resolvido(s); carteira %s, nunca consultados %s, atraso máx. %sh, janela ~%sh.',
+                    res.get('consultados'), res.get('baixados'), res.get('erros'),
+                    res.get('desfechos_resolvidos'), res.get('carteira_monitorada'),
+                    res.get('nunca_consultados'), res.get('atraso_max_horas'),
+                    res.get('janela_estimada_horas'),
+                )
+                if res.get('pendencias_novas'):
+                    _alerta_admin(
+                        f'⚠ Conciliação Ailos: {res["pendencias_novas"]} pendência(s) nova(s) '
+                        '(pagamento divergente, título pago em cobrança cancelada/removida ou baixado '
+                        'com cobrança aberta). Veja Financeiro → Ailos → Pendências.',
+                        logger,
+                    )
+                if res.get('alerta_atraso'):
+                    logger.warning(
+                        'Conciliação Ailos atrasada: título sem consulta há %sh (limite %sh). '
+                        'Aumente AILOS_CONCILIACAO_ORCAMENTO ou verifique erros individuais.',
+                        res.get('atraso_max_horas'), settings.ailos_conciliacao_atraso_alerta_horas,
                     )
         except Exception as exc:  # noqa: BLE001 — conciliação nunca pode derrubar o worker
             falhas_seguidas += 1

@@ -35,12 +35,16 @@ Ponto de ajuste documentado (assunção feita a partir da documentação):
 from __future__ import annotations
 
 import base64
+import logging
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
 import requests
+# Vinculado no import: testes substituem ``requests`` inteiro neste módulo e
+# a classificação de falha precisa das classes reais.
+from requests import exceptions as _req_exc
 from sqlalchemy import update
 from sqlalchemy.orm import Session
 
@@ -50,6 +54,8 @@ from app.db import session as db_session
 from app.models.ailos_api_log import AilosApiLog
 from app.models.ailos_client_token import AilosClientToken
 from app.models.ailos_integration import AilosIntegration
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Caminhos (relativos às bases configuradas)
@@ -110,6 +116,30 @@ def _mask_name(value: str) -> str:
 
 class AilosError(Exception):
     """Erro de configuração/estado da integração — nenhuma chamada à API foi feita."""
+
+
+class AilosDesfechoDesconhecido(AilosError):
+    """A requisição pode ter chegado à Ailos, mas não houve resposta (timeout de
+    leitura, conexão caída no meio). Para POST de registro isto NÃO é falha: o
+    boleto pode existir no banco. Quem chama não pode liberar a cobrança nem
+    repetir a emissão sem consultar antes (FIN-03)."""
+
+
+def _requisicao_pode_ter_chegado(exc: BaseException) -> bool:
+    """Só erro na fase de conexão garante que nada foi enviado ao banco."""
+    if isinstance(exc, _req_exc.ConnectTimeout):
+        return False
+    if isinstance(exc, _req_exc.ConnectionError):
+        texto = repr(exc)
+        if any(marca in texto for marca in (
+            'NewConnectionError', 'NameResolutionError', 'Failed to establish a new connection',
+            'Name or service not known', 'nodename nor servname', 'getaddrinfo failed',
+        )):
+            return False
+    if isinstance(exc, (_req_exc.InvalidURL, _req_exc.MissingSchema,
+                        _req_exc.InvalidSchema, _req_exc.InvalidHeader)):
+        return False
+    return True
 
 
 class AilosApiError(Exception):
@@ -246,6 +276,23 @@ def _log_call(
         log_db.commit()
     finally:
         log_db.close()
+
+
+def _registrar_log(*args) -> None:
+    """``_log_call`` sem poder derrubar a operação bancária.
+
+    O log roda depois da resposta da Ailos. Se o banco de log falhar e o erro
+    subisse, um boleto REGISTRADO no banco virava "erro de registro" aqui —
+    liberando edição e nova emissão de um título que existe (FIN-03). A falha
+    do log é registrada no log da aplicação e a resposta segue.
+    """
+    try:
+        _log_call(*args)
+    except Exception:  # noqa: BLE001 — log não pode mudar o desfecho bancário
+        logger.exception(
+            'Falha ao gravar ailos_api_logs para %s %s (billing %s); a resposta da Ailos foi mantida.',
+            args[0], args[1], args[-1],
+        )
 
 
 def _get_or_create_integration(db: Session) -> AilosIntegration:
@@ -829,7 +876,12 @@ def request(
                 timeout=settings.ailos_timeout_seconds,
             )
         except requests.RequestException as exc:
-            _log_call(method, path, json_body, None, None, False, str(exc), None, billing_id)
+            _registrar_log(method, path, json_body, None, None, False, str(exc), None, billing_id)
+            if _requisicao_pode_ter_chegado(exc):
+                raise AilosDesfechoDesconhecido(
+                    f'Falha de conexão com a API Ailos ({path}): {exc}. A resposta não chegou — '
+                    'o pedido pode ter sido processado.'
+                ) from exc
             raise AilosError(f'Falha de conexão com a API Ailos ({path}): {exc}') from exc
 
         if resp.status_code == 401:
@@ -879,7 +931,7 @@ def request(
     correlation_id = resp.headers.get('X-Correlation-Id') or resp.headers.get('correlationId')
     error_message = None if success else (_extract_message(body_json) or resp.text[:500])
 
-    _log_call(
+    _registrar_log(
         method, path, json_body, body_json, resp.status_code, success,
         error_message, correlation_id, billing_id,
     )
