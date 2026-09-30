@@ -339,3 +339,19 @@ class TestMapBillingType:
         # mantém o comportamento anterior à introdução deste campo.
         assert map_billing_type(None) == 'recorrente'
         assert map_billing_type('') == 'recorrente'
+
+
+class TestParcelaSgr:
+    """O SGR manda "0 de 1"/"2 de 1"/"0 de 0" em boleto de fechamento: não é
+    parcelamento e não pode virar parcela fora do intervalo (a migration
+    e5c2a9d71f04 recusa subir com isso)."""
+
+    def test_parcela_valida(self):
+        from app.services.sgr_migration.mapping import _parse_parcela
+        assert _parse_parcela('3 de 10') == (3, 10)
+        assert _parse_parcela('1 de 1') == (1, 1)
+
+    def test_parcela_fora_do_intervalo_vira_sem_parcela(self):
+        from app.services.sgr_migration.mapping import _parse_parcela
+        for texto in ('0 de 1', '2 de 1', '0 de 0', '5 de 4', 'x de 2', ''):
+            assert _parse_parcela(texto) == (None, None), texto

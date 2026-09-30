@@ -752,12 +752,21 @@ def map_billing_type(produto) -> str:
 
 
 def _parse_parcela(valor) -> tuple[int | None, int | None]:
-    """'1 de 10' → (1, 10). Formato observado na base real."""
+    """'1 de 10' → (1, 10). Formato observado na base real.
+
+    O SGR também manda "0 de 1", "2 de 1", "0 de 0" em boleto de fechamento,
+    que não é parcelamento. Número fora de 1..total vira (None, None) — o
+    texto original fica em ``sgr_payload['parcela']`` — em vez de gravar uma
+    parcela que a constraint ck_billings_parcela_no_intervalo recusa.
+    """
     texto = str(valor or '').strip().lower()
     if ' de ' not in texto:
         return None, None
     inicio, _, fim = texto.partition(' de ')
-    return _to_int(inicio), _to_int(fim)
+    numero, total = _to_int(inicio), _to_int(fim)
+    if numero is None or total is None or numero < 1 or total < 1 or numero > total:
+        return None, None
+    return numero, total
 
 
 def map_boleto(
