@@ -112,7 +112,12 @@ ok "Renovação automática ativa (verifica a cada 12h)"
 
 # ── 9. Configura cron de backup ───────────────────────────────────────────────
 log "Configurando backup automático..."
-CRON_JOB="0 2 * * * cd $(pwd) && docker compose --profile backup run --rm pg_dump >> /var/log/mastersat-backup.log 2>&1"
+# Imagem própria (postgres:16 + rclone): falha de build aparece agora, não às 02:00.
+docker compose --profile backup build pg_dump
+[ -f backup/backup.env ] || echo "⚠ backup/backup.env ausente: sem destino externo o backup termina com FALHA (ver backup/README.md)"
+# \$(git rev-parse HEAD) é avaliado pelo cron a cada execução: o manifest
+# registra o commit que estava em produção no momento do backup.
+CRON_JOB="0 2 * * * cd $(pwd) && MASTERSAT_GIT_SHA=\$(git rev-parse HEAD) docker compose --profile backup run --rm pg_dump >> /var/log/mastersat-backup.log 2>&1"
 (crontab -l 2>/dev/null | grep -v 'mastersat'; echo "$CRON_JOB") | crontab -
 ok "Backup agendado para 02:00 diariamente"
 
