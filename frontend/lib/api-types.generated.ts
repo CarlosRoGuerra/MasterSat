@@ -66,9 +66,13 @@ export interface paths {
         put?: never;
         /**
          * Logout
-         * @description Revoga a família do refresh token apresentado (server-side) e limpa o
-         *     cookie. Sem isto, 'logout' era só um efeito visual do front — um cookie
-         *     vazado antes do clique continuava válido normalmente até expirar sozinho.
+         * @description Encerra ESTA sessão (SEC-06): revoga a família do refresh token e,
+         *     com ela, todo access token emitido para a mesma sessão ('sid') — que
+         *     passa a levar 401 na hora, não só quando expirar. Outros dispositivos
+         *     do mesmo usuário continuam logados; para derrubar todos, troque a senha.
+         *
+         *     A sessão vem do cookie de refresh e, na falta dele, do Bearer enviado.
+         *     Sempre 200: logout não revela se o token existia.
          */
         post: operations["logout_api_v1_auth_logout_post"];
         delete?: never;
@@ -86,7 +90,15 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Forgot Password */
+        /**
+         * Forgot Password
+         * @description Envia o link de redefinição por e-mail (SEC-05).
+         *
+         *     Resposta IDÊNTICA para e-mail existente, inexistente, inativo ou acima
+         *     do limite por conta — não revela quais e-mails têm conta. O envio roda
+         *     depois da resposta (services/password_reset.py), então o SMTP também
+         *     não altera o tempo de resposta.
+         */
         post: operations["forgot_password_api_v1_auth_forgot_password_post"];
         delete?: never;
         options?: never;
@@ -103,7 +115,12 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Reset Password */
+        /**
+         * Reset Password
+         * @description Troca a senha com o token do e-mail. Uso único: o consumo é um UPDATE
+         *     condicional, então dois envios simultâneos do mesmo token não trocam a
+         *     senha duas vezes. Conta excluída/inativa não é reativada por aqui.
+         */
         post: operations["reset_password_api_v1_auth_reset_password_post"];
         delete?: never;
         options?: never;
@@ -1826,7 +1843,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Delinquency Status */
+        /**
+         * Delinquency Status
+         * @description Quantos clientes estão inadimplentes (o operacional usa para bloqueio
+         *     e desinstalação). Quantidade e valor dos títulos vencidos são dado
+         *     financeiro: para perfil sem FINANCIAL_READ voltam null (SEC-01).
+         */
         get: operations["delinquency_status_api_v1_delinquency_status_get"];
         put?: never;
         post?: never;
@@ -2096,6 +2118,28 @@ export interface paths {
         get: operations["get_boleto_pdf_api_v1_boletos__billing_id__pdf_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/boletos/{billing_id}/enviar-email": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Enviar Boleto Email
+         * @description Envia o boleto por e-mail direto do painel, via SMTP configurado em
+         *     Configurações → E-mail, com o PDF anexado — sem depender de cliente de
+         *     e-mail externo na máquina do operador.
+         */
+        post: operations["enviar_boleto_email_api_v1_boletos__billing_id__enviar_email_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3249,6 +3293,8 @@ export interface components {
              * @default false
              */
             boleto_ailos: boolean;
+            /** Sgr Payload */
+            sgr_payload?: Record<string, never> | null;
         };
         /** BillingReceive */
         BillingReceive: {
@@ -3328,7 +3374,6 @@ export interface components {
         Body_certificado_cadastrar_api_v1_nfse_certificado_post: {
             /**
              * Arquivo
-             * Format: binary
              * @description e-CNPJ A1 (.pfx / .p12)
              */
             arquivo: string;
@@ -3375,10 +3420,7 @@ export interface components {
         };
         /** Body_validate_signed_contract_api_v1_contracts_validate_signed_post */
         Body_validate_signed_contract_api_v1_contracts_validate_signed_post: {
-            /**
-             * File
-             * Format: binary
-             */
+            /** File */
             file: string;
         };
         /**
@@ -5539,6 +5581,10 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+            /** Input */
+            input?: unknown;
+            /** Context */
+            ctx?: Record<string, never>;
         };
         /** VehicleCreate */
         VehicleCreate: {
@@ -10574,6 +10620,37 @@ export interface operations {
         };
     };
     get_boleto_pdf_api_v1_boletos__billing_id__pdf_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                billing_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    enviar_boleto_email_api_v1_boletos__billing_id__enviar_email_post: {
         parameters: {
             query?: never;
             header?: never;
