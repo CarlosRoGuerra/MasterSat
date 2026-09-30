@@ -1,0 +1,10 @@
+v20.20.2
+10.8.2
+EXIT[npm ci]=0
+✖ 41 problems (0 errors, 41 warnings)
+EXIT[npm run lint]=0
+EXIT[npm run typecheck]=0
+ Test Files  19 passed (19)
+      Tests  167 passed (167)
+EXIT[npm test]=0
+EXIT[npm run build]=0
