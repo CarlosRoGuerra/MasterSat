@@ -26,9 +26,12 @@ type UpcomingBilling = {
 type DashboardData = {
   clients: {
     active: number; inactive: number; delinquent: number;
+    // PROD-02: suspensos e o denominador explícito (todos os estados).
+    suspended?: number; total?: number;
     new_this_month: number; new_prev_month: number;
   };
-  vehicles: { total: number };
+  // with_tracker: veículos DISTINTOS com rastreador instalado vinculado.
+  vehicles: { total: number; with_tracker?: number; without_tracker?: number };
   trackers: { installed: number; stock: number; maintenance: number };
   service_orders: { open: number; in_progress: number; completed: number };
   // null para perfil sem acesso financeiro (operacional) — o backend nem
@@ -38,7 +41,9 @@ type DashboardData = {
     received_month: number; received_prev_month: number;
     delta_received: number; delta_pct: number;
   } | null;
+  // Vencem de hoje a hoje+7 (os atrasados vêm à parte, em overdue_billings).
   upcoming_billings: UpcomingBilling[];
+  overdue_billings?: UpcomingBilling[];
 };
 
 type DelinquencyStatus = {
@@ -91,7 +96,10 @@ export default function DashboardPage() {
   /* ── Derived metrics ── */
   const totals = useMemo(() => {
     if (!data) return { clientTotal: 0, clientHealthy: 0, osCompletion: 0, osTotal: 0, financeRisk: 0, finTotal: 0 };
-    const clientTotal = data.clients.active + data.clients.inactive + data.clients.delinquent;
+    // Denominador com TODOS os estados (suspensos inclusive) — antes os
+    // suspensos ficavam fora e a carteira parecia 100% saudável.
+    const clientTotal = data.clients.total
+      ?? data.clients.active + data.clients.inactive + data.clients.delinquent + (data.clients.suspended ?? 0);
     const osTotal = data.service_orders.open + data.service_orders.in_progress + data.service_orders.completed;
     const finTotal = data.finance ? data.finance.pending_count + data.finance.overdue_count : 0;
     return {
@@ -339,11 +347,13 @@ export default function DashboardPage() {
                     { label: 'Ativos',        v: data?.clients.active },
                     { label: 'Inativos',      v: data?.clients.inactive },
                     { label: 'Inadimplentes', v: data?.clients.delinquent, danger: (data?.clients.delinquent ?? 0) > 0 },
+                    { label: 'Suspensos',     v: data?.clients.suspended ?? 0, warn: (data?.clients.suspended ?? 0) > 0 },
                   ]},
                 { title: 'Veículos', href: '/veiculos', rows: [
                     { label: 'Total',           v: data?.vehicles.total },
-                    { label: 'Com rastreador',  v: data?.trackers.installed },
-                    { label: 'Sem rastreador',  v: Math.max((data?.vehicles.total ?? 0) - (data?.trackers.installed ?? 0), 0) },
+                    // Veículos distintos com rastreador instalado (não a contagem de rastreadores).
+                    { label: 'Com rastreador',  v: data?.vehicles.with_tracker ?? data?.trackers.installed },
+                    { label: 'Sem rastreador',  v: data?.vehicles.without_tracker ?? Math.max((data?.vehicles.total ?? 0) - (data?.trackers.installed ?? 0), 0) },
                   ]},
                 { title: 'Ordens de serviço', href: '/ordens-servico', rows: [
                     { label: 'Abertas',      v: data?.service_orders.open, warn: (data?.service_orders.open ?? 0) > 0 },
@@ -390,6 +400,7 @@ export default function DashboardPage() {
                     { label: 'Ativos',   value: data?.clients.active    ?? 0 },
                     { label: 'Inativos', value: data?.clients.inactive  ?? 0 },
                     { label: 'Inadimp.', value: data?.clients.delinquent ?? 0 },
+                    { label: 'Suspensos', value: data?.clients.suspended ?? 0 },
                   ]}
                   height={120}
                   formatValue={(v) => String(v)}
@@ -460,7 +471,7 @@ export default function DashboardPage() {
 
           {/* Próximos vencimentos */}
           <Card>
-            <SectionHeader eyebrow="Atenção" title="Próximos vencimentos" description="Cobranças nos próximos 7 dias." />
+            <SectionHeader eyebrow="Atenção" title="Próximos vencimentos" description="Cobranças que vencem de hoje até 7 dias. Vencidas aparecem abaixo, separadas." />
             <div className="mt-4">
               {error ? (
                 // Sem 'data' e SEM tentativa em andamento — não deixa o
@@ -498,6 +509,21 @@ export default function DashboardPage() {
                   <Link href="/financeiro" className="mt-1 flex items-center justify-center gap-1.5 rounded-lg py-2 text-2xs font-semibold text-brand-700 hover:underline dark:text-brand-400">
                     Ver todos no financeiro <ArrowRight className="h-3 w-3" />
                   </Link>
+                </div>
+              )}
+              {!!data?.overdue_billings?.length && (
+                <div className="mt-4 space-y-2">
+                  <p className={labelClass}>Vencidas em aberto (mais antigas)</p>
+                  {data.overdue_billings.map((b) => (
+                    <div key={b.id} className="flex items-center gap-3 rounded-xl border border-rose-100 bg-rose-50/60 px-3 py-2.5 dark:border-rose-900/40 dark:bg-rose-950/20">
+                      <CalendarClock className="h-4 w-4 shrink-0 text-rose-500" />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-xs font-medium text-slate-800 dark:text-slate-200">{b.client_name}</p>
+                        <p className="text-2xs text-rose-500">{fmtDate(b.due_date)} · {Math.abs(b.days_until)}d atrasado</p>
+                      </div>
+                      <span className="text-xs font-semibold tabular-nums text-slate-700 dark:text-slate-300">{currency(b.amount)}</span>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>

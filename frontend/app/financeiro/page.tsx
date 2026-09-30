@@ -20,7 +20,9 @@ import { CarneTrackingModal, useCarneTracking } from '@/components/carne-trackin
 import { API_URL, apiFetch, apiFetchList } from '@/lib/api';
 import { entregarArquivo, nomeArquivoCliente } from '@/lib/arquivo';
 import { enviarBoletoEmail, enviarBoletoWhats } from '@/lib/boleto-mensagem';
-import { cancelarComConfirmacoes } from '@/lib/cancelamento-cobranca';
+import { cancelarComConfirmacoes, corpoCancelamento } from '@/lib/cancelamento-cobranca';
+import { camposDiferenca, diferencaRecebimento, pendenciaDoFormulario, ROTULO_TRATAMENTO, type TratamentoDiferenca } from '@/lib/recebimento';
+import { descreverTitulo, podeConsultarDesfecho, ROTULO_PENDENCIA, type TituloBancario } from '@/lib/titulo-bancario';
 import { useAuthGuard } from '@/lib/use-auth-guard';
 import { ROUTE_ROLES } from '@/lib/route-roles';
 import { useDebouncedValue, useEffectSkipFirst } from '@/lib/use-debounced-value';
@@ -76,9 +78,14 @@ type SgrPayload = {
   discriminacao?: { valor?: string; produto?: string; placa?: string; mes_referente?: string }[] | null;
 };
 
-type Billing = { id: number; contract_id?: number | null; client_id: number; payer_client_id?: number | null; item_id?: number | null; vehicle_id?: number | null; tracker_id?: number | null; title?: string | null; billing_type: string; installment_number?: number | null; installment_total?: number | null; amount: number; due_date: string; status: BillingStatus; payment_date?: string | null; payment_method?: string | null; notes?: string | null; paid_amount?: number | null; receipt_number?: string | null; period_label?: string | null; competencia?: string | null; competencia_liberada?: boolean; substituted_by_id?: number | null; client_name?: string | null; payer_name?: string | null; vehicle_plate?: string | null; tracker_identifier?: string | null; plan_name?: string | null; contract_status?: string | null; overdue_days: number; sgr_payload?: SgrPayload | null };
+type Billing = { id: number; contract_id?: number | null; client_id: number; payer_client_id?: number | null; item_id?: number | null; vehicle_id?: number | null; tracker_id?: number | null; title?: string | null; billing_type: string; installment_number?: number | null; installment_total?: number | null; amount: number; due_date: string; status: BillingStatus; payment_date?: string | null; payment_method?: string | null; notes?: string | null; paid_amount?: number | null; receipt_number?: string | null; period_label?: string | null; competencia?: string | null; competencia_liberada?: boolean; substituted_by_id?: number | null; client_name?: string | null; payer_name?: string | null; vehicle_plate?: string | null; tracker_identifier?: string | null; plan_name?: string | null; contract_status?: string | null; overdue_days: number; sgr_payload?: SgrPayload | null; titulo_bancario?: TituloBancario | null; relacoes_removidas?: string[] };
 type Summary = { active_plans: number; active_contracts: number; pending_billings: number; overdue_billings: number; pending_amount: number; overdue_amount: number; paid_this_month: number };
-type RevenueItem = { label: string; total_received: number; total_billed: number; total_outstanding: number };
+// Bases (PROD-01): total_billed/total_outstanding/total_received_by_due pelo
+// VENCIMENTO; total_received é CAIXA (data do pagamento). Canceladas fora.
+type RevenueItem = { label: string; total_received: number; total_billed: number; total_outstanding: number; total_received_by_due?: number };
+type PendenciaBancaria = { billing_id: number; nosso_numero?: string | null; estado: TituloBancario['estado']; baixa_status?: string | null; pendencia?: string | null; billing_status: string; billing_removida: boolean; valor: number; vencimento: string; cliente?: string | null; ultima_consulta_erro?: string | null };
+type Conciliacao = { carteira_monitorada: number; nunca_consultados: number; atraso_max_horas: number; janela_estimada_horas: number; desfecho_desconhecido: number; baixa_pendente: number; alerta_atraso: boolean };
+type CanaisBancarios = Record<'ailos_api' | 'cnab240' | 'cnab400', { habilitado: boolean; motivo: string | null }>;
 type DelinquentItem = { client_id: number; client_name: string; total_open: number; overdue_count: number };
 type Nfse = { billing_id: number; status: string; numero_nfse?: string | null; serie_nfse?: string | null; codigo_verificacao?: string | null; chave_acesso?: string | null; link_visualizacao?: string | null; protocolo?: string | null; situacao?: string | null; erro_codigo?: string | null; erro_mensagem?: string | null };
 
@@ -86,7 +93,7 @@ type PlanFormState = { name: string; price: string; description: string; active:
 type ServiceProductFormState = { name: string; category: string; default_price: string; description: string; active: boolean; allow_installments: boolean; remove_after_payment: boolean; auto_add_on_uninstall: boolean };
 type ContractFormState = { client_id: string; vehicle_id: string; tracker_id: string; plan_id: string; start_date: string; end_date: string; billing_day: string; payment_method: string; notes: string; installation_fee: string; uninstall_fee: string; signed: boolean; signed_at: string };
 type ChargeItemFormState = { client_id: string; contract_id: string; vehicle_id: string; tracker_id: string; service_product_id: string; title: string; description: string; quantity: string; unit_price: string; installment_count: string; start_date: string; remove_after_payment: boolean };
-type ReceiveFormState = { paid_amount: string; payment_date: string; payment_method: string; notes: string };
+type ReceiveFormState = { paid_amount: string; payment_date: string; payment_method: string; notes: string; tratamento: TratamentoDiferenca | ''; justificativa: string; saldo_vencimento: string };
 type AdjustFormState = { amount: string; due_date: string; justification: string };
 
 /* ── Constants ──────────────────────────────────────────────────────── */
@@ -96,7 +103,7 @@ const initialPlanForm: PlanFormState = { name: '', price: '', description: '', a
 const initialProductForm: ServiceProductFormState = { name: '', category: 'servico', default_price: '', description: '', active: true, allow_installments: true, remove_after_payment: false, auto_add_on_uninstall: false };
 const initialContractForm: ContractFormState = { client_id: '', vehicle_id: '', tracker_id: '', plan_id: '', start_date: new Date().toISOString().slice(0, 10), end_date: '', billing_day: '', payment_method: 'boleto', notes: '', installation_fee: '', uninstall_fee: '', signed: false, signed_at: '' };
 const initialChargeItemForm: ChargeItemFormState = { client_id: '', contract_id: '', vehicle_id: '', tracker_id: '', service_product_id: '', title: '', description: '', quantity: '1', unit_price: '', installment_count: '1', start_date: new Date().toISOString().slice(0, 10), remove_after_payment: false };
-const initialReceiveForm: ReceiveFormState = { paid_amount: '', payment_date: new Date().toISOString().slice(0, 10), payment_method: 'pix', notes: '' };
+const initialReceiveForm: ReceiveFormState = { paid_amount: '', payment_date: new Date().toISOString().slice(0, 10), payment_method: 'pix', notes: '', tratamento: '', justificativa: '', saldo_vencimento: '' };
 const initialAdjustForm: AdjustFormState = { amount: '', due_date: '', justification: '' };
 
 /* ── Helpers ────────────────────────────────────────────────────────── */
@@ -570,6 +577,11 @@ export default function FinanceiroPage() {
 
   // Saúde da sessão Ailos (emissão de boletos depende dela)
   const [ailosStatus, setAilosStatus] = useState<{ cooperado_status: string } | null>(null);
+  // Conciliação e pendências bancárias (Fase 03): desfecho desconhecido,
+  // baixa pendente, pagamento divergente.
+  const [pendenciasBancarias, setPendenciasBancarias] = useState<PendenciaBancaria[]>([]);
+  const [conciliacao, setConciliacao] = useState<Conciliacao | null>(null);
+  const [canais, setCanais] = useState<CanaisBancarios | null>(null);
   const [connectingAilos, setConnectingAilos] = useState(false);
 
   // Contas a Pagar
@@ -787,6 +799,8 @@ export default function FinanceiroPage() {
     apiFetch<{ cooperado_status: string }>('/ailos/status', {}, token)
       .then(setAilosStatus)
       .catch(() => setAilosStatus(null));
+    loadPendenciasBancarias(token);
+    apiFetch<CanaisBancarios>('/boletos/canais', {}, token).then(setCanais).catch(() => setCanais(null));
   }, [token]);
 
   // O banner de erro fica no topo da página; em listas longas (planos,
@@ -808,7 +822,7 @@ export default function FinanceiroPage() {
 
   useEffect(() => {
     if (selectedBilling) {
-      setReceiveForm({ paid_amount: String(selectedBilling.amount || ''), payment_date: new Date().toISOString().slice(0, 10), payment_method: selectedBilling.payment_method || 'pix', notes: '' });
+      setReceiveForm({ ...initialReceiveForm, paid_amount: String(selectedBilling.amount || ''), payment_date: new Date().toISOString().slice(0, 10), payment_method: selectedBilling.payment_method || 'pix' });
       setAdjustForm({ amount: String(selectedBilling.amount || ''), due_date: selectedBilling.due_date || '', justification: '' });
       // Carrega o status da NFS-e desta cobrança (404 = ainda não emitida)
       setNfse(null);
@@ -964,12 +978,85 @@ export default function FinanceiroPage() {
 
   async function handleReceive() {
     if (!token || !selectedBilling || !canEdit) return;
+    // Diferença entre título e recebido precisa ser classificada (FIN-06):
+    // o backend recusa sem isso; aqui a tela avisa antes de enviar.
+    const falta = pendenciaDoFormulario(selectedBilling.amount, receiveForm);
+    if (falta) { setModalError(falta); return; }
     setProcessing(true);
     try {
-      await apiFetch(`/billings/${selectedBilling.id}/receive`, { method: 'POST', body: JSON.stringify({ paid_amount: Number(receiveForm.paid_amount.replace(',', '.')), payment_date: receiveForm.payment_date, payment_method: receiveForm.payment_method, notes: receiveForm.notes || null }) }, token);
-      setFeedback('Pagamento registrado com sucesso.'); setReceiveModal(false);
+      await apiFetch(`/billings/${selectedBilling.id}/receive`, { method: 'POST', body: JSON.stringify({ paid_amount: Number(receiveForm.paid_amount.replace(',', '.')), payment_date: receiveForm.payment_date, payment_method: receiveForm.payment_method, notes: receiveForm.notes || null, ...camposDiferenca(selectedBilling.amount, receiveForm) }) }, token);
+      setFeedback(receiveForm.tratamento === 'parcial'
+        ? 'Pagamento parcial registrado; o saldo virou uma nova cobrança avulsa.'
+        : 'Pagamento registrado com sucesso.');
+      setReceiveModal(false);
       await loadData(token);
+      loadPendenciasBancarias(token);
     } catch (err) { setModalError(parseError(err)); } finally { setProcessing(false); }
+  }
+
+  // Desfaz um recebimento manual: a cobrança volta a ficar em aberto e o
+  // pagamento desfeito fica registrado como ajuste "estorno".
+  async function handleEstornar() {
+    if (!token || !selectedBilling || !canEdit) return;
+    const justificativa = window.prompt('Estornar o recebimento desta cobrança? Ela volta a ficar em aberto. Informe o motivo:', '');
+    if (!justificativa || justificativa.trim().length < 3) return;
+    setProcessing(true);
+    try {
+      const atualizada = await apiFetch<Billing>(`/billings/${selectedBilling.id}/estornar`, { method: 'POST', body: JSON.stringify({ justificativa: justificativa.trim() }) }, token);
+      setSelectedBilling(atualizada);
+      setFeedback('Recebimento estornado; a cobrança voltou a ficar em aberto.');
+      await loadData(token);
+    } catch (err) { setError(parseError(err)); } finally { setProcessing(false); }
+  }
+
+  async function loadPendenciasBancarias(t: string) {
+    try {
+      const [pend, conc] = await Promise.all([
+        apiFetch<PendenciaBancaria[]>('/ailos/pendencias', {}, t),
+        apiFetch<Conciliacao>('/ailos/conciliacao', {}, t),
+      ]);
+      setPendenciasBancarias(pend);
+      setConciliacao(conc);
+    } catch { setPendenciasBancarias([]); setConciliacao(null); }
+  }
+
+  // Registro com desfecho desconhecido: consulta a Ailos pelo número do
+  // documento. Não reenvia nada — só descobre se o boleto existe no banco.
+  async function handleConsultarDesfecho(billingId: number) {
+    if (!token || !canEdit) return;
+    setProcessing(true);
+    try {
+      const r = await apiFetch<{ resultado: string; mensagem: string }>(`/ailos/boletos/${billingId}/consultar-desfecho`, { method: 'POST' }, token);
+      setFeedback(r.mensagem);
+      await loadData(token);
+      loadPendenciasBancarias(token);
+    } catch (err) { setError(parseError(err)); } finally { setProcessing(false); }
+  }
+
+  // Baixa manual (administrador): o caminho normal é a conciliação confirmar
+  // pela situação "baixado" na consulta.
+  async function handleConfirmarBaixa(billingId: number) {
+    if (!token || user?.role !== 'admin') return;
+    const justificativa = window.prompt('Confirmar que o título foi BAIXADO no internet banking da Ailos? Informe quando/como:', '');
+    if (!justificativa || justificativa.trim().length < 3) return;
+    setProcessing(true);
+    try {
+      await apiFetch(`/ailos/boletos/${billingId}/confirmar-baixa`, { method: 'POST', body: JSON.stringify({ justificativa: justificativa.trim() }) }, token);
+      setFeedback('Baixa confirmada. A competência já pode ser liberada, se for o caso.');
+      await loadData(token);
+      loadPendenciasBancarias(token);
+    } catch (err) { setError(parseError(err)); } finally { setProcessing(false); }
+  }
+
+  async function handleResolverPendencia(billingId: number) {
+    if (!token || !canEdit) return;
+    const justificativa = window.prompt('Como a pendência foi tratada? (fica no histórico da cobrança)', '');
+    if (!justificativa || justificativa.trim().length < 3) return;
+    try {
+      await apiFetch(`/ailos/boletos/${billingId}/resolver-pendencia`, { method: 'POST', body: JSON.stringify({ justificativa: justificativa.trim() }) }, token);
+      setFeedback('Pendência encerrada.');
+      loadPendenciasBancarias(token);
+    } catch (err) { setError(parseError(err)); }
   }
 
   async function handleAdjust() {
@@ -1032,6 +1119,17 @@ export default function FinanceiroPage() {
     if (!token || !window.confirm(`Cancelar a conta "${p.description}"?`)) return;
     try {
       await apiFetch(`/payables/${p.id}/cancel`, { method: 'POST' }, token);
+      await loadPayables(token);
+    } catch (err) { setError(parseError(err)); }
+  }
+
+  async function handleRefundPayable(p: Payable) {
+    if (!token) return;
+    const justificativa = window.prompt(`Estornar o pagamento da conta "${p.description}"? Ela volta a pendente. Motivo:`, '');
+    if (!justificativa || justificativa.trim().length < 3) return;
+    try {
+      await apiFetch(`/payables/${p.id}/estornar`, { method: 'POST', body: JSON.stringify({ justificativa: justificativa.trim() }) }, token);
+      setFeedback('Pagamento estornado; a conta voltou a pendente.');
       await loadPayables(token);
     } catch (err) { setError(parseError(err)); }
   }
@@ -1258,7 +1356,7 @@ export default function FinanceiroPage() {
       const { cancelada, flags } = await cancelarComConfirmacoes(
         (confirmacoes) => apiFetch(
           `/billings/${selectedBilling.id}/cancel`,
-          { method: 'POST', body: JSON.stringify({ reason, liberar_competencia, ...confirmacoes }) },
+          { method: 'POST', body: JSON.stringify(corpoCancelamento(reason, liberar_competencia, confirmacoes)) },
           token,
         ),
         (mensagem) => window.confirm(mensagem),
@@ -1266,7 +1364,10 @@ export default function FinanceiroPage() {
       if (!cancelada) return;
       setFeedback(flags.reverter_substituicao
         ? 'Cobrança cancelada; as cobranças que ela substituía foram reabertas.'
-        : 'Cobrança cancelada com sucesso.');
+        : flags.desistir_liberacao
+          ? 'Cobrança cancelada. A competência continua ocupada até a baixa do boleto no banco ser confirmada.'
+          : 'Cobrança cancelada com sucesso.');
+      loadPendenciasBancarias(token);
       await loadData(token);
     } catch (err) { setError(parseError(err)); } finally { setProcessing(false); }
   }
@@ -1537,13 +1638,22 @@ export default function FinanceiroPage() {
                   <button
                     key={fmt}
                     type="button"
+                    // Canal sem homologação fica desligado no backend (FIN-07):
+                    // a tela mostra o motivo em vez de oferecer um arquivo que
+                    // o sistema não concilia.
+                    disabled={canais ? !canais[fmt].habilitado : false}
+                    title={canais && !canais[fmt].habilitado ? `Indisponível: ${canais[fmt].motivo ?? ''}` : undefined}
                     onClick={async () => {
                       try {
                         const resp = await fetch(
                           `${API_URL.replace(/\/+$/, '')}/boletos/${fmt}`,
                           { method: 'POST', headers: { Authorization: `Bearer ${token}` } }
                         );
-                        if (!resp.ok) throw new Error(`Erro ${resp.status}`);
+                        if (!resp.ok) {
+                          const corpo = await resp.json().catch(() => null);
+                          const detalhe = corpo?.detail;
+                          throw new Error(typeof detalhe === 'string' ? detalhe : detalhe?.message ?? `Erro ${resp.status}`);
+                        }
                         const blob = await resp.blob();
                         const url = URL.createObjectURL(blob);
                         const a = document.createElement('a');
@@ -1555,12 +1665,65 @@ export default function FinanceiroPage() {
                         setError(e instanceof Error ? e.message : `Erro ao gerar ${fmt}`);
                       }
                     }}
-                    className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
+                    className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
                   >
                     ⬇ {fmt.toUpperCase()}
                   </button>
                 ))}
+                {canais && !canais.cnab240.habilitado && (
+                  <span className="text-2xs text-slate-500">CNAB indisponível até homologação — emita pela Ailos.</span>
+                )}
               </div>
+            )}
+
+            {/* Pendências bancárias (Fase 03): desfecho desconhecido, baixa
+                pendente no banco e divergência de pagamento. Cada uma exige
+                ação humana — nada é resolvido em silêncio. */}
+            {(pendenciasBancarias.length > 0 || conciliacao?.alerta_atraso) && (
+              <Card>
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-baseline justify-between gap-2">
+                    <p className="text-xs font-bold uppercase tracking-widest text-slate-500">
+                      Pendências bancárias ({pendenciasBancarias.length})
+                    </p>
+                    {conciliacao && (
+                      <p className="text-xs text-slate-500">
+                        Conciliação: {conciliacao.carteira_monitorada} título(s) acompanhados · consulta mais antiga há {conciliacao.atraso_max_horas}h · carteira inteira em ~{conciliacao.janela_estimada_horas}h
+                        {conciliacao.alerta_atraso && <span className="ml-1 font-semibold text-rose-600"> — ATRASADA</span>}
+                      </p>
+                    )}
+                  </div>
+                  <div className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {pendenciasBancarias.slice(0, 20).map(p => {
+                      const t = descreverTitulo({ estado: p.estado, nosso_numero: p.nosso_numero, baixa_status: (p.baixa_status as TituloBancario['baixa_status']) ?? null, pendencia: p.pendencia });
+                      return (
+                        <div key={p.billing_id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
+                          <div className="min-w-0">
+                            <p className="font-medium">#{p.billing_id} · {p.cliente ?? '—'} · {formatCurrency(p.valor)} · venc. {formatDate(p.vencimento)}</p>
+                            <p className="text-xs text-slate-500">
+                              {p.pendencia ? (ROTULO_PENDENCIA[p.pendencia] ?? p.pendencia) : t.rotulo}
+                              {p.baixa_status === 'pendente' && ' · baixa pendente no banco'}
+                              {p.billing_removida ? ' · cobrança removida' : ` · cobrança ${p.billing_status}`}
+                              {p.ultima_consulta_erro && ` · última consulta falhou`}
+                            </p>
+                          </div>
+                          <div className="flex gap-2">
+                            {podeConsultarDesfecho({ estado: p.estado }) && (
+                              <Button variant="secondary" className="px-3 py-1.5 text-xs" disabled={!canEdit || processing} onClick={() => handleConsultarDesfecho(p.billing_id)}>Consultar</Button>
+                            )}
+                            {user?.role === 'admin' && p.baixa_status === 'pendente' && !['pendente', 'vencida'].includes(p.billing_status) && (
+                              <Button variant="secondary" className="px-3 py-1.5 text-xs" disabled={processing} onClick={() => handleConfirmarBaixa(p.billing_id)}>Confirmar baixa</Button>
+                            )}
+                            {p.pendencia && (
+                              <Button variant="secondary" className="px-3 py-1.5 text-xs" disabled={!canEdit || processing} onClick={() => handleResolverPendencia(p.billing_id)}>Encerrar</Button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </Card>
             )}
 
             {/* Billing table */}
@@ -1615,7 +1778,7 @@ export default function FinanceiroPage() {
               <div className="grid gap-4 lg:grid-cols-2">
                 <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-5 dark:border-slate-800 dark:bg-slate-950/60">
                   <p className="mb-1 text-xs font-bold uppercase tracking-widest text-slate-500">Faturamento mensal</p>
-                  <p className="mb-3 text-xs text-slate-500">Receita recebida por mês · passe o mouse para detalhes</p>
+                  <p className="mb-3 text-xs text-slate-500">Recebido por mês de pagamento (caixa) · comparado ao emitido por vencimento, sem canceladas</p>
                   <BarChart
                     items={revenue.slice(-8).map(r => ({ label: r.label, value: r.total_received, secondaryValue: r.total_billed }))}
                     formatValue={formatCurrency}
@@ -1888,6 +2051,12 @@ export default function FinanceiroPage() {
                                     <Button variant="secondary" onClick={() => handleDeletePayable(p)} className="px-3 py-1.5 text-xs">Excluir</Button>
                                   </div>
                                 )}
+                                {/* Paga não é editada nem removida (FIN-08): desfaz por estorno. */}
+                                {canEdit && p.status === 'paga' && (
+                                  <div className="flex justify-end gap-2">
+                                    <Button variant="secondary" onClick={() => handleRefundPayable(p)} className="px-3 py-1.5 text-xs">Estornar</Button>
+                                  </div>
+                                )}
                               </Td>
                             </Tr>
                           ))}
@@ -1966,6 +2135,17 @@ export default function FinanceiroPage() {
                 ...(selectedBilling.competencia_liberada ? [['Competência', 'Liberada para nova cobrança'] as [string, string]] : []),
                 ...(selectedBilling.installment_number ? [['Parcela', `${selectedBilling.installment_number}/${selectedBilling.installment_total}`] as [string, string]] : []),
                 ...(selectedBilling.paid_amount != null ? [['Valor pago', formatCurrency(selectedBilling.paid_amount)] as [string, string]] : []),
+                ...(selectedBilling.titulo_bancario ? [['Título no banco', (() => {
+                  const t = descreverTitulo(selectedBilling.titulo_bancario);
+                  return (
+                    <span key="tb" className="flex flex-col gap-1">
+                      <Badge variant={t.tom}>{t.rotulo}</Badge>
+                      {t.detalhe && <span className="text-xs text-slate-500">{t.detalhe}</span>}
+                    </span>
+                  );
+                })()] as [string, React.ReactNode]] : []),
+                // Histórico de cadastro removido continua visível (FIN-10).
+                ...(selectedBilling.relacoes_removidas?.length ? [['Cadastros removidos', selectedBilling.relacoes_removidas.join(', ').replace(/_/g, ' ')] as [string, string]] : []),
               ] as [string, React.ReactNode][]).map(([label, value]) => (
                 <div key={String(label)} className="rounded-xl border border-slate-100 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/50">
                   <p className="text-2xs font-semibold uppercase tracking-widest text-slate-500">{label}</p>
@@ -1997,6 +2177,21 @@ export default function FinanceiroPage() {
                 <Button variant="secondary" disabled={!canEdit || boletoLoading} onClick={handleVerificarPagamento}>
                   {boletoLoading ? 'Verificando…' : '🔄 Verificar pagamento'}
                 </Button>
+              )}
+              {podeConsultarDesfecho(selectedBilling.titulo_bancario) && (
+                <Button variant="secondary" disabled={!canEdit || processing} onClick={() => handleConsultarDesfecho(selectedBilling.id)}>
+                  🔎 Consultar desfecho na Ailos
+                </Button>
+              )}
+              {selectedBilling.status === 'paga' && (
+                <Button variant="secondary" disabled={!canEdit || processing} onClick={handleEstornar}>Estornar recebimento</Button>
+              )}
+              {user?.role === 'admin' && selectedBilling.titulo_bancario?.baixa_status === 'pendente'
+                && (selectedBilling.status === 'cancelada' || selectedBilling.status === 'paga') && (
+                <Button variant="secondary" disabled={processing} onClick={() => handleConfirmarBaixa(selectedBilling.id)}>Confirmar baixa no banco</Button>
+              )}
+              {selectedBilling.titulo_bancario?.pendencia && (
+                <Button variant="secondary" disabled={!canEdit || processing} onClick={() => handleResolverPendencia(selectedBilling.id)}>Encerrar pendência</Button>
               )}
               {/* Pago é a única condição: exigir receipt_number escondia o
                   recibo de cobranças pagas antes de o campo existir. */}
@@ -2378,6 +2573,32 @@ export default function FinanceiroPage() {
             <select className={fieldClass} value={receiveForm.payment_method} onChange={e => setReceiveForm(p => ({ ...p, payment_method: e.target.value }))}><option value="pix">Pix</option><option value="boleto">Boleto</option><option value="cartao">Cartão</option><option value="dinheiro">Dinheiro</option></select>
             <textarea className={areaClass} placeholder="Observações" value={receiveForm.notes} onChange={e => setReceiveForm(p => ({ ...p, notes: e.target.value }))} />
           </div>
+          {/* Diferença entre título e recebido (FIN-06): nenhum centavo some
+              sem classificação — desconto, saldo, encargos ou crédito. */}
+          {selectedBilling && (() => {
+            const dif = diferencaRecebimento(selectedBilling.amount, receiveForm.paid_amount);
+            if (!dif || dif.tipo === 'igual') return null;
+            return (
+              <div className="space-y-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm dark:border-amber-900/40 dark:bg-amber-950/30">
+                <p className="font-semibold text-amber-800 dark:text-amber-300">
+                  {dif.tipo === 'menor' ? 'Faltam' : 'Sobram'} {formatCurrency(Math.abs(dif.centavos) / 100)} em relação ao título de {formatCurrency(selectedBilling.amount)}. O que é a diferença?
+                </p>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <select className={fieldClass} value={receiveForm.tratamento} onChange={e => setReceiveForm(p => ({ ...p, tratamento: e.target.value as TratamentoDiferenca | '' }))}>
+                    <option value="">Escolha…</option>
+                    {dif.tratamentos.map(t => <option key={t} value={t}>{ROTULO_TRATAMENTO[t]}</option>)}
+                  </select>
+                  <input className={fieldClass} placeholder={receiveForm.tratamento === 'encargos' ? 'Justificativa (opcional)' : 'Justificativa'} value={receiveForm.justificativa} onChange={e => setReceiveForm(p => ({ ...p, justificativa: e.target.value }))} />
+                  {receiveForm.tratamento === 'parcial' && (
+                    <label className="flex flex-col gap-1 text-xs text-slate-600 dark:text-slate-300 md:col-span-2">
+                      Vencimento da cobrança do saldo
+                      <input type="date" className={fieldClass} value={receiveForm.saldo_vencimento} onChange={e => setReceiveForm(p => ({ ...p, saldo_vencimento: e.target.value }))} />
+                    </label>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
           <div className="flex justify-end gap-3">
             <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200" onClick={() => setReceiveModal(false)}>Cancelar</button>
             <Button type="button" disabled={!canEdit || processing} onClick={handleReceive}>{processing ? 'Processando...' : 'Confirmar pagamento'}</Button>

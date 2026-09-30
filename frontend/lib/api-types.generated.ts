@@ -937,7 +937,23 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Revenue Report */
+        /**
+         * Revenue Report
+         * @description Série do gráfico "Faturamento mensal" do Financeiro (PROD-01).
+         *
+         *     Cada campo tem UMA base temporal (docs/financeiro/dicionario-metricas.md):
+         *
+         *     * ``total_billed`` — emitido: valor das cobranças NÃO canceladas, pelo
+         *       mês de VENCIMENTO;
+         *     * ``total_outstanding`` — em aberto (pendente/vencida), pelo VENCIMENTO;
+         *     * ``total_received_by_due`` — quanto do emitido naquele vencimento já foi
+         *       pago (mesma base do emitido: dá a taxa de recebimento);
+         *     * ``total_received`` — CAIXA: valor pago, pelo mês do PAGAMENTO.
+         *
+         *     Antes, cobrança cancelada somava no emitido (consolidação e negociação
+         *     contavam a dívida duas vezes) e o emitido de cobrança paga ia para o mês
+         *     do pagamento, misturando as bases no mesmo campo.
+         */
         get: operations["revenue_report_api_v1_billings_reports_revenue_get"];
         put?: never;
         post?: never;
@@ -1165,6 +1181,47 @@ export interface paths {
         put?: never;
         /** Receive Billing */
         post: operations["receive_billing_api_v1_billings__item_id__receive_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/billings/{item_id}/estornar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refund Billing
+         * @description Desfaz um recebimento manual: a cobrança volta a ficar em aberto e o
+         *     pagamento desfeito fica registrado como ajuste ``estorno``.
+         */
+        post: operations["refund_billing_api_v1_billings__item_id__estornar_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/billings/{item_id}/ajustes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Billing Adjustments
+         * @description Descontos, saldos, encargos, créditos e estornos da cobrança.
+         */
+        get: operations["billing_adjustments_api_v1_billings__item_id__ajustes_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1808,7 +1865,17 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Client Statement */
+        /**
+         * Client Statement
+         * @description Extrato do cliente (PROD-01/FIN-10).
+         *
+         *     Lista as cobranças em que o cliente é o ATENDIDO (dono do contrato) e as
+         *     em que é o RESPONSÁVEL FINANCEIRO (pagador/interveniente); cada linha diz
+         *     o ``papel``. Dois resumos, cada um sobre o seu papel — ``resumo``
+         *     (atendido, formato anterior) e ``resumo_responsavel_financeiro``.
+         *     Cancelada aparece na lista, mas não soma em cobrado/aberto: não é dívida.
+         *     Cliente removido continua tendo extrato (histórico financeiro).
+         */
         get: operations["client_statement_api_v1_reports_client_statement__client_id__get"];
         put?: never;
         post?: never;
@@ -2021,6 +2088,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/payables/{item_id}/estornar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refund Item
+         * @description Desfaz um pagamento lançado: volta a pendente. Data e forma do
+         *     pagamento desfeito ficam no histórico.
+         */
+        post: operations["refund_item_api_v1_payables__item_id__estornar_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/payables/{item_id}/historico": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Item History */
+        get: operations["item_history_api_v1_payables__item_id__historico_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings/mensagens": {
         parameters: {
             query?: never;
@@ -2092,6 +2197,43 @@ export interface paths {
          *     boletos vinculados ao lote.
          */
         get: operations["listar_carnes_api_v1_boletos_carne_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/boletos/remessas": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Listar Remessas */
+        get: operations["listar_remessas_api_v1_boletos_remessas_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/boletos/canais": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Canais Bancarios
+         * @description Matriz de canais de emissão: o que está disponível e por quê.
+         */
+        get: operations["canais_bancarios_api_v1_boletos_canais_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2212,8 +2354,11 @@ export interface paths {
          * Gerar Cnab400
          * @description Gera arquivo de remessa CNAB400 para envio ao banco Ailos.
          *
-         *     Se billing_ids for fornecido, gera apenas para esses boletos.
-         *     Caso contrário, gera para todos os boletos pendentes ou vencidos.
+         *     Canal desligado até homologação (409 ``canal_cnab_indisponivel``). Ligado:
+         *     com billing_ids, só cobranças em aberto, sem repetição e sem título em
+         *     nenhum canal (senão 409/422 com o motivo de cada uma); sem billing_ids,
+         *     as pendentes ou vencidas livres. A remessa fica registrada (sequência,
+         *     hash, títulos reservados) — ver GET /boletos/remessas.
          */
         post: operations["gerar_cnab400_api_v1_boletos_cnab400_post"];
         delete?: never;
@@ -2233,9 +2378,51 @@ export interface paths {
         put?: never;
         /**
          * Gerar Cnab240
-         * @description Gera arquivo de remessa CNAB240 para envio ao banco Ailos.
+         * @description Gera arquivo de remessa CNAB240 para envio ao banco Ailos (mesmas regras
+         *     do CNAB400).
          */
         post: operations["gerar_cnab240_api_v1_boletos_cnab240_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/boletos/remessas/{remessa_id}/arquivo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Baixar Remessa
+         * @description Os mesmos bytes (mesmo hash) da geração — baixar de novo não cria remessa.
+         */
+        get: operations["baixar_remessa_api_v1_boletos_remessas__remessa_id__arquivo_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/boletos/remessas/{remessa_id}/descartar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Descartar Remessa
+         * @description Só para remessa que NÃO foi enviada ao banco: libera os títulos para
+         *     outro canal. Remessa enviada não se descarta — o título existe no banco.
+         */
+        post: operations["descartar_remessa_api_v1_boletos_remessas__remessa_id__descartar_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2489,6 +2676,132 @@ export interface paths {
          *     parcela não impede as demais de serem tentadas.
          */
         post: operations["registrar_pendentes_endpoint_api_v1_ailos_lotes__lote_id__registrar_pendentes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ailos/boletos/{billing_id}/consultar-desfecho": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Consultar Desfecho Endpoint
+         * @description Consulta a Ailos pelo número do documento para resolver um registro
+         *     com desfecho desconhecido (timeout/5xx/reserva órfã). Não reenvia nada.
+         */
+        post: operations["consultar_desfecho_endpoint_api_v1_ailos_boletos__billing_id__consultar_desfecho_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ailos/boletos/{billing_id}/declarar-nao-registrado": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Declarar Nao Registrado Endpoint
+         * @description Saída manual (só administrador, com justificativa no histórico) quando
+         *     a consulta não resolve e foi conferido no banco que o título não existe.
+         */
+        post: operations["declarar_nao_registrado_endpoint_api_v1_ailos_boletos__billing_id__declarar_nao_registrado_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ailos/boletos/{billing_id}/confirmar-baixa": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirmar Baixa Endpoint
+         * @description Administrador confirma que baixou o título no internet banking. O
+         *     caminho normal é automático: a conciliação confirma quando a consulta
+         *     devolve situação 3 (baixado).
+         */
+        post: operations["confirmar_baixa_endpoint_api_v1_ailos_boletos__billing_id__confirmar_baixa_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ailos/boletos/{billing_id}/resolver-pendencia": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolver Pendencia Endpoint
+         * @description Encerra uma pendência de conciliação já tratada, com justificativa.
+         */
+        post: operations["resolver_pendencia_endpoint_api_v1_ailos_boletos__billing_id__resolver_pendencia_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ailos/conciliacao": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Conciliacao Status
+         * @description Métricas da conciliação: carteira monitorada, atraso da consulta mais
+         *     antiga, janela estimada, desfechos desconhecidos, baixas e pendências.
+         */
+        get: operations["conciliacao_status_api_v1_ailos_conciliacao_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ailos/pendencias": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Listar Pendencias
+         * @description Tudo que precisa de ação humana: desfecho desconhecido, baixa pendente
+         *     no banco e divergência de pagamento — mais antigos primeiro.
+         */
+        get: operations["listar_pendencias_api_v1_ailos_pendencias_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2935,6 +3248,12 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /** Baixa Status */
+            baixa_status?: string | null;
+            /** Pendencia */
+            pendencia?: string | null;
+            /** Ultima Consulta Em */
+            ultima_consulta_em?: string | null;
         };
         /** AilosCallbackIn */
         AilosCallbackIn: {
@@ -2950,6 +3269,17 @@ export interface components {
             /** State */
             state: string;
         };
+        /** AilosDesfechoOut */
+        AilosDesfechoOut: {
+            /** Billing Id */
+            billing_id: number;
+            /** Resultado */
+            resultado: string;
+            /** Estado */
+            estado: string;
+            /** Mensagem */
+            mensagem: string;
+        };
         /** AilosGerarBoletoIn */
         AilosGerarBoletoIn: {
             /** Billing Id */
@@ -2959,6 +3289,11 @@ export interface components {
         AilosGerarLoteIn: {
             /** Billing Ids */
             billing_ids: number[];
+        };
+        /** AilosJustificativaIn */
+        AilosJustificativaIn: {
+            /** Justificativa */
+            justificativa: string;
         };
         /** AilosLoteOut */
         AilosLoteOut: {
@@ -3027,6 +3362,13 @@ export interface components {
             data_pagamento?: string | null;
             /** Valor Pago */
             valor_pago?: number | null;
+            /** Pendencia */
+            pendencia?: string | null;
+            /**
+             * Quitada
+             * @default false
+             */
+            quitada: boolean;
         };
         /**
          * AilosParcelaOut
@@ -3055,6 +3397,44 @@ export interface components {
             linha_digitavel?: string | null;
             /** Erro */
             erro?: string | null;
+        };
+        /** AilosPendenciaOut */
+        AilosPendenciaOut: {
+            /** Billing Id */
+            billing_id: number;
+            /** Nosso Numero */
+            nosso_numero?: string | null;
+            /** Status Ailos */
+            status_ailos?: string | null;
+            /** Estado */
+            estado: string;
+            /** Baixa Status */
+            baixa_status?: string | null;
+            /** Baixa Solicitada Em */
+            baixa_solicitada_em?: string | null;
+            /** Pendencia */
+            pendencia?: string | null;
+            /** Pendencia Detalhe */
+            pendencia_detalhe?: Record<string, never> | null;
+            /** Pendencia Desde */
+            pendencia_desde?: string | null;
+            /** Ultima Consulta Em */
+            ultima_consulta_em?: string | null;
+            /** Ultima Consulta Erro */
+            ultima_consulta_erro?: string | null;
+            /** Billing Status */
+            billing_status: string;
+            /** Billing Removida */
+            billing_removida: boolean;
+            /** Valor */
+            valor: number;
+            /**
+             * Vencimento
+             * Format: date
+             */
+            vencimento: string;
+            /** Cliente */
+            cliente?: string | null;
         };
         /** AilosRetornoArquivoOut */
         AilosRetornoArquivoOut: {
@@ -3133,6 +3513,29 @@ export interface components {
             ip_address?: string | null;
             /** Description */
             description?: string | null;
+            /** Created At */
+            created_at?: string | null;
+        };
+        /** BillingAdjustmentOut */
+        BillingAdjustmentOut: {
+            /** Id */
+            id: number;
+            /** Billing Id */
+            billing_id: number;
+            /** Kind */
+            kind: string;
+            /** Amount */
+            amount: number;
+            /** Justification */
+            justification: string;
+            /** Created By User Id */
+            created_by_user_id?: number | null;
+            /** Target Billing Id */
+            target_billing_id?: number | null;
+            /** Details */
+            details?: Record<string, never> | null;
+            /** Reversed At */
+            reversed_at?: string | null;
             /** Created At */
             created_at?: string | null;
         };
@@ -3335,6 +3738,12 @@ export interface components {
             competencia_liberada: boolean;
             /** Substituted By Id */
             substituted_by_id?: number | null;
+            titulo_bancario?: components["schemas"]["TituloBancarioOut"] | null;
+            /**
+             * Relacoes Removidas
+             * @default []
+             */
+            relacoes_removidas: string[];
         };
         /** BillingReceive */
         BillingReceive: {
@@ -3349,6 +3758,20 @@ export interface components {
             payment_method: string;
             /** Notes */
             notes?: string | null;
+            /** Tratamento Diferenca */
+            tratamento_diferenca?: ("desconto" | "parcial" | "encargos" | "credito") | null;
+            /** Justificativa Diferenca */
+            justificativa_diferenca?: string | null;
+            /** Saldo Vencimento */
+            saldo_vencimento?: string | null;
+        };
+        /**
+         * BillingRefund
+         * @description Estorno de recebimento manual.
+         */
+        BillingRefund: {
+            /** Justificativa */
+            justificativa: string;
         };
         /**
          * BillingReleasePeriod
@@ -4639,6 +5062,32 @@ export interface components {
             /** Primeiro Vencimento */
             primeiro_vencimento?: string | null;
         };
+        /** PayableCancel */
+        PayableCancel: {
+            /** Reason */
+            reason?: string | null;
+        };
+        /** PayableChangeLogOut */
+        PayableChangeLogOut: {
+            /** Id */
+            id: number;
+            /** Payable Id */
+            payable_id: number;
+            /** Changed By User Id */
+            changed_by_user_id?: number | null;
+            /** Action */
+            action: string;
+            /** Field Name */
+            field_name?: string | null;
+            /** Previous Value */
+            previous_value?: string | null;
+            /** New Value */
+            new_value?: string | null;
+            /** Justification */
+            justification?: string | null;
+            /** Created At */
+            created_at?: string | null;
+        };
         /** PayableCreate */
         PayableCreate: {
             /** Description */
@@ -4700,6 +5149,11 @@ export interface components {
             /** Notes */
             notes?: string | null;
         };
+        /** PayableRefund */
+        PayableRefund: {
+            /** Justificativa */
+            justificativa: string;
+        };
         /** PayableUpdate */
         PayableUpdate: {
             /** Description */
@@ -4714,6 +5168,8 @@ export interface components {
             due_date?: string | null;
             /** Notes */
             notes?: string | null;
+            /** Justification */
+            justification?: string | null;
         };
         /** PlanCreate */
         PlanCreate: {
@@ -4851,6 +5307,11 @@ export interface components {
              */
             message: string;
         };
+        /** RemessaDescarteIn */
+        RemessaDescarteIn: {
+            /** Motivo */
+            motivo: string;
+        };
         /** ResetPasswordRequest */
         ResetPasswordRequest: {
             /** Token */
@@ -4878,7 +5339,11 @@ export interface components {
             /** Total Geral */
             total_geral: number;
         };
-        /** RevenueReportItem */
+        /**
+         * RevenueReportItem
+         * @description Bases (PROD-01): emitido/aberto/recebido_by_due por VENCIMENTO,
+         *     total_received por data de PAGAMENTO (caixa). Canceladas fora.
+         */
         RevenueReportItem: {
             /** Label */
             label: string;
@@ -4888,6 +5353,11 @@ export interface components {
             total_billed: number;
             /** Total Outstanding */
             total_outstanding: number;
+            /**
+             * Total Received By Due
+             * @default 0
+             */
+            total_received_by_due: number;
         };
         /** SearchResultItem */
         SearchResultItem: {
@@ -5239,6 +5709,22 @@ export interface components {
             vehicle_id?: number | null;
             /** Service Order Id */
             service_order_id?: number | null;
+        };
+        /**
+         * TituloBancarioOut
+         * @description Situação do título no banco (app/services/titulo_bancario.py).
+         */
+        TituloBancarioOut: {
+            /** Estado */
+            estado: string;
+            /** Canal */
+            canal?: string | null;
+            /** Nosso Numero */
+            nosso_numero?: string | null;
+            /** Baixa Status */
+            baixa_status?: string | null;
+            /** Pendencia */
+            pendencia?: string | null;
         };
         /** TokenResponse */
         TokenResponse: {
@@ -8845,6 +9331,72 @@ export interface operations {
             };
         };
     };
+    refund_billing_api_v1_billings__item_id__estornar_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BillingRefund"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    billing_adjustments_api_v1_billings__item_id__ajustes_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingAdjustmentOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     cancel_billing_api_v1_billings__item_id__cancel_post: {
         parameters: {
             query?: never;
@@ -10009,6 +10561,8 @@ export interface operations {
                 date_from?: string | null;
                 /** @description Fim do período (inclusivo) */
                 date_to?: string | null;
+                /** @description Mês do emitido/recebido/aberto: vencimento (padrão, comportamento anterior) ou competência (período cobrado). */
+                base?: string;
             };
             header?: never;
             path?: never;
@@ -10482,7 +11036,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PayableCancel"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -10491,6 +11049,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PayableOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refund_item_api_v1_payables__item_id__estornar_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PayableRefund"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PayableOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    item_history_api_v1_payables__item_id__historico_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PayableChangeLogOut"][];
                 };
             };
             /** @description Validation Error */
@@ -10674,6 +11298,46 @@ export interface operations {
             };
         };
     };
+    listar_remessas_api_v1_boletos_remessas_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    canais_bancarios_api_v1_boletos_canais_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     get_boleto_api_v1_boletos__billing_id__get: {
         parameters: {
             query?: never;
@@ -10846,6 +11510,72 @@ export interface operations {
         requestBody?: {
             content: {
                 "application/json": number[] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    baixar_remessa_api_v1_boletos_remessas__remessa_id__arquivo_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                remessa_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    descartar_remessa_api_v1_boletos_remessas__remessa_id__descartar_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                remessa_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemessaDescarteIn"];
             };
         };
         responses: {
@@ -11225,6 +11955,182 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    consultar_desfecho_endpoint_api_v1_ailos_boletos__billing_id__consultar_desfecho_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                billing_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AilosDesfechoOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    declarar_nao_registrado_endpoint_api_v1_ailos_boletos__billing_id__declarar_nao_registrado_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                billing_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AilosJustificativaIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AilosDesfechoOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    confirmar_baixa_endpoint_api_v1_ailos_boletos__billing_id__confirmar_baixa_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                billing_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AilosJustificativaIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AilosBoletoOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resolver_pendencia_endpoint_api_v1_ailos_boletos__billing_id__resolver_pendencia_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                billing_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AilosJustificativaIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AilosBoletoOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    conciliacao_status_api_v1_ailos_conciliacao_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    listar_pendencias_api_v1_ailos_pendencias_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AilosPendenciaOut"][];
                 };
             };
         };

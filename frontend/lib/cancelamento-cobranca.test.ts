@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { cancelarComConfirmacoes, type FlagsCancelamento } from './cancelamento-cobranca';
+import { cancelarComConfirmacoes, corpoCancelamento, type FlagsCancelamento } from './cancelamento-cobranca';
 
 function conflito(code: string, message = `msg ${code}`) {
   return Object.assign(new Error(message), { status: 409, detail: { code, message } });
@@ -24,7 +24,10 @@ describe('cancelarComConfirmacoes', () => {
     });
     const confirmar = vi.fn().mockReturnValue(true);
     const r = await cancelarComConfirmacoes(chamar, confirmar);
-    expect(r).toEqual({ cancelada: true, flags: { confirmar_boleto_ailos: false, reverter_substituicao: true } });
+    expect(r).toEqual({
+      cancelada: true,
+      flags: { confirmar_boleto_ailos: false, reverter_substituicao: true, desistir_liberacao: false },
+    });
     expect(confirmar).toHaveBeenCalledWith(expect.stringContaining('Substitui #1, #2.'));
     expect(chamadas.map((f) => f.reverter_substituicao)).toEqual([false, true]);
   });
@@ -35,7 +38,7 @@ describe('cancelarComConfirmacoes', () => {
       if (!flags.confirmar_boleto_ailos) throw conflito('boleto_ailos_registrado');
     });
     const r = await cancelarComConfirmacoes(chamar, () => true);
-    expect(r.flags).toEqual({ confirmar_boleto_ailos: true, reverter_substituicao: true });
+    expect(r.flags).toEqual({ confirmar_boleto_ailos: true, reverter_substituicao: true, desistir_liberacao: false });
     expect(chamar).toHaveBeenCalledTimes(3);
   });
 
@@ -57,5 +60,28 @@ describe('cancelarComConfirmacoes', () => {
     const confirmar = vi.fn();
     await expect(cancelarComConfirmacoes(vi.fn().mockRejectedValue(erro), confirmar)).rejects.toBe(erro);
     expect(confirmar).not.toHaveBeenCalled();
+  });
+
+  it('boleto ainda ativo ao liberar o mês: oferece cancelar sem liberar (Fase 03)', async () => {
+    const corpos: Record<string, unknown>[] = [];
+    const chamar = vi.fn(async (flags: FlagsCancelamento) => {
+      const corpo = corpoCancelamento('desistiu', true, flags);
+      corpos.push(corpo);
+      if (!flags.confirmar_boleto_ailos) throw conflito('boleto_ailos_registrado');
+      if (corpo.liberar_competencia) throw conflito('baixa_bancaria_pendente', 'Boleto ativo no banco.');
+    });
+    const confirmar = vi.fn().mockReturnValue(true);
+    const r = await cancelarComConfirmacoes(chamar, confirmar);
+    expect(r.cancelada).toBe(true);
+    expect(r.flags.desistir_liberacao).toBe(true);
+    expect(confirmar).toHaveBeenLastCalledWith(expect.stringContaining('SEM liberar'));
+    expect(corpos.map((c) => c.liberar_competencia)).toEqual([true, true, false]);
+  });
+
+  it('corpo do cancelamento não envia a flag interna', () => {
+    const corpo = corpoCancelamento('x', false, {
+      confirmar_boleto_ailos: true, reverter_substituicao: false, desistir_liberacao: false,
+    });
+    expect(corpo).toEqual({ reason: 'x', liberar_competencia: false, confirmar_boleto_ailos: true, reverter_substituicao: false });
   });
 });
