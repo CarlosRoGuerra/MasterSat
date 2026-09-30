@@ -118,11 +118,15 @@ FOR EACH ROW EXECUTE FUNCTION mastersat_billings_competencia()
 """
 
 # Substituto derivado das notas, só para canceladas e só quando o alvo existe.
+# Ignora o marcador quando a própria nota registra que aquela substituição foi
+# revertida (financial.restore_substituted_originals): a original reaberta e
+# cancelada de novo depois não é mais substituída por aquele título. Isso
+# importa num re-upgrade após rollback (downgrade → código antigo → upgrade).
 _SQL_SUBSTITUICAO_DERIVADA = """
 SELECT b.id, alvo.id AS substituto, alvo.is_deleted AS substituto_removido,
        alvo.status::text AS substituto_status
 FROM (
-    SELECT id,
+    SELECT id, notes,
            COALESCE(
                (regexp_match(notes, 'Unificada na cobrança #([0-9]+)\\.'))[1],
                (regexp_match(notes, 'Consolidada no boleto único #([0-9]+)\\.'))[1]
@@ -131,7 +135,12 @@ FROM (
     WHERE status = 'CANCELED' AND notes IS NOT NULL
 ) b
 JOIN billings alvo ON alvo.id = b.alvo_id AND alvo.id <> b.id
+WHERE position('substituição pela cobrança #' || b.alvo_id::text || ' revertida' IN b.notes) = 0
 """
+
+# Competências liberadas guardadas pelo downgrade (o schema antigo não tem a
+# coluna). O upgrade seguinte as devolve e apaga a tabela.
+_TABELA_LIBERADAS = 'fase02_competencias_liberadas'
 
 # Cada verificação: (código, descrição, SQL que devolve as linhas violadoras,
 # bloqueia?). As bloqueantes são exatamente as que fariam um índice/CHECK desta
@@ -354,6 +363,14 @@ def upgrade() -> None:
         f'UPDATE billings b SET substituted_by_id = sub.substituto '
         f'FROM ({_SQL_SUBSTITUICAO_DERIVADA}) sub WHERE sub.id = b.id'
     ))
+    if bind.execute(sa.text(f"SELECT to_regclass('{_TABELA_LIBERADAS}') IS NOT NULL")).scalar():
+        # Re-upgrade depois de um rollback: devolve as liberações que o
+        # downgrade guardou — só para quem continua cancelada.
+        bind.execute(sa.text(
+            f"UPDATE billings SET competencia_liberada = true "
+            f"WHERE status = 'CANCELED' AND id IN (SELECT billing_id FROM {_TABELA_LIBERADAS})"
+        ))
+        op.drop_table(_TABELA_LIBERADAS)
 
     op.execute(_SQL_FUNCAO_TRIGGER)
     op.execute(_SQL_TRIGGER)
@@ -459,8 +476,17 @@ def downgrade() -> None:
     op.execute('DROP FUNCTION IF EXISTS mastersat_competencia(text)')
 
     # Os vínculos de substituição continuam legíveis nas notas (o sistema
-    # segue gravando os marcadores). Competências liberadas perdem a marca —
-    # por isso o preflight acima.
+    # segue gravando os marcadores e o de reversão) e o upgrade os refaz. As
+    # competências liberadas não cabem no schema antigo: ficam guardadas numa
+    # tabela à parte até o próximo upgrade. Nada é apagado.
+    bind.execute(sa.text(
+        f'CREATE TABLE IF NOT EXISTS {_TABELA_LIBERADAS} ('
+        f'billing_id integer PRIMARY KEY, preservado_em timestamptz NOT NULL DEFAULT now())'
+    ))
+    bind.execute(sa.text(
+        f'INSERT INTO {_TABELA_LIBERADAS} (billing_id) '
+        f'SELECT id FROM billings WHERE competencia_liberada ON CONFLICT DO NOTHING'
+    ))
     op.drop_constraint('fk_billings_substituted_by_id', 'billings', type_='foreignkey')
     op.drop_column('billings', 'substituted_by_id')
     op.drop_column('billings', 'competencia_liberada')

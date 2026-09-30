@@ -278,6 +278,39 @@ def test_downgrade_aborta_se_competencia_liberada_foi_recobrada(banco):
     assert _revisao(banco) == FASE02
 
 
+def test_rollback_preserva_liberacao_e_nao_religa_original_reaberta(banco):
+    """downgrade (para subir o código antigo) → upgrade de novo: nenhuma
+    liberação some e a original reaberta não volta a ser 'substituída'."""
+    _alembic(banco, 'upgrade', 'head')
+    with banco.begin() as conn:
+        ids = _seed_base(conn)
+        negociacao = _billing(conn, ids, contract_id=None, billing_type='avulsa', period_label='12/2099')
+        liberada = _billing(conn, ids, period_label='08/2099', status='CANCELED')
+        conn.execute(text('UPDATE billings SET competencia_liberada = true WHERE id = :id'), {'id': liberada})
+        substituida = _billing(conn, ids, period_label='09/2099', status='CANCELED',
+                               notes=f'Unificada na cobrança #{negociacao}.')
+        conn.execute(text('UPDATE billings SET substituted_by_id = :n WHERE id = :id'),
+                     {'n': negociacao, 'id': substituida})
+        # Reaberta pela reversão e depois cancelada de novo, sem substituto.
+        reaberta = _billing(conn, ids, period_label='10/2099', status='CANCELED', notes=(
+            f'Unificada na cobrança #{negociacao}. | Reaberta: substituição pela cobrança '
+            f'#{negociacao} revertida. | Cancelada: erro'))
+
+    _alembic(banco, 'downgrade', ANTERIOR)
+    with banco.connect() as conn:
+        guardadas = conn.execute(text('SELECT billing_id FROM fase02_competencias_liberadas')).scalars().all()
+    assert guardadas == [liberada]
+
+    _alembic(banco, 'upgrade', 'head')
+    with banco.connect() as conn:
+        linhas = {r.id: r for r in conn.execute(text(
+            'SELECT id, competencia_liberada, substituted_by_id FROM billings'))}
+        assert conn.execute(text("SELECT to_regclass('fase02_competencias_liberadas')")).scalar() is None
+    assert linhas[liberada].competencia_liberada is True
+    assert linhas[substituida].substituted_by_id == negociacao
+    assert linhas[reaberta].substituted_by_id is None
+
+
 def test_parser_python_e_sql_concordam(banco):
     _alembic(banco, 'upgrade', 'head')
     rotulos = [
