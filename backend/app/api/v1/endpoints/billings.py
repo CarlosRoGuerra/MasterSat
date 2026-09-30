@@ -13,13 +13,15 @@ from openpyxl import Workbook
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from sqlalchemy import and_, case, func, or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
 from app.api.deps import require_roles
+from app.core.integrity import raise_integrity_conflict
 from app.core.timezone import hoje
 from app.db.session import get_db
 from app.models.ailos_boleto import AilosBoleto
-from app.models.billing import Billing
+from app.models.billing import RECURRING_BILLING_TYPES, Billing
 from app.models.billing_change_log import BillingChangeLog
 from app.models.client import Client
 from app.models.client_charge_item import ClientChargeItem
@@ -38,6 +40,7 @@ from app.schemas.billing import (
     BillingCreate,
     BillingOut,
     BillingReceive,
+    BillingReleasePeriod,
     BillingUnify,
     BillingUpdate,
     DelinquentClientItem,
@@ -45,19 +48,25 @@ from app.schemas.billing import (
     RevenueReportItem,
 )
 from app.services.financial import (
+    BillingSubstitutionError,
     add_months,
     charge_item_payer_client_id,
     decimal_to_float,
+    ensure_substitution_allows_removal,
     existing_recurring_periods,
     generate_receipt_number,
     lock_charge_items_for_billings,
     lock_billings_for_update,
     marcar_billing_pago,
+    mark_billings_substituted,
     normalize_due_date,
     period_bucket,
     plan_title,
     refresh_overdue_statuses,
     refresh_charge_items_for_billing,
+    release_billing_competencia,
+    restore_substituted_originals,
+    substituted_originals,
     transfer_charge_items_to_billing,
     valor_com_juros,
     contract_payer_client_id,
@@ -125,6 +134,37 @@ def _reject_inflight_ailos_billings(db: Session, billing_ids: list[int]) -> None
                 ),
             },
         )
+
+
+# Barreiras do banco que uma corrida pode acionar mesmo depois da checagem da
+# aplicação (duas requisições checam ao mesmo tempo, uma confirma primeiro).
+# Viram 409 com mensagem de domínio em vez de 500 genérico.
+_BILLING_CONFLICTS = {
+    'uq_billings_contract_competencia_recorrente': (
+        'Este contrato já tem mensalidade lançada para esta competência '
+        '(outra operação acabou de gravá-la). Atualize a tela e confira antes de repetir.'
+    ),
+    'uq_billings_item_parcela_efetiva': (
+        'Esta parcela do serviço já foi gerada por outra operação. Atualize a tela.'
+    ),
+}
+_BILLING_CONFLICTS_SQLITE = {
+    'billings.contract_id, billings.competencia': 'uq_billings_contract_competencia_recorrente',
+    'billings.item_id, billings.installment_number': 'uq_billings_item_parcela_efetiva',
+}
+
+
+def _commit_billing_write(db: Session) -> None:
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        raise_integrity_conflict(
+            db, exc, _BILLING_CONFLICTS, sqlite_columns=_BILLING_CONFLICTS_SQLITE,
+        )
+
+
+def _substitution_conflict(exc: BillingSubstitutionError) -> HTTPException:
+    return HTTPException(status_code=409, detail=exc.detail())
 
 
 def _lock_billing_or_404(db: Session, billing_id: int) -> Billing:
@@ -221,6 +261,9 @@ def serialize_billing(row) -> BillingOut:
         receipt_number=billing.receipt_number,
         sgr_payload=billing.sgr_payload,
         period_label=billing.period_label,
+        competencia=billing.competencia,
+        competencia_liberada=bool(billing.competencia_liberada),
+        substituted_by_id=billing.substituted_by_id,
         client_name=client_name,
         payer_name=payer_name,
         vehicle_plate=vehicle_plate,
@@ -443,6 +486,27 @@ def list_items(search: str | None = None, status: str | None = None, client_id: 
     return [serialize_billing(row) for row in query.limit(limit).all()]
 
 
+def _validate_asset_links(
+    db: Session, client_id: int, vehicle_id: int | None, tracker_id: int | None,
+) -> None:
+    """Veículo e rastreador da cobrança precisam ser do cliente atendido
+    (DB-02). Mesmas regras de client_charge_items.validate_links."""
+    if vehicle_id:
+        vehicle = db.get(Vehicle, vehicle_id)
+        if not vehicle or vehicle.is_deleted:
+            raise HTTPException(status_code=404, detail='Veículo não encontrado')
+        if vehicle.client_id != client_id:
+            raise HTTPException(status_code=400, detail='O veículo selecionado não pertence ao cliente informado.')
+    if tracker_id:
+        tracker = db.get(Tracker, tracker_id)
+        if not tracker or tracker.is_deleted:
+            raise HTTPException(status_code=404, detail='Rastreador não encontrado')
+        if tracker.client_id and tracker.client_id != client_id:
+            raise HTTPException(status_code=400, detail='O rastreador selecionado não pertence ao cliente informado.')
+        if vehicle_id and tracker.vehicle_id and tracker.vehicle_id != vehicle_id:
+            raise HTTPException(status_code=400, detail='O rastreador selecionado está vinculado a outro veículo.')
+
+
 @router.post('/', response_model=BillingOut)
 def create_item(payload: BillingCreate, db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
     if payload.status == BillingStatus.PAID and not payload.payment_date:
@@ -454,7 +518,21 @@ def create_item(payload: BillingCreate, db: Session = Depends(get_db), _: object
     if not client or client.is_deleted:
         raise HTTPException(status_code=404, detail='Cliente não encontrado')
     if payload.contract_id:
-        contract = db.get(Contract, payload.contract_id)
+        if payload.billing_type in RECURRING_BILLING_TYPES:
+            # Mesmo protocolo do carnê e do fechamento: quem cria a mensalidade
+            # de um contrato trava o contrato ANTES de conferir o mês. Sem
+            # isto, carnê (contrato travado, esperando o índice) e este INSERT
+            # (índice ocupado, esperando o contrato na checagem da FK) davam
+            # deadlock → 500. Travado, o segundo espera e recebe 409.
+            contract = (
+                db.query(Contract)
+                .filter(Contract.id == payload.contract_id)
+                .with_for_update()
+                .populate_existing()
+                .first()
+            )
+        else:
+            contract = db.get(Contract, payload.contract_id)
         if not contract or contract.is_deleted:
             raise HTTPException(status_code=404, detail='Contrato não encontrado')
         if contract.client_id != payload.client_id:
@@ -481,20 +559,39 @@ def create_item(payload: BillingCreate, db: Session = Depends(get_db), _: object
                 data_payer_id = charge_item_payer_client_id(db, charge_item)
             except ValueError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
+    _validate_asset_links(db, payload.client_id, payload.vehicle_id, payload.tracker_id)
     data = payload.model_dump()
     data['payer_client_id'] = data_payer_id
     if not data.get('period_label'):
         data['period_label'] = payload.due_date.strftime('%m/%Y')
+    if payload.contract_id and payload.billing_type in RECURRING_BILLING_TYPES:
+        # Mesma regra do carnê e do fechamento, antes do INSERT: sem isto o
+        # índice único devolvia 500 (e '9/2026' passava ao lado de '09/2026').
+        if existing_recurring_periods(db, payload.contract_id, [data['period_label']]):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    'code': 'competencia_ocupada',
+                    'message': (
+                        f'O contrato #{payload.contract_id} já tem mensalidade lançada para '
+                        f'{data["period_label"]}. Para cobrar esse mês de novo, libere a '
+                        'competência da cobrança cancelada ou lance como avulsa.'
+                    ),
+                },
+            )
     obj = Billing(**data)
     db.add(obj)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        raise_integrity_conflict(db, exc, _BILLING_CONFLICTS, sqlite_columns=_BILLING_CONFLICTS_SQLITE)
     if obj.status == BillingStatus.PAID:
         obj.receipt_number = obj.receipt_number or generate_receipt_number(obj.id)
         obj.paid_amount = obj.paid_amount or obj.amount
         refresh_charge_items_for_billing(
             db, obj, completion_date=obj.payment_date, commit=False,
         )
-    db.commit()
+    _commit_billing_write(db)
     db.refresh(obj)
     row = base_query(db).filter(Billing.id == obj.id).first()
     return serialize_billing(row)
@@ -555,7 +652,9 @@ def parcelar_contrato(payload: ParcelarContratoIn, db: Session = Depends(get_db)
             detail=(
                 'Este contrato já tem cobrança de mensalidade lançada para: '
                 + ', '.join(meses_em_ordem)
-                + '. Cancele essas cobranças ou ajuste o primeiro vencimento antes de gerar o carnê.'
+                + '. Cancelada também ocupa o mês. Para cobrar um desses meses no carnê, '
+                'cancele a cobrança liberando a competência (ou use "Liberar competência" '
+                'numa cobrança já cancelada); ou ajuste o primeiro vencimento.'
             ),
         )
 
@@ -580,7 +679,7 @@ def parcelar_contrato(payload: ParcelarContratoIn, db: Session = Depends(get_db)
         )
         db.add(b)
         criados.append(b)
-    db.commit()
+    _commit_billing_write(db)
 
     ids = [b.id for b in criados]
     rows = base_query(db).filter(Billing.id.in_(ids)).order_by(Billing.installment_number.asc()).all()
@@ -614,6 +713,21 @@ def batch_status(payload: BillingBatchStatusIn, db: Session = Depends(get_db), c
         and locked_by_id[bid].status in abertas
     ]
     _reject_inflight_ailos_billings(db, [billing.id for billing in processable])
+    if payload.action == 'cancelar':
+        substitutos = [b.id for b in processable if substituted_originals(db, b.id)]
+        if substitutos:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    'code': 'titulo_substituto',
+                    'billing_ids': substitutos,
+                    'message': (
+                        'Boleto único/negociação não pode ser cancelado em lote: as cobranças '
+                        'que ele substituiu ficariam sem nenhuma cobrança em aberto. Cancele '
+                        'cada um pelo detalhe, confirmando a reversão.'
+                    ),
+                },
+            )
     lock_charge_items_for_billings(db, processable)
     # Um pagamento em lote é UMA operação: todas as parcelas recebidas juntas
     # compartilham o mesmo número de recibo, para gerar um recibo consolidado
@@ -761,12 +875,10 @@ def unify_billings(payload: BillingUnify, db: Session = Depends(get_db), _: obje
     db.add(nova)
     db.flush()
     transfer_charge_items_to_billing(db, billings, nova)
+    mark_billings_substituted(billings, nova, f'Unificada na cobrança #{nova.id}.')
     for b in billings:
-        b.status = BillingStatus.CANCELED
-        marker = f'Unificada na cobrança #{nova.id}.'
-        b.notes = f'{b.notes} | {marker}' if b.notes else marker
         refresh_charge_items_for_billing(db, b, commit=False)
-    db.commit()
+    _commit_billing_write(db)
     row = base_query(db).filter(Billing.id == nova.id).first()
     return serialize_billing(row)
 
@@ -801,13 +913,19 @@ def receive_billing(item_id: int, payload: BillingReceive, db: Session = Depends
 
 
 @router.post('/{item_id}/cancel', response_model=BillingOut)
-def cancel_billing(item_id: int, payload: BillingCancel, db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
+def cancel_billing(item_id: int, payload: BillingCancel, db: Session = Depends(get_db), current_user: User = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
     billing = _lock_billing_or_404(db, item_id)
     if billing.status == BillingStatus.CANCELED:
         raise HTTPException(status_code=400, detail='Cobrança já está cancelada.')
     if billing.status == BillingStatus.PAID:
         raise HTTPException(status_code=400, detail='Cobrança paga não pode ser cancelada. Use estorno se precisar reverter o pagamento.')
     _reject_inflight_ailos_billings(db, [billing.id])
+    try:
+        originals = ensure_substitution_allows_removal(
+            db, billing, revert_substitution=payload.reverter_substituicao,
+        )
+    except BillingSubstitutionError as exc:
+        raise _substitution_conflict(exc) from exc
 
     # Boleto já registrado na Ailos continua pagável no banco após o
     # cancelamento — o convênio não expõe baixa automática. Avisa e exige
@@ -830,17 +948,29 @@ def cancel_billing(item_id: int, payload: BillingCancel, db: Session = Depends(g
             },
         )
 
-    lock_charge_items_for_billings(db, [billing])
-    billing.status = BillingStatus.CANCELED
-    nota_extra = ''
-    if boleto_no_banco:
-        nota_extra = (
-            f'\n[ATENÇÃO] Boleto Ailos (nosso número {ab.nosso_numero or "—"}) '
-            'segue ativo no banco — baixa manual pendente.'
-        )
-    billing.notes = f'{billing.notes or ""}\nCancelada: {payload.reason}{nota_extra}'.strip()
+    try:
+        if originals:
+            restore_substituted_originals(
+                db, billing, user_id=current_user.id, reason=payload.reason,
+            )
+        lock_charge_items_for_billings(db, [billing])
+        billing.status = BillingStatus.CANCELED
+        nota_extra = ''
+        if boleto_no_banco:
+            nota_extra = (
+                f'\n[ATENÇÃO] Boleto Ailos (nosso número {ab.nosso_numero or "—"}) '
+                'segue ativo no banco — baixa manual pendente.'
+            )
+        billing.notes = f'{billing.notes or ""}\nCancelada: {payload.reason}{nota_extra}'.strip()
+        if payload.liberar_competencia:
+            release_billing_competencia(
+                db, billing, user_id=current_user.id, justification=payload.reason,
+            )
+    except BillingSubstitutionError as exc:
+        db.rollback()
+        raise _substitution_conflict(exc) from exc
     refresh_charge_items_for_billing(db, billing, commit=False)
-    db.commit()
+    _commit_billing_write(db)
     db.refresh(billing)
     row = base_query(db).filter(Billing.id == billing.id).first()
     return serialize_billing(row)
@@ -909,7 +1039,15 @@ def update_item(item_id: int, payload: BillingUpdate, db: Session = Depends(get_
 
 
 @router.delete('/{item_id}')
-def delete_item(item_id: int, db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
+def delete_item(
+    item_id: int,
+    reverter_substituicao: bool = Query(
+        default=False,
+        description='Obrigatório para remover boleto único/negociação: reabre as cobranças que ele substituiu.',
+    ),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL)),
+):
     obj = _lock_billing_or_404(db, item_id)
     if obj.status == BillingStatus.PAID:
         raise HTTPException(
@@ -917,8 +1055,43 @@ def delete_item(item_id: int, db: Session = Depends(get_db), _: object = Depends
             detail='Cobrança paga não pode ser removida; preserve o histórico financeiro.',
         )
     _reject_inflight_ailos_billings(db, [obj.id])
+    restored: list[int] = []
+    try:
+        originals = ensure_substitution_allows_removal(
+            db, obj, revert_substitution=reverter_substituicao,
+        )
+        if originals:
+            restored = restore_substituted_originals(
+                db, obj, user_id=current_user.id, reason=f'cobrança #{obj.id} removida',
+            )
+    except BillingSubstitutionError as exc:
+        db.rollback()
+        raise _substitution_conflict(exc) from exc
     lock_charge_items_for_billings(db, [obj])
     obj.is_deleted = True
     refresh_charge_items_for_billing(db, obj, commit=False)
-    db.commit()
-    return {'message': 'Cobrança removida com sucesso'}
+    _commit_billing_write(db)
+    return {'message': 'Cobrança removida com sucesso', 'reabertas': restored}
+
+
+@router.post('/{item_id}/liberar-competencia', response_model=BillingOut)
+def release_period(
+    item_id: int,
+    payload: BillingReleasePeriod,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL)),
+):
+    """Devolve o mês de uma mensalidade cancelada para nova cobrança (carnê ou
+    fechamento). Cancelada continua ocupando o mês até isto ser feito."""
+    billing = _lock_billing_or_404(db, item_id)
+    try:
+        release_billing_competencia(
+            db, billing, user_id=current_user.id, justification=payload.justificativa.strip(),
+        )
+    except BillingSubstitutionError as exc:
+        db.rollback()
+        raise _substitution_conflict(exc) from exc
+    _commit_billing_write(db)
+    db.refresh(billing)
+    row = base_query(db).filter(Billing.id == billing.id).first()
+    return serialize_billing(row)

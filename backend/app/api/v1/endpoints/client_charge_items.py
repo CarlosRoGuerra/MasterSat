@@ -1,4 +1,5 @@
 from datetime import date
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
@@ -16,9 +17,11 @@ from app.models.tracker import Tracker
 from app.models.vehicle import Vehicle
 from app.schemas.client_charge_item import ClientChargeItemCreate, ClientChargeItemOut, ClientChargeItemUpdate
 from app.services.financial import (
+    InstallmentSplitError,
     billing_ids_for_charge_item,
     decimal_to_float,
     effective_charge_item_billings,
+    split_amount_in_installments,
 )
 
 router = APIRouter()
@@ -39,6 +42,24 @@ def validate_links(db: Session, client_id: int, vehicle_id: int | None, tracker_
             raise HTTPException(status_code=400, detail='O rastreador selecionado não pertence ao cliente informado.')
         if vehicle_id and tracker.vehicle_id and tracker.vehicle_id != vehicle_id:
             raise HTTPException(status_code=400, detail='O rastreador selecionado está vinculado a outro veículo.')
+
+
+def _item_total(quantity: int, unit_price: float | Decimal, installment_count: int) -> Decimal:
+    """Total do lançamento em Decimal, validado contra o parcelamento (FIN-11).
+
+    O preço chegava como float e ``quantity * unit_price`` ia direto para a
+    coluna Numeric(10,2), que arredondava sozinha: 3 × 0,015 gravava 0,05 de
+    total com 0,02 de unitário. E 0,02 em 4 parcelas gerava uma de -0,01.
+    """
+    price = Decimal(str(unit_price))
+    if price != price.quantize(Decimal('0.01')):
+        raise HTTPException(status_code=422, detail='Valor unitário deve ter no máximo 2 casas decimais.')
+    total = price * int(quantity)
+    try:
+        split_amount_in_installments(total, installment_count)
+    except InstallmentSplitError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return total
 
 
 def serialize_item(db: Session, item: ClientChargeItem) -> ClientChargeItemOut:
@@ -113,7 +134,7 @@ def create_item(payload: ClientChargeItemCreate, db: Session = Depends(get_db), 
     if payload.service_product_id and (not service_product or service_product.is_deleted or not service_product.active):
         raise HTTPException(status_code=404, detail='Serviço/produto não encontrado ou inativo')
     remove_after_payment = payload.remove_after_payment or (service_product.remove_after_payment if service_product else False)
-    total_amount = payload.quantity * payload.unit_price
+    total_amount = _item_total(payload.quantity, payload.unit_price, payload.installment_count)
     obj = ClientChargeItem(
         **payload.model_dump(exclude={'auto_generate_billings', 'remove_after_payment'}),
         total_amount=total_amount,
@@ -146,10 +167,18 @@ def update_item(item_id: int, payload: ClientChargeItemUpdate, db: Session = Dep
             status_code=409,
             detail='Item já faturado não pode ter valor, parcelas, título ou vencimento alterados. Cancele a cobrança primeiro.',
         )
+    if {'quantity', 'unit_price', 'installment_count'}.intersection(data):
+        total_amount = _item_total(
+            data.get('quantity', obj.quantity),
+            data.get('unit_price', obj.unit_price),
+            data.get('installment_count', obj.installment_count),
+        )
+    else:
+        total_amount = None
     for key, value in data.items():
         setattr(obj, key, value)
-    if 'quantity' in data or 'unit_price' in data:
-        obj.total_amount = obj.quantity * obj.unit_price
+    if total_amount is not None:
+        obj.total_amount = total_amount
     db.commit()
     db.refresh(obj)
     return serialize_item(db, obj)

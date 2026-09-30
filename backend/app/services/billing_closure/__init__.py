@@ -34,13 +34,17 @@ from app.services.billing_closure.uninstall_fees import (
     uninstall_fee_for_event,
 )
 from app.services.financial import (
+    InstallmentSplitError,
     _quantize_amount,
     add_months,
     associate_billing_charge_item,
+    charge_item_effective_billing_count,
     contract_payer_client_id,
     decimal_to_float,
     existing_recurring_periods,
     generate_item_billings,
+    lock_charge_items_for_update,
+    mark_billings_substituted,
     plan_title,
     period_label_for_date,
     refresh_overdue_statuses,
@@ -343,6 +347,26 @@ def execute_closure(
         if locked_contract.status == 'ativo':
             _validate_locked_contract_for_closure(db, locked_contract)
 
+    # Serviços que a simulação decidiu embutir na 1ª mensalidade: outro
+    # fechamento (de outro mês) pode tê-los faturado depois da simulação e
+    # antes da trava do contrato. Trava na ordem contrato → serviço (a mesma
+    # de generate_item_billings) e revalida; se mudou, falha fechado (FIN-12).
+    embedded_ids = sorted({
+        charge['item_id']
+        for item in to_generate
+        for charge in item.get('first_month_charges', [])
+    })
+    for charge_obj in lock_charge_items_for_update(db, embedded_ids):
+        if (
+            charge_obj.is_deleted
+            or not charge_obj.active
+            or charge_item_effective_billing_count(db, charge_obj.id) > 0
+        ):
+            raise ValueError(
+                f'Serviço #{charge_obj.id} foi faturado ou alterado por outra operação '
+                'durante o fechamento. Refaça a simulação.'
+            )
+
     # Somente depois dos locks e da revalidação começam as mutações. Assim,
     # um contrato removido durante a simulação falha antes de criar cobranças.
     for event_id in deferred_item_ids:
@@ -450,8 +474,10 @@ def execute_closure(
     # Junta as MENSALIDADES normais recém-criadas do mesmo cliente em UMA
     # cobrança só (1 boleto = 1 tarifa bancária/mês, como o campo do cadastro
     # promete). Pró-rata e 1ª cobrança ficam de fora (semântica própria).
-    # As individuais são canceladas com referência cruzada — e continuam
-    # contando para a idempotência (_has_existing_billing ignora o status).
+    # As individuais são canceladas com vínculo estrutural (substituted_by_id)
+    # — e continuam ocupando o mês: é a original que diz "contrato X, mês Y já
+    # foi cobrado", porque o boleto único não tem contrato. Cancelar/excluir o
+    # boleto único exige reverter a substituição (reabre as individuais).
     consolidated_ids: list[int] = []
     _por_pagador: dict[int, list[Billing]] = defaultdict(list)
     for bid in created_ids:
@@ -493,10 +519,8 @@ def execute_closure(
         )
         db.add(unico)
         db.flush()
+        mark_billings_substituted(grupo, unico, f'Consolidada no boleto único #{unico.id}.')
         for b in grupo:
-            b.status = BillingStatus.CANCELED
-            marker = f'Consolidada no boleto único #{unico.id}.'
-            b.notes = f'{b.notes} | {marker}' if b.notes else marker
             created_ids.remove(b.id)
         created_ids.append(unico.id)
         consolidated_ids.append(unico.id)
@@ -589,10 +613,18 @@ def execute_closure(
     # Gera billings para serviços/cobranças avulsas pendentes (os não embutidos)
     services_generated = 0
     service_billing_ids: list[int] = []
+    # Serviços que outro fechamento (de qualquer mês) faturou enquanto este
+    # esperava a trava do item — ver generate_item_billings (FIN-12).
+    services_already_billed: list[int] = []
     for charge_item_dict in selected_charge_items:
         item_obj = db.get(ClientChargeItem, charge_item_dict['item_id'])
         if item_obj:
-            new_billings = generate_item_billings(db, item_obj, commit=False)
+            try:
+                new_billings = generate_item_billings(db, item_obj, commit=False)
+            except InstallmentSplitError as exc:
+                raise ValueError(f'Lançamento #{item_obj.id}: {exc}') from exc
+            if not new_billings:
+                services_already_billed.append(item_obj.id)
             for b in new_billings:
                 service_billing_ids.append(b.id)
             services_generated += len(new_billings)
@@ -629,6 +661,7 @@ def execute_closure(
         'uninstall_billing_ids': uninstall_billing_ids,
         'services_generated': services_generated,
         'service_billing_ids': service_billing_ids,
+        'services_already_billed': services_already_billed,
         'total_services_amount': total_services_amount,
         'grand_total': round(total_mensalidades + total_uninstall_amount + total_services_amount, 2),
     }

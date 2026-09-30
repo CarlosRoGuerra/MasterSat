@@ -1,7 +1,9 @@
 from datetime import date, datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
+from app.models.billing import BILLING_TYPES, RECURRING_BILLING_TYPES
 from app.models.enums import BillingStatus
+from app.services.competencia import competencia_do_rotulo, rotulo_canonico
 
 
 class BillingBase(BaseModel):
@@ -27,7 +29,24 @@ class BillingBase(BaseModel):
 
 
 class BillingCreate(BillingBase):
-    pass
+    @model_validator(mode='after')
+    def _tipo_e_competencia(self):
+        if self.billing_type not in BILLING_TYPES:
+            raise ValueError(
+                'billing_type inválido. Use um de: ' + ', '.join(BILLING_TYPES) + '.'
+            )
+        if self.period_label is not None:
+            canonico = rotulo_canonico(self.period_label)
+            if canonico is not None:
+                # '9/2026' e '09/2026' são o mesmo mês: grava do jeito que o
+                # sistema gera, para listagem e filtros baterem (FIN-04).
+                self.period_label = canonico
+            elif self.billing_type in RECURRING_BILLING_TYPES:
+                raise ValueError(
+                    'period_label de mensalidade precisa indicar o período: MM/AAAA '
+                    '(ex.: 09/2026), AAAA-MM, "AAAA • T1".."T4", "AAAA • S1"/"S2" ou AAAA.'
+                )
+        return self
 
 
 class BillingUpdate(BaseModel):
@@ -94,6 +113,19 @@ class BillingCancel(BaseModel):
     # Confirma o cancelamento mesmo havendo boleto registrado na Ailos (que
     # continua ativo no banco — o convênio não oferece baixa automática).
     confirmar_boleto_ailos: bool = False
+    # Mensalidade cancelada continua ocupando o mês do contrato (o fechamento
+    # não recobra). True devolve o mês para ser cobrado de novo — carnê ou
+    # fechamento. Fica registrado no histórico da cobrança.
+    liberar_competencia: bool = False
+    # Obrigatório para cancelar um boleto único/negociação que substituiu
+    # outras cobranças: as originais são reabertas (a dívida volta para elas).
+    reverter_substituicao: bool = False
+
+
+class BillingReleasePeriod(BaseModel):
+    """Libera o mês de uma mensalidade já cancelada para nova cobrança."""
+
+    justificativa: str = Field(min_length=3, max_length=500)
 
 
 class BillingOut(BillingBase):
@@ -115,6 +147,12 @@ class BillingOut(BillingBase):
     # bancário some do SGR depois de baixado, então é isto que a tela de
     # detalhes tem para mostrar.
     sgr_payload: dict | None = None
+    # Competência canônica (1º dia do mês em que o período começa). None em
+    # rótulo legado fora de formato.
+    competencia: date | None = None
+    competencia_liberada: bool = False
+    # Cobrança que assumiu esta dívida (boleto único ou negociação).
+    substituted_by_id: int | None = None
 
     model_config = {'from_attributes': True}
 
