@@ -1,4 +1,8 @@
-fastapi==0.115.0
+# FastAPI/Starlette/multipart: parsing HTTP de forms e uploads é alcançável
+# (login, uploads de documentos/certificado). Starlette 1.3.1+ corrige limites
+# de form urlencoded e reconstrução de URL (DEP-01, Fase 01). Ver
+# docs/seguranca/dependencias-fase-01.md antes de mudar estes pins.
+fastapi==0.142.2
 slowapi==0.1.9
 # Backend de storage do slowapi/limits (rate limit compartilhado entre workers
 # uvicorn via Redis — ver app/core/limiter.py).
@@ -8,14 +12,17 @@ sqlalchemy==2.0.35
 psycopg[binary]==3.2.1
 pydantic==2.9.2
 pydantic-settings==2.5.2
-python-jose[cryptography]==3.3.0
+# JWT HS256 (access/refresh/links de documento). Trocado do python-jose
+# 3.3.0 (algorithm confusion/JWE bomb; arrasta ecdsa, sem correção para o
+# ataque Minerva) pelo PyJWT — tokens já emitidos continuam válidos.
+PyJWT==2.15.1
 passlib[bcrypt]==1.7.4
-python-multipart==0.0.9
+python-multipart==0.0.32
 email-validator==2.2.0
 alembic==1.13.2
 bcrypt==4.0.1
 minio==7.2.7
-requests==2.32.3
+requests==2.33.0
 # requests valida chardet >= 3.0.2, < 6.0.0. Sem esse teto a imagem instala
 # chardet 7.x e todo comando loga RequestsDependencyWarning. É só ruído hoje,
 # mas o mTLS do Emissor Nacional passa por essa pilha e o aviso atrapalharia
@@ -31,7 +38,7 @@ python-docx==1.1.2
 # Leitura de texto de PDF (validação do contrato assinado no upload). Pure-Python,
 # sem dependência de sistema. Extrai a camada de texto quando existe; em
 # escaneamentos/fotos (sem texto) retorna vazio, que é o sinal de "ilegível".
-pypdf==6.14.2
+pypdf==6.19.0
 signxml==3.2.2
 # A pilha de assinatura XMLDSig do signxml 3.2.2 exige versões antigas de DUAS
 # libs, comprovado em venv local (build+sign+validate da DPS):

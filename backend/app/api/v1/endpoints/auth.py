@@ -1,7 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
-from jose import JWTError, jwt
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
@@ -9,6 +8,8 @@ from app.api.deps import get_current_user
 from app.core.config import settings
 from app.core.limiter import limiter
 from app.core.security import (
+    JWTError,
+    decode_token,
     create_access_token,
     create_refresh_token,
     get_password_hash,
@@ -136,7 +137,7 @@ def _rotate_refresh_token(db: Session, token: str) -> tuple[User, str, str]:
     """
     credenciais_invalidas = HTTPException(status_code=401, detail='Sessão expirada. Faça login novamente.')
     try:
-        decoded = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+        decoded = decode_token(token)
         if decoded.get('type') != 'refresh':
             raise HTTPException(status_code=401, detail='Token inválido')
         user_id = decoded.get('sub')
@@ -252,7 +253,7 @@ def _sessao_do_token(token: str | None, tipo: str) -> str | None:
     if not token:
         return None
     try:
-        decoded = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+        decoded = decode_token(token)
     except JWTError:
         return None
     if decoded.get('type') != tipo:

@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from app.core.config import settings
 from app.core.security import create_access_token, get_password_hash
 from app.main import app
 from app.models.enums import UserRole
@@ -109,8 +108,8 @@ class TestTransicaoDeTokensLegados:
         alvo = _user(db, "alvo@test.local")
         atacante = _user(db, "atacante@test.local")
         _, access_alvo = _dispositivo(alvo.email)
-        from jose import jwt
-        sid_alvo = jwt.decode(access_alvo, settings.secret_key, algorithms=[settings.algorithm])["sid"]
+        from app.core.security import decode_token
+        sid_alvo = decode_token(access_alvo)["sid"]
         forjado = create_access_token(str(atacante.id), session_id=sid_alvo)
         assert _me(TestClient(app, raise_server_exceptions=False), forjado) == 401
 

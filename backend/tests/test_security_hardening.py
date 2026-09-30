@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
-from jose import jwt
+import jwt
 
 from app.core.client_ip import client_ip_from_scope
 from app.core.config import settings
@@ -31,7 +31,8 @@ def _scope(xff, peer="172.18.0.5"):
 
 
 def _payload(token):
-    return jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+    from app.core.security import decode_token
+    return decode_token(token)
 
 
 def _token_com_iat(sub, emitido_em):

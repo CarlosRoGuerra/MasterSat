@@ -3,12 +3,11 @@ from collections.abc import Callable
 
 from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.security import token_revogado
+from app.core.security import JWTError, decode_token, token_revogado
 from app.db.session import get_db
 from app.models.enums import UserRole
 from app.models.refresh_token import RefreshToken
@@ -24,7 +23,7 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         headers={'WWW-Authenticate': 'Bearer'},
     )
     try:
-        payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+        payload = decode_token(token)
         user_id = payload.get('sub')
         token_type = payload.get('type')
         session_id = payload.get('sid')
