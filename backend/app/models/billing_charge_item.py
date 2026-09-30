@@ -1,4 +1,4 @@
-from sqlalchemy import ForeignKey, Numeric, UniqueConstraint
+from sqlalchemy import CheckConstraint, ForeignKey, Numeric, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -16,6 +16,7 @@ class BillingChargeItem(Base, TimestampMixin):
     __tablename__ = 'billing_charge_items'
     __table_args__ = (
         UniqueConstraint('billing_id', 'item_id', name='uq_billing_charge_item'),
+        CheckConstraint('amount > 0', name='ck_billing_charge_items_amount_positivo'),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)

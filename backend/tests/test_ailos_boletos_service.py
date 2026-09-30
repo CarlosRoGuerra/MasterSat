@@ -50,7 +50,9 @@ def _criar_billing_futuro(db, contrato, due_date=date(2099, 6, 30), title='Plano
         due_date=due_date,
         status=BillingStatus.PENDING,
         billing_type='recorrente',
-        period_label='06/2099',
+        # Um mês por mensalidade do contrato: o índice único de competência
+        # (que o SQLite dos testes agora também tem) recusa dois no mesmo mês.
+        period_label=due_date.strftime('%m/%Y'),
         title=title,
     )
     db.add(b)
