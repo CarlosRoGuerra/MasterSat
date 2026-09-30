@@ -108,6 +108,21 @@ class Settings(BaseSettings):
     ailos_cooperado_conta: str = ''
     ailos_cooperado_senha: str = ''
     ailos_token_encryption_key: str = ''
+    # ── Desfecho de registro e conciliação (Fase 03) ─────────────────────────
+    # Reserva REGISTRANDO/PROCESSANDO sem resposta há mais que isto vira
+    # desfecho desconhecido (o processo caiu entre o envio e a resposta).
+    ailos_reserva_orfa_minutos: int = 30
+    # A consulta só pode concluir "não existe no banco" depois deste tempo
+    # desde o envio — antes disso a Ailos pode não ter processado ainda.
+    ailos_ausencia_confirmada_minutos: int = 10
+    # Títulos consultados por execução do worker (1 execução por hora).
+    # Janela de conciliação da carteira ≈ carteira / orçamento horas.
+    ailos_conciliacao_orcamento: int = 300
+    # Alerta quando algum título monitorado está há mais que isto sem consulta.
+    ailos_conciliacao_atraso_alerta_horas: int = 26
+    # Remessa CNAB 240/400 (FIN-07). Desligada: o layout nunca foi homologado
+    # com o banco e não há leitura de retorno. Ligar só em homologação.
+    cnab_remessa_habilitada: bool = False
 
     # ── Integração NFS-e Joinville (Pública / Nota Nacional, SOAP) ────────────
     # Emissão comprovada SEM certificado (homologação aceita RPS sem assinatura);

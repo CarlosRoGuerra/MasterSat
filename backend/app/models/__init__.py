@@ -4,16 +4,19 @@ from app.models.ailos_client_token import AilosClientToken
 from app.models.ailos_integration import AilosIntegration
 from app.models.ailos_lote import AilosLote
 from app.models.ailos_retorno_arquivo import AilosRetornoArquivo
+from app.models.billing_adjustment import BillingAdjustment
 from app.models.billing_change_log import BillingChangeLog
 from app.models.billing import Billing
 from app.models.billing_charge_item import BillingChargeItem
 from app.models.client import Client
 from app.models.client_charge_item import ClientChargeItem
+from app.models.cnab_remessa import CnabRemessa, CnabRemessaItem
 from app.models.contract import Contract
 from app.models.document import Document
 from app.models.integration_log import IntegrationLog
 from app.models.nfse_nota import NfseNota
 from app.models.password_reset_token import PasswordResetToken
+from app.models.payable_change_log import PayableChangeLog
 from app.models.plan import Plan
 from app.models.refresh_token import RefreshToken
 from app.models.service_order import ServiceOrder
