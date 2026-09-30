@@ -1,0 +1,57 @@
+# Falhas conhecidas da suíte backend — baseline da Fase 00 (QA-01)
+#
+# Cada linha: <nodeid do pytest>  <código da causa>
+# A triagem completa está em docs/validacao/baseline-fase-00.md.
+# Este arquivo NÃO silencia nada: os testes continuam rodando e vermelhos.
+# scripts/checar_baseline_testes.py reprova (a) qualquer falha fora desta
+# lista e (b) qualquer item daqui que passe a passar — quem corrigir remove
+# a linha no mesmo commit.
+#
+# Códigos:
+#   G1  geração automática de cobrança na criação de contrato/item/vínculo foi
+#       retirada (hoje: fechamento mensal); UI de rastreadores ainda envia os
+#       campos — DECISÃO DE PRODUTO pendente
+#   R1  RBAC restringiu leitura financeira ao ADMIN/FINANCIAL — teste espera
+#       o operacional; confirmar matriz de papéis
+#   V1  corpo validado (422) antes da checagem de existência/bloqueio (404/403)
+#   C1  formato de resposta de relatório mudou (frontend já usa o novo)
+#   F1  filtro com nome antigo (API usa outro parâmetro / não oferece)
+
+tests/test_auth_api.py::TestRegisterClient::test_always_returns_403  V1
+tests/test_billings_api.py::TestListBillings::test_operational_can_list  R1
+tests/test_client_charge_items_api.py::TestListChargeItems::test_operational_can_list  R1
+tests/test_client_charge_items_api.py::TestCreateChargeItem::test_create_with_auto_billing  G1
+tests/test_client_charge_items_api.py::TestCreateChargeItem::test_create_installments  G1
+tests/test_client_charge_items_api.py::TestUpdateChargeItem::test_update_nonexistent_returns_404  V1
+tests/test_contracts_api.py::TestCreateContrato::test_generates_billings_by_default  G1
+tests/test_contracts_api.py::TestCreateContrato::test_billing_cycles_out_of_range_422  G1
+tests/test_contracts_api.py::TestGenerateBillings::test_generates_billings  G1
+tests/test_contracts_api.py::TestGenerateBillings::test_default_12_months  G1
+tests/test_plans_api.py::TestListPlans::test_filter_active_only  F1
+tests/test_plans_api.py::TestListPlans::test_operational_can_list  R1
+tests/test_plans_api.py::TestUpdatePlan::test_update_nonexistent_returns_404  V1
+tests/test_reports_api.py::TestDelinquentsReport::test_returns_list  C1
+tests/test_reports_api.py::TestDelinquentsReport::test_includes_delinquent_client  C1
+tests/test_reports_api.py::TestDelinquentsReport::test_structure  C1
+tests/test_reports_api.py::TestClientStatement::test_operational_can_access  R1
+tests/test_reports_api.py::TestExecutiveSummary::test_contracts_by_plan_included  C1
+tests/test_schemas_contract.py::TestContractCreateBillingCycles::test_default_cycles_is_12  G1
+tests/test_schemas_contract.py::TestContractCreateBillingCycles::test_cycles_1_accepted  G1
+tests/test_schemas_contract.py::TestContractCreateBillingCycles::test_cycles_60_accepted  G1
+tests/test_schemas_contract.py::TestContractCreateBillingCycles::test_cycles_0_rejected  G1
+tests/test_schemas_contract.py::TestContractCreateBillingCycles::test_cycles_61_rejected  G1
+tests/test_schemas_contract.py::TestContractCreateBillingCycles::test_cycles_negative_rejected  G1
+tests/test_schemas_contract.py::TestContractCreateDefaults::test_auto_generate_billings_default_true  G1
+tests/test_schemas_tracker.py::TestTrackerLinkPayload::test_valid_payload  G1
+tests/test_schemas_tracker.py::TestTrackerLinkPayload::test_billing_cycles_min  G1
+tests/test_schemas_tracker.py::TestTrackerLinkPayload::test_billing_cycles_max  G1
+tests/test_schemas_tracker.py::TestTrackerLinkPayload::test_billing_cycles_zero_rejected  G1
+tests/test_schemas_tracker.py::TestTrackerLinkPayload::test_billing_cycles_above_max_rejected  G1
+tests/test_schemas_tracker.py::TestTrackerLinkPayload::test_billing_modality_carne  G1
+tests/test_schemas_tracker.py::TestTrackerLinkPayload::test_installation_fee_positivo  G1
+tests/test_schemas_tracker.py::TestTrackerLinkPayload::test_installation_fee_negativo_rejeitado  G1
+tests/test_service_products_api.py::TestListServiceProducts::test_filter_auto_uninstall  F1
+tests/test_service_products_api.py::TestListServiceProducts::test_operational_can_list  R1
+tests/test_service_products_api.py::TestUpdateServiceProduct::test_update_nonexistent_returns_404  V1
+tests/test_trackers_api.py::TestLinkVeiculo::test_link_with_plan_generates_billings  G1
+tests/test_trackers_api.py::TestLinkVeiculo::test_link_sem_prorata_gera_exato  G1
