@@ -88,22 +88,27 @@ def _apply_database_migrations() -> None:
     cfg = Config(str(BACKEND_DIR / 'alembic.ini'))
     cfg.set_main_option('script_location', str(BACKEND_DIR / 'alembic'))
 
+    from app.db.legacy_schema import diagnosticar_schema_legado, tem_schema_legado
+
     with engine.connect() as conn:
         current_rev = MigrationContext.configure(conn).get_current_revision()
-        schema_already_exists = inspect(conn).has_table('users')
-        has_refresh_tokens = inspect(conn).has_table('refresh_tokens')
+        diagnostico = (
+            diagnosticar_schema_legado(conn)
+            if current_rev is None and tem_schema_legado(conn) else None
+        )
 
-    if current_rev is None and schema_already_exists:
-        # A baseline não continha refresh_tokens. Alguns ambientes legados
-        # podem tê-la recebido depois por create_all; nesse caso seu schema já
-        # corresponde à revisão seguinte. Em ambos os casos, o upgrade abaixo
-        # ainda executa todas as revisões realmente pendentes.
-        legacy_revision = 'e0905f77f744' if has_refresh_tokens else '96f61a589162'
-        command.stamp(cfg, legacy_revision)
+    if diagnostico is not None:
+        # Banco pré-Alembic: só carimba se o schema contém tudo o que a
+        # revisão legada cria e nada que migrations posteriores criam (DB-03).
+        # Antes bastava existir a tabela users — um banco parcialmente
+        # atualizado era dado como completo e quebrava só em runtime.
+        if diagnostico.revisao is None:
+            raise RuntimeError(diagnostico.relatorio())
+        command.stamp(cfg, diagnostico.revisao)
         logging.getLogger('uvicorn.error').warning(
-            'Alembic: banco pré-existente (sem alembic_version) carimbado como %s; '
-            'aplicando migrations posteriores.',
-            legacy_revision,
+            'Alembic: banco pré-existente (sem alembic_version) conferido com o manifesto '
+            'e carimbado como %s; aplicando migrations posteriores.',
+            diagnostico.revisao,
         )
 
     command.upgrade(cfg, 'head')

@@ -1,0 +1,1619 @@
+{
+ "96f61a589162": {
+  "ailos_api_logs": {
+   "colunas": [
+    "billing_id",
+    "correlation_id",
+    "created_at",
+    "endpoint",
+    "error_message",
+    "id",
+    "method",
+    "request_payload",
+    "response_payload",
+    "status_code",
+    "success",
+    "updated_at"
+   ],
+   "indices": []
+  },
+  "ailos_boletos": {
+   "colunas": [
+    "billing_id",
+    "codigo_barras",
+    "created_at",
+    "data_vencimento",
+    "id",
+    "identificador_unico_titulo",
+    "linha_digitavel",
+    "lote_id",
+    "nosso_numero",
+    "numero_convenio",
+    "numero_documento",
+    "payload_request",
+    "payload_response",
+    "pix_emv",
+    "pix_qr_base64",
+    "status_ailos",
+    "updated_at",
+    "valor_nominal"
+   ],
+   "indices": [
+    "ix_ailos_boletos_billing_id"
+   ]
+  },
+  "ailos_client_tokens": {
+   "colunas": [
+    "access_token_encrypted",
+    "created_at",
+    "environment",
+    "expires_at",
+    "id",
+    "scope",
+    "token_type",
+    "updated_at"
+   ],
+   "indices": [
+    "ix_ailos_client_tokens_environment"
+   ]
+  },
+  "ailos_integrations": {
+   "colunas": [
+    "authorized_at",
+    "auto_relogin_failures",
+    "codigo_carteira",
+    "conta_digito",
+    "conta_numero",
+    "cooperado_token_encrypted",
+    "cooperado_token_expires_at",
+    "cooperativa_codigo",
+    "created_at",
+    "id",
+    "last_error",
+    "last_refresh_at",
+    "numero_convenio",
+    "state",
+    "status",
+    "updated_at"
+   ],
+   "indices": []
+  },
+  "ailos_lotes": {
+   "colunas": [
+    "billing_ids",
+    "created_at",
+    "id",
+    "numero_convenio",
+    "payload_response",
+    "status",
+    "ticket",
+    "tipo",
+    "updated_at"
+   ],
+   "indices": [
+    "ix_ailos_lotes_ticket"
+   ]
+  },
+  "ailos_retorno_arquivos": {
+   "colunas": [
+    "created_at",
+    "data_movimento",
+    "downloaded_at",
+    "id",
+    "numero_convenio",
+    "requested_at",
+    "status",
+    "storage_object_key",
+    "ticket",
+    "updated_at"
+   ],
+   "indices": [
+    "ailos_retorno_arquivos_ticket_key"
+   ]
+  },
+  "audit_logs": {
+   "colunas": [
+    "created_at",
+    "description",
+    "entity_id",
+    "entity_type",
+    "id",
+    "ip_address",
+    "method",
+    "path",
+    "status_code",
+    "updated_at",
+    "user_id",
+    "user_name",
+    "user_role"
+   ],
+   "indices": [
+    "ix_audit_logs_entity_id",
+    "ix_audit_logs_entity_type",
+    "ix_audit_logs_id",
+    "ix_audit_logs_method",
+    "ix_audit_logs_path",
+    "ix_audit_logs_user_id",
+    "ix_audit_logs_user_role"
+   ]
+  },
+  "billing_change_logs": {
+   "colunas": [
+    "billing_id",
+    "changed_by_user_id",
+    "created_at",
+    "field_name",
+    "id",
+    "justification",
+    "new_value",
+    "previous_value",
+    "updated_at"
+   ],
+   "indices": [
+    "ix_billing_change_logs_billing_id",
+    "ix_billing_change_logs_changed_by_user_id",
+    "ix_billing_change_logs_field_name",
+    "ix_billing_change_logs_id"
+   ]
+  },
+  "billing_charge_items": {
+   "colunas": [
+    "amount",
+    "billing_id",
+    "created_at",
+    "id",
+    "item_id",
+    "updated_at"
+   ],
+   "indices": [
+    "ix_billing_charge_items_billing_id",
+    "ix_billing_charge_items_id",
+    "ix_billing_charge_items_item_id",
+    "uq_billing_charge_item"
+   ]
+  },
+  "billings": {
+   "colunas": [
+    "amount",
+    "billing_type",
+    "client_id",
+    "contract_id",
+    "created_at",
+    "due_date",
+    "id",
+    "installment_number",
+    "installment_total",
+    "is_deleted",
+    "item_id",
+    "notes",
+    "paid_amount",
+    "payer_client_id",
+    "payment_date",
+    "payment_method",
+    "period_label",
+    "receipt_number",
+    "status",
+    "title",
+    "tracker_id",
+    "updated_at",
+    "vehicle_id"
+   ],
+   "indices": [
+    "ix_billings_billing_type",
+    "ix_billings_client_id",
+    "ix_billings_contract_id",
+    "ix_billings_due_date",
+    "ix_billings_id",
+    "ix_billings_item_id",
+    "ix_billings_payer_client_id",
+    "ix_billings_period_label",
+    "ix_billings_receipt_number",
+    "ix_billings_status",
+    "ix_billings_title",
+    "ix_billings_tracker_id",
+    "ix_billings_vehicle_id"
+   ]
+  },
+  "client_charge_items": {
+   "colunas": [
+    "active",
+    "client_id",
+    "completed_at",
+    "contract_id",
+    "created_at",
+    "description",
+    "id",
+    "installment_count",
+    "is_deleted",
+    "quantity",
+    "remove_after_payment",
+    "service_product_id",
+    "start_date",
+    "status",
+    "title",
+    "total_amount",
+    "tracker_id",
+    "unit_price",
+    "updated_at",
+    "vehicle_id"
+   ],
+   "indices": [
+    "ix_client_charge_items_active",
+    "ix_client_charge_items_client_id",
+    "ix_client_charge_items_contract_id",
+    "ix_client_charge_items_id",
+    "ix_client_charge_items_service_product_id",
+    "ix_client_charge_items_status",
+    "ix_client_charge_items_title",
+    "ix_client_charge_items_tracker_id",
+    "ix_client_charge_items_vehicle_id"
+   ]
+  },
+  "clients": {
+   "colunas": [
+    "address",
+    "address_complement",
+    "address_line",
+    "address_number",
+    "billing_day",
+    "birth_date",
+    "boleto_fee",
+    "boleto_format",
+    "city",
+    "contacts",
+    "cpf_cnpj",
+    "created_at",
+    "delivery_method",
+    "email",
+    "emergency_contacts",
+    "extra_emails",
+    "id",
+    "is_deleted",
+    "iss_retido",
+    "issue_invoice",
+    "name",
+    "neighborhood",
+    "notes",
+    "optante_simples",
+    "phone",
+    "rg_ie",
+    "send_boleto_whatsapp",
+    "state",
+    "status",
+    "trade_name",
+    "tributacao",
+    "type",
+    "updated_at",
+    "zip_code"
+   ],
+   "indices": [
+    "ix_clients_cpf_cnpj",
+    "ix_clients_id",
+    "ix_clients_name"
+   ]
+  },
+  "closure_jobs": {
+   "colunas": [
+    "client_id",
+    "completed_at",
+    "created_at",
+    "error",
+    "filter_type",
+    "id",
+    "reference_month",
+    "result",
+    "started_at",
+    "status",
+    "updated_at"
+   ],
+   "indices": [
+    "ix_closure_jobs_id",
+    "ix_closure_jobs_status"
+   ]
+  },
+  "contracts": {
+   "colunas": [
+    "bank",
+    "billing_day",
+    "billing_modality",
+    "client_id",
+    "created_at",
+    "end_date",
+    "id",
+    "installation_fee",
+    "interveniente_client_id",
+    "is_deleted",
+    "notes",
+    "payment_method",
+    "plan_id",
+    "signed",
+    "signed_at",
+    "start_date",
+    "status",
+    "tracker_id",
+    "uninstall_fee",
+    "updated_at",
+    "vehicle_id"
+   ],
+   "indices": [
+    "ix_contracts_client_id",
+    "ix_contracts_id",
+    "ix_contracts_interveniente_client_id",
+    "ix_contracts_plan_id",
+    "ix_contracts_tracker_id",
+    "ix_contracts_vehicle_id"
+   ]
+  },
+  "documents": {
+   "colunas": [
+    "active",
+    "category",
+    "content_type",
+    "created_at",
+    "file_name",
+    "id",
+    "object_key",
+    "reference_id",
+    "reference_type",
+    "review_notes",
+    "review_status",
+    "size_bytes",
+    "updated_at",
+    "uploaded_by_user_id"
+   ],
+   "indices": [
+    "ix_documents_category",
+    "ix_documents_id",
+    "ix_documents_object_key",
+    "ix_documents_reference_id",
+    "ix_documents_reference_type"
+   ]
+  },
+  "integration_logs": {
+   "colunas": [
+    "batch_id",
+    "created_at",
+    "entity_id",
+    "entity_type",
+    "id",
+    "operation",
+    "provider",
+    "request_payload",
+    "response_code",
+    "response_description",
+    "response_payload",
+    "success",
+    "transaction_id",
+    "updated_at"
+   ],
+   "indices": [
+    "ix_integration_logs_batch_id",
+    "ix_integration_logs_entity_id",
+    "ix_integration_logs_entity_type",
+    "ix_integration_logs_id",
+    "ix_integration_logs_operation",
+    "ix_integration_logs_provider",
+    "ix_integration_logs_response_code",
+    "ix_integration_logs_success",
+    "ix_integration_logs_transaction_id"
+   ]
+  },
+  "multiportal_outbox": {
+   "colunas": [
+    "attempts",
+    "batch_id",
+    "completed_at",
+    "created_at",
+    "id",
+    "last_error",
+    "next_attempt_at",
+    "operation",
+    "reason",
+    "status",
+    "tracker_id",
+    "updated_at"
+   ],
+   "indices": [
+    "ix_multiportal_outbox_batch_id",
+    "ix_multiportal_outbox_id",
+    "ix_multiportal_outbox_next_attempt_at",
+    "ix_multiportal_outbox_operation",
+    "ix_multiportal_outbox_status",
+    "ix_multiportal_outbox_tracker_id"
+   ]
+  },
+  "nfse_certificados": {
+   "colunas": [
+    "arquivo_cifrado",
+    "ativo",
+    "cnpj",
+    "created_at",
+    "emissor",
+    "enviado_por",
+    "id",
+    "nome_arquivo",
+    "senha_cifrada",
+    "titular",
+    "updated_at",
+    "valido_ate",
+    "valido_de"
+   ],
+   "indices": [
+    "ix_nfse_certificados_ativo",
+    "ix_nfse_certificados_cnpj",
+    "ix_nfse_certificados_id"
+   ]
+  },
+  "nfse_lotes": {
+   "colunas": [
+    "codigo_servico",
+    "competencia",
+    "concluido_em",
+    "created_at",
+    "criado_por",
+    "discriminacao",
+    "id",
+    "period_label",
+    "status",
+    "total_autorizadas",
+    "total_erro",
+    "total_notas",
+    "updated_at"
+   ],
+   "indices": [
+    "ix_nfse_lotes_id",
+    "ix_nfse_lotes_period_label",
+    "ix_nfse_lotes_status"
+   ]
+  },
+  "nfse_notas": {
+   "colunas": [
+    "billing_id",
+    "chave_acesso",
+    "codigo_verificacao",
+    "created_at",
+    "data_emissao",
+    "erro_codigo",
+    "erro_mensagem",
+    "id",
+    "link_visualizacao",
+    "lote_id",
+    "numero_lote",
+    "numero_nfse",
+    "numero_rps",
+    "protocolo",
+    "serie_nfse",
+    "serie_rps",
+    "situacao",
+    "status",
+    "updated_at",
+    "xml_envio",
+    "xml_retorno"
+   ],
+   "indices": [
+    "ix_nfse_notas_billing_id",
+    "ix_nfse_notas_lote_id",
+    "ix_nfse_notas_numero_nfse",
+    "ix_nfse_notas_protocolo",
+    "ix_nfse_notas_status"
+   ]
+  },
+  "password_reset_tokens": {
+   "colunas": [
+    "created_at",
+    "expires_at",
+    "id",
+    "token",
+    "updated_at",
+    "used_at",
+    "user_id"
+   ],
+   "indices": [
+    "ix_password_reset_tokens_id",
+    "ix_password_reset_tokens_token",
+    "ix_password_reset_tokens_user_id"
+   ]
+  },
+  "payables": {
+   "colunas": [
+    "amount",
+    "category",
+    "created_at",
+    "description",
+    "due_date",
+    "id",
+    "is_deleted",
+    "notes",
+    "payment_date",
+    "payment_method",
+    "status",
+    "supplier",
+    "updated_at"
+   ],
+   "indices": [
+    "ix_payables_category",
+    "ix_payables_description",
+    "ix_payables_due_date",
+    "ix_payables_id",
+    "ix_payables_status",
+    "ix_payables_supplier"
+   ]
+  },
+  "plans": {
+   "colunas": [
+    "active",
+    "billing_interval_months",
+    "created_at",
+    "default_billing_day",
+    "default_duration_months",
+    "default_installation_fee",
+    "default_uninstall_fee",
+    "description",
+    "id",
+    "is_deleted",
+    "name",
+    "price",
+    "updated_at"
+   ],
+   "indices": [
+    "ix_plans_id",
+    "plans_name_key"
+   ]
+  },
+  "service_order_status_logs": {
+   "colunas": [
+    "changed_by_id",
+    "created_at",
+    "id",
+    "new_status",
+    "notes",
+    "previous_status",
+    "service_order_id",
+    "updated_at"
+   ],
+   "indices": [
+    "ix_service_order_status_logs_changed_by_id",
+    "ix_service_order_status_logs_id",
+    "ix_service_order_status_logs_service_order_id"
+   ]
+  },
+  "service_orders": {
+   "colunas": [
+    "checklist",
+    "client_id",
+    "created_at",
+    "executed_at",
+    "id",
+    "is_deleted",
+    "number",
+    "observations",
+    "scheduled_at",
+    "status",
+    "technician_id",
+    "tracker_id",
+    "type",
+    "updated_at",
+    "vehicle_id"
+   ],
+   "indices": [
+    "ix_service_orders_id",
+    "ix_service_orders_number"
+   ]
+  },
+  "service_products": {
+   "colunas": [
+    "active",
+    "allow_installments",
+    "auto_add_on_uninstall",
+    "category",
+    "created_at",
+    "default_price",
+    "description",
+    "id",
+    "is_deleted",
+    "name",
+    "remove_after_payment",
+    "updated_at"
+   ],
+   "indices": [
+    "ix_service_products_category",
+    "ix_service_products_id",
+    "ix_service_products_name"
+   ]
+  },
+  "system_settings": {
+   "colunas": [
+    "created_at",
+    "id",
+    "key",
+    "updated_at",
+    "value"
+   ],
+   "indices": [
+    "ix_system_settings_key"
+   ]
+  },
+  "tracker_histories": {
+   "colunas": [
+    "action",
+    "created_at",
+    "created_by_user_id",
+    "event_date",
+    "id",
+    "new_client_id",
+    "new_status",
+    "new_vehicle_id",
+    "notes",
+    "previous_client_id",
+    "previous_status",
+    "previous_vehicle_id",
+    "tracker_id",
+    "updated_at"
+   ],
+   "indices": [
+    "ix_tracker_histories_action",
+    "ix_tracker_histories_id",
+    "ix_tracker_histories_tracker_id"
+   ]
+  },
+  "trackers": {
+   "colunas": [
+    "acquisition_date",
+    "brand",
+    "carrier",
+    "chip_type",
+    "client_id",
+    "communication_type",
+    "created_at",
+    "equipment_type",
+    "external_manufacturer_id",
+    "external_manufacturer_label",
+    "firmware",
+    "id",
+    "imei",
+    "install_date",
+    "install_location",
+    "installation_fee",
+    "integration_last_code",
+    "integration_last_description",
+    "integration_last_transaction_id",
+    "integration_status",
+    "ip_address",
+    "is_deleted",
+    "model",
+    "notes",
+    "port",
+    "serial_number",
+    "service_plan_name",
+    "sim_iccid",
+    "sim_number",
+    "sim_status",
+    "status",
+    "uninstall_date",
+    "updated_at",
+    "vehicle_id",
+    "warranty_until"
+   ],
+   "indices": [
+    "ix_trackers_client_id",
+    "ix_trackers_external_manufacturer_id",
+    "ix_trackers_id",
+    "ix_trackers_imei",
+    "ix_trackers_integration_status",
+    "ix_trackers_serial_number",
+    "ix_trackers_vehicle_id"
+   ]
+  },
+  "uninstall_events": {
+   "colunas": [
+    "billing_id",
+    "client_id",
+    "contract_id",
+    "created_at",
+    "fee_amount",
+    "id",
+    "notes",
+    "payer_client_id",
+    "processed_at",
+    "service_product_id",
+    "status",
+    "tracker_id",
+    "uninstall_date",
+    "updated_at",
+    "vehicle_id"
+   ],
+   "indices": [
+    "ix_uninstall_events_client_id",
+    "ix_uninstall_events_id",
+    "ix_uninstall_events_payer_client_id",
+    "ix_uninstall_events_status",
+    "ix_uninstall_events_tracker_id",
+    "ix_uninstall_events_uninstall_date",
+    "ix_uninstall_events_vehicle_id"
+   ]
+  },
+  "users": {
+   "colunas": [
+    "active",
+    "client_id",
+    "created_at",
+    "email",
+    "id",
+    "is_deleted",
+    "name",
+    "password_hash",
+    "role",
+    "tokens_valid_from",
+    "updated_at"
+   ],
+   "indices": [
+    "ix_users_email",
+    "ix_users_id"
+   ]
+  },
+  "vehicles": {
+   "colunas": [
+    "address_complement",
+    "address_line",
+    "address_number",
+    "address_zip_code",
+    "brand",
+    "chassis",
+    "city",
+    "client_id",
+    "color",
+    "contract_date",
+    "contract_end_date",
+    "contract_number",
+    "created_at",
+    "fipe_code",
+    "fipe_value",
+    "fuel_type",
+    "id",
+    "is_deleted",
+    "manufacture_year",
+    "model",
+    "model_year",
+    "neighborhood",
+    "plate",
+    "renavam",
+    "sales_point",
+    "seller_consultant",
+    "state",
+    "status",
+    "type",
+    "uninstalled_at",
+    "updated_at",
+    "user_alert",
+    "vehicle_classification",
+    "year"
+   ],
+   "indices": [
+    "ix_vehicles_client_id",
+    "ix_vehicles_contract_number",
+    "ix_vehicles_id",
+    "ix_vehicles_plate",
+    "ix_vehicles_renavam",
+    "vehicles_chassis_key"
+   ]
+  }
+ },
+ "e0905f77f744": {
+  "ailos_api_logs": {
+   "colunas": [
+    "billing_id",
+    "correlation_id",
+    "created_at",
+    "endpoint",
+    "error_message",
+    "id",
+    "method",
+    "request_payload",
+    "response_payload",
+    "status_code",
+    "success",
+    "updated_at"
+   ],
+   "indices": []
+  },
+  "ailos_boletos": {
+   "colunas": [
+    "billing_id",
+    "codigo_barras",
+    "created_at",
+    "data_vencimento",
+    "id",
+    "identificador_unico_titulo",
+    "linha_digitavel",
+    "lote_id",
+    "nosso_numero",
+    "numero_convenio",
+    "numero_documento",
+    "payload_request",
+    "payload_response",
+    "pix_emv",
+    "pix_qr_base64",
+    "status_ailos",
+    "updated_at",
+    "valor_nominal"
+   ],
+   "indices": [
+    "ix_ailos_boletos_billing_id"
+   ]
+  },
+  "ailos_client_tokens": {
+   "colunas": [
+    "access_token_encrypted",
+    "created_at",
+    "environment",
+    "expires_at",
+    "id",
+    "scope",
+    "token_type",
+    "updated_at"
+   ],
+   "indices": [
+    "ix_ailos_client_tokens_environment"
+   ]
+  },
+  "ailos_integrations": {
+   "colunas": [
+    "authorized_at",
+    "auto_relogin_failures",
+    "codigo_carteira",
+    "conta_digito",
+    "conta_numero",
+    "cooperado_token_encrypted",
+    "cooperado_token_expires_at",
+    "cooperativa_codigo",
+    "created_at",
+    "id",
+    "last_error",
+    "last_refresh_at",
+    "numero_convenio",
+    "state",
+    "status",
+    "updated_at"
+   ],
+   "indices": []
+  },
+  "ailos_lotes": {
+   "colunas": [
+    "billing_ids",
+    "created_at",
+    "id",
+    "numero_convenio",
+    "payload_response",
+    "status",
+    "ticket",
+    "tipo",
+    "updated_at"
+   ],
+   "indices": [
+    "ix_ailos_lotes_ticket"
+   ]
+  },
+  "ailos_retorno_arquivos": {
+   "colunas": [
+    "created_at",
+    "data_movimento",
+    "downloaded_at",
+    "id",
+    "numero_convenio",
+    "requested_at",
+    "status",
+    "storage_object_key",
+    "ticket",
+    "updated_at"
+   ],
+   "indices": [
+    "ailos_retorno_arquivos_ticket_key"
+   ]
+  },
+  "audit_logs": {
+   "colunas": [
+    "created_at",
+    "description",
+    "entity_id",
+    "entity_type",
+    "id",
+    "ip_address",
+    "method",
+    "path",
+    "status_code",
+    "updated_at",
+    "user_id",
+    "user_name",
+    "user_role"
+   ],
+   "indices": [
+    "ix_audit_logs_entity_id",
+    "ix_audit_logs_entity_type",
+    "ix_audit_logs_id",
+    "ix_audit_logs_method",
+    "ix_audit_logs_path",
+    "ix_audit_logs_user_id",
+    "ix_audit_logs_user_role"
+   ]
+  },
+  "billing_change_logs": {
+   "colunas": [
+    "billing_id",
+    "changed_by_user_id",
+    "created_at",
+    "field_name",
+    "id",
+    "justification",
+    "new_value",
+    "previous_value",
+    "updated_at"
+   ],
+   "indices": [
+    "ix_billing_change_logs_billing_id",
+    "ix_billing_change_logs_changed_by_user_id",
+    "ix_billing_change_logs_field_name",
+    "ix_billing_change_logs_id"
+   ]
+  },
+  "billing_charge_items": {
+   "colunas": [
+    "amount",
+    "billing_id",
+    "created_at",
+    "id",
+    "item_id",
+    "updated_at"
+   ],
+   "indices": [
+    "ix_billing_charge_items_billing_id",
+    "ix_billing_charge_items_id",
+    "ix_billing_charge_items_item_id",
+    "uq_billing_charge_item"
+   ]
+  },
+  "billings": {
+   "colunas": [
+    "amount",
+    "billing_type",
+    "client_id",
+    "contract_id",
+    "created_at",
+    "due_date",
+    "id",
+    "installment_number",
+    "installment_total",
+    "is_deleted",
+    "item_id",
+    "notes",
+    "paid_amount",
+    "payer_client_id",
+    "payment_date",
+    "payment_method",
+    "period_label",
+    "receipt_number",
+    "status",
+    "title",
+    "tracker_id",
+    "updated_at",
+    "vehicle_id"
+   ],
+   "indices": [
+    "ix_billings_billing_type",
+    "ix_billings_client_id",
+    "ix_billings_contract_id",
+    "ix_billings_due_date",
+    "ix_billings_id",
+    "ix_billings_item_id",
+    "ix_billings_payer_client_id",
+    "ix_billings_period_label",
+    "ix_billings_receipt_number",
+    "ix_billings_status",
+    "ix_billings_title",
+    "ix_billings_tracker_id",
+    "ix_billings_vehicle_id"
+   ]
+  },
+  "client_charge_items": {
+   "colunas": [
+    "active",
+    "client_id",
+    "completed_at",
+    "contract_id",
+    "created_at",
+    "description",
+    "id",
+    "installment_count",
+    "is_deleted",
+    "quantity",
+    "remove_after_payment",
+    "service_product_id",
+    "start_date",
+    "status",
+    "title",
+    "total_amount",
+    "tracker_id",
+    "unit_price",
+    "updated_at",
+    "vehicle_id"
+   ],
+   "indices": [
+    "ix_client_charge_items_active",
+    "ix_client_charge_items_client_id",
+    "ix_client_charge_items_contract_id",
+    "ix_client_charge_items_id",
+    "ix_client_charge_items_service_product_id",
+    "ix_client_charge_items_status",
+    "ix_client_charge_items_title",
+    "ix_client_charge_items_tracker_id",
+    "ix_client_charge_items_vehicle_id"
+   ]
+  },
+  "clients": {
+   "colunas": [
+    "address",
+    "address_complement",
+    "address_line",
+    "address_number",
+    "billing_day",
+    "birth_date",
+    "boleto_fee",
+    "boleto_format",
+    "city",
+    "contacts",
+    "cpf_cnpj",
+    "created_at",
+    "delivery_method",
+    "email",
+    "emergency_contacts",
+    "extra_emails",
+    "id",
+    "is_deleted",
+    "iss_retido",
+    "issue_invoice",
+    "name",
+    "neighborhood",
+    "notes",
+    "optante_simples",
+    "phone",
+    "rg_ie",
+    "send_boleto_whatsapp",
+    "state",
+    "status",
+    "trade_name",
+    "tributacao",
+    "type",
+    "updated_at",
+    "zip_code"
+   ],
+   "indices": [
+    "ix_clients_cpf_cnpj",
+    "ix_clients_id",
+    "ix_clients_name"
+   ]
+  },
+  "closure_jobs": {
+   "colunas": [
+    "client_id",
+    "completed_at",
+    "created_at",
+    "error",
+    "filter_type",
+    "id",
+    "reference_month",
+    "result",
+    "started_at",
+    "status",
+    "updated_at"
+   ],
+   "indices": [
+    "ix_closure_jobs_id",
+    "ix_closure_jobs_status"
+   ]
+  },
+  "contracts": {
+   "colunas": [
+    "bank",
+    "billing_day",
+    "billing_modality",
+    "client_id",
+    "created_at",
+    "end_date",
+    "id",
+    "installation_fee",
+    "interveniente_client_id",
+    "is_deleted",
+    "notes",
+    "payment_method",
+    "plan_id",
+    "signed",
+    "signed_at",
+    "start_date",
+    "status",
+    "tracker_id",
+    "uninstall_fee",
+    "updated_at",
+    "vehicle_id"
+   ],
+   "indices": [
+    "ix_contracts_client_id",
+    "ix_contracts_id",
+    "ix_contracts_interveniente_client_id",
+    "ix_contracts_plan_id",
+    "ix_contracts_tracker_id",
+    "ix_contracts_vehicle_id"
+   ]
+  },
+  "documents": {
+   "colunas": [
+    "active",
+    "category",
+    "content_type",
+    "created_at",
+    "file_name",
+    "id",
+    "object_key",
+    "reference_id",
+    "reference_type",
+    "review_notes",
+    "review_status",
+    "size_bytes",
+    "updated_at",
+    "uploaded_by_user_id"
+   ],
+   "indices": [
+    "ix_documents_category",
+    "ix_documents_id",
+    "ix_documents_object_key",
+    "ix_documents_reference_id",
+    "ix_documents_reference_type"
+   ]
+  },
+  "integration_logs": {
+   "colunas": [
+    "batch_id",
+    "created_at",
+    "entity_id",
+    "entity_type",
+    "id",
+    "operation",
+    "provider",
+    "request_payload",
+    "response_code",
+    "response_description",
+    "response_payload",
+    "success",
+    "transaction_id",
+    "updated_at"
+   ],
+   "indices": [
+    "ix_integration_logs_batch_id",
+    "ix_integration_logs_entity_id",
+    "ix_integration_logs_entity_type",
+    "ix_integration_logs_id",
+    "ix_integration_logs_operation",
+    "ix_integration_logs_provider",
+    "ix_integration_logs_response_code",
+    "ix_integration_logs_success",
+    "ix_integration_logs_transaction_id"
+   ]
+  },
+  "multiportal_outbox": {
+   "colunas": [
+    "attempts",
+    "batch_id",
+    "completed_at",
+    "created_at",
+    "id",
+    "last_error",
+    "next_attempt_at",
+    "operation",
+    "reason",
+    "status",
+    "tracker_id",
+    "updated_at"
+   ],
+   "indices": [
+    "ix_multiportal_outbox_batch_id",
+    "ix_multiportal_outbox_id",
+    "ix_multiportal_outbox_next_attempt_at",
+    "ix_multiportal_outbox_operation",
+    "ix_multiportal_outbox_status",
+    "ix_multiportal_outbox_tracker_id"
+   ]
+  },
+  "nfse_certificados": {
+   "colunas": [
+    "arquivo_cifrado",
+    "ativo",
+    "cnpj",
+    "created_at",
+    "emissor",
+    "enviado_por",
+    "id",
+    "nome_arquivo",
+    "senha_cifrada",
+    "titular",
+    "updated_at",
+    "valido_ate",
+    "valido_de"
+   ],
+   "indices": [
+    "ix_nfse_certificados_ativo",
+    "ix_nfse_certificados_cnpj",
+    "ix_nfse_certificados_id"
+   ]
+  },
+  "nfse_lotes": {
+   "colunas": [
+    "codigo_servico",
+    "competencia",
+    "concluido_em",
+    "created_at",
+    "criado_por",
+    "discriminacao",
+    "id",
+    "period_label",
+    "status",
+    "total_autorizadas",
+    "total_erro",
+    "total_notas",
+    "updated_at"
+   ],
+   "indices": [
+    "ix_nfse_lotes_id",
+    "ix_nfse_lotes_period_label",
+    "ix_nfse_lotes_status"
+   ]
+  },
+  "nfse_notas": {
+   "colunas": [
+    "billing_id",
+    "chave_acesso",
+    "codigo_verificacao",
+    "created_at",
+    "data_emissao",
+    "erro_codigo",
+    "erro_mensagem",
+    "id",
+    "link_visualizacao",
+    "lote_id",
+    "numero_lote",
+    "numero_nfse",
+    "numero_rps",
+    "protocolo",
+    "serie_nfse",
+    "serie_rps",
+    "situacao",
+    "status",
+    "updated_at",
+    "xml_envio",
+    "xml_retorno"
+   ],
+   "indices": [
+    "ix_nfse_notas_billing_id",
+    "ix_nfse_notas_lote_id",
+    "ix_nfse_notas_numero_nfse",
+    "ix_nfse_notas_protocolo",
+    "ix_nfse_notas_status"
+   ]
+  },
+  "password_reset_tokens": {
+   "colunas": [
+    "created_at",
+    "expires_at",
+    "id",
+    "token",
+    "updated_at",
+    "used_at",
+    "user_id"
+   ],
+   "indices": [
+    "ix_password_reset_tokens_id",
+    "ix_password_reset_tokens_token",
+    "ix_password_reset_tokens_user_id"
+   ]
+  },
+  "payables": {
+   "colunas": [
+    "amount",
+    "category",
+    "created_at",
+    "description",
+    "due_date",
+    "id",
+    "is_deleted",
+    "notes",
+    "payment_date",
+    "payment_method",
+    "status",
+    "supplier",
+    "updated_at"
+   ],
+   "indices": [
+    "ix_payables_category",
+    "ix_payables_description",
+    "ix_payables_due_date",
+    "ix_payables_id",
+    "ix_payables_status",
+    "ix_payables_supplier"
+   ]
+  },
+  "plans": {
+   "colunas": [
+    "active",
+    "billing_interval_months",
+    "created_at",
+    "default_billing_day",
+    "default_duration_months",
+    "default_installation_fee",
+    "default_uninstall_fee",
+    "description",
+    "id",
+    "is_deleted",
+    "name",
+    "price",
+    "updated_at"
+   ],
+   "indices": [
+    "ix_plans_id",
+    "plans_name_key"
+   ]
+  },
+  "refresh_tokens": {
+   "colunas": [
+    "created_at",
+    "expires_at",
+    "family",
+    "id",
+    "jti",
+    "replaced_by_jti",
+    "revoked_at",
+    "updated_at",
+    "user_id"
+   ],
+   "indices": [
+    "ix_refresh_tokens_family",
+    "ix_refresh_tokens_id",
+    "ix_refresh_tokens_jti",
+    "ix_refresh_tokens_user_id"
+   ]
+  },
+  "service_order_status_logs": {
+   "colunas": [
+    "changed_by_id",
+    "created_at",
+    "id",
+    "new_status",
+    "notes",
+    "previous_status",
+    "service_order_id",
+    "updated_at"
+   ],
+   "indices": [
+    "ix_service_order_status_logs_changed_by_id",
+    "ix_service_order_status_logs_id",
+    "ix_service_order_status_logs_service_order_id"
+   ]
+  },
+  "service_orders": {
+   "colunas": [
+    "checklist",
+    "client_id",
+    "created_at",
+    "executed_at",
+    "id",
+    "is_deleted",
+    "number",
+    "observations",
+    "scheduled_at",
+    "status",
+    "technician_id",
+    "tracker_id",
+    "type",
+    "updated_at",
+    "vehicle_id"
+   ],
+   "indices": [
+    "ix_service_orders_id",
+    "ix_service_orders_number"
+   ]
+  },
+  "service_products": {
+   "colunas": [
+    "active",
+    "allow_installments",
+    "auto_add_on_uninstall",
+    "category",
+    "created_at",
+    "default_price",
+    "description",
+    "id",
+    "is_deleted",
+    "name",
+    "remove_after_payment",
+    "updated_at"
+   ],
+   "indices": [
+    "ix_service_products_category",
+    "ix_service_products_id",
+    "ix_service_products_name"
+   ]
+  },
+  "system_settings": {
+   "colunas": [
+    "created_at",
+    "id",
+    "key",
+    "updated_at",
+    "value"
+   ],
+   "indices": [
+    "ix_system_settings_key"
+   ]
+  },
+  "tracker_histories": {
+   "colunas": [
+    "action",
+    "created_at",
+    "created_by_user_id",
+    "event_date",
+    "id",
+    "new_client_id",
+    "new_status",
+    "new_vehicle_id",
+    "notes",
+    "previous_client_id",
+    "previous_status",
+    "previous_vehicle_id",
+    "tracker_id",
+    "updated_at"
+   ],
+   "indices": [
+    "ix_tracker_histories_action",
+    "ix_tracker_histories_id",
+    "ix_tracker_histories_tracker_id"
+   ]
+  },
+  "trackers": {
+   "colunas": [
+    "acquisition_date",
+    "brand",
+    "carrier",
+    "chip_type",
+    "client_id",
+    "communication_type",
+    "created_at",
+    "equipment_type",
+    "external_manufacturer_id",
+    "external_manufacturer_label",
+    "firmware",
+    "id",
+    "imei",
+    "install_date",
+    "install_location",
+    "installation_fee",
+    "integration_last_code",
+    "integration_last_description",
+    "integration_last_transaction_id",
+    "integration_status",
+    "ip_address",
+    "is_deleted",
+    "model",
+    "notes",
+    "port",
+    "serial_number",
+    "service_plan_name",
+    "sim_iccid",
+    "sim_number",
+    "sim_status",
+    "status",
+    "uninstall_date",
+    "updated_at",
+    "vehicle_id",
+    "warranty_until"
+   ],
+   "indices": [
+    "ix_trackers_client_id",
+    "ix_trackers_external_manufacturer_id",
+    "ix_trackers_id",
+    "ix_trackers_imei",
+    "ix_trackers_integration_status",
+    "ix_trackers_serial_number",
+    "ix_trackers_vehicle_id"
+   ]
+  },
+  "uninstall_events": {
+   "colunas": [
+    "billing_id",
+    "client_id",
+    "contract_id",
+    "created_at",
+    "fee_amount",
+    "id",
+    "notes",
+    "payer_client_id",
+    "processed_at",
+    "service_product_id",
+    "status",
+    "tracker_id",
+    "uninstall_date",
+    "updated_at",
+    "vehicle_id"
+   ],
+   "indices": [
+    "ix_uninstall_events_client_id",
+    "ix_uninstall_events_id",
+    "ix_uninstall_events_payer_client_id",
+    "ix_uninstall_events_status",
+    "ix_uninstall_events_tracker_id",
+    "ix_uninstall_events_uninstall_date",
+    "ix_uninstall_events_vehicle_id"
+   ]
+  },
+  "users": {
+   "colunas": [
+    "active",
+    "client_id",
+    "created_at",
+    "email",
+    "id",
+    "is_deleted",
+    "name",
+    "password_hash",
+    "role",
+    "tokens_valid_from",
+    "updated_at"
+   ],
+   "indices": [
+    "ix_users_email",
+    "ix_users_id"
+   ]
+  },
+  "vehicles": {
+   "colunas": [
+    "address_complement",
+    "address_line",
+    "address_number",
+    "address_zip_code",
+    "brand",
+    "chassis",
+    "city",
+    "client_id",
+    "color",
+    "contract_date",
+    "contract_end_date",
+    "contract_number",
+    "created_at",
+    "fipe_code",
+    "fipe_value",
+    "fuel_type",
+    "id",
+    "is_deleted",
+    "manufacture_year",
+    "model",
+    "model_year",
+    "neighborhood",
+    "plate",
+    "renavam",
+    "sales_point",
+    "seller_consultant",
+    "state",
+    "status",
+    "type",
+    "uninstalled_at",
+    "updated_at",
+    "user_alert",
+    "vehicle_classification",
+    "year"
+   ],
+   "indices": [
+    "ix_vehicles_client_id",
+    "ix_vehicles_contract_number",
+    "ix_vehicles_id",
+    "ix_vehicles_plate",
+    "ix_vehicles_renavam",
+    "vehicles_chassis_key"
+   ]
+  }
+ }
+}
