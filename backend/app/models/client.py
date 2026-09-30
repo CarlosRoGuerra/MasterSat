@@ -4,7 +4,7 @@ from sqlalchemy import Boolean, Date, Enum, Index, Integer, JSON, String, Text, 
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
-from app.models.base import SoftDeleteMixin, TimestampMixin
+from app.models.base import SoftDeleteMixin, TimestampMixin, trigram_index
 from app.models.enums import ClientStatus
 
 
@@ -18,6 +18,8 @@ class Client(Base, TimestampMixin, SoftDeleteMixin):
             postgresql_where=text('is_deleted = false'),
             sqlite_where=text('is_deleted = 0'),
         ),
+        trigram_index('ix_clients_name_trgm', 'name'),
+        trigram_index('ix_clients_trade_name_trgm', 'trade_name'),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)

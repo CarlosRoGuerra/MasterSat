@@ -2,7 +2,7 @@ from sqlalchemy import Date, Enum, ForeignKey, Index, Integer, Numeric, String, 
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
-from app.models.base import SoftDeleteMixin, TimestampMixin
+from app.models.base import SoftDeleteMixin, TimestampMixin, trigram_index
 from app.models.enums import VehicleStatus
 
 
@@ -23,6 +23,9 @@ class Vehicle(Base, TimestampMixin, SoftDeleteMixin):
             postgresql_where=text('is_deleted = false'),
             sqlite_where=text('is_deleted = 0'),
         ),
+        trigram_index('ix_vehicles_plate_trgm', 'plate'),
+        trigram_index('ix_vehicles_brand_trgm', 'brand'),
+        trigram_index('ix_vehicles_model_trgm', 'model'),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)

@@ -2,7 +2,7 @@ from sqlalchemy import Date, Enum, ForeignKey, Index, Integer, Numeric, String, 
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
-from app.models.base import SoftDeleteMixin, TimestampMixin
+from app.models.base import SoftDeleteMixin, TimestampMixin, trigram_index
 from app.models.enums import TrackerStatus
 
 
@@ -16,6 +16,8 @@ class Tracker(Base, TimestampMixin, SoftDeleteMixin):
             postgresql_where=text('is_deleted = false'),
             sqlite_where=text('is_deleted = 0'),
         ),
+        trigram_index('ix_trackers_imei_trgm', 'imei'),
+        trigram_index('ix_trackers_serial_number_trgm', 'serial_number'),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
