@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { apiFetch, apiFetchList } from './api';
+import { apiFetch, apiFetchList, logout } from './api';
 
 const originalLocation = window.location;
 
@@ -77,6 +77,68 @@ describe('apiFetch', () => {
 
     await expect(apiFetch('/auth/login', { method: 'POST' })).rejects.toThrow('Credenciais inválidas.');
     expect(window.location.href).toBe('');
+  });
+});
+
+// SEC-02/SEC-06: refresh de uso único (409 quando outra aba já renovou) e
+// logout que encerra a sessão do access token.
+describe('refresh entre abas e logout', () => {
+  // O single-flight libera refreshPromise num setTimeout(0): drena antes de
+  // cada teste para não herdar o refresh do teste anterior.
+  beforeEach(() => new Promise((resolve) => setTimeout(resolve, 0)));
+
+  it('refresh com 409 espera e renova de novo com o cookie do vencedor', async () => {
+    localStorage.setItem('access_token', 'expired-token');
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 401, json: async () => ({}) }) // chamada original
+      .mockResolvedValueOnce({ ok: false, status: 409, json: async () => ({}) }) // outra aba venceu
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ access_token: 'fresh-token' }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ data: 'ok' }) }); // retry
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await apiFetch<{ data: string }>('/clientes', {}, 'expired-token');
+
+    expect(result).toEqual({ data: 'ok' });
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(localStorage.getItem('access_token')).toBe('fresh-token');
+    expect(window.location.href).toBe('');
+  });
+
+  it('refresh com 409 reaproveita o access que a outra aba gravou', async () => {
+    localStorage.setItem('access_token', 'expired-token');
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 401, json: async () => ({}) })
+      .mockImplementationOnce(async () => {
+        // a aba vencedora grava o access novo no localStorage compartilhado
+        localStorage.setItem('access_token', 'other-tab-token');
+        return { ok: false, status: 409, json: async () => ({}) };
+      })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ data: 'ok' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await apiFetch<{ data: string }>('/clientes', {}, 'expired-token');
+
+    expect(result).toEqual({ data: 'ok' });
+    expect(fetchMock).toHaveBeenCalledTimes(3); // sem segundo /auth/refresh
+    const [, init] = fetchMock.mock.calls[2];
+    expect(init.headers.Authorization).toBe('Bearer other-tab-token');
+  });
+
+  it('logout envia o access token para o backend revogar a sessão', async () => {
+    localStorage.setItem('access_token', 'session-token');
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await logout();
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain('/auth/logout');
+    expect(init.headers.Authorization).toBe('Bearer session-token');
+    expect(init.credentials).toBe('include');
+    expect(localStorage.getItem('access_token')).toBeNull();
+    expect(window.location.href).toBe('/login/admin');
   });
 });
 
