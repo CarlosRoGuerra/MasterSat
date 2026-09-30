@@ -1,5 +1,4 @@
 import logging
-import secrets
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -13,20 +12,16 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from sqlalchemy import inspect, or_, text
-from sqlalchemy.exc import IntegrityError
 
 from app.api.v1.api import api_router
 from app.core.config import settings
 from app.core.limiter import limiter
-from app.core.security import get_password_hash
 from app.db.session import SessionLocal, engine
 from app.models import ailos_api_log, ailos_boleto, ailos_client_token, ailos_integration, ailos_lote, ailos_retorno_arquivo, audit_log, billing, billing_change_log, billing_charge_item, client, client_charge_item, closure_job, contract, document, integration_log, multiportal_outbox, nfse_certificado, nfse_lote, nfse_nota, password_reset_token, payable, plan, refresh_token, service_order, service_order_status_log, service_product, system_setting, tracker, tracker_history, uninstall_event, user, vehicle  # noqa: F401 — side-effect imports that register models with SQLAlchemy Base
 from app.core.audit import AuditMiddleware
 from app.core.body_limit import MaxBodySizeMiddleware
 from app.core.forwarded_proto import ForwardedProtoMiddleware
 from app.core.validation_errors import validation_exception_handler
-from app.models.enums import UserRole
-from app.models.user import User
 from app.services.storage import ensure_bucket
 
 # /docs, /redoc e /openapi.json só ficam expostos se ENABLE_DOCS=true (dev).
@@ -530,49 +525,15 @@ def ensure_schema_updates():
 
 
 def _seed_admin() -> None:
-    """
-    Cria o admin inicial apenas se ainda não existir (banco vazio).
+    """Provisiona o admin inicial SÓ em instalação nova (banco sem usuários),
+    com INITIAL_ADMIN_PASSWORD. Não reativa conta excluída e não escreve
+    senha em log — ver services/admin_bootstrap.py (SEC-03)."""
+    from app.db import session as db_session
+    from app.services.admin_bootstrap import seed_initial_admin
 
-    Sem senha pública: usa INITIAL_ADMIN_PASSWORD do .env ou gera uma aleatória,
-    logada UMA vez para troca no primeiro acesso. Tolerante a corrida entre
-    workers (IntegrityError no e-mail único).
-    """
-    db = SessionLocal()
+    db = db_session.SessionLocal()
     try:
-        email = settings.initial_admin_email
-        existing = db.query(User).filter(User.email == email).first()
-        if existing and not existing.is_deleted:
-            return
-        senha = settings.initial_admin_password or secrets.token_urlsafe(16)
-        if existing and existing.is_deleted:
-            # O e-mail é UNIQUE: se o admin inicial foi soft-deletado, o registro
-            # apagado continua ocupando o e-mail e um INSERT novo nunca passaria
-            # (cai no IntegrityError abaixo e o bootstrap trava pra sempre).
-            # Reativa em vez de tentar recriar.
-            existing.is_deleted = False
-            existing.active = True
-            existing.password_hash = get_password_hash(senha)
-            db.commit()
-            logging.getLogger('uvicorn.error').warning(
-                'ADMIN INICIAL estava soft-deletado — reativado: %s — senha gerada: %s — TROQUE no primeiro acesso.',
-                email, senha,
-            )
-            return
-        db.add(User(
-            name='Administrador',
-            email=email,
-            password_hash=get_password_hash(senha),
-            role=UserRole.ADMIN,
-            active=True,
-        ))
-        db.commit()
-        if not settings.initial_admin_password:
-            logging.getLogger('uvicorn.error').warning(
-                'ADMIN INICIAL criado: %s — senha gerada: %s — TROQUE no primeiro acesso.',
-                email, senha,
-            )
-    except IntegrityError:
-        db.rollback()  # outro worker criou primeiro
+        seed_initial_admin(db)
     finally:
         db.close()
 

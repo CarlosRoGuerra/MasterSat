@@ -36,8 +36,10 @@ class Settings(BaseSettings):
     # Webhook de alertas (Discord/Slack) — mesmo canal usado pelo backup.
     # Usado p/ avisar quando a sessão do cooperado Ailos morre (emissão parada).
     alert_webhook: str = ''
-    # Admin inicial (criado só se o banco não tiver esse e-mail). Se a senha não
-    # for definida, é gerada uma aleatória e logada uma vez — NUNCA usar senha pública.
+    # Admin inicial: criado só em instalação nova (banco sem nenhum usuário),
+    # com esta senha, que passa pela política de senha. Vazia = nada é criado
+    # e nenhuma senha é gerada/logada; use scripts/reset_admin_senha.py --criar.
+    # Ver services/admin_bootstrap.py (SEC-03).
     initial_admin_email: str = 'admin@rastreamento.local'
     initial_admin_password: str = ''
     database_url: str = 'postgresql+psycopg://postgres:postgres@db:5432/rastreamento'
