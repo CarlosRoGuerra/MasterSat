@@ -31,18 +31,21 @@ type DashboardData = {
   vehicles: { total: number };
   trackers: { installed: number; stock: number; maintenance: number };
   service_orders: { open: number; in_progress: number; completed: number };
+  // null para perfil sem acesso financeiro (operacional) — o backend nem
+  // calcula os valores (SEC-01). upcoming_billings vem vazio nesse caso.
   finance: {
     pending_count: number; overdue_count: number;
     received_month: number; received_prev_month: number;
     delta_received: number; delta_pct: number;
-  };
+  } | null;
   upcoming_billings: UpcomingBilling[];
 };
 
 type DelinquencyStatus = {
   clientes_inadimplentes: number;
-  cobrancas_vencidas: number;
-  valor_total_vencido: number;
+  // null para perfil sem acesso financeiro
+  cobrancas_vencidas: number | null;
+  valor_total_vencido: number | null;
 };
 
 /* ── Helpers ───────────────────────────────────────────────────────────── */
@@ -90,18 +93,22 @@ export default function DashboardPage() {
     if (!data) return { clientTotal: 0, clientHealthy: 0, osCompletion: 0, osTotal: 0, financeRisk: 0, finTotal: 0 };
     const clientTotal = data.clients.active + data.clients.inactive + data.clients.delinquent;
     const osTotal = data.service_orders.open + data.service_orders.in_progress + data.service_orders.completed;
-    const finTotal = data.finance.pending_count + data.finance.overdue_count;
+    const finTotal = data.finance ? data.finance.pending_count + data.finance.overdue_count : 0;
     return {
       clientTotal,
       clientHealthy: clientTotal >= 5 ? Math.round((data.clients.active / clientTotal) * 100) : null,
       osCompletion: osTotal >= 3 ? Math.round((data.service_orders.completed / osTotal) * 100) : null,
       osTotal,
-      financeRisk: finTotal >= 2 ? Math.round((data.finance.overdue_count / finTotal) * 100) : null,
+      financeRisk: data.finance && finTotal >= 2 ? Math.round((data.finance.overdue_count / finTotal) * 100) : null,
       finTotal,
     };
   }, [data]);
 
   const labelClass = 'text-2xs font-semibold uppercase tracking-[0.06em] text-slate-500 dark:text-slate-400';
+  const finance = data?.finance ?? null;
+  // Enquanto carrega, mantém o layout completo (skeletons); depois, some com
+  // os blocos financeiros se o backend não os enviou para este perfil.
+  const showFinance = !data || finance !== null;
 
   return (
     <PageShell title="Dashboard" description="Visão executiva da operação — cadastros, campo e financeiro.">
@@ -118,9 +125,11 @@ export default function DashboardPage() {
             <span className="font-semibold text-rose-800 dark:text-rose-300">
               {delinquency.clientes_inadimplentes} cliente(s) inadimplente(s)
             </span>
-            <span className="ml-2 text-rose-600 dark:text-rose-400">
-              · {delinquency.cobrancas_vencidas} cobrança(s) · {currency(delinquency.valor_total_vencido)} em aberto
-            </span>
+            {delinquency.valor_total_vencido !== null && (
+              <span className="ml-2 text-rose-600 dark:text-rose-400">
+                · {delinquency.cobrancas_vencidas} cobrança(s) · {currency(delinquency.valor_total_vencido)} em aberto
+              </span>
+            )}
           </div>
           <Link href="/relatorios" className="shrink-0 rounded-lg border border-rose-200 bg-white px-3 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-50 dark:border-rose-800 dark:bg-transparent dark:text-rose-400">
             Ver relatório →
@@ -170,18 +179,28 @@ export default function DashboardPage() {
               icon={<ClipboardList className="h-5 w-5" />}
             />
 
-            {/* Receita do mês — saúde financeira */}
-            <StatCard
-              label="Receita do mês"
-              value={currency(data?.finance.received_month)}
-              hint="Pagamentos confirmados"
-              tone={data && data.finance.overdue_count > 0 ? 'warning' : 'success'}
-              icon={<Wallet className="h-5 w-5" />}
-              delta={data ? {
-                value: Math.round(data.finance.delta_received * 100) / 100,
-                pct: data.finance.delta_pct,
-              } : undefined}
-            />
+            {/* Receita do mês — saúde financeira (só com acesso financeiro) */}
+            {showFinance ? (
+              <StatCard
+                label="Receita do mês"
+                value={currency(finance?.received_month)}
+                hint="Pagamentos confirmados"
+                tone={finance && finance.overdue_count > 0 ? 'warning' : 'success'}
+                icon={<Wallet className="h-5 w-5" />}
+                delta={finance ? {
+                  value: Math.round(finance.delta_received * 100) / 100,
+                  pct: finance.delta_pct,
+                } : undefined}
+              />
+            ) : (
+              <StatCard
+                label="Clientes inadimplentes"
+                value={data?.clients.delinquent ?? '—'}
+                hint="Para bloqueio e desinstalação"
+                tone={(data?.clients.delinquent ?? 0) > 0 ? 'warning' : 'success'}
+                icon={<AlertTriangle className="h-5 w-5" />}
+              />
+            )}
           </>
         )}
       </section>
@@ -192,15 +211,15 @@ export default function DashboardPage() {
         <div className="space-y-6">
 
           {/* Alertas inline */}
-          {data && (data.finance.overdue_count > 0 || data.service_orders.open > 0) && (
+          {data && ((finance?.overdue_count ?? 0) > 0 || data.service_orders.open > 0) && (
             <Card>
               <SectionHeader eyebrow="Alertas" title="Itens que precisam de atenção" />
               <div className="mt-4 space-y-2">
-                {data.finance.overdue_count > 0 && (
+                {finance && finance.overdue_count > 0 && (
                   <Link href="/financeiro" className="flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm transition hover:bg-amber-100 dark:border-amber-900/40 dark:bg-amber-950/30">
                     <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
                     <span className="text-amber-800 dark:text-amber-300">
-                      <strong>{data.finance.overdue_count}</strong> cobrança(s) vencida(s) sem baixa
+                      <strong>{finance.overdue_count}</strong> cobrança(s) vencida(s) sem baixa
                     </span>
                     <ArrowRight className="ml-auto h-4 w-4 text-amber-400" />
                   </Link>
@@ -223,9 +242,11 @@ export default function DashboardPage() {
             <SectionHeader
               eyebrow="Indicadores"
               title="Saúde da operação"
-              description="Proporção de clientes ativos, conclusão de OS e risco de inadimplência."
+              description={showFinance
+                ? 'Proporção de clientes ativos, conclusão de OS e risco de inadimplência.'
+                : 'Proporção de clientes ativos e conclusão de OS.'}
             />
-            <div className="mt-5 grid gap-4 md:grid-cols-3">
+            <div className={`mt-5 grid gap-4 ${showFinance ? 'md:grid-cols-3' : 'md:grid-cols-2'}`}>
               {/* Clientes ativos */}
               <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-4 dark:border-slate-800 dark:bg-slate-950/50">
                 <div className="flex items-center justify-between">
@@ -277,6 +298,7 @@ export default function DashboardPage() {
               </div>
 
               {/* Risco financeiro */}
+              {showFinance && (
               <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-4 dark:border-slate-800 dark:bg-slate-950/50">
                 <div className="flex items-center justify-between">
                   <p className={labelClass}>Risco financeiro</p>
@@ -293,17 +315,18 @@ export default function DashboardPage() {
                 {totals.financeRisk !== null ? (
                   <>
                     <div className="mt-3"><ProgressBar value={totals.financeRisk} tone={totals.financeRisk > 20 ? 'danger' : 'warning'} /></div>
-                    <p className="mt-2 text-xs text-slate-500">{data?.finance.overdue_count ?? 0} vencidas de {totals.finTotal}</p>
+                    <p className="mt-2 text-xs text-slate-500">{finance?.overdue_count ?? 0} vencidas de {totals.finTotal}</p>
                   </>
                 ) : (
                   <p className="mt-3 text-xs text-slate-500">
-                    {data?.finance.overdue_count === 0 ? 'Sem cobranças vencidas' : `${data?.finance.overdue_count} vencida(s)`}
+                    {finance?.overdue_count === 0 ? 'Sem cobranças vencidas' : `${finance?.overdue_count ?? 0} vencida(s)`}
                   </p>
                 )}
                 <Link href="/relatorios" className="mt-3 flex items-center gap-1 text-2xs font-semibold text-brand-700 hover:underline dark:text-brand-400">
                   Ver relatório <ArrowRight className="h-3 w-3" />
                 </Link>
               </div>
+              )}
             </div>
           </Card>
 
@@ -394,6 +417,8 @@ export default function DashboardPage() {
         {/* ── Right column ────────────────────────────────────────────── */}
         <div className="space-y-6">
 
+          {/* Resumo financeiro e próximos vencimentos: só com acesso financeiro */}
+          {showFinance && (<>
           {/* Resumo financeiro */}
           <Card>
             <SectionHeader eyebrow="Financeiro" title="Resumo do mês" />
@@ -402,27 +427,27 @@ export default function DashboardPage() {
                 <div className="flex items-center gap-2 text-body text-slate-600 dark:text-slate-400">
                   <TrendingUp className="h-4 w-4" /> Recebido
                 </div>
-                <strong className="text-body tabular-nums text-slate-900 dark:text-white">{currency(data?.finance.received_month)}</strong>
+                <strong className="text-body tabular-nums text-slate-900 dark:text-white">{currency(finance?.received_month)}</strong>
               </div>
               <div className="flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/50">
                 <div className="flex items-center gap-2 text-body text-slate-600 dark:text-slate-400">
                   <Wallet className="h-4 w-4" /> Pendentes
                 </div>
-                <strong className="text-body tabular-nums text-slate-900 dark:text-white">{data?.finance.pending_count ?? '—'}</strong>
+                <strong className="text-body tabular-nums text-slate-900 dark:text-white">{finance?.pending_count ?? '—'}</strong>
               </div>
               <div className={`flex items-center justify-between rounded-xl border px-4 py-3 ${
-                (data?.finance.overdue_count ?? 0) > 0
+                (finance?.overdue_count ?? 0) > 0
                   ? 'border-rose-100 bg-rose-50/80 dark:border-rose-900/40 dark:bg-rose-950/30'
                   : 'border-slate-100 bg-slate-50 dark:border-slate-800 dark:bg-slate-950/50'
               }`}>
                 <div className={`flex items-center gap-2 text-body ${
-                  (data?.finance.overdue_count ?? 0) > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-600 dark:text-slate-400'
+                  (finance?.overdue_count ?? 0) > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-600 dark:text-slate-400'
                 }`}>
                   <AlertTriangle className="h-4 w-4" /> Vencidas
                 </div>
                 <strong className={`text-body tabular-nums ${
-                  (data?.finance.overdue_count ?? 0) > 0 ? 'text-rose-700 dark:text-rose-400' : 'text-slate-900 dark:text-white'
-                }`}>{data?.finance.overdue_count ?? '—'}</strong>
+                  (finance?.overdue_count ?? 0) > 0 ? 'text-rose-700 dark:text-rose-400' : 'text-slate-900 dark:text-white'
+                }`}>{finance?.overdue_count ?? '—'}</strong>
               </div>
             </div>
             {/* Compact CTA */}
@@ -477,6 +502,7 @@ export default function DashboardPage() {
               )}
             </div>
           </Card>
+          </>)}
         </div>
       </div>
     </PageShell>
