@@ -1,0 +1,15 @@
+INFO  [alembic.runtime.migration] Running upgrade c7b2f9a41d38 -> b3f8a1c9d2e7, billings: indice unico (contract_id, period_label) para tipos recorrentes
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+INFO  [alembic.runtime.migration] Running upgrade b3f8a1c9d2e7 -> d9e4f1a7b2c5, Fase 01: consumo único de refresh/reset e prazo do state Ailos
+apos upgrade:
+t|t|t|0
+st-legado|t
+INFO  [alembic.runtime.migration] Running downgrade d9e4f1a7b2c5 -> b3f8a1c9d2e7, Fase 01: consumo único de refresh/reset e prazo do state Ailos
+apos downgrade:
+revogado:f9375c0aafeca01fdeec73b8d6932b9c17e24d35fb7343f8411ddc94e91f661e|t
+INFO  [alembic.runtime.migration] Running upgrade b3f8a1c9d2e7 -> d9e4f1a7b2c5, Fase 01: consumo único de refresh/reset e prazo do state Ailos
+apos re-upgrade:
+t|t|t
+d9e4f1a7b2c5

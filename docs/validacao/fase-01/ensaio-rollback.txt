@@ -1,0 +1,24 @@
+NOTICE:  database "rollback" does not exist, skipping
+== 1. código NOVO: schema head + dados
+d9e4f1a7b2c5
+1|2
+1|1|0
+== 2. rollback do schema com a imagem NOVA (tem o arquivo da migration)
+INFO  [alembic.runtime.migration] Running downgrade d9e4f1a7b2c5 -> b3f8a1c9d2e7, Fase 01: consumo único de refresh/reset e prazo do state Ailos
+b3f8a1c9d2e7
+0
+== 3. corte de sessões (plano: novo login controlado)
+UPDATE 1
+== 4. código ANTERIOR sobe e respeita o corte
+access A (logout feito no código novo): 401
+access B (sessão ativa antes do rollback): 401
+refresh A: 401  refresh B: 401
+login novo: 200
+me com login novo: 200
+forgot (código anterior): 200
+1
+== 5. roll-forward: código NOVO de novo
+d9e4f1a7b2c5
+0|2
+login após roll-forward: 200
+== fim

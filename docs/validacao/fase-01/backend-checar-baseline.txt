@@ -1,0 +1,3 @@
+# python scripts/checar_baseline_testes.py junit-final.xml  (SHA ddfe47af6ebca90ec4957250d8ee4604c926cc46)
+Executados: 2033  falhas: 38  conhecidas: 38  skips: 0
+BASELINE OK — só falhas conhecidas e triadas
