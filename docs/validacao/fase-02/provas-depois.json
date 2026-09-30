@@ -1,0 +1,60 @@
+{
+ "FIN-04 rotulos_equivalentes": {
+  "status": [
+   200,
+   409
+  ],
+  "mensalidades_de_setembro_gravadas": 1
+ },
+ "FIN-01 cancelada_e_carne": {
+  "status_carne": 409,
+  "mensagem": "Este contrato já tem cobrança de mensalidade lançada para: 09/2099. Cancelada também ocupa o mês. Para cobrar um desses meses no carnê, cancele a cobrança liberando a competência (ou use \"Liberar competência\" numa cobrança já cancelada); ou ajuste o primeiro vencimento."
+ },
+ "FIN-01 consolidado_removido": {
+  "delete_sem_confirmar": 409,
+  "delete_revertendo": 200,
+  "already_generated": [
+   true,
+   true
+  ],
+  "cobrancas_em_aberto_depois": 2
+ },
+ "FIN-11 parcela_negativa": {
+  "status_criacao": 422,
+  "parcelas_geradas": null
+ },
+ "FIN-12 corrida_entre_meses": {
+  "status": [
+   200,
+   200
+  ],
+  "parcelas_1_gravadas": 1
+ },
+ "DB-01 drift_alembic": {
+  "exit_code": 0,
+  "remove_index_propostos": 0,
+  "saida": "INFO  [alembic.ddl.postgresql] Detected sequence named 'service_order_status_logs_id_seq' as owned by integer column 'service_order_status_logs(id)', assuming SERIAL and omitting"
+ },
+ "DB-04 ciclo_down_up": [
+  {
+   "comando": "upgrade head",
+   "exit_code": 0,
+   "erro": null
+  },
+  {
+   "comando": "downgrade base",
+   "exit_code": 0,
+   "erro": null
+  },
+  {
+   "comando": "upgrade head",
+   "exit_code": 0,
+   "erro": null
+  }
+ ],
+ "DB-03 carimbo_legado_parcial": {
+  "resultado": "exceção: RuntimeError: Banco sem alembic_version com schema que não corresponde a nenhuma revisão legada admitida — o boot NÃO carimbou nem alterou nada.",
+  "alembic_version_gravada": null,
+  "leitura": "recusou antes de carimbar; banco intocado"
+ }
+}

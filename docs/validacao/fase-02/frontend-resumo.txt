@@ -1,0 +1,7 @@
+# Frontend — node:20-alpine (Node 20.20.2 / npm 10.8.2), cópia limpa do frontend/
+# SHA do código: 915e451 (frontend não mudou depois)
+npm ci             saída 0
+npm run lint       saída 0 — 0 erros, 40 avisos (baseline: 41; nenhum aviso novo)
+npm run typecheck  saída 0
+npm test           saída 0 — 21 arquivos, 178/178 (172 anteriores + 6 de lib/cancelamento-cobranca.test.ts)
+npm run build      saída 0 — Compiled successfully

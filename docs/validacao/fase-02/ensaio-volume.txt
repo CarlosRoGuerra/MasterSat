@@ -1,0 +1,6 @@
+upgrade até d9e4f1a7b2c5: (0, 1.9566187619930133)
+semeadura: 574992 cobranças, 20833 contratos em 13.5s
+upgrade e5c2a9d71f04 (preflight + colunas + backfill + índices + CHECKs): exit=0 37.5s []
+backfill: competencia=574992 substituted_by_id=49999
+downgrade para d9e4f1a7b2c5: exit=0 1.6s []
+novo upgrade: exit=0 24.6s []

@@ -1,0 +1,65 @@
+{
+ "FIN-04 rotulos_equivalentes": {
+  "status": [
+   200,
+   200
+  ],
+  "mensalidades_de_setembro_gravadas": 2
+ },
+ "FIN-01 cancelada_e_carne": {
+  "status_carne": 409,
+  "mensagem": "Este contrato já tem cobrança de mensalidade lançada para: 09/2099. Cancele essas cobranças ou ajuste o primeiro vencimento antes de gerar o carnê."
+ },
+ "FIN-01 consolidado_removido": {
+  "delete_sem_confirmar": 200,
+  "delete_revertendo": null,
+  "already_generated": [
+   true,
+   true
+  ],
+  "cobrancas_em_aberto_depois": 0
+ },
+ "FIN-11 parcela_negativa": {
+  "status_criacao": 200,
+  "parcelas_geradas": [
+   "0.01",
+   "0.01",
+   "0.01",
+   "-0.01"
+  ]
+ },
+ "FIN-12 corrida_entre_meses": {
+  "status": [
+   200,
+   200
+  ],
+  "parcelas_1_gravadas": 2
+ },
+ "DB-01 drift_alembic": {
+  "exit_code": 255,
+  "remove_index_propostos": 12,
+  "saida": "ERROR [alembic.util.messaging] New upgrade operations detected: [('remove_index', Index('uq_billings_contract_period_recurring', Column('contract_id', INTEGER(), table=<billings>), Column('period_label', VARCHAR(length=20), table=<billings>), unique=True)), ('remove_index', Index('ix_clients_name_tr"
+ },
+ "DB-04 ciclo_down_up": [
+  {
+   "comando": "upgrade head",
+   "exit_code": 0,
+   "erro": null
+  },
+  {
+   "comando": "downgrade base",
+   "exit_code": 0,
+   "erro": null
+  },
+  {
+   "comando": "upgrade head",
+   "exit_code": 1,
+   "erro": "sqlalchemy.exc.ProgrammingError: (psycopg.errors.DuplicateObject) type \"clientstatus\" already exists"
+  }
+ ],
+ "DB-03 carimbo_legado_parcial": {
+  "resultado": "exceção: ProgrammingError: (psycopg.errors.UndefinedColumn) column \"period_label\" does not exist",
+  "alembic_version_gravada": "96f61a589162",
+  "leitura": "carimbou o banco parcial e só quebrou numa migration adiante"
+ }
+}
