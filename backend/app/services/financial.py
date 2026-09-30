@@ -9,7 +9,6 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.timezone import hoje
-from app.models.ailos_boleto import AilosBoleto
 from app.models.billing import RECURRING_BILLING_TYPES, Billing
 from app.models.billing_change_log import BillingChangeLog
 from app.models.billing_charge_item import BillingChargeItem
@@ -19,6 +18,7 @@ from app.models.contract import Contract
 from app.models.enums import BillingStatus
 from app.models.plan import Plan
 from app.models.service_product import ServiceProduct
+from app.services import titulo_bancario
 from app.services.competencia import competencia_do_rotulo
 
 
@@ -324,6 +324,15 @@ def generate_receipt_number(billing_id: int) -> str:
     return f'RCB-{now}-{billing_id:05d}'
 
 
+def _regravavel(db: Session, billing: Billing) -> bool:
+    """``force`` só regrava cobrança em aberto e sem título no banco: valor
+    novo sobre boleto registrado deixaria banco e sistema divergentes."""
+    if billing.status not in (BillingStatus.PENDING, BillingStatus.OVERDUE):
+        return False
+    titulo = titulo_bancario.titulos_bancarios(db, [billing.id])[billing.id]
+    return titulo.estado == titulo_bancario.SEM_TITULO
+
+
 def _quantize_amount(value: float | Decimal) -> Decimal:
     return Decimal(str(value)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
@@ -432,6 +441,8 @@ def generate_monthly_billings(db: Session, contract: Contract, cycles: int = 12,
         )
         notes = f'Cobrança recorrente automática do plano {plan.name}'
         if existing and not force:
+            continue
+        if existing and not _regravavel(db, existing):
             continue
         if existing and force:
             existing.amount = plan.price
@@ -572,6 +583,11 @@ def generate_item_billings(
             )
             .first()
         ) if force else None
+        if existing and not _regravavel(db, existing):
+            # Paga ou com título no banco: não se regrava, mas a parcela
+            # continua ocupada (não gera outra por cima).
+            created.append(existing)
+            continue
         if existing:
             existing.amount = amount
             existing.due_date = due_date
@@ -645,12 +661,18 @@ def marcar_billing_pago(
         billing = locked[0]
         if billing.status == BillingStatus.PAID:
             return billing
+    if billing.status == BillingStatus.CANCELED:
+        # Cancelada entre a leitura e a trava: pagamento de cobrança cancelada
+        # é pendência de conciliação, nunca quitação silenciosa.
+        raise ValueError(f'Cobrança #{billing.id} está cancelada e não pode ser quitada.')
 
     billing.status = BillingStatus.PAID
     billing.payment_date = payment_date
     billing.payment_method = payment_method
     if notes:
-        billing.notes = notes
+        # Acrescenta: sobrescrever apagava o histórico de cancelamento,
+        # negociação e liberação registrado nas notas.
+        billing.notes = f'{billing.notes} | {notes}' if billing.notes else notes
     billing.paid_amount = paid_amount if paid_amount else billing.amount
     if not billing.receipt_number:
         billing.receipt_number = generate_receipt_number(billing.id)
@@ -798,9 +820,6 @@ def refresh_charge_items_for_billing(
         db.flush()
 
 
-_AILOS_REGISTRATION_IN_PROGRESS = ('REGISTRANDO', 'PROCESSANDO')
-
-
 def cancel_open_billings_for_contract(
     db: Session,
     contract_id: int,
@@ -822,31 +841,28 @@ def cancel_open_billings_for_contract(
     if not ids:
         return []
     billings = lock_billings_for_update(db, ids)
-    inflight = [
-        row[0] for row in db.query(AilosBoleto.billing_id).filter(
-            AilosBoleto.billing_id.in_(ids),
-            AilosBoleto.status_ailos.in_(_AILOS_REGISTRATION_IN_PROGRESS),
-        ).all()
-    ]
-    if inflight:
+    try:
+        # Excluir o contrato é a confirmação: título registrado é cancelado e
+        # fica com baixa pendente. Registro em andamento ou com desfecho
+        # desconhecido bloqueia — não dá para saber se há título no banco.
+        titulos = titulo_bancario.exigir(db, titulo_bancario.CANCELAR, ids, confirmado=True)
+    except titulo_bancario.PoliticaBancariaError as exc:
         raise ValueError(
-            f'Cobranças {inflight} aguardando registro na Ailos — tente excluir o contrato novamente em instantes.'
-        )
+            f'Cobranças {exc.billing_ids} do contrato: {exc.message} Tente excluir o contrato depois.'
+        ) from exc
     lock_charge_items_for_billings(db, billings)
-    boletos_ativos: list[dict] = []
     for billing in billings:
         billing.status = BillingStatus.CANCELED
         marker = f'Cancelada automaticamente: {reason}'
-        ab = db.query(AilosBoleto).filter_by(billing_id=billing.id).first()
-        if ab and ab.linha_digitavel and ab.codigo_barras:
-            boletos_ativos.append({'billing_id': billing.id, 'nosso_numero': ab.nosso_numero})
+        titulo = titulos.get(billing.id)
+        if titulo is not None and titulo.ativo_no_banco:
             marker += (
-                f' | [ATENÇÃO] Boleto Ailos (nosso número {ab.nosso_numero or "—"}) '
+                f' | [ATENÇÃO] Boleto Ailos (nosso número {titulo.nosso_numero or "—"}) '
                 'segue ativo no banco — baixa manual pendente.'
             )
         billing.notes = f'{billing.notes} | {marker}' if billing.notes else marker
         refresh_charge_items_for_billing(db, billing, commit=False)
-    return boletos_ativos
+    return titulo_bancario.marcar_baixa_pendente(db, ids, f'cancelada: {reason}')
 
 
 def transfer_charge_items_to_billing(
@@ -958,20 +974,15 @@ def restore_substituted_originals(
         billing for billing in lock_billings_for_update(db, [b.id for b in candidates])
         if not billing.is_deleted and billing.substituted_by_id == substitute.id
     ]
-    registered = [
-        row[0] for row in db.query(AilosBoleto.billing_id).filter(
-            AilosBoleto.billing_id.in_([b.id for b in originals]),
-            AilosBoleto.linha_digitavel.isnot(None),
-            AilosBoleto.codigo_barras.isnot(None),
-        ).order_by(AilosBoleto.billing_id.asc()).all()
-    ]
-    if registered:
+    try:
+        titulo_bancario.exigir(db, titulo_bancario.REABRIR, [b.id for b in originals])
+    except titulo_bancario.PoliticaBancariaError as exc:
         raise BillingSubstitutionError(
             'original_com_boleto_registrado',
-            'Cobranças originais com boleto registrado na Ailos não podem ser reabertas '
-            'automaticamente. Resolva a situação bancária delas antes de reverter.',
-            registered,
-        )
+            'Cobranças originais com boleto registrado (ou em registro) na Ailos não podem ser '
+            'reabertas automaticamente. Resolva a situação bancária delas antes de reverter.',
+            exc.billing_ids,
+        ) from exc
     lock_charge_items_for_billings(db, originals)
     today = hoje()
     for billing in originals:
@@ -1052,6 +1063,10 @@ def release_billing_competencia(
             'coberto por ela. Reverta a substituição em vez de liberar a competência.',
             [billing.substituted_by_id],
         )
+    # Título ainda pagável no banco (ou desfecho desconhecido) não libera o
+    # mês: a nova mensalidade seria uma segunda cobrança do mesmo período
+    # enquanto o boleto antigo continua valendo (FIN-02).
+    titulo_bancario.exigir(db, titulo_bancario.LIBERAR_COMPETENCIA, [billing.id])
     db.add(BillingChangeLog(
         billing_id=billing.id,
         changed_by_user_id=user_id,

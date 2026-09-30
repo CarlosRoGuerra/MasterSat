@@ -276,6 +276,20 @@ def boleto_registrado(billing_id: int, db: Session) -> AilosBoleto | None:
     return ab if (ab and ab.linha_digitavel and ab.codigo_barras) else None
 
 
+def _recusar_titulo_baixado(ailos_boleto: AilosBoleto) -> None:
+    """Baixa pendente/confirmada (Fase 03): a cobrança deixou de valer ou o
+    título foi baixado — não sai PDF nem e-mail para pagamento."""
+    if ailos_boleto.baixa_status is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'code': 'boleto_ailos_baixado',
+                'message': 'Este boleto foi baixado (ou está com baixa pendente) no banco e não deve '
+                           'ser enviado para pagamento.',
+            },
+        )
+
+
 def _placa_do_billing(b: Billing, db: Session) -> str:
     if b.vehicle_id:
         veiculo = db.get(Vehicle, b.vehicle_id)
@@ -361,6 +375,7 @@ def get_boleto_pdf(
             detail='Esta cobrança ainda não tem boleto emitido na Ailos, então não há '
                    'PDF para baixar. Gere o boleto na aba Ailos do Financeiro.',
         )
+    _recusar_titulo_baixado(ailos_boleto)
     c = _pagador_do_billing(b, db)
     pdf_bytes, filename = _montar_pdf_boleto(b, c, db, ailos_boleto)
     return Response(
@@ -397,6 +412,7 @@ def enviar_boleto_email(
             detail='Esta cobrança ainda não tem boleto emitido na Ailos, então não pode ser enviada. '
                    'Gere o boleto na aba Ailos do Financeiro.',
         )
+    _recusar_titulo_baixado(ailos_boleto)
     c = _pagador_do_billing(b, db)
     if not c.email:
         raise HTTPException(status_code=400, detail='Cliente sem e-mail cadastrado.')
@@ -475,10 +491,12 @@ def get_carne_pdf(
     # A ordem das parcelas é a ordem em que os billing_ids foram enviados.
     for billing_id in (lote.billing_ids or []):
         ab = boleto_registrado(billing_id, db)
-        if ab is None:
+        if ab is None or ab.baixa_status is not None:
+            # Sem registro, ou parcela cancelada/recebida por fora/baixada:
+            # não vai para o carnê que o cliente paga (Fase 03).
             continue
         b = db.get(Billing, billing_id)
-        if not b or b.is_deleted:
+        if not b or b.is_deleted or b.status == BillingStatus.CANCELED:
             continue
         c = ailos_boletos.resolver_pagador(db, b, db.get(Client, b.client_id))
         if not c:
@@ -531,6 +549,10 @@ def get_boleto_publico(
     # tenha o link de um título que não existe no banco.
     ailos_boleto = boleto_registrado(billing_id, db)
     if ailos_boleto is None:
+        raise HTTPException(status_code=404, detail="Boleto não encontrado")
+    # Baixa pendente/confirmada = a cobrança deixou de valer (recebida por
+    # fora, cancelada) ou o título foi baixado: não entregar para pagamento.
+    if ailos_boleto.baixa_status is not None:
         raise HTTPException(status_code=404, detail="Boleto não encontrado")
     c = _pagador_do_billing(b, db)
     pdf_bytes, filename = _montar_pdf_boleto(b, c, db, ailos_boleto)

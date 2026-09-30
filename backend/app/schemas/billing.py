@@ -1,4 +1,6 @@
 from datetime import date, datetime
+from typing import Literal
+
 from pydantic import BaseModel, Field, model_validator
 
 from app.models.billing import BILLING_TYPES, RECURRING_BILLING_TYPES
@@ -106,6 +108,45 @@ class BillingReceive(BaseModel):
     payment_date: date
     payment_method: str
     notes: str | None = None
+    # Obrigatório quando paid_amount difere do valor do título (FIN-06):
+    #   menor → 'desconto' | 'parcial' (saldo vira nova cobrança)
+    #   maior → 'encargos' | 'credito'
+    # Sem isto, recebimento divergente é recusado (409 recebimento_divergente).
+    tratamento_diferenca: Literal['desconto', 'parcial', 'encargos', 'credito'] | None = None
+    justificativa_diferenca: str | None = Field(default=None, max_length=500)
+    # Vencimento da cobrança do saldo (tratamento 'parcial').
+    saldo_vencimento: date | None = None
+
+
+class BillingRefund(BaseModel):
+    """Estorno de recebimento manual."""
+
+    justificativa: str = Field(min_length=3, max_length=500)
+
+
+class BillingAdjustmentOut(BaseModel):
+    id: int
+    billing_id: int
+    kind: str
+    amount: float
+    justification: str
+    created_by_user_id: int | None = None
+    target_billing_id: int | None = None
+    details: dict | None = None
+    reversed_at: datetime | None = None
+    created_at: datetime | None = None
+
+    model_config = {'from_attributes': True}
+
+
+class TituloBancarioOut(BaseModel):
+    """Situação do título no banco (app/services/titulo_bancario.py)."""
+
+    estado: str
+    canal: str | None = None
+    nosso_numero: str | None = None
+    baixa_status: str | None = None
+    pendencia: str | None = None
 
 
 class BillingCancel(BaseModel):
@@ -153,6 +194,12 @@ class BillingOut(BillingBase):
     competencia_liberada: bool = False
     # Cobrança que assumiu esta dívida (boleto único ou negociação).
     substituted_by_id: int | None = None
+    # Situação do título no banco; None = nunca foi ao banco (Fase 03).
+    titulo_bancario: TituloBancarioOut | None = None
+    # Cadastros ligados à cobrança que foram removidos depois (FIN-10):
+    # 'cliente', 'responsavel_financeiro', 'contrato', 'plano', 'veiculo',
+    # 'rastreador'. A cobrança continua visível como histórico.
+    relacoes_removidas: list[str] = []
 
     model_config = {'from_attributes': True}
 
