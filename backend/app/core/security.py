@@ -61,8 +61,19 @@ def token_revogado(payload: dict[str, Any], tokens_valid_from: datetime | None) 
     return emitido_em < corte
 
 
-def create_access_token(subject: str, name: str | None = None, role: str | None = None) -> str:
+def create_access_token(
+    subject: str,
+    name: str | None = None,
+    role: str | None = None,
+    session_id: str | None = None,
+) -> str:
+    """Access token (30 min). 'sid' é a família do refresh token do mesmo
+    login: get_current_user recusa o access cuja sessão foi revogada (logout,
+    reuso detectado, troca de senha). Sem isto o logout só derrubava o
+    refresh e o access copiado seguia valendo até expirar (SEC-06)."""
     extra: dict[str, str] = {}
+    if session_id:
+        extra['sid'] = session_id
     if name:
         extra['name'] = name
     if role:

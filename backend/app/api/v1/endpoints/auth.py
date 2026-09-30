@@ -209,11 +209,13 @@ def login(request: Request, response: Response, payload: LoginRequest, db: Sessi
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='O acesso de clientes foi desativado. Utilize o painel administrativo.')
     role_value = user.role.value if hasattr(user.role, 'value') else str(user.role)
 
-    refresh_token, _jti, _family = _issue_refresh_token(db, user.id)
+    refresh_token, _jti, family = _issue_refresh_token(db, user.id)
     db.commit()
     _set_refresh_cookie(response, refresh_token)
 
-    return TokenResponse(access_token=create_access_token(str(user.id), name=user.name, role=role_value))
+    return TokenResponse(access_token=create_access_token(
+        str(user.id), name=user.name, role=role_value, session_id=family,
+    ))
 
 
 @router.post('/register-client', response_model=RegisterClientResponse)
@@ -231,28 +233,49 @@ def refresh(request: Request, response: Response, db: Session = Depends(get_db))
     if not token:
         raise HTTPException(status_code=401, detail='Sessão expirada. Faça login novamente.')
 
-    user, new_refresh_token, _family = _rotate_refresh_token(db, token)
+    user, new_refresh_token, family = _rotate_refresh_token(db, token)
     _set_refresh_cookie(response, new_refresh_token)
 
     role_value = user.role.value if hasattr(user.role, 'value') else str(user.role)
-    return TokenResponse(access_token=create_access_token(str(user.id), name=user.name, role=role_value))
+    return TokenResponse(access_token=create_access_token(
+        str(user.id), name=user.name, role=role_value, session_id=family,
+    ))
+
+
+def _sessao_do_token(token: str | None, tipo: str) -> str | None:
+    """Família (sessão) de um refresh ('family') ou access ('sid') assinado.
+    Token inválido/expirado → None: não há o que revogar."""
+    if not token:
+        return None
+    try:
+        decoded = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+    except JWTError:
+        return None
+    if decoded.get('type') != tipo:
+        return None
+    return decoded.get('family' if tipo == 'refresh' else 'sid')
 
 
 @router.post('/logout')
 def logout(request: Request, response: Response, db: Session = Depends(get_db)):
-    """Revoga a família do refresh token apresentado (server-side) e limpa o
-    cookie. Sem isto, 'logout' era só um efeito visual do front — um cookie
-    vazado antes do clique continuava válido normalmente até expirar sozinho."""
-    token = request.cookies.get(REFRESH_COOKIE_NAME)
-    if token:
-        try:
-            decoded = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
-            family = decoded.get('family')
-            if family:
-                _revoke_family(db, family)
-                db.commit()
-        except JWTError:
-            pass  # cookie inválido/expirado — nada pra revogar, só limpa
+    """Encerra ESTA sessão (SEC-06): revoga a família do refresh token e,
+    com ela, todo access token emitido para a mesma sessão ('sid') — que
+    passa a levar 401 na hora, não só quando expirar. Outros dispositivos
+    do mesmo usuário continuam logados; para derrubar todos, troque a senha.
+
+    A sessão vem do cookie de refresh e, na falta dele, do Bearer enviado.
+    Sempre 200: logout não revela se o token existia."""
+    families = {
+        _sessao_do_token(request.cookies.get(REFRESH_COOKIE_NAME), 'refresh'),
+    }
+    auth_header = request.headers.get('authorization') or ''
+    if auth_header.lower().startswith('bearer '):
+        families.add(_sessao_do_token(auth_header[7:].strip(), 'access'))
+    families.discard(None)
+    for family in families:
+        _revoke_family(db, family)
+    if families:
+        db.commit()
     _clear_refresh_cookie(response)
     return {'message': 'Sessão encerrada.'}
 
