@@ -86,6 +86,9 @@ class Settings(BaseSettings):
     ailos_client_secret: str = ''
     ailos_developer_key: str = ''
     ailos_callback_url: str = ''
+    # Validade do 'state' do fluxo de autorização do cooperado (FIN-09): o
+    # callback só aceita state emitido há menos que isto, e uma única vez.
+    ailos_state_ttl_minutes: int = 15
     ailos_timeout_seconds: int = 30
     ailos_numero_convenio: str = '102004'
     ailos_default_carteira: int = 1

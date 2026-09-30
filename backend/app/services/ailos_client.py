@@ -41,6 +41,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
 import requests
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -66,6 +67,9 @@ _COOPERADO_TOKEN_LIFETIME = timedelta(minutes=30)
 # (o keepalive em background renova a cada 20 min, então normalmente nem chega
 # perto). Evita o token morrer entre uma operação e outra.
 _COOPERADO_REFRESH_MARGIN = timedelta(minutes=10)
+# Renovação que outro processo/requisição acabou de fazer (dentro desta
+# janela) não é repetida: quem esperava o lock reaproveita o token novo.
+_COOPERADO_REFRESH_DEDUP = timedelta(seconds=60)
 _MAX_ATTEMPTS = 3
 
 # Código de falha do WSO2 para access token expirado/inválido (Cartilha p.18).
@@ -402,6 +406,21 @@ def _obter_id_cooperado(db: Session, state: str) -> str:
         return resp.text.strip().strip('"')
 
 
+def _aware(value: datetime | None) -> datetime | None:
+    if value is not None and value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def _gravar_state(integration: AilosIntegration, state: str) -> None:
+    """Novo state de autorização, com prazo (FIN-09). Substitui o anterior:
+    só o state mais recente é aceito no callback."""
+    integration.state = state
+    integration.state_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ailos_state_ttl_minutes)
+    integration.status = 'pending'
+    integration.last_error = None
+
+
 def build_cooperado_login_url(db: Session) -> tuple[str, str]:
     """
     Inicia o fluxo de autorização do cooperado: obtém o id do cooperado na
@@ -418,9 +437,7 @@ def build_cooperado_login_url(db: Session) -> tuple[str, str]:
     login_url = f'{settings.ailos_apim_base_url}{_PATH_COOPERADO_AUTORIZAR}?id={quote(cooperado_id, safe="")}'
 
     integration = _get_or_create_integration(db)
-    integration.state = state
-    integration.status = 'pending'
-    integration.last_error = None
+    _gravar_state(integration, state)
     db.commit()
 
     return login_url, state
@@ -453,9 +470,7 @@ def autorizar_cooperado_directo(
     cooperado_id = _obter_id_cooperado(db, state)
 
     integration = _get_or_create_integration(db)
-    integration.state = state
-    integration.status = 'pending'
-    integration.last_error = None
+    _gravar_state(integration, state)
     db.commit()
 
     client_token = get_valid_client_token(db)
@@ -485,14 +500,40 @@ def autorizar_cooperado_directo(
 
 
 def handle_cooperado_callback(db: Session, state: str, code: str) -> AilosIntegration:
-    """Valida o ``state`` recebido no callback e persiste o token do cooperado."""
+    """Valida o ``state`` recebido no callback e persiste o token do cooperado.
+
+    FIN-09: o state vale AILOS_STATE_TTL_MINUTES e uma única vez. O consumo é
+    um UPDATE condicional (state ainda igual ao recebido): dois callbacks
+    simultâneos com o mesmo state se serializam na linha e só um grava o
+    token. State sem prazo (gravado antes desta versão) conta como expirado.
+    O protocolo com a Ailos não muda: ``code`` continua sendo o token do
+    cooperado entregue no callback (não há code exchange/PKCE no contrato).
+    """
+    invalido = AilosError('state inválido ou expirado')
+    if not state:
+        raise invalido
     integration = db.query(AilosIntegration).filter(
         AilosIntegration.state == state,
         AilosIntegration.state.isnot(None),
     ).first()
     if integration is None:
-        raise AilosError('state inválido ou expirado')
+        raise invalido
 
+    consumido = db.execute(
+        update(AilosIntegration)
+        .where(AilosIntegration.id == integration.id, AilosIntegration.state == state)
+        .values(state=None, state_expires_at=None)
+        .execution_options(synchronize_session=False)
+    ).rowcount
+    expira_em = _aware(integration.state_expires_at)
+    if consumido != 1:
+        db.rollback()
+        raise invalido
+    if expira_em is None or expira_em <= datetime.now(timezone.utc):
+        db.commit()  # state vencido é descartado, não fica reutilizável
+        raise invalido
+
+    db.refresh(integration)
     integration.cooperado_token_encrypted = encrypt_token(code)
     integration.cooperado_token_expires_at = datetime.now(timezone.utc) + _COOPERADO_TOKEN_LIFETIME
     integration.status = 'authorized'
@@ -553,12 +594,41 @@ def get_valid_cooperado_token(db: Session) -> str:
 
 
 def refresh_cooperado_token(db: Session) -> str:
-    """Renova o token de cooperado via GET .../cooperado/token/refresh?code=<atual>."""
+    """Renova o token de cooperado via GET .../cooperado/token/refresh?code=<atual>.
+
+    FIN-09: requisições e o keepalive podiam renovar ao mesmo tempo, com o
+    mesmo token atual — duas chamadas à Ailos e o último a gravar vencia
+    (sem saber se a Ailos invalida o token anterior). Agora a linha da
+    integração fica travada (SELECT ... FOR UPDATE) do início ao fim da
+    renovação, limitada por AILOS_TIMEOUT_SECONDS; quem estava esperando
+    revalida e, se a renovação acabou de acontecer, usa o token novo sem
+    chamar a Ailos de novo.
+    """
     integration = db.query(AilosIntegration).order_by(AilosIntegration.id.asc()).first()
     if integration is None or not integration.cooperado_token_encrypted:
         raise AilosError('Cooperado Ailos ainda não autorizado')
 
+    # Pode fazer commit (renova o token de aplicação): antes do lock.
     client_token = get_valid_client_token(db)
+
+    integration = (
+        db.query(AilosIntegration)
+        .filter(AilosIntegration.id == integration.id)
+        .with_for_update()
+        .populate_existing()
+        .one()
+    )
+    ultimo = _aware(integration.last_refresh_at)
+    if (
+        integration.status == 'authorized'
+        and integration.cooperado_token_encrypted
+        and ultimo is not None
+        and datetime.now(timezone.utc) - ultimo < _COOPERADO_REFRESH_DEDUP
+    ):
+        token_atual = decrypt_token(integration.cooperado_token_encrypted)
+        db.commit()  # libera o lock
+        return token_atual
+
     current_token = decrypt_token(integration.cooperado_token_encrypted)
 
     headers = {
