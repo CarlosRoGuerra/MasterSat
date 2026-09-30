@@ -12,8 +12,8 @@ class RefreshToken(Base, TimestampMixin):
 
     'family' agrupa toda a cadeia de rotações de um mesmo login: se um jti já
     substituído (replaced_by_jti preenchido) for apresentado de novo, é reuso
-    de um token roubado — a família inteira é revogada (ver token_revogado_ou_reuso
-    em security.py). created_at (via TimestampMixin) é o instante de emissão.
+    de um token roubado — a família inteira é revogada (ver _rotate_refresh_token
+    em endpoints/auth.py). created_at (via TimestampMixin) é o instante de emissão.
     """
 
     __tablename__ = 'refresh_tokens'
@@ -25,3 +25,7 @@ class RefreshToken(Base, TimestampMixin):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     replaced_by_jti: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # Instante da rotação (quando replaced_by_jti foi preenchido). Separa a
+    # disputa legítima entre abas — o mesmo cookie chegando duas vezes em
+    # poucos segundos — do reuso de um token antigo, que revoga a família.
+    rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
