@@ -24,6 +24,7 @@ from datetime import date, datetime, time, timezone
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
+from app.core.permissions import Capability, roles_with
 from app.models.audit_log import AuditLog
 from app.models.billing import Billing
 from app.models.client import Client
@@ -39,9 +40,11 @@ from app.models.vehicle import Vehicle
 from app.schemas.client_timeline import TimelineCategory, TimelineEventOut, TimelineLinkOut
 from app.schemas.pagination import Page
 
-CONTRACT_ROLES = (UserRole.ADMIN, UserRole.FINANCIAL)
-FINANCIAL_ROLES = (UserRole.ADMIN, UserRole.FINANCIAL)
-AUDIT_ROLES = (UserRole.ADMIN,)
+# Derivados de core/permissions.py — o PDF da timeline (endpoints/clients.py)
+# usa a mesma capacidade, então JSON e PDF não divergem mais (SEC-01).
+CONTRACT_ROLES = roles_with(Capability.FINANCIAL_READ)
+FINANCIAL_ROLES = roles_with(Capability.FINANCIAL_READ)
+AUDIT_ROLES = roles_with(Capability.AUDIT_READ)
 
 # Teto de segurança por categoria — mesmo espírito do `.limit(50)` que
 # `client_timeline_pdf` já usa e do comentário em schemas/pagination.py

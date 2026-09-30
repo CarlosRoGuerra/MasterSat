@@ -5,12 +5,14 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_roles
+from app.core.permissions import Capability, has_capability, roles_with
 from app.db.session import get_db
 from app.models.billing import Billing
 from app.models.client import Client
-from app.models.enums import BillingStatus, ClientStatus, OrderStatus, TrackerStatus, UserRole
+from app.models.enums import BillingStatus, ClientStatus, OrderStatus, TrackerStatus
 from app.models.service_order import ServiceOrder
 from app.models.tracker import Tracker
+from app.models.user import User
 from app.models.vehicle import Vehicle
 
 router = APIRouter()
@@ -19,12 +21,17 @@ router = APIRouter()
 @router.get('/')
 def dashboard(
     db: Session = Depends(get_db),
-    _: object = Depends(require_roles(UserRole.ADMIN, UserRole.OPERATIONAL, UserRole.FINANCIAL)),
+    current_user: User = Depends(require_roles(*roles_with(Capability.REGISTRY_READ))),
 ):
     today = date.today()
     first_of_month = today.replace(day=1)
     first_of_prev = date(today.year if today.month > 1 else today.year - 1,
                          today.month - 1 if today.month > 1 else 12, 1)
+
+    # Perfil sem FINANCIAL_READ (operacional): 'finance' volta null e
+    # 'upcoming_billings' vazio — as chaves continuam no payload, só sem
+    # valores/títulos. Mesmo corte de /billings e /reports (SEC-01).
+    ver_financeiro = has_capability(current_user.role, Capability.FINANCIAL_READ)
 
     # ── Finance deltas (current vs previous calendar month) ──────────────
     def _received(date_from: date, date_to: date) -> float:
@@ -38,10 +45,19 @@ def dashboard(
             )
         ) or 0)
 
-    received_this = _received(first_of_month, today + timedelta(days=1))
-    received_prev = _received(first_of_prev, first_of_month)
-    delta_received = round(received_this - received_prev, 2)
-    delta_pct = round((delta_received / received_prev * 100) if received_prev else 0, 1)
+    def _finance() -> dict:
+        received_this = _received(first_of_month, today + timedelta(days=1))
+        received_prev = _received(first_of_prev, first_of_month)
+        delta_received = round(received_this - received_prev, 2)
+        delta_pct = round((delta_received / received_prev * 100) if received_prev else 0, 1)
+        return {
+            'pending_count':    db.scalar(select(func.count()).select_from(Billing).where(Billing.status == BillingStatus.PENDING, Billing.is_deleted.is_(False))) or 0,
+            'overdue_count':    db.scalar(select(func.count()).select_from(Billing).where(Billing.status == BillingStatus.OVERDUE, Billing.is_deleted.is_(False))) or 0,
+            'received_month':   received_this,
+            'received_prev_month': received_prev,
+            'delta_received':   delta_received,
+            'delta_pct':        delta_pct,
+        }
 
     # ── New clients this month vs previous ───────────────────────────────
     def _new_clients(date_from: date, date_to: date) -> int:
@@ -56,7 +72,7 @@ def dashboard(
     new_prev = _new_clients(first_of_prev, first_of_month)
 
     # ── Upcoming billings (next 7 days, max 5) ───────────────────────────
-    upcoming_rows = db.execute(
+    upcoming_rows = [] if not ver_financeiro else db.execute(
         select(Billing.id, Billing.due_date, Billing.amount, Client.name.label('client_name'))
         .join(
             Client,
@@ -93,14 +109,7 @@ def dashboard(
             'in_progress':db.scalar(select(func.count()).select_from(ServiceOrder).where(ServiceOrder.status == OrderStatus.IN_PROGRESS, ServiceOrder.is_deleted.is_(False))) or 0,
             'completed':  db.scalar(select(func.count()).select_from(ServiceOrder).where(ServiceOrder.status == OrderStatus.COMPLETED,   ServiceOrder.is_deleted.is_(False))) or 0,
         },
-        'finance': {
-            'pending_count':    db.scalar(select(func.count()).select_from(Billing).where(Billing.status == BillingStatus.PENDING, Billing.is_deleted.is_(False))) or 0,
-            'overdue_count':    db.scalar(select(func.count()).select_from(Billing).where(Billing.status == BillingStatus.OVERDUE, Billing.is_deleted.is_(False))) or 0,
-            'received_month':   received_this,
-            'received_prev_month': received_prev,
-            'delta_received':   delta_received,
-            'delta_pct':        delta_pct,
-        },
+        'finance': _finance() if ver_financeiro else None,
         'upcoming_billings': [
             {
                 'id': r.id,
