@@ -1,0 +1,134 @@
+{
+ "FIN-02 excluir_registrada": {
+  "delete": 409,
+  "delete_code": "boleto_ailos_registrado",
+  "nova_mensalidade_mesmo_mes": 409,
+  "obrigacoes_efetivas_no_mes": 1,
+  "boleto_original_ativo": true
+ },
+ "FIN-02 cancelar_liberar_registrada": {
+  "cancel_com_liberacao": 409,
+  "cancel_code": "baixa_bancaria_pendente",
+  "cancel_sem_liberacao": 200,
+  "liberar_depois": 409,
+  "liberar_code": "baixa_bancaria_pendente",
+  "competencia_liberada_com_boleto_ativo": false
+ },
+ "FIN-03 timeout_apos_aceite": {
+  "gerar": 502,
+  "estado_local": "DESFECHO_DESCONHECIDO",
+  "put_valor": 409,
+  "valor_local_depois": "100.00",
+  "cancelar": 409
+ },
+ "FIN-03 log_falha_apos_sucesso": {
+  "gerar": 200,
+  "estado_local": "REGISTRADO"
+ },
+ "FIN-05 carteira_1001": {
+  "execucoes": [
+   {
+    "consultados": 300,
+    "baixados": 2,
+    "erros": 0
+   },
+   {
+    "consultados": 300,
+    "baixados": 296,
+    "erros": 0
+   },
+   {
+    "consultados": 300,
+    "baixados": 300,
+    "erros": 0
+   },
+   {
+    "consultados": 300,
+    "baixados": 106,
+    "erros": 0
+   }
+  ],
+  "titulos_distintos_consultados": 1005,
+  "titulo_301_consultado": true,
+  "baixados_total": 701,
+  "esperado_baixar": 701
+ },
+ "FIN-07 cnab_selecao_invalida": {
+  "status": 409,
+  "code": "canal_cnab_indisponivel",
+  "segmentos_p_no_arquivo": null,
+  "com_canal_habilitado_para_homologacao": {
+   "status": 422,
+   "code": "selecao_invalida"
+  }
+ },
+ "FIN-06 pagamento_parcial": {
+  "receber_1_de_100": 409,
+  "code": "recebimento_divergente",
+  "status": "pendente",
+  "paid_amount": "None"
+ },
+ "FIN-08 contas_a_pagar": {
+  "pagar_cancelada": 409,
+  "editar_valor_paga": 409,
+  "excluir_paga": 409,
+  "a_status": "cancelada",
+  "b_amount": "500.00",
+  "b_removida": false
+ },
+ "FIN-10 contrato_removido": {
+  "excluir_contrato": 200,
+  "lista_antes": 1,
+  "lista_depois": 1,
+  "detalhe": 200,
+  "recibo": 200
+ },
+ "PROD-01 canceladas_e_bases": {
+  "unificar": 200,
+  "rota_antiga_08_2031": {
+   "label": "08/2031",
+   "total_received": 0.0,
+   "total_billed": 300.0,
+   "total_outstanding": 200.0,
+   "total_received_by_due": 100.0
+  },
+  "rota_antiga_09_2031": {
+   "label": "09/2031",
+   "total_received": 100.0,
+   "total_billed": 0.0,
+   "total_outstanding": 0.0,
+   "total_received_by_due": 0.0
+  },
+  "rota_relatorios_meses": [
+   {
+    "label": "08/2031",
+    "total_emitido": 300.0,
+    "total_recebido": 100.0,
+    "total_recebido_caixa": 0.0
+   },
+   {
+    "label": "09/2031",
+    "total_emitido": 0.0,
+    "total_recebido": 0.0,
+    "total_recebido_caixa": 100.0
+   }
+  ],
+  "extrato_total_cobrado": 300.0,
+  "esperado_emitido_sem_canceladas": 300.0
+ },
+ "PROD-02 dashboard": {
+  "clientes": {
+   "active": 6,
+   "inactive": 0,
+   "delinquent": 0,
+   "suspended": 5,
+   "total": 11
+  },
+  "saudaveis_pct": 55,
+  "proximos_vencimentos_ids": [
+   1020
+  ],
+  "titulo_de_3_dias_aparece": true,
+  "vencidas_separadas": true
+ }
+}

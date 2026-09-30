@@ -93,6 +93,36 @@ POST `/billings` confere contrato, item, veículo e rastreador contra o cliente
 atendido. **Só aplicação** — não há FK composta (decisão consciente: dados
 históricos podem apontar para cadastros removidos ou transferidos).
 
+### I7 — Nenhum título ativo no banco perde a obrigação local (Fase 03)
+
+- Toda escrita que muda valor, vencimento, situação ou existência de uma
+  cobrança passa por `titulo_bancario.exigir()` — tabela única por operação
+  e estado do título (sem título, em registro, desfecho desconhecido,
+  registrado, baixado, remessa CNAB).
+- Cobrança com histórico bancário não é removida; cancelada/recebida por fora
+  com título ativo fica com **baixa pendente** (coluna, não nota) e continua
+  na conciliação; liberar a competência exige baixa confirmada.
+- Detalhes e códigos 409: [runbook-desfecho-desconhecido.md](runbook-desfecho-desconhecido.md).
+
+### I8 — Resultado bancário incerto não libera a cobrança (Fase 03)
+
+- Timeout depois do envio, 5xx, "já cadastrado" sem dados, falha local depois
+  do aceite e reserva sem resposta há 30 min → `DESFECHO_DESCONHECIDO`: nada
+  muda nem é emitido de novo até a consulta pelo número do documento resolver.
+- `ERRO_REGISTRO` (libera) só para rejeição definitiva ou pedido que não saiu.
+
+### I9 — Dinheiro conserva valor (Fase 03)
+
+- Cobrança paga: `paid_amount = amount − desconto − saldo_transferido +
+  encargos + credito` (ajustes ativos em `billing_adjustments`).
+- Diferença sem classificação é recusada; estorno não apaga o pagamento
+  desfeito. Política completa: [politica-pagamento-estorno-conciliacao.md](politica-pagamento-estorno-conciliacao.md).
+
+### I10 — A carteira inteira é conciliada dentro da janela (Fase 03)
+
+- Fila por `ultima_consulta_em`, checkpoint gravado também em erro, orçamento
+  por rodada; janela ≈ carteira ÷ orçamento horas, com métrica e alerta.
+
 ## Mapa de substituições
 
 ```mermaid

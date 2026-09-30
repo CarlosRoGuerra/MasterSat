@@ -1,0 +1,16 @@
+# SHA novo: 1b14099298e6ab515ef64edad606e91443e6b734 | SHA antigo: 44733f0c353b6fa8d120497af47612207a07e927 (git archive, backend/)
+[apagar exit=0]
+[criar exit=0]
+== 1. codigo NOVO sobe e opera
+{"etapa": "preparar", "cancelada": 1, "incerta": 2, "com_desconto": 3, "divergente": 4, "status": [200, 200, 200], "tabelas": {"billing_adjustments": 1, "cnab_remessa_itens": 0, "cnab_remessas": 0, "payable_change_logs": 2}, "versao": "b7d3e1f5a902", "boletos": [["1", "CANCELED", "0", "pendente", "None"], ["2", "PENDING", "DESFECHO_DESCONHECIDO", "None", "None"], ["4", "PENDING", "0", "None", "pagamento_divergente"]]}
+[preparar exit=0]
+== 2. codigo NOVO faz downgrade para e5c2a9d71f04
+{"etapa": "downgrade", "exit": 0, "versao": "e5c2a9d71f04", "tabelas": {"fase03_preservado_ailos_boletos": 3, "fase03_preservado_billing_adjustments": 1, "fase03_preservado_payable_change_logs": 2}, "boletos": [["1", "CANCELED", "0"], ["2", "PENDING", "PROCESSANDO"], ["4", "PENDING", "0"]], "erro": []}
+[downgrade exit=0]
+== 3. codigo ANTIGO (44733f0) sobe e opera
+{"etapa": "antigo", "status": {"put_incerta": 409, "cancel_incerta": 409, "receber_divergente": 200, "criar": 200, "cancelar_nova": 200}, "tabelas": {"fase03_preservado_ailos_boletos": 3, "fase03_preservado_billing_adjustments": 1, "fase03_preservado_payable_change_logs": 2}, "versao": "e5c2a9d71f04", "boletos": [["1", "CANCELED", "0"], ["2", "PENDING", "PROCESSANDO"], ["4", "PAID", "0"]]}
+[antigo exit=0]
+== 4. codigo NOVO sobe de novo (reupgrade)
+{"etapa": "reupgrade", "alembic_check_exit": 0, "ajustes": [["desconto", "10.00"]], "historico_contas_a_pagar": 2, "put_incerta_depois": 409, "tabelas": {"billing_adjustments": 1, "cnab_remessa_itens": 0, "cnab_remessas": 0, "payable_change_logs": 2}, "versao": "b7d3e1f5a902", "boletos": [["1", "CANCELED", "0", "pendente", "None"], ["2", "PENDING", "DESFECHO_DESCONHECIDO", "None", "None"], ["4", "PAID", "0", "pendente", "pagamento_divergente"]]}
+[reupgrade exit=0]
+[apagar exit=0]

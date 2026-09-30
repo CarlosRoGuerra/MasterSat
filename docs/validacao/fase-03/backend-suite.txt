@@ -1,0 +1,14 @@
+# SHA: 1b14099298e6ab515ef64edad606e91443e6b734 — python:3.12-slim (imagem mastersat-f01-test:new), backend/ com .env vazio, TEST_DATABASE_URL = PostgreSQL 16 descartável
+$ python -m pytest tests -q -p no:cacheprovider --junitxml=/tmp/junit.xml
+exit=1
+================= 38 failed, 2182 passed in 137.94s (0:02:17) ==================
+$ python scripts/checar_baseline_testes.py /tmp/junit.xml
+Executados: 2220  falhas: 38  conhecidas: 38  skips: 0
+BASELINE OK — só falhas conhecidas e triadas
+exit=0
+$ python -m pytest tests -q -m postgres
+===================== 46 passed, 2174 deselected in 33.94s =====================
+$ python -m pytest tests/test_fase03_*.py -q
+============================= 101 passed in 21.97s =============================
+$ tests/test_fase03_postgres.py repetido 10x
+     10 6 passed

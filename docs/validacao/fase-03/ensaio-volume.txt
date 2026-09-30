@@ -1,0 +1,8 @@
+# SHA: 1b14099298e6ab515ef64edad606e91443e6b734 — ensaio_volume.py 300000 (PostgreSQL 16 descartável)
+upgrade até e5c2a9d71f04: (0, 1.5)
+semeadura: 300000 cobranças, 150000 títulos, 450000 logs em 15.4s
+upgrade b7d3e1f5a902 (colunas + tabelas + inventário): exit=0 1.8s []
+inventário: baixa_pendente=25500 desfecho_desconhecido=3000
+downgrade para e5c2a9d71f04: exit=0 1.3s []
+novo upgrade: exit=0 1.7s []
+após novo upgrade: baixa_pendente=25500 desfecho_desconhecido=3000

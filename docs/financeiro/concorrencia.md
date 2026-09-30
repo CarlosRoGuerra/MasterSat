@@ -27,7 +27,11 @@ obrigação efetiva. Duas camadas:
 | Receber / cancelar / manutenção / excluir | cobrança `FOR UPDATE` (+ serviços da cobrança) | 400/409 com estado atual |
 | Unificar (negociação) | cobranças `FOR UPDATE` (ordem de id) → serviços | 400 "apenas pendentes/vencidas" |
 | Cancelar/excluir substituto com reversão | substituto → originais `FOR UPDATE` → serviços | 409 `titulo_substituto` se sem confirmação |
-| Excluir contrato | contrato `FOR UPDATE` → cobranças abertas → serviços | — |
+| Excluir contrato | contrato `FOR UPDATE` → cobranças abertas → serviços | 409 se alguma cobrança está em registro/desfecho desconhecido (Fase 03) |
+| Emitir boleto Ailos (individual/lote/carnê) — Fase 03 | cobranças `FOR UPDATE` → política → reserva `REGISTRANDO` **confirmada antes** da chamada HTTP (trava liberada durante a rede) | 409 `boleto_ailos_em_registro`/`..._desfecho_desconhecido`/`..._registrado`/`titulo_em_remessa_cnab` |
+| Consulta de pagamento (conciliação/manual) — Fase 03 | chamada HTTP **sem** trava → cobrança `FOR UPDATE` com releitura → aplica | cancelada/recebida no meio: vira pendência, nunca quitação |
+| Remessa CNAB (canal ligado) — Fase 03 | cobranças `FOR UPDATE` → política → itens `reservado` | 409 `titulo_remessa_cnab`/`remessa_concorrente` (índice `uq_cnab_remessa_itens_billing_reservado`) |
+| Contas a pagar: pagar/cancelar/editar/estornar/excluir — Fase 03 | conta `FOR UPDATE` com releitura | 400/409 com o estado atual |
 
 Ordem global resultante: **advisory → contrato → cobrança → serviço**. Nenhum
 caminho trava contrato depois de cobrança, nem cobrança depois de serviço.
@@ -56,6 +60,15 @@ passou a ocorrer também com `9/2026` × `09/2026`.
 falha) e `docs/validacao/fase-02/provas-*.json` (antes: duas parcelas 1 e duas
 mensalidades de setembro; depois: uma de cada).
 
+Fase 03: `backend/tests/test_fase03_postgres.py` (repetido 10× sem falha) —
+DELETE/PUT/cancelar em paralelo sobre título registrado (só o cancelamento
+vence, baixa pendente gravada); quatro mutações simultâneas sobre desfecho
+desconhecido (todas 409); manutenção durante um POST de registro que termina
+em timeout (409 em registro → 502 desfecho → 409 desfecho); cancelamento no
+meio da consulta de pagamento (fica cancelada, vira pendência); pagar ×
+cancelar conta a pagar (um vence); duas remessas CNAB para o mesmo título
+(uma vence).
+
 ## Riscos residuais conhecidos
 
 - **Fechamento × exclusão de contrato.** O fechamento reclassifica
@@ -71,3 +84,13 @@ mensalidades de setembro; depois: uma de cada).
   automático fica para quando houver caso real.
 - **Importador SGR** grava sem travar contrato; roda offline, em lote único.
   O índice o protege; rodar com usuários operando exige cuidado.
+- **Registro Ailos: a trava do Billing é solta durante a rede** (Fase 03, de
+  propósito — segurar linha durante 30 s de timeout travaria o financeiro). O
+  que protege a janela é a reserva `REGISTRANDO` confirmada antes da chamada;
+  a política a trata como "em registro" e, após 30 min sem resposta, como
+  desfecho desconhecido. Retry manual numa reserva *recente* ainda é aceito
+  (comportamento anterior, coberto pela deduplicação do banco por número do
+  documento + recuperação "já cadastrado").
+- **Conciliação e resolução manual em paralelo** podem consultar o mesmo título
+  duas vezes; a aplicação do resultado é serializada pela trava da cobrança e
+  idempotente (segunda consulta não quita de novo).

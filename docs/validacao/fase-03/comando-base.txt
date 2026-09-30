@@ -1,0 +1,22 @@
+# SHA: 1b14099298e6ab515ef64edad606e91443e6b734 — backend/ montado com .env vazio; PostgreSQL 16 descartável (rede docker --internal f03-net)
+Python 3.12.14
+alembic 1.13.2 sqlalchemy 2.0.35 psycopg 3.2.1 fastapi 0.142.2 pydantic 2.9.2
+
+$ python -m pytest tests/test_ailos_boletos_service.py tests/test_ailos_registration_reservation.py tests/test_ailos_retorno_service.py tests/test_billings_api.py tests/test_boletos_api.py tests/test_cnab_generators.py tests/test_payables_api.py tests/test_reports_api.py -q
+FAILED tests/test_billings_api.py::TestListBillings::test_operational_can_list
+FAILED tests/test_reports_api.py::TestDelinquentsReport::test_returns_list - ...
+FAILED tests/test_reports_api.py::TestDelinquentsReport::test_includes_delinquent_client
+FAILED tests/test_reports_api.py::TestDelinquentsReport::test_structure - Key...
+FAILED tests/test_reports_api.py::TestClientStatement::test_operational_can_access
+FAILED tests/test_reports_api.py::TestExecutiveSummary::test_contracts_by_plan_included
+======================== 6 failed, 189 passed in 9.95s =========================
+(as 6 falhas são da baseline conhecida: R1 x2, C1 x4 — tests/baseline_falhas_conhecidas.txt)
+
+$ python -m alembic upgrade head   (banco novo f03check)
+exit=0
+INFO  [alembic.runtime.migration] Running upgrade e5c2a9d71f04 -> b7d3e1f5a902, Fase 03: desfecho bancário, conciliação, ajustes de recebimento e CNAB
+INFO  [alembic.runtime.migration] Fase 03: 0 título(s) com baixa pendente; 0 registro(s) com desfecho desconhecido.
+
+$ python -m alembic check
+exit=0
+No new upgrade operations detected.
