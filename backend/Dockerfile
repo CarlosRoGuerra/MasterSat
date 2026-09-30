@@ -4,7 +4,9 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# pip da imagem base tem advisories de instalação (só atuam no build); a
+# versão é fixada para o build ser reprodutível.
+RUN pip install --no-cache-dir "pip==26.2.1" && pip install --no-cache-dir -r requirements.txt
 # O .dockerignore ao lado deste arquivo e o que impede o certificado ICP-Brasil
 # (certs/*.pfx) e os tokens da Ailos (scripts/*.json) de entrarem na imagem.
 # O .gitignore NAO tem efeito sobre o Docker.
