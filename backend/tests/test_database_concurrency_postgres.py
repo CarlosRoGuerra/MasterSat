@@ -593,7 +593,9 @@ def test_ailos_registration_serializes_financial_maintenance(postgres_api):
 
     assert registered.status_code == 200
     assert maintenance.status_code == 409
-    assert maintenance.json()["detail"]["code"] == "boleto_ailos_registrado"
+    # Fase 03: registro em andamento tem código próprio em todas as rotas
+    # (antes a manutenção reutilizava boleto_ailos_registrado).
+    assert maintenance.json()["detail"]["code"] == "boleto_ailos_em_registro"
 
     current = http.get(f"/api/v1/billings/{billing_id}")
     assert current.status_code == 200

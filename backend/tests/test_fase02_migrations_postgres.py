@@ -21,6 +21,7 @@ import pytest
 from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from alembic.migration import MigrationContext
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
@@ -36,6 +37,8 @@ pytestmark = pytest.mark.postgres
 BACKEND = Path(__file__).resolve().parent.parent
 ANTERIOR = 'd9e4f1a7b2c5'  # head antes da Fase 02
 FASE02 = 'e5c2a9d71f04'
+# Head real das migrations (fases seguintes acrescentam revisões depois da 02).
+HEAD = ScriptDirectory(str(BACKEND / 'alembic')).get_current_head()
 
 
 @pytest.fixture()
@@ -140,7 +143,7 @@ def test_ciclo_completo_base_head_base_head(banco):
     assert tipos == []  # DB-04: antes sobravam os 8 enums da baseline
     assert funcoes == []
     _alembic(banco, 'upgrade', 'head')
-    assert _revisao(banco) == FASE02
+    assert _revisao(banco) == HEAD
 
 
 # ---------------------------------------------------------------------------
@@ -234,7 +237,7 @@ def test_preflight_aborta_com_ids_e_nao_altera_nada(banco):
     with banco.begin() as conn:
         conn.execute(text('UPDATE billings SET is_deleted = true WHERE id IN (:a, :z)'), {'a': a, 'z': zero})
         conn.execute(text("UPDATE billings SET status = 'CANCELED' WHERE id = :id"), {'id': p2})
-    _alembic(banco, 'upgrade', 'head')
+    _alembic(banco, 'upgrade', FASE02)
     assert _revisao(banco) == FASE02
     with banco.connect() as conn:
         assert conn.execute(text('SELECT count(*) FROM billings')).scalar_one() == 5
@@ -296,7 +299,7 @@ def test_script_de_preflight_nao_altera_o_banco(banco):
 
 
 def test_downgrade_aborta_se_competencia_liberada_foi_recobrada(banco):
-    _alembic(banco, 'upgrade', 'head')
+    _alembic(banco, 'upgrade', FASE02)
     with banco.begin() as conn:
         ids = _seed_base(conn)
         cancelada = _billing(conn, ids, period_label='09/2026', status='CANCELED')
@@ -311,7 +314,7 @@ def test_downgrade_aborta_se_competencia_liberada_foi_recobrada(banco):
         conn.execute(text('UPDATE billings SET is_deleted = true WHERE id = :id'), {'id': cancelada})
     _alembic(banco, 'downgrade', ANTERIOR)
     assert 'competencia' not in _colunas(banco, 'billings')
-    _alembic(banco, 'upgrade', 'head')
+    _alembic(banco, 'upgrade', FASE02)
     assert _revisao(banco) == FASE02
 
 
