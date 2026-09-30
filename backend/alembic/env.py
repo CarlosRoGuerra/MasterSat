@@ -21,7 +21,12 @@ config.set_main_option("sqlalchemy.url", settings.database_url)
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False: as migrations rodam no startup da API
+    # (main._apply_database_migrations). Com o padrão (True), o fileConfig
+    # desligava os loggers do uvicorn e da aplicação já criados — depois do
+    # boot sumiam access log, "Application startup complete" e avisos como
+    # o de SMTP não configurado no reset de senha e os alertas do Ailos.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 
