@@ -1,5 +1,6 @@
 from pydantic import BaseModel, field_validator
 
+from app.core.password_policy import validate_password
 from app.models.enums import UserRole
 
 
@@ -26,6 +27,11 @@ class UserBase(BaseModel):
 class UserCreate(UserBase):
     password: str
 
+    @field_validator('password')
+    @classmethod
+    def password_policy(cls, value: str) -> str:
+        return validate_password(value)
+
 
 class UserUpdate(BaseModel):
     name: str | None = None
@@ -39,6 +45,13 @@ class UserUpdate(BaseModel):
     @classmethod
     def normalize_email(cls, value: str | None) -> str | None:
         return _normalize_email(value) if value is not None else None
+
+    # Ausente/null = mantém a senha atual (a tela manda só quando preenchida).
+    # String presente passa pela política — "" não é mais "senha vazia".
+    @field_validator('password')
+    @classmethod
+    def password_policy(cls, value: str | None) -> str | None:
+        return validate_password(value) if value is not None else None
 
 
 class UserOut(UserBase):

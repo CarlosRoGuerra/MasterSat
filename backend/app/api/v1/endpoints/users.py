@@ -79,6 +79,8 @@ def update_item(item_id: int, payload: UserUpdate, db: Session = Depends(get_db)
     obj = db.get(User, item_id)
     if not obj or obj.is_deleted: raise HTTPException(status_code=404, detail='Registro não encontrado')
     data = payload.model_dump(exclude_unset=True)
+    if data.get('password') is None:
+        data.pop('password', None)  # null = manter a senha atual
     if 'password' in data:
         data['password_hash'] = get_password_hash(data.pop('password'))
         # Mesma intencao do /reset-password: a senha nova tem de expulsar quem

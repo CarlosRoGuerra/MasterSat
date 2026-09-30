@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
@@ -23,6 +24,7 @@ from app.models import ailos_api_log, ailos_boleto, ailos_client_token, ailos_in
 from app.core.audit import AuditMiddleware
 from app.core.body_limit import MaxBodySizeMiddleware
 from app.core.forwarded_proto import ForwardedProtoMiddleware
+from app.core.validation_errors import validation_exception_handler
 from app.models.enums import UserRole
 from app.models.user import User
 from app.services.storage import ensure_bucket
@@ -44,6 +46,8 @@ app.add_middleware(ForwardedProtoMiddleware)
 # ── Rate limiting ─────────────────────────────────────────────────────────────
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+# 422 sem ecoar senha/token recebidos (ver core/validation_errors.py)
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_middleware(SlowAPIMiddleware)
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
