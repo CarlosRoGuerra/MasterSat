@@ -85,19 +85,21 @@ ORDER BY a.billing_id
 """
 
 # ERRO_REGISTRO cuja última tentativa individual de registro (POST
-# gerar/boleto com billing_id) não teve resposta conclusiva.
+# gerar/boleto com billing_id) não teve resposta conclusiva. Uma passada só
+# sobre ailos_api_logs (DISTINCT ON): a tabela não tem índice por billing_id,
+# e um LATERAL por título virava uma varredura por título.
 SQL_ERRO_AMBIGUO = """
-SELECT a.billing_id, ult.id AS log_id, ult.status_code, ult.error_message
-FROM ailos_boletos a
-JOIN LATERAL (
-    SELECT l.id, l.status_code, l.error_message
+WITH ult AS (
+    SELECT DISTINCT ON (l.billing_id) l.billing_id, l.id, l.status_code, l.error_message
     FROM ailos_api_logs l
-    WHERE l.billing_id = a.billing_id
+    WHERE l.billing_id IS NOT NULL
       AND l.method = 'POST'
       AND l.endpoint LIKE '%gerar/boleto%'
-    ORDER BY l.id DESC
-    LIMIT 1
-) ult ON true
+    ORDER BY l.billing_id, l.id DESC
+)
+SELECT a.billing_id, ult.id AS log_id, ult.status_code, ult.error_message
+FROM ailos_boletos a
+JOIN ult ON ult.billing_id = a.billing_id
 WHERE a.status_ailos = 'ERRO_REGISTRO'
   AND a.linha_digitavel IS NULL
   AND (ult.status_code IS NULL OR ult.status_code >= 500 OR ult.status_code = 408)
@@ -369,31 +371,34 @@ def upgrade() -> None:
         op.drop_table(preservado)
         log.info('Fase 03: estado de ailos_boletos restaurado de %s.', preservado)
 
-    # ── inventário (flags locais revisáveis) ─────────────────────────────
-    ativos = _linhas(bind, SQL_TITULO_ATIVO_SEM_OBRIGACAO.format(filtro_baixa='a.baixa_status IS NULL'))
-    for linha in ativos:
-        bind.execute(sa.text("""
-            UPDATE ailos_boletos
-            SET baixa_status = 'pendente', baixa_solicitada_em = now(), baixa_observacao = :obs
-            WHERE billing_id = :bid AND baixa_status IS NULL
-        """), {'bid': linha['billing_id'],
-               'obs': f"{_MARCA_INVENTARIO}cobrança {linha['motivo']} com título registrado; confirmar baixa no banco"})
-    ambiguos = _linhas(bind, SQL_ERRO_AMBIGUO)
-    for linha in ambiguos:
-        bind.execute(sa.text("""
-            UPDATE ailos_boletos SET status_ailos = 'DESFECHO_DESCONHECIDO'
-            WHERE billing_id = :bid AND status_ailos = 'ERRO_REGISTRO' AND linha_digitavel IS NULL
-        """), {'bid': linha['billing_id']})
-        bind.execute(sa.text("""
-            INSERT INTO billing_change_logs
-                (billing_id, changed_by_user_id, field_name, previous_value, new_value, justification)
-            VALUES (:bid, NULL, 'registro_ailos', 'ERRO_REGISTRO', 'DESFECHO_DESCONHECIDO', :just)
-        """), {'bid': linha['billing_id'],
-               'just': (f"{_MARCA_INVENTARIO}última tentativa de registro sem resposta conclusiva "
-                        f"(ailos_api_logs #{linha['log_id']}, HTTP {linha['status_code'] or '—'}); "
-                        'a conciliação consulta pelo número do documento')})
+    # ── inventário (flags locais revisáveis) — operações de conjunto ─────
+    ativos = bind.execute(sa.text(f"""
+        UPDATE ailos_boletos a
+        SET baixa_status = 'pendente', baixa_solicitada_em = now(),
+            baixa_observacao = :marca || 'cobrança ' || x.motivo
+                               || ' com título registrado; confirmar baixa no banco'
+        FROM ({SQL_TITULO_ATIVO_SEM_OBRIGACAO.format(filtro_baixa='a.baixa_status IS NULL')}) x
+        WHERE a.billing_id = x.billing_id AND a.baixa_status IS NULL
+    """), {'marca': _MARCA_INVENTARIO}).rowcount
+    ambiguos = bind.execute(sa.text(f"""
+        WITH amb AS ({SQL_ERRO_AMBIGUO}),
+        marcados AS (
+            UPDATE ailos_boletos a SET status_ailos = 'DESFECHO_DESCONHECIDO'
+            FROM amb
+            WHERE a.billing_id = amb.billing_id
+              AND a.status_ailos = 'ERRO_REGISTRO' AND a.linha_digitavel IS NULL
+            RETURNING a.billing_id, amb.log_id, amb.status_code
+        )
+        INSERT INTO billing_change_logs
+            (billing_id, changed_by_user_id, field_name, previous_value, new_value, justification)
+        SELECT billing_id, NULL, 'registro_ailos', 'ERRO_REGISTRO', 'DESFECHO_DESCONHECIDO',
+               :marca || 'última tentativa de registro sem resposta conclusiva (ailos_api_logs #'
+               || log_id || ', HTTP ' || COALESCE(status_code::text, '—')
+               || '); a conciliação consulta pelo número do documento'
+        FROM marcados
+    """), {'marca': _MARCA_INVENTARIO}).rowcount
     log.info('Fase 03: %s título(s) com baixa pendente; %s registro(s) com desfecho desconhecido.',
-             len(ativos), len(ambiguos))
+             ativos, ambiguos)
 
 
 def downgrade() -> None:
