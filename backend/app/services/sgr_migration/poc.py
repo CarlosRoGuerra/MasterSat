@@ -7,12 +7,21 @@ diagnóstico gerado por report.py.
 """
 from __future__ import annotations
 
+import inspect
 from calendar import monthrange
 from dataclasses import dataclass, field
 from datetime import date
 from time import sleep
 
-from app.services.sgr_migration.client import RequestLogEntry, SGRApiError, SGRClient
+from app.services.sgr_migration.client import (
+    ColetaPaginada,
+    RequestLogEntry,
+    SGRApiError,
+    SGRAuthenticationError,
+    SGRClient,
+    iterar_paginas,
+    paginar,
+)
 from app.services.sgr_migration.mapping import (
     build_vencimento_index,
     ci_get,
@@ -60,6 +69,11 @@ class ClientNode:
     # 'url'}. Uma NF cobre o boleto consolidado inteiro, por isso fica aqui e
     # não junto de uma cobrança específica.
     invoices: list[dict] = field(default_factory=list)
+    # Motivos pelos quais a coleta deste cliente não é comprovadamente
+    # completa (página que falhou, página repetida, boletos em aberto não
+    # confirmados). Cliente com coleta incompleta NÃO é importado: entraria
+    # com parte da frota/histórico e pareceria completo (SGR-05).
+    coleta_incompleta: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -80,6 +94,9 @@ class PocRunResult:
     # ATIVO/INADIMPLENTE. As cobranças antigas dessas placas continuam vindo
     # no histórico do cliente (entram sem veículo — ver _import_billings).
     vehicles_out_of_scope: dict[str, int] = field(default_factory=dict)
+    # Manifesto de completude: uma entrada por coleção paginada (ver
+    # ColetaPaginada) — é o que prova que a leitura chegou ao fim.
+    coletas: list[dict] = field(default_factory=list)
 
 
 def check_connectivity(client: SGRClient) -> dict:
@@ -95,46 +112,78 @@ def check_connectivity(client: SGRClient) -> dict:
 
 
 _PAGINA_RASTREADOR = 200  # teto por página imposto pela API
-_MAX_PAGINAS_RASTREADOR = 15  # teto de segurança da POC (~3.000 rastreadores)
+_PAGINA_PADRAO = 200
 
 
-def build_tracker_index(client: SGRClient) -> dict[str, dict]:
-    """Índice placa -> rastreador, paginando /buscar_rastreador.
+def _com_tentativas(buscar):
+    """Repete uma página que falhou por instabilidade (5xx, timeout). Erro de
+    credencial não é instabilidade: sobe na hora."""
+    def _pagina(total, indice):
+        for tentativa in range(_TENTATIVAS_POR_MES):
+            try:
+                return buscar(total, indice)
+            except SGRAuthenticationError:
+                raise
+            except SGRApiError:
+                if tentativa == _TENTATIVAS_POR_MES - 1:
+                    raise
+                sleep(_ESPERA_ENTRE_TENTATIVAS * (tentativa + 1))
+        return []  # inalcançável
+    return _pagina
+
+
+def build_tracker_index(client: SGRClient, coletas: list[dict] | None = None) -> dict[str, dict]:
+    """Índice placa -> rastreador, paginando /buscar_rastreador ATÉ O FIM.
 
     /buscar_rastreador é o único endpoint que devolve IMEI, situação e placa
     no mesmo registro, e não aceita filtro por placa nem por cliente. Paginar
     uma vez e indexar localmente troca N chamadas (1 por veículo) por poucas,
     e é o que permite preencher o IMEI de qualquer veículo da amostra.
+
+    Antes havia um teto silencioso de 15 páginas e um `break` em qualquer
+    erro: rastreador além disso entrava "sem IMEI" como se não existisse.
+    Agora índice incompleto interrompe a leitura (SGRIncompleteScan).
     """
+    coleta = ColetaPaginada('/buscar_rastreador', 'todos')
     index: dict[str, dict] = {}
-    for pagina in range(_MAX_PAGINAS_RASTREADOR):
-        try:
-            lote = client.buscar_rastreadores(
-                total=_PAGINA_RASTREADOR, indice=pagina * _PAGINA_RASTREADOR,
-            )
-        except SGRApiError:
-            break  # sem índice a POC segue; o IMEI fica ausente e é reportado
-        if not lote:
-            break
-        for rast in lote:
-            placa = normalize_plate(ci_get(rast, 'placa') or '')
-            if placa:
-                index.setdefault(placa, rast)
-        if len(lote) < _PAGINA_RASTREADOR:
-            break
+    try:
+        buscar = _com_tentativas(lambda total, indice: client.buscar_rastreadores(total=total, indice=indice))
+        for lote in iterar_paginas(buscar, _PAGINA_RASTREADOR, coleta):
+            for rast in lote:
+                placa = normalize_plate(ci_get(rast, 'placa') or '')
+                if placa:
+                    index.setdefault(placa, rast)
+    except SGRApiError as exc:
+        raise SGRIncompleteScan(
+            f'índice de rastreadores incompleto ({type(exc).__name__}: {exc}) — sem ele os '
+            f'rastreadores das páginas não lidas entrariam como "sem IMEI"'
+        ) from exc
+    finally:
+        if coletas is not None:
+            coletas.append(coleta.as_dict())
     return index
 
 
 def _fetch_trackers_for_vehicle(
     client: SGRClient, plate: str, issues: list[str], tracker_index: dict[str, dict],
     vencimento_index: dict[str, int] | None = None,
+    pendencias: list[str] | None = None, coletas: list[dict] | None = None, cod_veiculo=None,
 ) -> list[TrackerNode]:
     trackers: list[TrackerNode] = []
+    coleta = ColetaPaginada('/buscar_vinculo', f'veiculo:{cod_veiculo or "?"}')
     try:
-        vinculos_raw = client.buscar_vinculos_por_placa(plate)
+        vinculos_raw = paginar(
+            lambda total, indice: client.buscar_vinculos_por_placa(plate, total=total, indice=indice),
+            _PAGINA_PADRAO, coleta,
+        )
     except SGRApiError as exc:
         issues.append(f'Falha ao buscar vínculo/equipamento deste veículo: {exc}')
+        if pendencias is not None:
+            pendencias.append(f'vínculos do veículo #{cod_veiculo or "?"}: {type(exc).__name__}')
         return trackers
+    finally:
+        if coletas is not None:
+            coletas.append(coleta.as_dict())
     for link in vinculos_raw:
         tmapped, tissues = map_tracker(link, tracker_index.get(plate))
         contract, cissues = map_contrato(link, vencimento_index or {})
@@ -156,16 +205,28 @@ def _fetch_vehicles_for_client(
     client: SGRClient, cod_cliente, issues: list[str], tracker_index: dict[str, dict],
     vencimento_index: dict[str, int] | None = None,
     fora_do_escopo: dict[str, int] | None = None,
+    pendencias: list[str] | None = None, coletas: list[dict] | None = None,
 ) -> list[VehicleNode]:
     vehicles: list[VehicleNode] = []
     if not cod_cliente:
         issues.append('Cliente sem cod_cliente na resposta — não é possível buscar seus veículos')
+        if pendencias is not None:
+            pendencias.append('cliente sem cod_cliente: frota não pode ser lida')
         return vehicles
+    coleta = ColetaPaginada('/buscar_veiculo', f'cliente:{cod_cliente}')
     try:
-        veiculos_raw = client.buscar_veiculos_por_cliente(cod_cliente)
+        veiculos_raw = paginar(
+            lambda total, indice: client.buscar_veiculos_por_cliente(cod_cliente, total=total, indice=indice),
+            _PAGINA_PADRAO, coleta,
+        )
     except SGRApiError as exc:
         issues.append(f'Falha ao buscar veículos deste cliente: {exc}')
+        if pendencias is not None:
+            pendencias.append(f'veículos do cliente: {type(exc).__name__}')
         return vehicles
+    finally:
+        if coletas is not None:
+            coletas.append(coleta.as_dict())
 
     for vraw in veiculos_raw:
         situacao = _situacao_veiculo(vraw)
@@ -176,7 +237,10 @@ def _fetch_vehicles_for_client(
         vmapped, vissues = map_veiculo(vraw)
         plate = vmapped.get('plate')
         trackers = (
-            _fetch_trackers_for_vehicle(client, plate, vissues, tracker_index, vencimento_index)
+            _fetch_trackers_for_vehicle(
+                client, plate, vissues, tracker_index, vencimento_index,
+                pendencias, coletas, vmapped.get('external_id'),
+            )
             if plate else []
         )
         if not trackers:
@@ -231,7 +295,10 @@ def _fetch_planos(client: SGRClient) -> tuple[list[dict], list[str], dict[str, i
     return planos, issues, vencimento_index
 
 
-def _fetch_boletos(client: SGRClient, cpf_cnpj: str, issues: list[str]) -> tuple[list[dict], list[dict]]:
+def _fetch_boletos(
+    client: SGRClient, cpf_cnpj: str, issues: list[str],
+    pendencias: list[str] | None = None, coletas: list[dict] | None = None, cod_cliente=None,
+) -> tuple[list[dict], list[dict]]:
     """Histórico de cobrança do cliente: (cobranças achatadas, boletos crus).
 
     Uma chamada por cliente: /buscar_boletos (sem CPF) responde 500 no
@@ -243,29 +310,45 @@ def _fetch_boletos(client: SGRClient, cpf_cnpj: str, issues: list[str]) -> tuple
     """
     if not cpf_cnpj:
         return [], []
+    pendencias = pendencias if pendencias is not None else []
+    coleta = ColetaPaginada('/buscar_boletos_cliente', f'cliente:{cod_cliente or "?"}')
     try:
-        boletos = client.buscar_boletos_cliente(cpf_cnpj)
+        boletos = paginar(
+            lambda total, indice: client.buscar_boletos_cliente(cpf_cnpj, total=total, indice=indice),
+            _PAGINA_PADRAO, coleta,
+        )
     except SGRApiError as exc:
         issues.append(f'Falha ao buscar o histórico de boletos: {exc}')
+        pendencias.append(f'histórico de boletos: {type(exc).__name__}')
         return [], []
+    finally:
+        if coletas is not None:
+            coletas.append(coleta.as_dict())
 
     # A situação do boleto NÃO diz o que continua em aberto: 'APROVADO'
     # significa apenas registrado, e na base real há boletos de 2019 e 2023
     # ainda com esse status. Tratá-los como dívida inflaria a inadimplência
     # e poderia gerar cobrança indevida. Quem responde isso é
     # /buscar_boletos_abertos_cliente, e é ele a fonte da verdade aqui.
+    coleta_abertos = ColetaPaginada('/buscar_boletos_abertos_cliente', f'cliente:{cod_cliente or "?"}')
     try:
         abertos = {
             str(ci_get(b, 'cod_boleto'))
-            for b in client.buscar_boletos_abertos_cliente(cpf_cnpj)
+            for b in paginar(
+                lambda total, indice: client.buscar_boletos_abertos_cliente(cpf_cnpj, total=total, indice=indice),
+                _PAGINA_PADRAO, coleta_abertos,
+            )
             if ci_get(b, 'cod_boleto')
         }
     except SGRApiError as exc:
-        issues.append(
-            f'Falha ao confirmar quais boletos estão em aberto ({exc}) — '
-            f'as cobranças em aberto deste cliente NÃO foram importadas como dívida'
-        )
-        abertos = set()
+        # Antes: seguia com `abertos` vazio e importava as dívidas em aberto
+        # como CANCELADAS. Sem a confirmação, o cliente inteiro fica de fora.
+        issues.append(f'Falha ao confirmar quais boletos estão em aberto ({exc})')
+        pendencias.append(f'boletos em aberto não confirmados: {type(exc).__name__}')
+        return [], boletos
+    finally:
+        if coletas is not None:
+            coletas.append(coleta_abertos.as_dict())
 
     achatado: list[dict] = []
     for boleto in boletos:
@@ -273,8 +356,10 @@ def _fetch_boletos(client: SGRClient, cpf_cnpj: str, issues: list[str]) -> tuple
         for item in linhas or [None]:
             mapped, bissues = map_boleto(boleto, item, em_aberto=str(ci_get(boleto, 'cod_boleto')) in abertos)
             # Linha zerada é ruído do SGR: todo boleto traz uma cópia da placa
-            # com valor 0,00 ao lado da cobrança real.
-            if mapped.get('amount') in (None, 0, 0.0):
+            # com valor 0,00 ao lado da cobrança real. Valor ausente ou
+            # malformado NÃO é descartado aqui: o importador confere a soma do
+            # documento e decide (antes sumia em silêncio).
+            if mapped.get('amount_cents') == 0:
                 continue
             achatado.append(mapped)
             issues.extend(bissues)
@@ -297,6 +382,15 @@ class SGRIncompleteScan(RuntimeError):
     """
 
 
+def _aceita_coleta(client) -> bool:
+    """O SGRClient real preenche o manifesto de páginas do mês; dublês de
+    teste que não aceitam o parâmetro ficam com a contagem simples."""
+    try:
+        return 'coleta' in inspect.signature(client.buscar_boletos_periodo).parameters
+    except (TypeError, ValueError):
+        return False
+
+
 def _meses(inicio: date, fim: date):
     """Gera (primeiro_dia, ultimo_dia) de cada mês do intervalo.
 
@@ -312,6 +406,7 @@ def _meses(inicio: date, fim: date):
 
 def fetch_boletos_por_periodo(
     client: SGRClient, inicio: date, fim: date, issues: list[str],
+    coletas: list[dict] | None = None,
 ) -> dict[str, list[dict]]:
     """Boletos de TODA a base no período, indexados por cod_cliente.
 
@@ -325,19 +420,29 @@ def fetch_boletos_por_periodo(
 
     for mes_inicio, mes_fim in _meses(inicio, fim):
         lote = None
+        coleta = ColetaPaginada('/buscar_boletos', f'vencimento:{mes_inicio:%Y-%m}')
         for tentativa in range(_TENTATIVAS_POR_MES):
+            coleta = ColetaPaginada('/buscar_boletos', f'vencimento:{mes_inicio:%Y-%m}')
             try:
                 # linha_digitavel=True é o que traz link/linha/código de barras
                 # dos boletos ainda em aberto (ver map_boleto).
-                lote = client.buscar_boletos_periodo(
-                    mes_inicio.isoformat(), mes_fim.isoformat(), linha_digitavel=True,
-                )
+                if _aceita_coleta(client):
+                    lote = client.buscar_boletos_periodo(
+                        mes_inicio.isoformat(), mes_fim.isoformat(), linha_digitavel=True, coleta=coleta,
+                    )
+                else:
+                    lote = client.buscar_boletos_periodo(
+                        mes_inicio.isoformat(), mes_fim.isoformat(), linha_digitavel=True,
+                    )
+                    coleta.registros, coleta.completa = len(lote or []), True
                 break
             except SGRApiError as exc:
                 if tentativa == _TENTATIVAS_POR_MES - 1:
                     falhas.append(f'{mes_inicio:%m/%Y} ({exc})')
                 else:
                     sleep(_ESPERA_ENTRE_TENTATIVAS * (tentativa + 1))
+        if coletas is not None:
+            coletas.append(coleta.as_dict())
 
         for boleto in lote or []:
             cod_cliente = ci_get(boleto, 'cod_cliente')
@@ -369,8 +474,10 @@ def achatar_boletos(boletos: list[dict], issues: list[str]) -> list[dict]:
         for item in linhas or [None]:
             mapped, bissues = map_boleto(boleto, item)
             # Linha zerada é ruído do SGR: todo boleto traz uma cópia da placa
-            # com valor 0,00 ao lado da cobrança real.
-            if mapped.get('amount') in (None, 0, 0.0):
+            # com valor 0,00 ao lado da cobrança real. Valor ausente ou
+            # malformado NÃO é descartado aqui: o importador confere a soma do
+            # documento e decide (antes sumia em silêncio).
+            if mapped.get('amount_cents') == 0:
                 continue
             achatado.append(mapped)
             issues.extend(bissues)
@@ -430,6 +537,7 @@ def _situacao_cliente(raw: dict) -> str:
 
 def _clientes_elegiveis(
     client: SGRClient, limit: int, fora_do_escopo: dict[str, int],
+    coletas: list[dict] | None = None,
 ) -> list[dict]:
     """Pagina /buscar_cliente até juntar `limit` clientes com situação
     migrável (ver _SITUACOES_MIGRAVEIS), pulando os demais sem gastar
@@ -439,22 +547,28 @@ def _clientes_elegiveis(
     ~33% cancelado), pedir 10 lê bem mais que 10 até juntar 10 utilizáveis.
     """
     elegiveis: list[dict] = []
-    indice = 0
-    while len(elegiveis) < limit:
-        lote = client.buscar_clientes(total=_PAGINA_CLIENTES, indice=indice)
-        if not lote:
-            break
-        for raw in lote:
-            situacao = _situacao_cliente(raw)
-            if situacao in _SITUACOES_MIGRAVEIS:
-                elegiveis.append(raw)
-                if len(elegiveis) >= limit:
-                    break
-            else:
-                fora_do_escopo[situacao] = fora_do_escopo.get(situacao, 0) + 1
-        if len(lote) < _PAGINA_CLIENTES:
-            break
-        indice += _PAGINA_CLIENTES
+    if limit <= 0:
+        return elegiveis
+    coleta = ColetaPaginada('/buscar_cliente', 'todos')
+    try:
+        for lote in iterar_paginas(
+            lambda total, indice: client.buscar_clientes(total=total, indice=indice),
+            _PAGINA_CLIENTES, coleta,
+        ):
+            for raw in lote:
+                situacao = _situacao_cliente(raw)
+                if situacao in _SITUACOES_MIGRAVEIS:
+                    elegiveis.append(raw)
+                    if len(elegiveis) >= limit:
+                        break
+                else:
+                    fora_do_escopo[situacao] = fora_do_escopo.get(situacao, 0) + 1
+            if len(elegiveis) >= limit:
+                coleta.observacao = f'leitura interrompida ao juntar o limite de {limit} cliente(s)'
+                break
+    finally:
+        if coletas is not None:
+            coletas.append(coleta.as_dict())
     return elegiveis
 
 
@@ -467,14 +581,15 @@ def run_poc(
     contado em `clients_out_of_scope` e não entra na migração."""
     fora_do_escopo: dict[str, int] = {}
     veiculos_fora: dict[str, int] = {}
-    clients_raw = _clientes_elegiveis(client, limit, fora_do_escopo)
-    tracker_index = build_tracker_index(client)
+    coletas: list[dict] = []
+    clients_raw = _clientes_elegiveis(client, limit, fora_do_escopo, coletas)
+    tracker_index = build_tracker_index(client, coletas)
     planos, plan_issues, vencimento_index = _fetch_planos(client)
 
     # Uma varredura só para a base inteira, em vez de 1 chamada por cliente.
     boletos_por_cliente: dict[str, list[dict]] = {}
     if (com_boletos or com_notas) and periodo:
-        boletos_por_cliente = fetch_boletos_por_periodo(client, periodo[0], periodo[1], plan_issues)
+        boletos_por_cliente = fetch_boletos_por_periodo(client, periodo[0], periodo[1], plan_issues, coletas)
 
     nodes: list[ClientNode] = []
     for raw in clients_raw:
@@ -484,9 +599,10 @@ def run_poc(
             nodes.append(ClientNode(raw=raw, mapped={}, issues=[f'Falha ao mapear cliente: {exc}'], fetch_failed=True))
             continue
 
+        pendencias: list[str] = []
         vehicles = _fetch_vehicles_for_client(
             client, ci_get(raw, 'cod_cliente'), issues, tracker_index, vencimento_index,
-            veiculos_fora,
+            veiculos_fora, pendencias, coletas,
         )
         billings: list[dict] = []
         invoices: list[dict] = []
@@ -495,14 +611,16 @@ def run_poc(
                 boletos_crus = boletos_por_cliente.get(str(ci_get(raw, 'cod_cliente') or ''), [])
                 billings = achatar_boletos(boletos_crus, issues) if com_boletos else []
             else:
-                billings, boletos_crus = _fetch_boletos(client, mapped.get('cpf_cnpj'), issues)
+                billings, boletos_crus = _fetch_boletos(
+                    client, mapped.get('cpf_cnpj'), issues, pendencias, coletas, ci_get(raw, 'cod_cliente'),
+                )
                 if not com_boletos:
                     billings = []
             if com_notas:
                 invoices = _fetch_notas_fiscais(client, boletos_crus, issues)
         nodes.append(ClientNode(
             raw=raw, mapped=mapped, issues=issues, vehicles=vehicles,
-            billings=billings, invoices=invoices,
+            billings=billings, invoices=invoices, coleta_incompleta=pendencias,
         ))
 
     return PocRunResult(
@@ -514,4 +632,5 @@ def run_poc(
         plan_issues=plan_issues,
         clients_out_of_scope=fora_do_escopo,
         vehicles_out_of_scope=veiculos_fora,
+        coletas=coletas,
     )

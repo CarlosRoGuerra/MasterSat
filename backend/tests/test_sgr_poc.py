@@ -33,7 +33,7 @@ class FakeClient:
 
     def buscar_rastreadores(self, total=200, indice=0):
         self._track('/buscar_rastreador')
-        return self._rastreadores
+        return self._rastreadores[indice:indice + total]
 
     def get_grupo_mensalidade(self, total=200, indice=0):
         self._track('/get_grupo_mensalidade')
@@ -59,11 +59,11 @@ class FakeClient:
         self._track('/buscar_veiculo')
         if cod_cliente in self._veiculo_erro_para:
             raise SGRApiError('erro simulado', status_code=500)
-        return self._veiculos_por_cliente.get(cod_cliente, [])
+        return self._veiculos_por_cliente.get(cod_cliente, [])[indice:indice + total]
 
     def buscar_vinculos_por_placa(self, placa, total=200, indice=0):
         self._track('/buscar_vinculo')
-        return self._vinculos_por_placa.get(placa, [])
+        return self._vinculos_por_placa.get(placa, [])[indice:indice + total]
 
     def authenticate(self):
         self._track('/headers_authorization')
@@ -168,14 +168,15 @@ class TestRunPocRelationships:
         )
         result = run_poc(client, limit=10)
 
-        # 1 (clientes) + 1 (rastreadores em lote) + 3 (tabelas de domínio:
-        # grupos de mensalidade, grupos de adesão e vencimentos) + 1 (veiculos
-        # do cliente 1) + 1 (vinculo da placa AAA1111). As tabelas de domínio
-        # são 1 chamada cada, independente de quantos clientes/veículos existam.
-        assert result.request_count == 7
+        # Página curta não prova o fim (SGR-05): cada coleção paginada pede a
+        # página seguinte, que tem de vir vazia. Clientes 2 + rastreadores 1
+        # (1ª página já vazia) + 3 tabelas de domínio (1 chamada cada,
+        # independente do tamanho da base) + veículos 2 + vínculos 2.
+        assert result.request_count == 10
         assert [e.path for e in result.request_log] == [
-            '/buscar_cliente', '/buscar_rastreador', '/get_grupo_mensalidade', '/get_grupo_adesao',
-            '/get_vencimento', '/buscar_veiculo', '/buscar_vinculo',
+            '/buscar_cliente', '/buscar_cliente', '/buscar_rastreador', '/get_grupo_mensalidade',
+            '/get_grupo_adesao', '/get_vencimento', '/buscar_veiculo', '/buscar_veiculo',
+            '/buscar_vinculo', '/buscar_vinculo',
         ]
 
     def test_never_fetches_more_clients_than_the_limit(self):
