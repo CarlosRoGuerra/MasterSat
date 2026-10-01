@@ -226,3 +226,22 @@ def test_erro_local_em_lote_admite_revisao_individual(db, monkeypatch, fiscal):
     reservas.atualizar(db, nota.id, token, status='erro', erro_tipo='local')
     monkeypatch.setattr(nacional, '_post', lambda *args, **kwargs: resposta(nfseXmlGZipB64=nacional._compactar(xml_nota())))
     assert nacional.emitir_nfse(db, b, c).status == 'emitida'
+
+
+def test_joinville_resposta_duplicidade_exige_consultar_rps(db, monkeypatch, fiscal):
+    b, c = fiscal
+    monkeypatch.setattr(settings, 'nfse_cert_path', '')
+    monkeypatch.setattr(municipal, '_ibge_por_cep', lambda cep: '4209102')
+    xml = '<Resposta><MensagemRetorno><Codigo>E10</Codigo><Mensagem>RPS já recebido</Mensagem></MensagemRetorno></Resposta>'
+    from html import escape
+    calls = []
+
+    def post(*args, **kwargs):
+        calls.append('POST')
+        return f'<Envelope><return>{escape(xml)}</return></Envelope>'
+
+    monkeypatch.setattr(municipal, '_post', post)
+    with pytest.raises(municipal.NfseApiError):
+        municipal.emitir_nfse(db, b, c)
+    assert municipal.emitir_nfse(db, b, c).status == 'desconhecido'
+    assert calls == ['POST']

@@ -439,10 +439,14 @@ def emitir_nfse(db: Session, billing: Billing, client: Client,
             raise NfseApiError('Resposta inesperada da prefeitura; consulte o RPS.')
         protocolo, erros = _txt(root, 'Protocolo'), _erros(root)
         if not protocolo:
-            if erros:
+            mensagem = _mensagem_erros(erros)
+            duplicada = any(trecho in mensagem.lower() for trecho in (
+                'duplic', 'já exist', 'ja exist', 'já gerad', 'ja gerad',
+                'já emit', 'ja emit', 'já receb', 'ja receb'))
+            if erros and not duplicada:
                 return nfse_emissao.atualizar(db, nota_id, token, status='erro', erro_tipo='rejeicao',
                     xml_retorno=texto, erro_codigo=erros[0].get('codigo'),
-                    erro_mensagem=_mensagem_erros(erros))
+                    erro_mensagem=mensagem)
             raise NfseApiError('Resposta sem protocolo; desfecho desconhecido, consulte o RPS.')
         nota = nfse_emissao.atualizar(db, nota_id, token, status='processing', protocolo=protocolo,
                                      xml_retorno=texto, lease_expires_at=None)
