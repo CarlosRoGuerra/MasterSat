@@ -230,6 +230,17 @@ class Settings(BaseSettings):
     sgr_timeout_seconds: int = 30
     # Teto de clientes consultados pela POC de migração — nunca usar em lote real.
     sgr_migration_limit: int = 10
+    # Downloads de PDF de boleto / XML de NFS-e devolvidos pela origem (SGR-06).
+    # Só HTTPS, só para estes hosts (separados por vírgula; ".dominio.com"
+    # libera os subdomínios) e nunca para IP privado/loopback/link-local —
+    # a checagem se repete a cada redirect. O host de SGR_BASE_URL entra
+    # sempre. Host fora da lista deixa o arquivo "bloqueado" no outbox
+    # (sgr_arquivos), para ser baixado quando o host for aprovado.
+    sgr_download_hosts: str = ''
+    sgr_download_max_bytes: int = 10 * 1024 * 1024
+    sgr_download_max_redirects: int = 3
+    # Tentativas de download por arquivo antes de exigir ação humana.
+    sgr_download_max_tentativas: int = 5
 
     # Retenção de audit_logs (trilha de auditoria — SEC-06). Não guarda
     # payload, só quem fez o quê: user_id/user_name/user_role, method, path,
