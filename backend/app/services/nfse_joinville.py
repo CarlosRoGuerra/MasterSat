@@ -29,6 +29,7 @@ from app.core.config import settings
 from app.models.billing import Billing
 from app.models.client import Client
 from app.models.nfse_nota import NfseNota
+from app.services import nfse_emissao
 
 # ---------------------------------------------------------------------------
 # Endpoints e namespaces
@@ -66,8 +67,8 @@ class NfseApiError(Exception):
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _base_url() -> str:
-    base = _ENDPOINTS.get(settings.nfse_env)
+def _base_url(ambiente: str | None = None) -> str:
+    base = _ENDPOINTS.get(ambiente or settings.nfse_env)
     if not base:
         raise NfseError(f'NFSE_ENV inválido: {settings.nfse_env!r} (use homologacao|producao)')
     return base
@@ -174,9 +175,13 @@ def _sim_nao_code(value: str | None, default: int) -> str:
     return str(default)
 
 
-def montar_inf_rps(billing: Billing, client: Client, numero_rps: str) -> tuple[etree._Element, str]:
+def montar_inf_rps(billing: Billing, client: Client, numero_rps: str, *,
+                   competencia: dt.date | None = None, discriminacao: str | None = None,
+                   cod_trib_nacional: str | None = None) -> tuple[etree._Element, str]:
     """Monta <InfRps id="..."> a partir de um Billing + Client."""
     agora = dt.datetime.now(_TZ_BRASILIA)
+    if competencia is not None and competencia != agora.date():
+        raise NfseError('Competência histórica não suportada pelo leiaute municipal legado; use o Emissor Nacional.')
     rps_id = f'rps{numero_rps}'
     valor = _fmt_valor(billing.amount)
 
@@ -214,9 +219,9 @@ def montar_inf_rps(billing: Billing, client: Client, numero_rps: str) -> tuple[e
     etree.SubElement(pis_cofins, 'PercentualAliquotaCofins').text = settings.nfse_aliquota_cofins
     etree.SubElement(pis_cofins, 'TipoRetencaoPisCofins').text = settings.nfse_tipo_retencao_pis_cofins
 
-    etree.SubElement(servico, 'ItemListaServico').text = settings.nfse_item_lista_servico
+    etree.SubElement(servico, 'ItemListaServico').text = _codigo_servico(cod_trib_nacional)
     etree.SubElement(servico, 'Discriminacao').text = _norm(
-        billing.title or settings.nfse_discriminacao_padrao, 2000
+        discriminacao if discriminacao is not None else billing.title or settings.nfse_discriminacao_padrao, 2000
     )
     etree.SubElement(servico, 'CodigoMunicipio').text = settings.nfse_codigo_municipio
 
@@ -229,7 +234,9 @@ def montar_inf_rps(billing: Billing, client: Client, numero_rps: str) -> tuple[e
 
 
 def montar_envio_lote(
-    billing: Billing, client: Client, numero_lote: str, numero_rps: str
+    billing: Billing, client: Client, numero_lote: str, numero_rps: str, *,
+    competencia: dt.date | None = None, discriminacao: str | None = None,
+    cod_trib_nacional: str | None = None,
 ) -> tuple[etree._Element, etree._Element, etree._Element, str, str]:
     """Monta <EnviarLoteRpsEnvio> com 1 RPS (sem assinatura)."""
     envio = etree.Element('EnviarLoteRpsEnvio', nsmap={None: NS_PUBLICA})
@@ -240,16 +247,17 @@ def montar_envio_lote(
     etree.SubElement(lote, 'QuantidadeRps').text = '1'
     lista = etree.SubElement(lote, 'ListaRps')
     rps = etree.SubElement(lista, 'Rps')
-    inf, rps_id = montar_inf_rps(billing, client, numero_rps)
+    inf, rps_id = montar_inf_rps(billing, client, numero_rps, competencia=competencia,
+                                discriminacao=discriminacao, cod_trib_nacional=cod_trib_nacional)
     rps.append(inf)
     return envio, rps, inf, rps_id, f'lote{numero_lote}'
 
 
-def _montar_consulta(metodo_root: str, protocolo: str) -> str:
+def _montar_consulta(metodo_root: str, protocolo: str, *, nota: NfseNota | None = None) -> str:
     envio = etree.Element(metodo_root, nsmap={None: NS_PUBLICA})
     prest = etree.SubElement(envio, 'Prestador')
-    etree.SubElement(prest, 'Cnpj').text = settings.nfse_cnpj
-    etree.SubElement(prest, 'InscricaoMunicipal').text = settings.nfse_inscricao_municipal
+    etree.SubElement(prest, 'Cnpj').text = nota.prestador_cnpj if nota else settings.nfse_cnpj
+    etree.SubElement(prest, 'InscricaoMunicipal').text = nota.prestador_im if nota else settings.nfse_inscricao_municipal
     etree.SubElement(envio, 'Protocolo').text = protocolo
     return etree.tostring(envio, encoding='unicode')
 
@@ -271,30 +279,27 @@ def _envelope_soap(xml_interno: str, metodo: str) -> str:
 def _assinar_lote(envio: etree._Element, inf: etree._Element, rps: etree._Element,
                   rps_id: str, lote_id: str) -> str:
     """Assina o InfRps e o lote com o certificado A1 (perfil ABRASF/Pública)."""
-    from pathlib import Path
-
-    from cryptography.hazmat.primitives import serialization
-    from cryptography.hazmat.primitives.serialization import pkcs12
     from signxml import XMLSigner, methods
+    from signxml.exceptions import InvalidInput
+    from app.services import nfse_nacional
 
-    data = Path(settings.nfse_cert_path).read_bytes()
-    chave, cert, _ = pkcs12.load_key_and_certificates(data, settings.nfse_cert_senha.encode())
-    if chave is None or cert is None:
-        raise NfseError('Não foi possível ler o certificado .pfx (senha incorreta?)')
-    key_pem = chave.private_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PrivateFormat.TraditionalOpenSSL,
-        encryption_algorithm=serialization.NoEncryption(),
-    )
-    cert_pem = cert.public_bytes(serialization.Encoding.PEM)
+    try:
+        key_pem, cert_pem = nfse_nacional._material_certificado()
+    except nfse_nacional.NfseError as exc:
+        raise NfseError(str(exc)) from exc
 
     def _sign(elem, ref):
-        signer = XMLSigner(
-            method=methods.enveloped,
-            signature_algorithm='rsa-sha1',
-            digest_algorithm='sha1',
-            c14n_algorithm='http://www.w3.org/TR/2001/REC-xml-c14n-20010315',
-        )
+        try:
+            signer = XMLSigner(
+                method=methods.enveloped,
+                signature_algorithm='rsa-sha1',
+                digest_algorithm='sha1',
+                c14n_algorithm='http://www.w3.org/TR/2001/REC-xml-c14n-20010315',
+            )
+        except InvalidInput as exc:
+            # Não retirar a proteção SHA1 nem trocar o perfil para silenciar
+            # a falha. O perfil municipal legado precisa de homologação.
+            raise NfseError('Perfil de assinatura municipal legado recusado pela biblioteca; use o Emissor Nacional para nova emissão.') from exc
         return signer.sign(elem, key=key_pem, cert=cert_pem, reference_uri=ref)
 
     inf_assinado = _sign(inf, rps_id)
@@ -307,8 +312,8 @@ def _assinar_lote(envio: etree._Element, inf: etree._Element, rps: etree._Elemen
 # Transporte + parse das respostas
 # ---------------------------------------------------------------------------
 
-def _post(servico: str, soap: str, soapaction: str) -> str:
-    url = f'{_base_url()}/{servico}'
+def _post(servico: str, soap: str, soapaction: str, *, ambiente: str | None = None) -> str:
+    url = f'{_base_url(ambiente)}/{servico}'
     try:
         resp = requests.post(
             url,
@@ -372,125 +377,164 @@ def _aplicar_erro(nota: NfseNota, erros: list[dict]) -> None:
 # Fluxo principal
 # ---------------------------------------------------------------------------
 
-def emitir_nfse(db: Session, billing: Billing, client: Client,
-                cod_trib_nacional: str | None = None) -> NfseNota:
-    """
-    Emite a NFS-e de um billing: monta o RPS, envia o lote e consulta o
-    resultado. Idempotente: se já houver NFS-e emitida para o billing, retorna-a.
+def _codigo_servico(codigo: str | None) -> str:
+    valor = _only_digits(codigo) or _only_digits(settings.nfse_item_lista_servico)
+    if len(valor) == 6:
+        return valor[:4]  # cTribNac: item LC116 (4) + desdobramento nacional (2)
+    if len(valor) != 4:
+        raise NfseError('Código de serviço municipal deve ter 4 dígitos (ou 6 do código nacional).')
+    return valor
 
-    ``cod_trib_nacional`` é ignorado (o webservice municipal usa o item de serviço
-    próprio); existe só para manter a mesma assinatura do provedor nacional.
-    """
+
+def emitir_nfse(db: Session, billing: Billing, client: Client,
+                cod_trib_nacional: str | None = None, *, competencia: dt.date | None = None,
+                discriminacao: str | None = None, lote_id: int | None = None) -> NfseNota:
     if not settings.nfse_enabled:
         raise NfseError('Integração NFS-e desabilitada (NFSE_ENABLED=false)')
-
-    # Respeita a preferência do cliente: só emite se "Emitir Nota Fiscal" != 'nao'
-    # (None/'sim' → emite; mantém compatibilidade com clientes antigos sem o campo).
     if (client.issue_invoice or 'sim') == 'nao':
-        raise NfseError('Cliente configurado para NÃO emitir nota fiscal (campo "Emitir Nota Fiscal" = Não no cadastro).')
-
+        raise NfseError('Cliente configurado para NÃO emitir nota fiscal.')
     _validar_endereco_tomador(client)
-
-    nota = db.query(NfseNota).filter_by(billing_id=billing.id).first()
-    if nota and nota.status == 'emitida':
+    descricao = _norm(discriminacao if discriminacao is not None else
+                      billing.title or settings.nfse_discriminacao_padrao, 2000)
+    nota, token = nfse_emissao.reservar(
+        db, billing.id, lote_id=lote_id, provedor='joinville', ambiente=settings.nfse_env,
+        competencia=competencia or dt.datetime.now(_TZ_BRASILIA).date(),
+        discriminacao=descricao, codigo_servico=_codigo_servico(cod_trib_nacional),
+        numero_rps=str(billing.id), serie_rps=settings.nfse_serie_rps,
+        prestador_cnpj=_only_digits(settings.nfse_cnpj), prestador_im=settings.nfse_inscricao_municipal,
+        codigo_municipio=settings.nfse_codigo_municipio,
+    )
+    if token is None:
         return nota
-    if nota is None:
-        nota = NfseNota(billing_id=billing.id)
-        db.add(nota)
-
-    numero_rps = str(billing.id)
-    numero_lote = str(int(time.time()))
-    envio, rps, inf, rps_id, lote_id = montar_envio_lote(billing, client, numero_lote, numero_rps)
-
-    if settings.nfse_cert_path:
-        xml = _assinar_lote(envio, inf, rps, rps_id, lote_id)
-    else:
-        xml = etree.tostring(envio, encoding='unicode')
-
-    nota.numero_rps = numero_rps
-    nota.serie_rps = settings.nfse_serie_rps
-    nota.numero_lote = numero_lote
-    nota.xml_envio = xml
-    nota.status = 'pending'
-    nota.erro_codigo = None
-    nota.erro_mensagem = None
-    db.commit()
-
-    resp_text = _post('Services', _envelope_soap(xml, 'RecepcionarLoteRps'), 'RecepcionarLoteRps')
-    root = _inner_root(resp_text)
-    if root is None:
-        _aplicar_erro(nota, [{'codigo': None, 'mensagem': resp_text[:500], 'correcao': None}])
-        db.commit()
-        raise NfseApiError('Resposta inesperada da prefeitura na recepção do lote')
-
-    protocolo = _txt(root, 'Protocolo')
-    erros = _erros(root)
-    if not protocolo:
-        _aplicar_erro(nota, erros or [{'codigo': None, 'mensagem': 'Lote sem protocolo', 'correcao': None}])
-        db.commit()
+    nota_id = nota.id
+    try:
+        try:
+            nfse_emissao.validar_identidade(nota, provedor='joinville', ambiente=settings.nfse_env,
+                serie_rps=settings.nfse_serie_rps, prestador_cnpj=_only_digits(settings.nfse_cnpj),
+                prestador_im=settings.nfse_inscricao_municipal, codigo_municipio=settings.nfse_codigo_municipio)
+        except ValueError as exc:
+            raise NfseError(str(exc)) from exc
+        numero_lote = str(int(time.time() * 1000))
+        envio, rps, inf, rps_id, lote_xml_id = montar_envio_lote(
+            billing, client, numero_lote, nota.numero_rps, competencia=nota.competencia,
+            discriminacao=nota.discriminacao, cod_trib_nacional=nota.codigo_servico)
+        from app.services.nfse_certificado import obter_ativo
+        tem_certificado = bool(settings.nfse_cert_path or obter_ativo(db))
+        xml = (_assinar_lote(envio, inf, rps, rps_id, lote_xml_id) if tem_certificado
+               else etree.tostring(envio, encoding='unicode'))
+    except Exception as exc:
+        nfse_emissao.atualizar(db, nota_id, token, status='erro', erro_tipo='local', erro_mensagem=str(exc)[:2000])
+        raise
+    if not nfse_emissao.marcar_envio(db, nota_id, token, xml, numero_lote=numero_lote,
+                                   discriminacao=_txt(inf, 'Discriminacao'),
+                                   codigo_servico=_codigo_servico(nota.codigo_servico)):
+        db.refresh(nota)
         return nota
+    try:
+        with nfse_emissao.heartbeat(db, nota_id, token):
+            texto = _post('Services', _envelope_soap(xml, 'RecepcionarLoteRps'),
+                          'RecepcionarLoteRps', ambiente=nota.ambiente)
+        root = _inner_root(texto)
+        if root is None:
+            raise NfseApiError('Resposta inesperada da prefeitura; consulte o RPS.')
+        protocolo, erros = _txt(root, 'Protocolo'), _erros(root)
+        if not protocolo:
+            if erros:
+                return nfse_emissao.atualizar(db, nota_id, token, status='erro', erro_tipo='rejeicao',
+                    xml_retorno=texto, erro_codigo=erros[0].get('codigo'),
+                    erro_mensagem=_mensagem_erros(erros))
+            raise NfseApiError('Resposta sem protocolo; desfecho desconhecido, consulte o RPS.')
+        nota = nfse_emissao.atualizar(db, nota_id, token, status='processing', protocolo=protocolo,
+                                     xml_retorno=texto, lease_expires_at=None)
+        return consultar(db, nota)
+    except Exception as exc:
+        db.rollback()
+        db.refresh(nota)
+        if nota.tentativa_id == token and nota.status not in ('emitida', 'erro'):
+            nfse_emissao.atualizar(db, nota_id, token, status='desconhecido', erro_tipo='desconhecido',
+                                  erro_mensagem=str(exc)[:2000])
+        if isinstance(exc, (NfseError, NfseApiError)):
+            raise
+        raise NfseApiError(f'Desfecho desconhecido; consulte o RPS: {exc}') from exc
 
-    nota.protocolo = protocolo
-    nota.status = 'processing'
-    db.commit()
 
-    # Consulta imediata (o processamento costuma ser instantâneo). SEM sleep no
-    # request: se ainda estiver processando, o front reconsulta via /consultar.
-    return consultar(db, nota)
+def _mensagem_erros(erros):
+    return '; '.join(f"{e.get('codigo')}: {e.get('mensagem')} ({e.get('correcao')})" for e in erros)[:2000]
+
+
+def _montar_consulta_rps(nota: NfseNota) -> str:
+    envio = etree.Element('ConsultarNfseRpsEnvio', nsmap={None: NS_PUBLICA})
+    ident = etree.SubElement(envio, 'IdentificacaoRps')
+    etree.SubElement(ident, 'Numero').text = nota.numero_rps
+    etree.SubElement(ident, 'Serie').text = nota.serie_rps
+    etree.SubElement(ident, 'Tipo').text = '1'
+    prest = etree.SubElement(envio, 'Prestador')
+    etree.SubElement(prest, 'Cnpj').text = nota.prestador_cnpj
+    etree.SubElement(prest, 'InscricaoMunicipal').text = nota.prestador_im
+    return etree.tostring(envio, encoding='unicode')
 
 
 def consultar(db: Session, nota: NfseNota) -> NfseNota:
-    """Consulta situação + lote de um protocolo e atualiza a nota (emitida/erro/processing)."""
-    if not nota.protocolo:
-        raise NfseError('Nota sem protocolo — emita primeiro')
-
-    sit_text = _post(
-        'Consultas',
-        _envelope_soap(_montar_consulta('ConsultarSituacaoLoteRpsEnvio', nota.protocolo), 'ConsultarSituacaoLoteRps'),
-        'ConsultarSituacaoLoteRps',
-    )
-    sit_root = _inner_root(sit_text)
-    if sit_root is not None:
-        nota.situacao = _txt(sit_root, 'Situacao')
-
-    lote_text = _post(
-        'Consultas',
-        _envelope_soap(_montar_consulta('ConsultarLoteRpsEnvio', nota.protocolo), 'ConsultarLoteRps'),
-        'ConsultarLoteRps',
-    )
-    nota.xml_retorno = lote_text
-    root = _inner_root(lote_text)
-    if root is None:
-        nota.status = 'processing'
-        db.commit()
+    """Consulta protocolo ou RPS original, sem depender da configuração atual."""
+    if nota.status == 'emitida':
         return nota
-
-    inf_nfse = root.xpath('.//*[local-name()="InfNfse"]')
-    if inf_nfse:
-        node = inf_nfse[0]
-        nota.numero_nfse = _txt(node, 'Numero')
-        nota.serie_nfse = _txt(node, 'Serie')
-        nota.codigo_verificacao = _txt(node, 'CodigoVerificacao')
-        nota.chave_acesso = _txt(node, 'ChaveAcesso')
-        nota.link_visualizacao = _txt(node, 'LinkVisualizacaoNfse')
-        data_emissao = _txt(node, 'DataEmissao')
-        if data_emissao:
-            try:
-                nota.data_emissao = dt.datetime.fromisoformat(data_emissao)
-            except ValueError:
-                pass
-        nota.status = 'emitida'
-        nota.erro_codigo = None
-        nota.erro_mensagem = None
-        db.commit()
+    token = nfse_emissao.reservar_consulta(db, nota)
+    if token is None:
+        db.refresh(nota)
         return nota
-
-    erros = _erros(root)
-    if erros:
-        _aplicar_erro(nota, erros)
-    elif (nota.situacao or '') in _SITUACAO_PROCESSANDO:
-        nota.status = 'processing'
-    else:
-        nota.status = 'processing'
-    db.commit()
-    return nota
+    nota_id = nota.id
+    try:
+        if nota.provedor != 'joinville' or not nota.ambiente or not nota.prestador_cnpj:
+            raise NfseError('Identidade fiscal legada incompleta; reconciliação manual necessária.')
+        situacao = nota.situacao
+        with nfse_emissao.heartbeat(db, nota_id, token):
+            if nota.protocolo:
+                sit_text = _post('Consultas', _envelope_soap(
+                    _montar_consulta('ConsultarSituacaoLoteRpsEnvio', nota.protocolo, nota=nota),
+                    'ConsultarSituacaoLoteRps'), 'ConsultarSituacaoLoteRps', ambiente=nota.ambiente)
+                sit_root = _inner_root(sit_text)
+                situacao = _txt(sit_root, 'Situacao') if sit_root is not None else situacao
+                texto = _post('Consultas', _envelope_soap(
+                    _montar_consulta('ConsultarLoteRpsEnvio', nota.protocolo, nota=nota),
+                    'ConsultarLoteRps'), 'ConsultarLoteRps', ambiente=nota.ambiente)
+            else:
+                if not nota.numero_rps or not nota.serie_rps:
+                    raise NfseError('Identidade RPS ausente; reconciliação manual necessária.')
+                texto = _post('Consultas', _envelope_soap(_montar_consulta_rps(nota), 'ConsultarNfseRps'),
+                              'ConsultarNfseRps', ambiente=nota.ambiente)
+        root = _inner_root(texto)
+        if root is None:
+            raise NfseApiError('Resposta de consulta inválida; não reenviar.')
+        encontrados = root.xpath('.//*[local-name()="InfNfse"]')
+        if encontrados:
+            node = encontrados[0]
+            numero = _txt(node, 'Numero')
+            if not numero:
+                raise NfseApiError('Consulta sem número de NFS-e; não reenviar.')
+            campos = dict(status='emitida', numero_nfse=numero, serie_nfse=_txt(node, 'Serie'),
+                codigo_verificacao=_txt(node, 'CodigoVerificacao'), chave_acesso=_txt(node, 'ChaveAcesso'),
+                link_visualizacao=_txt(node, 'LinkVisualizacaoNfse'), xml_retorno=texto,
+                erro_tipo=None, erro_codigo=None, erro_mensagem=None, situacao=situacao)
+            data = _txt(node, 'DataEmissao')
+            if data:
+                try:
+                    campos['data_emissao'] = dt.datetime.fromisoformat(data)
+                except ValueError:
+                    pass
+            return nfse_emissao.atualizar(db, nota_id, token, **campos)
+        erros = _erros(root)
+        # Consulta RPS 'não encontrado' não prova rejeição. Apenas lote com
+        # situação final de erro (3/5) e mensagem fiscal pode liberar revisão.
+        rejeicao = bool(nota.protocolo and situacao in ('3', '5') and erros)
+        return nfse_emissao.atualizar(db, nota_id, token,
+            status='erro' if rejeicao else ('processing' if nota.protocolo else 'desconhecido'),
+            erro_tipo='rejeicao' if rejeicao else (None if nota.protocolo else 'desconhecido'),
+            erro_codigo=erros[0].get('codigo') if erros else None,
+            erro_mensagem=_mensagem_erros(erros) if erros else None,
+            situacao=situacao, xml_retorno=texto, lease_expires_at=None)
+    except Exception as exc:
+        nfse_emissao.atualizar(db, nota_id, token, status='desconhecido', erro_tipo='desconhecido',
+                              erro_mensagem=str(exc)[:2000])
+        if isinstance(exc, (NfseError, NfseApiError)):
+            raise
+        raise NfseApiError(f'Consulta RPS inconclusiva: {exc}') from exc

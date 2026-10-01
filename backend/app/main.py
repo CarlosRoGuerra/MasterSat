@@ -885,6 +885,18 @@ def _overdue_status_refresh_worker():
             logger.warning('Reclassificação de cobranças vencidas falhou (tentará novamente no próximo ciclo): %s', exc)
 
 
+def _nfse_lease_recovery_worker():
+    """Expira reservas abandonadas sem reenviar documentos fiscais."""
+    from app.services.nfse_lote import recuperar_notas_orfas
+
+    while True:
+        time.sleep(60)
+        try:
+            _run_locked(918273652, recuperar_notas_orfas)
+        except Exception:
+            logging.getLogger('uvicorn.error').exception('Falha ao recuperar leases NFS-e expiradas.')
+
+
 @app.on_event('startup')
 def on_startup():
     # Com múltiplos workers (uvicorn --workers), o startup roda em cada processo.
@@ -895,9 +907,8 @@ def on_startup():
         lock_conn.exec_driver_sql('SELECT pg_advisory_lock(918273645)')
         _apply_database_migrations()
         _seed_admin()
-        # Recupera notas NFS-e presas em 'pending'/'processing' de um reinício
-        # anterior (o worker é thread daemon; um restart mata a emissão em voo).
-        # No boot ainda não há worker ativo, então é seguro reprocessá-las.
+        # Outro processo pode estar emitindo durante este startup. Só leases
+        # expiradas passam para consulta de desfecho, sem autorizar reenvio.
         try:
             from app.services.nfse_lote import recuperar_notas_orfas
             _db = SessionLocal()
@@ -907,7 +918,7 @@ def on_startup():
                 _db.close()
             if _recuperadas:
                 logging.getLogger('uvicorn.error').warning(
-                    'NFS-e: %s nota(s) órfã(s) recuperada(s) no boot (marcadas p/ reprocesso).',
+                    'NFS-e: %s lease(s) expirada(s) no boot, aguardando consulta de desfecho.',
                     _recuperadas,
                 )
         except Exception:  # noqa: BLE001 — recuperação nunca pode derrubar o boot
@@ -924,6 +935,7 @@ def on_startup():
     # independente de qualquer integração — é regra de negócio pura sobre a
     # tabela de cobranças, sem dependência externa.
     threading.Thread(target=_overdue_status_refresh_worker, daemon=True).start()
+    threading.Thread(target=_nfse_lease_recovery_worker, daemon=True).start()
 
     # Renovador automático do token do cooperado Ailos (mantém a sessão viva
     # sem reautorização manual) + conciliação automática de pagamentos (baixa

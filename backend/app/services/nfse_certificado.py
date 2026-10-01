@@ -11,6 +11,9 @@ Ordem de resolução na emissão: certificado ATIVO no banco → NFSE_CERT_PATH 
 from __future__ import annotations
 
 import datetime as dt
+from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.serialization import pkcs12
@@ -52,14 +55,7 @@ def _cnpj_do_certificado(cert) -> str | None:
 
 
 def _validade(cert) -> tuple[dt.datetime, dt.datetime]:
-    """
-    (início, fim) da validade, sempre com fuso UTC.
-
-    A propriedade ``not_valid_before_utc`` só existe a partir da cryptography
-    42. O container roda a 41.x — presa por ``pyOpenSSL<24``, que o signxml
-    exige para assinar a DPS. Nessa versão só há ``not_valid_before``, que é
-    ingênuo mas já está em UTC.
-    """
+    """Validade UTC; mantém leitura compatível com a imagem anterior."""
     try:
         return cert.not_valid_before_utc, cert.not_valid_after_utc
     except AttributeError:
@@ -67,6 +63,65 @@ def _validade(cert) -> tuple[dt.datetime, dt.datetime]:
             cert.not_valid_before.replace(tzinfo=dt.timezone.utc),
             cert.not_valid_after.replace(tzinfo=dt.timezone.utc),
         )
+
+
+def _validar_periodo(inicio: dt.datetime, fim: dt.datetime) -> None:
+    agora = dt.datetime.now(dt.timezone.utc)
+    if agora < inicio:
+        raise CertificadoError('O certificado ainda não está no período de validade.')
+    if agora >= fim:
+        raise CertificadoError(
+            f'Certificado vencido em {fim.strftime("%d/%m/%Y")}. '
+            'Emita um novo na Autoridade Certificadora.'
+        )
+
+
+@dataclass(frozen=True)
+class _Material:
+    chave_pem: bytes
+    cert_pem: bytes
+    valido_de: dt.datetime
+    valido_ate: dt.datetime
+
+    def utilizar(self) -> tuple[bytes, bytes]:
+        # Deliberadamente fora do cache: um certificado pode vencer entre usos.
+        _validar_periodo(self.valido_de, self.valido_ate)
+        return self.chave_pem, self.cert_pem
+
+
+def _extrair_material(arquivo: bytes, senha: str) -> _Material:
+    try:
+        chave, cert, _ = pkcs12.load_key_and_certificates(arquivo, senha.encode())
+    except (ValueError, TypeError) as exc:
+        raise CertificadoError('Não foi possível abrir o certificado. Confira o arquivo e a senha.') from exc
+    if chave is None or cert is None:
+        raise CertificadoError('O arquivo não contém chave privada e certificado.')
+    inicio, fim = _validade(cert)
+    return _Material(
+        chave.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.TraditionalOpenSSL,
+            encryption_algorithm=serialization.NoEncryption(),
+        ),
+        cert.public_bytes(serialization.Encoding.PEM), inicio, fim,
+    )
+
+
+@lru_cache(maxsize=4)
+def _material_versionado(versao: int, arquivo_cifrado: bytes, senha_cifrada: str) -> _Material:
+    # O id existente é a versão imutável do upload. Ciphertexts na chave do
+    # cache também detectam restaurações do banco/regravação no mesmo id.
+    return _extrair_material(decrypt_bytes(arquivo_cifrado), decrypt_token(senha_cifrada))
+
+
+@lru_cache(maxsize=2)
+def _material_arquivo(arquivo: bytes, senha: str) -> _Material:
+    return _extrair_material(arquivo, senha)
+
+
+def material_arquivo(caminho: Path, senha: str) -> tuple[bytes, bytes]:
+    """Compatibilidade .env: substituição do PFX é percebida no próximo uso."""
+    return _material_arquivo(caminho.read_bytes(), senha).utilizar()
 
 
 def inspecionar(arquivo: bytes, senha: str) -> dict:
@@ -107,11 +162,7 @@ def salvar(
     """Valida o .pfx, desativa o anterior e grava o novo como ativo."""
     dados = inspecionar(arquivo, senha)
 
-    if dados['valido_ate'] and dados['valido_ate'] < dt.datetime.now(dt.timezone.utc):
-        raise CertificadoError(
-            f'Certificado vencido em {dados["valido_ate"].strftime("%d/%m/%Y")}. '
-            'Emita um novo na Autoridade Certificadora.'
-        )
+    _validar_periodo(dados['valido_de'], dados['valido_ate'])
 
     db.query(NfseCertificado).filter_by(ativo=True).update({'ativo': False})
     registro = NfseCertificado(
@@ -136,6 +187,7 @@ def salvar(
 def obter_ativo(db: Session) -> NfseCertificado | None:
     return (
         db.query(NfseCertificado)
+        .populate_existing()
         .filter_by(ativo=True)
         .order_by(NfseCertificado.id.desc())
         .first()
@@ -150,24 +202,15 @@ def material_pem(db: Session) -> tuple[bytes, bytes] | None:
     registro = obter_ativo(db)
     if registro is None:
         return None
-    arquivo = decrypt_bytes(registro.arquivo_cifrado)
-    senha = decrypt_token(registro.senha_cifrada)
-    chave, cert, _ = pkcs12.load_key_and_certificates(arquivo, senha.encode())
-    return (
-        chave.private_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PrivateFormat.TraditionalOpenSSL,
-            encryption_algorithm=serialization.NoEncryption(),
-        ),
-        cert.public_bytes(serialization.Encoding.PEM),
-    )
+    return _material_versionado(
+        registro.id, registro.arquivo_cifrado, registro.senha_cifrada,
+    ).utilizar()
 
 
 def _invalidar_cache() -> None:
-    """Limpa os caches do módulo de emissão para o novo certificado valer já."""
-    from app.services import nfse_nacional
-    nfse_nacional._material_certificado.cache_clear()
-    nfse_nacional._par_pem_mtls.cache_clear()
+    """Libera memória local; correção entre workers depende da versão no banco."""
+    _material_versionado.cache_clear()
+    _material_arquivo.cache_clear()
 
 
 def _com_fuso(valor: dt.datetime | None) -> dt.datetime | None:

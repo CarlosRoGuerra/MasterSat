@@ -28,19 +28,20 @@ import datetime as dt
 import gzip
 import logging
 import re
+from contextlib import contextmanager
 from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
 
 import requests
 from lxml import etree
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.billing import Billing
 from app.models.client import Client
 from app.models.nfse_nota import NfseNota
+from app.services import nfse_emissao
 
 logger = logging.getLogger(__name__)
 
@@ -103,9 +104,9 @@ class NfseApiError(Exception):
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _ambiente() -> tuple[str, str]:
+def _ambiente(ambiente: str | None = None) -> tuple[str, str]:
     try:
-        return _AMBIENTES[settings.nfse_nac_ambiente]
+        return _AMBIENTES[ambiente or settings.nfse_nac_ambiente]
     except KeyError:
         raise NfseError(
             f'NFSE_NAC_AMBIENTE inválido: {settings.nfse_nac_ambiente!r} '
@@ -222,7 +223,8 @@ def _montar_tomador(inf: etree._Element, client: Client) -> None:
 
 
 def _montar_servico(inf: etree._Element, billing: Billing,
-                    cod_trib_nacional: str | None = None) -> None:
+                    cod_trib_nacional: str | None = None,
+                    discriminacao: str | None = None) -> None:
     serv = _sub(inf, 'serv')
     loc = _sub(serv, 'locPrest')
     _sub(loc, 'cLocPrestacao', settings.nfse_codigo_municipio)
@@ -233,7 +235,7 @@ def _montar_servico(inf: etree._Element, billing: Billing,
     codigo = _only_digits(cod_trib_nacional) or settings.nfse_nac_cod_trib_nacional
     _sub(cserv, 'cTribNac', codigo)
     _sub(cserv, 'xDescServ', _norm(
-        billing.title or settings.nfse_discriminacao_padrao, 2000))
+        discriminacao if discriminacao is not None else billing.title or settings.nfse_discriminacao_padrao, 2000))
     if settings.nfse_nac_cod_nbs:
         _sub(cserv, 'cNBS', settings.nfse_nac_cod_nbs)
 
@@ -288,7 +290,9 @@ def validar_cadastro_tomador(client: Client) -> None:
 
 
 def montar_dps(billing: Billing, client: Client, numero_dps: str,
-               cod_trib_nacional: str | None = None) -> etree._Element:
+               cod_trib_nacional: str | None = None, *,
+               competencia: dt.date | None = None,
+               discriminacao: str | None = None) -> etree._Element:
     """Monta o <DPS> completo (sem assinatura) para um Billing/Client.
 
     ``cod_trib_nacional`` permite escolher o código de tributação por emissão
@@ -308,14 +312,14 @@ def montar_dps(billing: Billing, client: Client, numero_dps: str,
     _sub(inf, 'verAplic', settings.nfse_nac_ver_aplic)
     _sub(inf, 'serie', settings.nfse_nac_serie)
     _sub(inf, 'nDPS', str(numero_dps))
-    _sub(inf, 'dCompet', agora.strftime('%Y-%m-%d'))
+    _sub(inf, 'dCompet', (competencia or agora.date()).isoformat())
     # tpEmit: 1=Prestador, 2=Tomador, 3=Intermediário
     _sub(inf, 'tpEmit', '1')
     _sub(inf, 'cLocEmi', settings.nfse_codigo_municipio)
 
     _montar_prestador(inf)
     _montar_tomador(inf, client)
-    _montar_servico(inf, billing, cod_trib_nacional)
+    _montar_servico(inf, billing, cod_trib_nacional, discriminacao)
     _montar_valores(inf, billing)
     return dps
 
@@ -366,29 +370,28 @@ def validar_dps(dps: etree._Element) -> None:
 # ---------------------------------------------------------------------------
 
 def _material_do_banco() -> tuple[bytes, bytes] | None:
-    """Certificado cadastrado pela tela (tabela nfse_certificados), se houver.
-    Falha de banco não derruba a emissão — cai no .env."""
+    """Consulta a versão ativa em cada uso, inclusive em outros workers.
+
+    Só ausência de cadastro permite fallback .env. Falha de banco, validade
+    ou decifração bloqueia o uso para não ressuscitar um certificado antigo.
+    """
+    from sqlalchemy.exc import SQLAlchemyError
+    from app.core.crypto import CryptoError
+    from app.db.session import SessionLocal
+    from app.services import nfse_certificado
     try:
-        from app.db.session import SessionLocal
-        from app.services import nfse_certificado
-        db = SessionLocal()
-        try:
+        with SessionLocal() as db:
             return nfse_certificado.material_pem(db)
-        finally:
-            db.close()
-    except Exception:  # noqa: BLE001 — sem banco/tabela, usa o arquivo do .env
-        logger.warning('Falha ao buscar certificado NFS-e cadastrado no banco; caindo para o .env', exc_info=True)
-        return None
+    except (SQLAlchemyError, CryptoError, nfse_certificado.CertificadoError) as exc:
+        raise NfseError('Não foi possível utilizar o certificado NFS-e cadastrado; verifique banco, chave de decifração e validade.') from exc
 
 
-@lru_cache(maxsize=1)
 def _material_certificado() -> tuple[bytes, bytes]:
     """
     (chave_pem, certificado_pem). Prioridade: certificado ATIVO cadastrado na
-    tela → NFSE_CERT_PATH do .env. O cache é limpo ao cadastrar um novo.
+    tela → NFSE_CERT_PATH do .env. A versão e a validade são lidas a cada uso.
     """
-    from cryptography.hazmat.primitives import serialization
-    from cryptography.hazmat.primitives.serialization import pkcs12
+    from app.services import nfse_certificado
 
     do_banco = _material_do_banco()
     if do_banco is not None:
@@ -404,36 +407,32 @@ def _material_certificado() -> tuple[bytes, bytes]:
     if not caminho.exists():
         raise NfseError(f'Certificado não encontrado em {caminho}')
 
-    chave, cert, _ = pkcs12.load_key_and_certificates(
-        caminho.read_bytes(), settings.nfse_cert_senha.encode()
-    )
-    if chave is None or cert is None:
-        raise NfseError('Não foi possível ler o certificado .pfx (senha incorreta?)')
-    return (
-        chave.private_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PrivateFormat.TraditionalOpenSSL,
-            encryption_algorithm=serialization.NoEncryption(),
-        ),
-        cert.public_bytes(serialization.Encoding.PEM),
-    )
+    try:
+        return nfse_certificado.material_arquivo(caminho, settings.nfse_cert_senha)
+    except (OSError, nfse_certificado.CertificadoError) as exc:
+        raise NfseError(f'Não foi possível utilizar o certificado .pfx: {exc}') from exc
 
 
-@lru_cache(maxsize=1)
-def _par_pem_mtls() -> tuple[str, str]:
+@contextmanager
+def _par_pem_mtls():
     """
     Escreve cert e chave em PEM temporários — o ``requests`` exige caminhos de
-    arquivo para mTLS, não bytes em memória.
+    arquivo para mTLS, não bytes em memória. Cada requisição possui seus
+    arquivos, removidos no finally do contexto, inclusive quando há timeout.
+    Renovação em paralelo nunca apaga PEM de uma requisição em andamento.
     """
     import tempfile
 
     key_pem, cert_pem = _material_certificado()
-    tmp = Path(tempfile.mkdtemp(prefix='nfse_mtls_'))
-    cert_file, key_file = tmp / 'cert.pem', tmp / 'key.pem'
-    cert_file.write_bytes(cert_pem)
-    key_file.write_bytes(key_pem)
-    key_file.chmod(0o600)
-    return str(cert_file), str(key_file)
+    with tempfile.TemporaryDirectory(prefix='nfse_mtls_') as diretorio:
+        tmp = Path(diretorio)
+        tmp.chmod(0o700)
+        cert_file, key_file = tmp / 'cert.pem', tmp / 'key.pem'
+        cert_file.write_bytes(cert_pem)
+        key_file.write_bytes(key_pem)
+        cert_file.chmod(0o600)
+        key_file.chmod(0o600)
+        yield str(cert_file), str(key_file)
 
 
 NS_DSIG = 'http://www.w3.org/2000/09/xmldsig#'
@@ -502,16 +501,17 @@ def _descompactar(b64: str) -> str:
     return gzip.decompress(base64.b64decode(b64)).decode('utf-8')
 
 
-def _post(caminho: str, payload: dict) -> requests.Response:
-    _, base = _ambiente()
+def _post(caminho: str, payload: dict, *, ambiente: str | None = None) -> requests.Response:
+    _, base = _ambiente(ambiente)
     try:
-        return requests.post(
-            f'{base}{caminho}',
-            json=payload,
-            headers={'Content-Type': 'application/json', 'Accept': 'application/json'},
-            cert=_par_pem_mtls(),
-            timeout=settings.nfse_timeout_seconds,
-        )
+        with _par_pem_mtls() as par:
+            return requests.post(
+                f'{base}{caminho}',
+                json=payload,
+                headers={'Content-Type': 'application/json', 'Accept': 'application/json'},
+                cert=par,
+                timeout=settings.nfse_timeout_seconds,
+            )
     except requests.RequestException as exc:
         raise NfseApiError(f'Falha de conexão com a Sefin Nacional: {exc}') from exc
 
@@ -541,93 +541,141 @@ def _erro_da_resposta(resp: requests.Response) -> str:
 # ---------------------------------------------------------------------------
 
 def emitir_nfse(db: Session, billing: Billing, client: Client,
-                cod_trib_nacional: str | None = None) -> NfseNota:
-    """
-    Emite a NFS-e de um billing pelo Emissor Nacional. Idempotente: se já houver
-    nota emitida para o billing, retorna-a sem reenviar.
-
-    ``cod_trib_nacional`` escolhe o código de tributação do serviço nesta emissão
-    (vazio = default do .env).
-    """
+                cod_trib_nacional: str | None = None, *,
+                competencia: dt.date | None = None, discriminacao: str | None = None,
+                lote_id: int | None = None) -> NfseNota:
+    """Reserva exclusiva antes da rede; resultado incerto só permite consulta."""
     if not settings.nfse_enabled:
         raise NfseError('Integração NFS-e desabilitada (NFSE_ENABLED=false)')
-    # Trava anti-acidente: emitir nota fiscal REAL (ambiente 'producao') exige
-    # confirmação explícita, além do ambiente — evita emissão irreversível por
-    # engano de .env.
     if settings.nfse_nac_ambiente == 'producao' and not settings.nfse_nac_producao_confirmada:
-        raise NfseError(
-            'Emissão em PRODUÇÃO (nota fiscal real) bloqueada: defina '
-            'NFSE_NAC_PRODUCAO_CONFIRMADA=true para confirmar. '
-            'Sem isso, use producao_restrita para testes.'
-        )
+        raise NfseError('Emissão em PRODUÇÃO bloqueada: defina NFSE_NAC_PRODUCAO_CONFIRMADA=true.')
     if (client.issue_invoice or 'sim') == 'nao':
-        raise NfseError(
-            'Cliente configurado para NÃO emitir nota fiscal '
-            '(campo "Emitir Nota Fiscal" = Não no cadastro).'
-        )
-
-    nota = db.query(NfseNota).filter_by(billing_id=billing.id).first()
-    if nota and nota.status == 'emitida':
-        return nota
-    if nota is None:
+        raise NfseError('Cliente configurado para NÃO emitir nota fiscal.')
+    competencia = competencia or dt.datetime.now(_TZ_BRASILIA).date()
+    descricao = _norm(discriminacao if discriminacao is not None else
+                      billing.title or settings.nfse_discriminacao_padrao, 2000)
+    codigo = _only_digits(cod_trib_nacional) or settings.nfse_nac_cod_trib_nacional
+    nota, token = nfse_emissao.reservar(
+        db, billing.id, lote_id=lote_id, provedor='nacional', ambiente=settings.nfse_nac_ambiente,
+        competencia=competencia, discriminacao=descricao, codigo_servico=codigo,
+        numero_rps=str(billing.id), serie_rps=settings.nfse_nac_serie,
+        prestador_cnpj=_only_digits(settings.nfse_cnpj), prestador_im=settings.nfse_inscricao_municipal,
+        codigo_municipio=settings.nfse_codigo_municipio, dps_id=id_dps(str(billing.id)),
+    )
+    if token is None:
+        return nota  # recuperação/consulta é explícita: nunca outro POST
+    nota_id = nota.id
+    try:
         try:
-            # `db.add` acontece DENTRO do savepoint — ver comentário equivalente
-            # em `ailos_boletos._upsert_ailos_boleto` sobre por que precisa ser
-            # assim (`begin_nested()` flusha pendências antes de abrir o
-            # SAVEPOINT).
-            with db.begin_nested():
-                nota = NfseNota(billing_id=billing.id)
-                db.add(nota)
-                db.flush()
-        except IntegrityError:
-            # Corrida: outra emissão concorrente para o mesmo billing_id já
-            # inseriu a nota entre o SELECT e este INSERT (billing_id é UNIQUE
-            # — ver app/models/nfse_nota.py). Descarta a tentativa e reaproveita
-            # o registro vencedor em vez de propagar o erro.
-            nota = db.query(NfseNota).filter_by(billing_id=billing.id).first()
-            if nota.status == 'emitida':
-                return nota
+            nfse_emissao.validar_identidade(nota, provedor='nacional', ambiente=settings.nfse_nac_ambiente,
+                serie_rps=settings.nfse_nac_serie, prestador_cnpj=_only_digits(settings.nfse_cnpj),
+                codigo_municipio=settings.nfse_codigo_municipio)
+        except ValueError as exc:
+            raise NfseError(str(exc)) from exc
+        dps = montar_dps(billing, client, nota.numero_rps, nota.codigo_servico,
+                         competencia=nota.competencia, discriminacao=nota.discriminacao)
+        validar_dps(dps)
+        xml_bytes = _serializar_dps(assinar_dps(dps))
+    except Exception as exc:
+        nfse_emissao.atualizar(db, nota_id, token, status='erro', erro_tipo='local',
+                              erro_mensagem=str(exc)[:2000])
+        raise
+    if not nfse_emissao.marcar_envio(db, nota_id, token, xml_bytes.decode('utf-8'),
+                                   discriminacao=_texto(dps, 'xDescServ'), codigo_servico=_texto(dps, 'cTribNac')):
+        db.refresh(nota)
+        return nota
+    try:
+        with nfse_emissao.heartbeat(db, nota_id, token):
+            resp = _post('/nfse', {'dpsXmlGZipB64': _compactar(xml_bytes)}, ambiente=nota.ambiente)
+        if resp.status_code not in (200, 201):
+            mensagem = _erro_da_resposta(resp)
+            # Só mensagem fiscal estruturada de validação prova rejeição.
+            # HTTP 409/5xx, gateway, timeout e corpo inválido são ambíguos.
+            try:
+                corpo = resp.json()
+            except ValueError:
+                corpo = {}
+            erros = (corpo.get('erros') or corpo.get('Erros')) if isinstance(corpo, dict) else None
+            estruturados = (isinstance(erros, list) and bool(erros) and all(
+                isinstance(e, dict) and (e.get('Descricao') or e.get('descricao') or e.get('Mensagem'))
+                for e in erros))
+            # Uma indicação de documento já existente exige consulta, mesmo
+            # quando o gateway utiliza HTTP 400 em vez de 409.
+            duplicada = any(trecho in mensagem.lower() for trecho in (
+                'duplic', 'já exist', 'ja exist', 'já gerad', 'ja gerad', 'já emit', 'ja emit'))
+            rejeicao = resp.status_code in (400, 422) and estruturados and not duplicada
+            nfse_emissao.atualizar(db, nota_id, token,
+                status='erro' if rejeicao else 'desconhecido',
+                erro_tipo='rejeicao' if rejeicao else 'desconhecido',
+                erro_codigo=str(resp.status_code), erro_mensagem=mensagem[:2000],
+                xml_retorno=resp.text)
+            raise NfseApiError(f'Sefin Nacional (HTTP {resp.status_code}): {mensagem}',
+                               status_code=resp.status_code)
+        corpo = resp.json()
+        nfse_b64 = corpo.get('nfseXmlGZipB64') or corpo.get('NfseXmlGZipB64')
+        if not nfse_b64:
+            raise NfseApiError('Sefin Nacional não devolveu o XML da NFS-e; consultar DPS.')
+        xml_nfse = _descompactar(nfse_b64)
+        dados = _dados_nfse(xml_nfse, corpo, nota.ambiente)
+        return nfse_emissao.atualizar(db, nota_id, token, **dados)
+    except Exception as exc:
+        db.rollback()
+        db.refresh(nota)
+        # A rejeição estruturada acima já foi classificada e persistida.
+        if nota.tentativa_id == token and nota.status not in ('emitida', 'erro'):
+            nfse_emissao.atualizar(db, nota_id, token, status='desconhecido',
+                                  erro_tipo='desconhecido', erro_mensagem=str(exc)[:2000])
+        if isinstance(exc, NfseApiError):
+            raise
+        raise NfseApiError(f'Desfecho desconhecido; consulte a DPS: {exc}') from exc
 
-    numero_dps = str(billing.id)
-    dps = montar_dps(billing, client, numero_dps, cod_trib_nacional)
-    validar_dps(dps)
-    assinada = assinar_dps(dps)
-    xml_bytes = _serializar_dps(assinada)  # UTF-8 com declaração (E1229)
 
-    nota.numero_rps = numero_dps
-    nota.serie_rps = settings.nfse_nac_serie
-    nota.xml_envio = xml_bytes.decode('utf-8')
-    nota.status = 'pending'
-    nota.erro_codigo = None
-    nota.erro_mensagem = None
-    db.commit()
+def _dados_nfse(xml_nfse: str, corpo: dict, ambiente: str | None) -> dict:
+    """Parse isolado para nunca sujar entidade ORM antes da escrita com fencing."""
+    temporaria = NfseNota(ambiente=ambiente)
+    _aplicar_nfse(temporaria, xml_nfse, corpo)
+    if not temporaria.numero_nfse or not temporaria.chave_acesso:
+        raise NfseApiError('XML recebido sem número/chave da NFS-e; desfecho desconhecido.')
+    return {**{key: getattr(temporaria, key) for key in (
+        'numero_nfse', 'data_emissao', 'chave_acesso', 'link_visualizacao', 'status',
+        'erro_codigo', 'erro_mensagem')}, 'xml_retorno': xml_nfse, 'erro_tipo': None}
 
-    resp = _post('/nfse', {'dpsXmlGZipB64': _compactar(xml_bytes)})
 
-    if resp.status_code not in (200, 201):
-        mensagem = _erro_da_resposta(resp)
-        nota.status = 'erro'
-        nota.erro_codigo = str(resp.status_code)
-        nota.erro_mensagem = mensagem[:2000]
-        db.commit()
-        raise NfseApiError(
-            f'Sefin Nacional rejeitou a DPS (HTTP {resp.status_code}): {mensagem}',
-            status_code=resp.status_code,
-        )
-
-    corpo = resp.json()
-    nfse_b64 = corpo.get('nfseXmlGZipB64') or corpo.get('NfseXmlGZipB64')
-    if not nfse_b64:
-        nota.status = 'erro'
-        nota.erro_mensagem = f'Resposta sem XML da NFS-e: {str(corpo)[:500]}'
-        db.commit()
-        raise NfseApiError('Sefin Nacional não devolveu o XML da NFS-e')
-
-    xml_nfse = _descompactar(nfse_b64)
-    nota.xml_retorno = xml_nfse
-    _aplicar_nfse(nota, xml_nfse, corpo)
-    db.commit()
-    return nota
+def consultar(db: Session, nota: NfseNota) -> NfseNota:
+    """Reconcilia a identidade DPS original. 404 nunca autoriza reenvio automático."""
+    if nota.status == 'emitida':
+        return nota
+    token = nfse_emissao.reservar_consulta(db, nota)
+    if token is None:
+        db.refresh(nota)
+        return nota
+    nota_id = nota.id
+    try:
+        if nota.provedor != 'nacional' or not nota.ambiente or not nota.dps_id:
+            raise NfseError('Identidade fiscal legada incompleta; reconciliação manual necessária.')
+        with nfse_emissao.heartbeat(db, nota_id, token):
+            chave = nota.chave_acesso
+            if not chave:
+                _, base = _ambiente(nota.ambiente)
+                with _par_pem_mtls() as par:
+                    resp = requests.get(f'{base}/dps/{nota.dps_id}', headers={'Accept': 'application/json'},
+                                        cert=par, timeout=settings.nfse_timeout_seconds)
+                if resp.status_code != 200:
+                    raise NfseApiError(f'Consulta DPS inconclusiva (HTTP {resp.status_code}); não reenviar.',
+                                       status_code=resp.status_code)
+                corpo = resp.json()
+                chave = corpo.get('chaveAcesso') or corpo.get('ChaveAcesso')
+                if not chave:
+                    raise NfseApiError('Consulta DPS não retornou chave; não reenviar.')
+            xml_nfse = consultar_por_chave(chave, ambiente=nota.ambiente)
+        return nfse_emissao.atualizar(db, nota_id, token,
+                                     **_dados_nfse(xml_nfse, {'chaveAcesso': chave}, nota.ambiente))
+    except Exception as exc:
+        nfse_emissao.atualizar(db, nota_id, token, status='desconhecido',
+                              erro_tipo='desconhecido', erro_mensagem=str(exc)[:2000])
+        if isinstance(exc, (NfseError, NfseApiError)):
+            raise
+        raise NfseApiError(f'Consulta DPS inconclusiva: {exc}') from exc
 
 
 def _aplicar_nfse(nota: NfseNota, xml_nfse: str, corpo: dict) -> None:
@@ -649,7 +697,7 @@ def _aplicar_nfse(nota: NfseNota, xml_nfse: str, corpo: dict) -> None:
     if chave:
         # Estava fixo no portal de produção: nota emitida em teste virava link
         # quebrado, porque a consulta pública de cada ambiente é separada.
-        nota.link_visualizacao = url_consulta_publica(chave)
+        nota.link_visualizacao = url_consulta_publica(chave, ambiente=nota.ambiente)
     nota.status = 'emitida'
     nota.erro_codigo = None
     nota.erro_mensagem = None
@@ -660,16 +708,17 @@ def _texto(no: etree._Element, tag: str) -> str | None:
     return achado.text if achado is not None else None
 
 
-def consultar_por_chave(chave_acesso: str) -> str:
+def consultar_por_chave(chave_acesso: str, *, ambiente: str | None = None) -> str:
     """GET /nfse/{chaveAcesso} — devolve o XML da NFS-e."""
-    _, base = _ambiente()
+    _, base = _ambiente(ambiente)
     try:
-        resp = requests.get(
-            f'{base}/nfse/{chave_acesso}',
-            headers={'Accept': 'application/json'},
-            cert=_par_pem_mtls(),
-            timeout=settings.nfse_timeout_seconds,
-        )
+        with _par_pem_mtls() as par:
+            resp = requests.get(
+                f'{base}/nfse/{chave_acesso}',
+                headers={'Accept': 'application/json'},
+                cert=par,
+                timeout=settings.nfse_timeout_seconds,
+            )
     except requests.RequestException as exc:
         raise NfseApiError(f'Falha de conexão com a Sefin Nacional: {exc}') from exc
 
@@ -683,7 +732,7 @@ def consultar_por_chave(chave_acesso: str) -> str:
     return _descompactar(b64) if b64 else str(corpo)
 
 
-def baixar_danfse(chave_acesso: str) -> bytes:
+def baixar_danfse(chave_acesso: str, *, ambiente: str | None = None) -> bytes:
     """
     Baixa o DANFSE (PDF visual da NFS-e) do ADN, via mTLS. É a versão
     "modelada"/imprimível da nota — o que se envia ao tomador.
@@ -692,33 +741,34 @@ def baixar_danfse(chave_acesso: str) -> bytes:
     mensagem de 501 do serviço antigo em {sefin}/DANFSe (ver nota em _ADN);
     a disponibilidade, porém, é instável do lado do governo.
     """
-    base = _ADN.get(settings.nfse_nac_ambiente)
+    base = _ADN.get(ambiente or settings.nfse_nac_ambiente)
     if not base:
         raise NfseError(
             f'NFSE_NAC_AMBIENTE inválido para DANFSE: {settings.nfse_nac_ambiente!r}'
         )
     try:
-        resp = requests.get(
-            f'{base}/danfse/{chave_acesso}',
-            headers={'Accept': 'application/pdf'},
-            cert=_par_pem_mtls(),
-            timeout=settings.nfse_timeout_seconds,
-        )
+        with _par_pem_mtls() as par:
+            resp = requests.get(
+                f'{base}/danfse/{chave_acesso}',
+                headers={'Accept': 'application/pdf'},
+                cert=par,
+                timeout=settings.nfse_timeout_seconds,
+            )
     except requests.RequestException as exc:
         raise NfseApiError(f'Falha ao baixar o DANFSE: {exc}') from exc
 
     if resp.status_code != 200 or 'pdf' not in resp.headers.get('Content-Type', '').lower():
-        raise NfseApiError(_erro_danfse(resp, chave_acesso), status_code=resp.status_code)
+        raise NfseApiError(_erro_danfse(resp, chave_acesso, ambiente=ambiente), status_code=resp.status_code)
     return resp.content
 
 
-def url_consulta_publica(chave_acesso: str) -> str | None:
+def url_consulta_publica(chave_acesso: str, *, ambiente: str | None = None) -> str | None:
     """Endereço da consulta pública da nota — abre no navegador, sem certificado."""
-    modelo = _CONSULTA_PUBLICA.get(settings.nfse_nac_ambiente)
+    modelo = _CONSULTA_PUBLICA.get(ambiente or settings.nfse_nac_ambiente)
     return modelo.format(chave=chave_acesso) if modelo else None
 
 
-def _erro_danfse(resp, chave_acesso: str) -> str:
+def _erro_danfse(resp, chave_acesso: str, *, ambiente: str | None = None) -> str:
     """
     Traduz a falha do ADN em algo acionável.
 
@@ -726,7 +776,7 @@ def _erro_danfse(resp, chave_acesso: str) -> str:
     tela (era o que acontecia) não diz nada ao operador. Em toda falha a nota
     em si continua íntegra: o que faltou foi só a representação em PDF.
     """
-    restrita = settings.nfse_nac_ambiente == 'producao_restrita'
+    restrita = (ambiente or settings.nfse_nac_ambiente) == 'producao_restrita'
     ambiente = 'produção restrita (teste)' if restrita else 'produção'
     consulta = url_consulta_publica(chave_acesso)
     saida = (
