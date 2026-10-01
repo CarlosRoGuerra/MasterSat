@@ -1,0 +1,16 @@
+docker : /app/app/core/config.py:309: UserWarning: ⚠ SECRET_KEY fraca ou padrão — gere: python -c "import secrets;
+print(secrets.token_hex(32))"
+No linha:2 caractere:1
++ docker exec -e PYTHONPATH=/app mastersat-f05-tests python /evidence/r ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (/app/app/core/c...token_hex(32))":String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+
+  settings.enforce_security()
+/app/app/core/config.py:309: UserWarning: ⚠ Senha do MinIO ainda é o valor padrão
+  settings.enforce_security()
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade a4c7e2f9b1d6 -> f5a1c8e3d902, Fase 05: reserva fiscal, lease,
+payload efetivo e reconciliação conservadora.
+Reupgrade preserva identidade/XML/status; banco descartável removido.

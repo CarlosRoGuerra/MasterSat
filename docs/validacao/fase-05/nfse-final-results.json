@@ -1,0 +1,38 @@
+{
+  "sha": "f85db354cd30a67a69123407a628273ec78e48aa",
+  "python": "3.12.14",
+  "versions": {
+    "signxml": "5.1.0",
+    "cryptography": "50.0.1",
+    "pyOpenSSL": "26.4.0",
+    "lxml": "6.1.3",
+    "SQLAlchemy": "2.0.35",
+    "psycopg": "3.2.1",
+    "pytest": "8.3.3",
+    "fastapi": "0.142.2"
+  },
+  "commands": [
+    {
+      "name": "nfse-final-tests",
+      "cwd": "/app",
+      "command": [
+        "/usr/local/bin/python",
+        "-m",
+        "pytest",
+        "tests/test_nfse_certificado.py",
+        "tests/test_nfse_danfse.py",
+        "tests/test_nfse_danfse_endpoint.py",
+        "tests/test_nfse_emissao.py",
+        "tests/test_nfse_fiscal.py",
+        "tests/test_nfse_lote.py",
+        "tests/test_nfse_nacional.py",
+        "tests/test_nfse_xmldsig.py",
+        "tests/test_fase05_postgres.py",
+        "-q",
+        "-p",
+        "no:cacheprovider"
+      ],
+      "exit_code": 0
+    }
+  ]
+}

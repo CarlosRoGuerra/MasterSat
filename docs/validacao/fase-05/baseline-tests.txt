@@ -1,0 +1,55 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-8.3.3, pluggy-1.6.0
+rootdir: /app
+configfile: pytest.ini
+plugins: platformdirs-4.12.2, anyio-4.15.1, mock-3.14.0
+collected 127 items
+
+tests/test_nfse_nacional.py ............................................ [ 34%]
+                                                                         [ 34%]
+tests/test_nfse_fiscal.py ..........                                     [ 42%]
+tests/test_nfse_lote.py ............................................     [ 77%]
+tests/test_nfse_certificado.py ..................                        [ 91%]
+tests/test_nfse_danfse_endpoint.py ...........                           [100%]
+
+=============================== warnings summary ===============================
+../usr/local/lib/python3.12/site-packages/fastapi/testclient.py:1
+  /usr/local/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+app/core/config.py:309
+  /app/app/core/config.py:309: UserWarning: ⚠ SECRET_KEY fraca ou padrão — gere: python -c "import secrets; print(secrets.token_hex(32))"
+    settings.enforce_security()
+
+app/core/config.py:309
+  /app/app/core/config.py:309: UserWarning: ⚠ Senha do MinIO ainda é o valor padrão
+    settings.enforce_security()
+
+../usr/local/lib/python3.12/site-packages/passlib/utils/__init__.py:854
+  /usr/local/lib/python3.12/site-packages/passlib/utils/__init__.py:854: DeprecationWarning: 'crypt' is deprecated and slated for removal in Python 3.13
+    from crypt import crypt as _crypt
+
+../usr/local/lib/python3.12/site-packages/reportlab/lib/rl_safe_eval.py:12
+  /usr/local/lib/python3.12/site-packages/reportlab/lib/rl_safe_eval.py:12: DeprecationWarning: ast.NameConstant is deprecated and will be removed in Python 3.14; use ast.Constant instead
+    haveNameConstant = hasattr(ast,'NameConstant')
+
+app/main.py:888
+  /app/app/main.py:888: DeprecationWarning:
+          on_event is deprecated, use lifespan event handlers instead.
+
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+
+    @app.on_event('startup')
+
+../usr/local/lib/python3.12/site-packages/fastapi/applications.py:4744
+  /usr/local/lib/python3.12/site-packages/fastapi/applications.py:4744: DeprecationWarning:
+          on_event is deprecated, use lifespan event handlers instead.
+
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================= 127 passed, 7 warnings in 4.73s ========================

@@ -1,0 +1,39 @@
+docker : /app/app/core/config.py:309: UserWarning: ⚠ SECRET_KEY fraca ou padrão — gere: python -c "import secrets;
+print(secrets.token_hex(32))"
+No linha:2 caractere:203
++ ... xt -Tail 5; docker exec -e DATABASE_URL=postgresql+psycopg://postgres ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (/app/app/core/c...token_hex(32))":String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+
+  settings.enforce_security()
+/app/app/core/config.py:309: UserWarning: ⚠ Senha do MinIO ainda é o valor padrão
+  settings.enforce_security()
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade  -> 96f61a589162, baseline schema
+INFO  [alembic.runtime.migration] Running upgrade 96f61a589162 -> e0905f77f744, refresh tokens
+INFO  [alembic.runtime.migration] Running upgrade e0905f77f744 -> f7c1a2b3d4e5, align unique indexes with soft delete
+semantics
+INFO  [alembic.runtime.migration] Running upgrade f7c1a2b3d4e5 -> 8b4e2a7f1c93, os materiais prioridade assinatura
+INFO  [alembic.runtime.migration] Running upgrade 8b4e2a7f1c93 -> c3f9a1b2d4e6, busca global — unaccent + pg_trgm
+INFO  [alembic.runtime.migration] Running upgrade c3f9a1b2d4e6 -> a1c9e4f2b6d3, linha do tempo do cliente — índices de
+performance
+INFO  [alembic.runtime.migration] Running upgrade a1c9e4f2b6d3 -> d4a8b1e6c2f9, status 'cancelado' em veículos
+INFO  [alembic.runtime.migration] Running upgrade d4a8b1e6c2f9 -> c7b2f9a41d38, billings.sgr_payload: dados do boleto
+de origem no SGR
+INFO  [alembic.runtime.migration] Running upgrade c7b2f9a41d38 -> b3f8a1c9d2e7, billings: indice unico (contract_id,
+period_label) para tipos recorrentes
+INFO  [alembic.runtime.migration] Running upgrade b3f8a1c9d2e7 -> d9e4f1a7b2c5, Fase 01: consumo único de
+refresh/reset e prazo do state Ailos
+INFO  [alembic.runtime.migration] Running upgrade d9e4f1a7b2c5 -> e5c2a9d71f04, Fase 02: competência canônica,
+substituição e integridade financeira
+INFO  [alembic.runtime.migration] Running upgrade e5c2a9d71f04 -> b7d3e1f5a902, Fase 03: desfecho bancário,
+conciliação, ajustes de recebimento e CNAB
+INFO  [alembic.runtime.migration] Fase 03: 0 título(s) com baixa pendente; 0 registro(s) com desfecho desconhecido.
+INFO  [alembic.runtime.migration] Running upgrade b7d3e1f5a902 -> a4c7e2f9b1d6, Fase 04: proveniência, conciliação e
+retomada da migração SGR
+INFO  [alembic.runtime.migration] Fase 04: 0 cobrança(s) importada(s) do SGR sem documento de origem registrado — rode
+scripts/sgr_backfill.py (simulação) para o relatório de reconstrução.
+INFO  [alembic.runtime.migration] Running upgrade a4c7e2f9b1d6 -> f5a1c8e3d902, Fase 05: reserva fiscal, lease,
+payload efetivo e reconciliação conservadora.
