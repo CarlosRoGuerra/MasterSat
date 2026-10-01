@@ -39,15 +39,9 @@ python-docx==1.1.2
 # sem dependência de sistema. Extrai a camada de texto quando existe; em
 # escaneamentos/fotos (sem texto) retorna vazio, que é o sinal de "ilegível".
 pypdf==6.19.0
-signxml==3.2.2
-# A pilha de assinatura XMLDSig do signxml 3.2.2 exige versões antigas de DUAS
-# libs, comprovado em venv local (build+sign+validate da DPS):
-#   - cryptography: referencia curvas EC (ex.: SECT163K1) removidas na 43+, então
-#     precisa de <43. Sem teto o container pega a 44 e `import signxml` quebra.
-#   - pyOpenSSL: usa OpenSSL.crypto.verify/sign, removidos na 24, então <24. E a
-#     pyOpenSSL 23.x por sua vez fixa cryptography em <42.
-# Resultado da resolução: cryptography 41.0.7 + pyOpenSSL 23.3.0. Ao subir o
-# signxml (>=4, que fala com libs modernas) estes dois tetos saem juntos.
-cryptography>=41,<42
-pyOpenSSL>=23,<24
-lxml==5.3.0
+# Atualizar a pilha em conjunto; preservar RSA-SHA256 e C14N exclusiva.
+# Evidência e limites: docs/seguranca/dependencias-fase-05.md.
+signxml==5.1.0
+cryptography==50.0.1
+pyOpenSSL==26.4.0
+lxml==6.1.3
