@@ -37,6 +37,7 @@ from app.models import (  # noqa: F401
     service_order,
     service_order_status_log,
     service_product,
+    sgr_migracao,
     system_setting,
     tracker,
     tracker_history,
