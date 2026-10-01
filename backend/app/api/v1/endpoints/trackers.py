@@ -780,6 +780,10 @@ def link_vehicle(
         }
     if previous_vehicle_id == vehicle.id and payload.plan_id and active_contracts:
         raise HTTPException(status_code=409, detail='Já existe contrato ativo para este rastreador e veículo.')
+    # Rastreador já instalado neste veículo, sem contrato: o pedido é só para
+    # criar o contrato. O vínculo não muda — nada de reenviar ao Multiportal
+    # nem marcar a integração como pendente.
+    somente_contrato = previous_vehicle_id == vehicle.id
 
     old_vehicle = None
     lifecycle = None
@@ -847,12 +851,13 @@ def link_vehicle(
         if not other_tracker and old_vehicle.status == VehicleStatus.ACTIVE:
             old_vehicle.status = VehicleStatus.NO_TRACKER
 
-    apply_tracker_integration_result(
-        tracker,
-        lifecycle.calls,
-        status='sincronizado' if lifecycle.managed_externally else 'pendente',
-    )
-    if not lifecycle.managed_externally:
+    if not somente_contrato:
+        apply_tracker_integration_result(
+            tracker,
+            lifecycle.calls,
+            status='sincronizado' if lifecycle.managed_externally else 'pendente',
+        )
+    if not lifecycle.managed_externally and not somente_contrato:
         # Vínculo criado sem passar pelo Multiportal (integração desligada ou
         # sem referência externa ainda): entra na fila para o worker levar o
         # cadastro completo quando o provedor estiver disponível, em vez de
@@ -861,7 +866,7 @@ def link_vehicle(
 
     _register_history(
         db, tracker,
-        action='transferred' if is_transfer else 'linked',
+        action='transferred' if is_transfer else ('contract_created' if somente_contrato else 'linked'),
         previous_vehicle_id=previous_vehicle_id,
         new_vehicle_id=vehicle.id,
         previous_client_id=previous_client_id,
@@ -869,8 +874,11 @@ def link_vehicle(
         previous_status=previous_status,
         new_status=tracker.status.value if isinstance(tracker.status, TrackerStatus) else str(tracker.status),
         created_by_user_id=current_user.id,
-        notes=(f'Transferido para o veículo {vehicle.plate}' if is_transfer else f'Vinculado ao veículo {vehicle.plate}')
-        + (f' com plano #{payload.plan_id}' if payload.plan_id else ''),
+        notes=(
+            f'Transferido para o veículo {vehicle.plate}' if is_transfer
+            else f'Contrato criado no veículo {vehicle.plate}' if somente_contrato
+            else f'Vinculado ao veículo {vehicle.plate}'
+        ) + (f' com plano #{payload.plan_id}' if payload.plan_id else ''),
     )
 
     contract_out: ContractOut | None = None
@@ -915,9 +923,12 @@ def link_vehicle(
         'tracker': _tracker_to_out(tracker, db),
         'contract': contract_out,
         'message': (
-            f'Rastreador transferido para o veículo {vehicle.plate}'
-            if is_transfer else f'Rastreador vinculado ao veículo {vehicle.plate}'
-        ) + (' com contrato criado.' if contract_out else '.'),
+            f'Contrato criado para o rastreador no veículo {vehicle.plate}.' if somente_contrato
+            else (
+                f'Rastreador transferido para o veículo {vehicle.plate}'
+                if is_transfer else f'Rastreador vinculado ao veículo {vehicle.plate}'
+            ) + (' com contrato criado.' if contract_out else '.')
+        ),
         'previous_contracts_closed': len(active_contracts) if is_transfer else 0,
         'multiportal_synchronized': lifecycle.managed_externally,
     }

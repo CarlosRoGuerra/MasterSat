@@ -154,6 +154,7 @@ function friendlyAction(value: string) {
   const map: Record<string, string> = {
     created: 'Cadastro inicial',
     linked: 'Vínculo atualizado',
+    contract_created: 'Contrato criado',
     unlinked: 'Desvínculo',
     swapped_out: 'Substituído (retornou ao estoque)',
     swapped_in: 'Instalado em substituição',
@@ -416,6 +417,11 @@ function RastreadoresPageInner() {
     return vehicles.filter((item) => item.client_id === Number(form.client_id));
   }, [vehicles, form.client_id]);
 
+  const contratoAtivoNoVeiculo = Boolean(
+    isEditing && selectedTracker?.active_plan_name
+    && selectedTracker.vehicle_id === Number(form.vehicle_id),
+  );
+
   const vehicleExistingTrackers = useMemo(() => {
     if (!form.vehicle_id) return [];
     return trackers.filter((t) => t.vehicle_id === Number(form.vehicle_id) && (!selectedTracker || t.id !== selectedTracker.id));
@@ -514,8 +520,13 @@ function RastreadoresPageInner() {
       vehicle_id: tracker.vehicle_id ? String(tracker.vehicle_id) : '',
       client_lookup_document: tracker.client_cpf_cnpj ? formatCpfCnpj(tracker.client_cpf_cnpj) : '',
       link_plan_id: '',
-      link_start_date: new Date().toISOString().split('T')[0],
-      link_billing_day: '',
+      // Contrato criado para um rastreador já instalado começa, por padrão, na
+      // data da instalação (não no dia de hoje).
+      link_start_date: tracker.install_date || new Date().toISOString().split('T')[0],
+      link_billing_day: (() => {
+        const cli = clients.find((c) => c.id === tracker.client_id);
+        return cli?.billing_day ? String(cli.billing_day) : '';
+      })(),
       link_payment_method: '',
       link_billing_cycles: '12',
     });
@@ -546,6 +557,12 @@ function RastreadoresPageInner() {
       const isTransfer = Boolean(
         isEditing && selectedTracker?.vehicle_id && form.vehicle_id
         && selectedTracker.vehicle_id !== Number(form.vehicle_id),
+      );
+      // Rastreador já instalado neste veículo e um plano escolhido: antes o PUT
+      // salvava só os dados técnicos e o plano era descartado sem aviso.
+      const isAddingContract = Boolean(
+        isEditing && selectedTracker?.vehicle_id && form.link_plan_id
+        && selectedTracker.vehicle_id === Number(form.vehicle_id),
       );
       const isRemovingVehicle = Boolean(isEditing && selectedTracker?.vehicle_id && !form.vehicle_id);
       if (isRemovingVehicle) {
@@ -587,7 +604,7 @@ function RastreadoresPageInner() {
         }
         saved = await apiFetch<Tracker>(`/trackers/${selectedTracker.id}`, { method: 'PUT', body: JSON.stringify(updatePayload) }, token);
 
-        if (isLinkingVehicle) {
+        if (isLinkingVehicle || isAddingContract) {
           const linkResult = await apiFetch<{ tracker: Tracker }>(`/trackers/${selectedTracker.id}/link-vehicle`, {
             method: 'POST',
             body: JSON.stringify({
@@ -621,7 +638,10 @@ function RastreadoresPageInner() {
         }
       }
 
-      setFeedback(isEditing ? 'Rastreador atualizado com sucesso.' : 'Rastreador cadastrado com sucesso.');
+      setFeedback(
+        isEditing && isAddingContract ? 'Rastreador atualizado e contrato criado.'
+          : isEditing ? 'Rastreador atualizado com sucesso.' : 'Rastreador cadastrado com sucesso.',
+      );
       setModalOpen(false);
       resetForm();
       await loadBaseData(token);
@@ -1000,7 +1020,18 @@ function RastreadoresPageInner() {
           {form.vehicle_id && (
             <div className="rounded-[24px] border border-brand-200 bg-brand-50/50 p-5 dark:border-cyan-900 dark:bg-cyan-950/30">
               <p className="text-sm font-semibold text-slate-900 dark:text-white">Plano contratado</p>
-              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Selecione o plano para criar o contrato automaticamente ao vincular. Deixe em branco para vincular sem contrato.</p>
+              {contratoAtivoNoVeiculo ? (
+                <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                  Este rastreador já tem contrato ativo neste veículo: <span className="font-semibold">{selectedTracker?.active_plan_name}</span>.
+                  Para mudar plano, início ou vencimento, use Financeiro → Planos e Contratos.
+                </p>
+              ) : (
+              <>
+              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                {isEditing && selectedTracker?.vehicle_id === Number(form.vehicle_id)
+                  ? 'Rastreador já instalado neste veículo, sem contrato. Selecione o plano para criar o contrato ao salvar.'
+                  : 'Selecione o plano para criar o contrato automaticamente ao vincular. Deixe em branco para vincular sem contrato.'}
+              </p>
               {vehicleExistingTrackers.length > 0 && (
                 <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-800 dark:bg-amber-950/40">
                   <p className="text-xs font-semibold text-amber-700 dark:text-amber-400">Este veículo já possui {vehicleExistingTrackers.length} rastreador(es) instalado(s):</p>
@@ -1058,6 +1089,8 @@ function RastreadoresPageInner() {
                   </>
                 )}
               </div>
+              </>
+              )}
             </div>
           )}
 
