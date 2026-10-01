@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
+import multiprocessing
+from pathlib import Path
 
 import pytest
 from cryptography import x509
@@ -24,11 +27,13 @@ def _chave_de_criptografia(monkeypatch):
     monkeypatch.setattr(settings, 'ailos_token_encryption_key', VALID_KEY)
     from app.core.crypto import _fernet
     _fernet.cache_clear()
+    nfse_certificado._invalidar_cache()
     yield
     _fernet.cache_clear()
+    nfse_certificado._invalidar_cache()
 
 
-def _pfx(*, cn='MASTERSAT COMERCIO LTDA:14228344000167', dias_validade=365, senha=SENHA) -> bytes:
+def _pfx(*, cn='MASTERSAT COMERCIO LTDA:14228344000167', dias_validade=365, senha=SENHA, dias_inicio=None) -> bytes:
     """Gera um .pfx autoassinado para os testes."""
     chave = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     nome = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, cn)])
@@ -41,7 +46,7 @@ def _pfx(*, cn='MASTERSAT COMERCIO LTDA:14228344000167', dias_validade=365, senh
         .serial_number(x509.random_serial_number())
         # p/ gerar um certificado vencido (dias_validade negativo), o início
         # precisa recuar junto — senão a própria lib recusa montar o cert.
-        .not_valid_before(agora + dt.timedelta(days=dias_validade) - dt.timedelta(days=1))
+        .not_valid_before(agora + dt.timedelta(days=min(-1, dias_validade - 1) if dias_inicio is None else dias_inicio))
         .not_valid_after(agora + dt.timedelta(days=dias_validade))
         .sign(chave, hashes.SHA256())
     )
@@ -134,6 +139,173 @@ def test_material_pem_devolve_chave_e_certificado(db):
 
 def test_material_pem_sem_certificado_cadastrado(db):
     assert nfse_certificado.material_pem(db) is None
+
+
+def test_salvar_recusa_certificado_ainda_nao_valido(db):
+    with pytest.raises(nfse_certificado.CertificadoError, match='ainda não'):
+        nfse_certificado.salvar(db, _pfx(dias_inicio=2), SENHA)
+
+
+def test_cache_revalida_vencimento_em_cada_utilizacao(db, monkeypatch):
+    nfse_certificado.salvar(db, _pfx(dias_validade=1), SENHA)
+    nfse_certificado.material_pem(db)  # aquece cache com certificado válido
+    agora = dt.datetime.now(dt.timezone.utc)
+    original = dt.datetime
+
+    class RelogioFuturo(original):
+        @classmethod
+        def now(cls, tz=None):
+            return agora + dt.timedelta(days=2)
+
+    monkeypatch.setattr(nfse_certificado.dt, 'datetime', RelogioFuturo)
+    with pytest.raises(nfse_certificado.CertificadoError, match='vencido'):
+        nfse_certificado.material_pem(db)
+
+
+def test_renovacao_nao_depende_de_invalidacao_local(db, monkeypatch):
+    nfse_certificado.salvar(db, _pfx(), SENHA)
+    anterior = nfse_certificado.material_pem(db)
+    monkeypatch.setattr(nfse_certificado, '_invalidar_cache', lambda: None)
+    nfse_certificado.salvar(db, _pfx(cn='NOVO:99999999000191'), SENHA)
+    assert nfse_certificado.material_pem(db) != anterior
+
+
+def test_falha_banco_nao_ressuscita_certificado_env(monkeypatch, tmp_path):
+    from sqlalchemy.exc import OperationalError
+    from app.db import session
+    from app.services import nfse_nacional
+
+    arquivo = tmp_path / 'anterior.pfx'
+    arquivo.write_bytes(_pfx())
+    monkeypatch.setattr(settings, 'nfse_cert_path', str(arquivo))
+    monkeypatch.setattr(settings, 'nfse_cert_senha', SENHA)
+
+    def indisponivel():
+        raise OperationalError('offline', {}, Exception('offline'))
+
+    monkeypatch.setattr(session, 'SessionLocal', indisponivel)
+    with pytest.raises(nfse_nacional.NfseError, match='cadastrado'):
+        nfse_nacional._material_certificado()
+
+
+def test_arquivo_env_substituido_e_validade_conferida(monkeypatch, tmp_path):
+    from app.services import nfse_nacional
+
+    arquivo = tmp_path / 'teste.pfx'
+    arquivo.write_bytes(_pfx())
+    monkeypatch.setattr(nfse_nacional, '_material_do_banco', lambda: None)
+    monkeypatch.setattr(settings, 'nfse_cert_path', str(arquivo))
+    monkeypatch.setattr(settings, 'nfse_cert_senha', SENHA)
+    anterior = nfse_nacional._material_certificado()
+    arquivo.write_bytes(_pfx(cn='NOVO:99999999000191'))
+    assert nfse_nacional._material_certificado() != anterior
+    arquivo.write_bytes(_pfx(dias_validade=-2))
+    with pytest.raises(nfse_nacional.NfseError, match='vencido'):
+        nfse_nacional._material_certificado()
+
+
+def test_pem_de_chamada_ativa_sobrevive_renovacao_e_limpa_no_final(db, monkeypatch):
+    from app.services import nfse_nacional
+
+    nfse_certificado.salvar(db, _pfx(), SENHA)
+    monkeypatch.setattr(nfse_nacional, '_material_do_banco', lambda: nfse_certificado.material_pem(db))
+    with nfse_nacional._par_pem_mtls() as anterior:
+        certificado_anterior = Path(anterior[0]).read_bytes()
+        nfse_certificado.salvar(db, _pfx(cn='NOVO:99999999000191'), SENHA)
+        with nfse_nacional._par_pem_mtls() as novo:
+            assert Path(novo[0]).read_bytes() != certificado_anterior
+            assert Path(anterior[0]).read_bytes() == certificado_anterior
+        assert not Path(novo[0]).parent.exists()
+        assert Path(anterior[1]).exists()
+    assert not Path(anterior[0]).parent.exists()
+
+
+def test_pem_removido_quando_transporte_falha(db, monkeypatch):
+    import requests
+    from app.services import nfse_nacional
+
+    nfse_certificado.salvar(db, _pfx(), SENHA)
+    monkeypatch.setattr(nfse_nacional, '_material_do_banco', lambda: nfse_certificado.material_pem(db))
+    usados = []
+
+    def timeout(*args, **kwargs):
+        usados.extend(kwargs['cert'])
+        assert all(Path(p).exists() for p in usados)
+        raise requests.Timeout('sintético')
+
+    monkeypatch.setattr(nfse_nacional.requests, 'post', timeout)
+    with pytest.raises(nfse_nacional.NfseApiError):
+        nfse_nacional._post('/nfse', {})
+    assert usados and not any(Path(p).exists() for p in usados)
+
+
+def _worker_certificado_versionado(database_url, chave_fernet, conexao):
+    """Processo independente: preserva o cache entre as duas leituras."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+    from app.core.crypto import _fernet
+
+    settings.ailos_token_encryption_key = chave_fernet
+    _fernet.cache_clear()
+    engine = create_engine(database_url)
+    try:
+        for _ in range(2):
+            conexao.recv()
+            with Session(engine) as sessao:
+                _, certificado = nfse_certificado.material_pem(sessao)
+                conexao.send(hashlib.sha256(certificado).hexdigest())
+    finally:
+        engine.dispose()
+        conexao.close()
+
+
+def test_renovacao_adotada_por_dois_processos_sem_restart(tmp_path):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+    from app.core.crypto import decrypt_bytes, decrypt_token
+
+    database_url = f'sqlite:///{tmp_path / "certificados.sqlite"}'
+    engine = create_engine(database_url)
+    NfseCertificado.__table__.create(engine)
+    contexto = multiprocessing.get_context('spawn')
+    canais, processos = [], []
+    try:
+        with Session(engine) as sessao:
+            conteudo = _pfx()
+            antigo = nfse_certificado.salvar(sessao, conteudo, SENHA)
+            for _ in range(2):
+                pai, filho = contexto.Pipe()
+                processo = contexto.Process(target=_worker_certificado_versionado, args=(database_url, VALID_KEY, filho))
+                processo.start()
+                filho.close()
+                canais.append(pai)
+                processos.append(processo)
+            for canal in canais:
+                canal.send('ler')
+            for canal in canais:
+                assert canal.poll(30), 'worker não terminou a primeira leitura'
+            antigos = [canal.recv() for canal in canais]
+            novo = nfse_certificado.salvar(sessao, _pfx(cn='RENOVADO:99999999000191'), SENHA)
+            esperado = hashlib.sha256(nfse_certificado.material_pem(sessao)[1]).hexdigest()
+            for canal in canais:
+                canal.send('ler')
+            for canal in canais:
+                assert canal.poll(30), 'worker não percebeu a renovação'
+            assert [canal.recv() for canal in canais] == [esperado, esperado]
+            assert antigos[0] == antigos[1] != esperado
+            sessao.refresh(antigo)
+            assert not antigo.ativo and novo.ativo
+            assert decrypt_bytes(antigo.arquivo_cifrado) == conteudo
+            assert decrypt_token(antigo.senha_cifrada) == SENHA
+    finally:
+        for processo in processos:
+            processo.join(10)
+            if processo.is_alive():
+                processo.terminate()
+                processo.join(10)
+        for canal in canais:
+            canal.close()
+        engine.dispose()
 
 
 def _registro_com_validade(dias: int) -> NfseCertificado:

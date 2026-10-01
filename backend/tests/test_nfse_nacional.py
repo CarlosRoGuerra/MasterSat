@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import gzip
+from contextlib import nullcontext
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -337,7 +338,7 @@ def test_post_timeout_raises_nfse_api_error(monkeypatch):
     import requests as real_requests
 
     monkeypatch.setattr(settings, 'nfse_nac_ambiente', 'producao_restrita')
-    monkeypatch.setattr(nf, '_par_pem_mtls', lambda: ('cert.pem', 'key.pem'))
+    monkeypatch.setattr(nf, '_par_pem_mtls', lambda: nullcontext(('cert.pem', 'key.pem')))
 
     with patch('app.services.nfse_nacional.requests') as mock_requests:
         mock_requests.RequestException = real_requests.RequestException
@@ -351,7 +352,7 @@ def test_consultar_por_chave_connection_error_raises_nfse_api_error(monkeypatch)
     import requests as real_requests
 
     monkeypatch.setattr(settings, 'nfse_nac_ambiente', 'producao_restrita')
-    monkeypatch.setattr(nf, '_par_pem_mtls', lambda: ('cert.pem', 'key.pem'))
+    monkeypatch.setattr(nf, '_par_pem_mtls', lambda: nullcontext(('cert.pem', 'key.pem')))
 
     with patch('app.services.nfse_nacional.requests') as mock_requests:
         mock_requests.RequestException = real_requests.RequestException
@@ -365,7 +366,7 @@ def test_baixar_danfse_connection_error_raises_nfse_api_error(monkeypatch):
     import requests as real_requests
 
     monkeypatch.setattr(settings, 'nfse_nac_ambiente', 'producao_restrita')
-    monkeypatch.setattr(nf, '_par_pem_mtls', lambda: ('cert.pem', 'key.pem'))
+    monkeypatch.setattr(nf, '_par_pem_mtls', lambda: nullcontext(('cert.pem', 'key.pem')))
 
     with patch('app.services.nfse_nacional.requests') as mock_requests:
         mock_requests.RequestException = real_requests.RequestException
