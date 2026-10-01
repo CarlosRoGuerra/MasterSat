@@ -239,6 +239,27 @@ class TestPlanosEContratos:
         assert db.query(Plan).count() == 1
         assert db.query(Contract).count() == 1
 
+    def test_rastreador_que_chega_depois_e_ligado_ao_contrato(self, db):
+        # Caso real (MKJ9G48 em produção): a 1ª rodada trouxe o equipamento
+        # sem IMEI e criou o contrato sem rastreador; a 2ª trouxe o IMEI e
+        # criou o rastreador, mas o contrato reaproveitado ficava sem ele e a
+        # tela mostrava "Sem plano".
+        import_poc_result(db, _resultado(tracker_over={'imei': None}), dry_run=False)
+        assert db.query(Contract).one().tracker_id is None
+
+        import_poc_result(db, _resultado(), dry_run=False)
+
+        contrato = db.query(Contract).one()
+        assert contrato.tracker_id == db.query(Tracker).one().id
+
+    def test_contrato_ja_ligado_nao_troca_de_rastreador(self, db):
+        import_poc_result(db, _resultado(), dry_run=False)
+        original = db.query(Contract).one().tracker_id
+
+        import_poc_result(db, _resultado(tracker_over={'imei': '355488020902013'}), dry_run=False)
+
+        assert db.query(Contract).one().tracker_id == original
+
     def test_gerar_cobranca_nao_vira_contrato_inativo(self, db):
         import_poc_result(db, _resultado(contract_over={'status': 'inativo'}), dry_run=False)
         assert db.query(Contract).one().status == 'inativo'

@@ -334,7 +334,15 @@ def _import_contract(
         stats.skip(f'contrato do veículo {placa}: sem data de início (obrigatória no MasterSat)')
         return
 
-    if _find_contract(db, client_id, vehicle_id):
+    existente = _find_contract(db, client_id, vehicle_id)
+    if existente:
+        # Rodada anterior criou o contrato quando o equipamento ainda vinha sem
+        # IMEI (rastreador não entrou). Agora que o rastreador existe, liga —
+        # sem isto a tela mostra "Sem plano" para sempre. Só preenche o vazio:
+        # contrato já ligado a outro rastreador nunca é trocado aqui.
+        if existente.tracker_id is None and tracker_id is not None:
+            existente.tracker_id = tracker_id
+            db.flush()
         stats.contracts_reused += 1
         return
 
