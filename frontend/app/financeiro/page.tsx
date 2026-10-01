@@ -842,9 +842,31 @@ export default function FinanceiroPage() {
   );
 
   /* ── Derived data ── */
-  const visibleContracts = useMemo(() => chargeItemForm.client_id ? contracts.filter(c => c.client_id === Number(chargeItemForm.client_id)) : contracts, [contracts, chargeItemForm.client_id]);
-  const chargeVehicles = useMemo(() => chargeItemForm.client_id ? vehicles.filter(v => v.client_id === Number(chargeItemForm.client_id)) : vehicles, [vehicles, chargeItemForm.client_id]);
-  const chargeTrackers = useMemo(() => trackers.filter(t => (!chargeItemForm.client_id || t.client_id === Number(chargeItemForm.client_id)) && (!chargeItemForm.vehicle_id || t.vehicle_id === Number(chargeItemForm.vehicle_id) || t.vehicle_id == null)), [trackers, chargeItemForm.client_id, chargeItemForm.vehicle_id]);
+  // A página carrega só as listas mais recentes (300 veículos/rastreadores, 100
+  // contratos). Cliente cujos veículos ficaram fora delas aparecia "sem veículo"
+  // no lançamento. Ao escolher o cliente, busca os DELE direto na API.
+  const [doCliente, setDoCliente] = useState<{ clientId: string; vehicles: VehicleOption[]; trackers: TrackerOption[]; contracts: Contract[] } | null>(null);
+  useEffect(() => {
+    const clientId = chargeItemForm.client_id;
+    if (!token || !clientId) { setDoCliente(null); return; }
+    let cancelado = false;
+    Promise.all([
+      apiFetchList<VehicleOption>(`/vehicles?client_id=${clientId}&limit=300`, {}, token),
+      apiFetchList<TrackerOption>(`/trackers?client_id=${clientId}&limit=300`, {}, token),
+      apiFetch<Contract[]>(`/contracts?client_id=${clientId}&limit=300`, {}, token),
+    ]).then(([v, t, c]) => { if (!cancelado) setDoCliente({ clientId, vehicles: v, trackers: t, contracts: c }); })
+      .catch(() => { if (!cancelado) setDoCliente(null); });
+    return () => { cancelado = true; };
+  }, [token, chargeItemForm.client_id]);
+  const doClienteAtual = doCliente && doCliente.clientId === chargeItemForm.client_id ? doCliente : null;
+  const mesclar = <T extends { id: number }>(base: T[], extra: T[] | undefined) => {
+    if (!extra?.length) return base;
+    const ids = new Set(base.map(i => i.id));
+    return [...base, ...extra.filter(i => !ids.has(i.id))];
+  };
+  const visibleContracts = useMemo(() => chargeItemForm.client_id ? mesclar(contracts, doClienteAtual?.contracts).filter(c => c.client_id === Number(chargeItemForm.client_id)) : contracts, [contracts, doClienteAtual, chargeItemForm.client_id]);
+  const chargeVehicles = useMemo(() => chargeItemForm.client_id ? mesclar(vehicles, doClienteAtual?.vehicles).filter(v => v.client_id === Number(chargeItemForm.client_id)) : vehicles, [vehicles, doClienteAtual, chargeItemForm.client_id]);
+  const chargeTrackers = useMemo(() => mesclar(trackers, doClienteAtual?.trackers).filter(t => (!chargeItemForm.client_id || t.client_id === Number(chargeItemForm.client_id)) && (!chargeItemForm.vehicle_id || t.vehicle_id === Number(chargeItemForm.vehicle_id) || t.vehicle_id == null)), [trackers, doClienteAtual, chargeItemForm.client_id, chargeItemForm.vehicle_id]);
 
   // Revenue variation: compare last two months
   const monthlyVariation = useMemo(() => {
