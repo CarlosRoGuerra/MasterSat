@@ -4836,6 +4836,12 @@ export interface components {
             erro_codigo?: string | null;
             /** Erro Mensagem */
             erro_mensagem?: string | null;
+            /** Erro Tipo */
+            erro_tipo?: string | null;
+            /** Competencia */
+            competencia?: string | null;
+            /** Discriminacao */
+            discriminacao?: string | null;
         };
         /**
          * LoteResumo
@@ -4914,6 +4920,12 @@ export interface components {
             erro_codigo?: string | null;
             /** Erro Mensagem */
             erro_mensagem?: string | null;
+            /** Erro Tipo */
+            erro_tipo?: string | null;
+            /** Competencia */
+            competencia?: string | null;
+            /** Discriminacao */
+            discriminacao?: string | null;
             /** Valor */
             valor?: number | null;
             /** Titulo */
@@ -4954,6 +4966,12 @@ export interface components {
             erro_codigo?: string | null;
             /** Erro Mensagem */
             erro_mensagem?: string | null;
+            /** Erro Tipo */
+            erro_tipo?: string | null;
+            /** Competencia */
+            competencia?: string | null;
+            /** Discriminacao */
+            discriminacao?: string | null;
         };
         /**
          * NotaListItem
@@ -4986,6 +5004,12 @@ export interface components {
             erro_codigo?: string | null;
             /** Erro Mensagem */
             erro_mensagem?: string | null;
+            /** Erro Tipo */
+            erro_tipo?: string | null;
+            /** Competencia */
+            competencia?: string | null;
+            /** Discriminacao */
+            discriminacao?: string | null;
             /**
              * Tem Xml
              * @default false
@@ -5334,6 +5358,11 @@ export interface components {
             negadas: number;
             /** Processando */
             processando: number;
+            /**
+             * Desconhecidas
+             * @default 0
+             */
+            desconhecidas: number;
             /** Total */
             total: number;
             /** Total Geral */
@@ -12385,6 +12414,8 @@ export interface operations {
             query?: {
                 /** @description Código de tributação nacional (ex.: 110201); vazio usa o padrão */
                 cod_trib_nacional?: string | null;
+                competencia?: string | null;
+                discriminacao?: string | null;
             };
             header?: never;
             path: {

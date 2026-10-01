@@ -25,6 +25,9 @@ class NfseOut(BaseModel):
     data_emissao: datetime | None = None
     erro_codigo: str | None = None
     erro_mensagem: str | None = None
+    erro_tipo: str | None = None
+    competencia: date | None = None
+    discriminacao: str | None = None
 
 
 class NfseClientItem(NfseOut):
@@ -76,6 +79,9 @@ class LoteNotaItem(BaseModel):
     link_visualizacao: str | None = None
     erro_codigo: str | None = None
     erro_mensagem: str | None = None
+    erro_tipo: str | None = None
+    competencia: str | None = None
+    discriminacao: str | None = None
 
 
 class LoteDetalhe(LoteResumo):
@@ -116,6 +122,9 @@ class NotaListItem(BaseModel):
     link_visualizacao: str | None = None
     erro_codigo: str | None = None
     erro_mensagem: str | None = None
+    erro_tipo: str | None = None
+    competencia: str | None = None
+    discriminacao: str | None = None
     tem_xml: bool = False
     data_ocorrencia: str | None = None
 
@@ -150,5 +159,6 @@ class ResumoOut(BaseModel):
     autorizadas: int
     negadas: int
     processando: int
+    desconhecidas: int = 0
     total: int
     total_geral: int

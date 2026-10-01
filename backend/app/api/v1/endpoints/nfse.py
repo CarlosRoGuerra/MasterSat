@@ -19,6 +19,7 @@ PDF da nota, dois caminhos:
 """
 from __future__ import annotations
 
+from datetime import date
 from typing import NoReturn
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
@@ -113,6 +114,8 @@ def emitir(
     billing_id: int,
     cod_trib_nacional: str | None = Query(
         default=None, description='Código de tributação nacional (ex.: 110201); vazio usa o padrão'),
+    competencia: date | None = Query(default=None),
+    discriminacao: str | None = Query(default=None),
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*ALLOWED_ROLES)),
 ):
@@ -129,7 +132,8 @@ def emitir(
     # Tomador = interveniente do contrato, quando houver (coerente com o boleto).
     client = resolver_pagador(db, billing, owner)
     try:
-        return _provedor().emitir_nfse(db, billing, client, cod_trib_nacional=cod_trib_nacional)
+        return nfse_provider.emitir_nfse(db, billing, client, cod_trib_nacional=cod_trib_nacional,
+                                       competencia=competencia, discriminacao=discriminacao)
     except (*_ERROS_CONFIG, *_ERROS_API) as exc:
         _raise_nfse_error(exc)
 
@@ -151,7 +155,7 @@ def resumo(
 @router.get('/notas', response_model=NotasOut)
 def notas(
     busca: str | None = None,
-    situacao: str | None = Query(default=None, pattern='^(emitida|erro|pending|processing)$'),
+    situacao: str | None = Query(default=None, pattern='^(emitida|erro|pending|processing|desconhecido)$'),
     period_label: str | None = None,
     limit: int = Query(default=25, le=200),
     offset: int = 0,
@@ -287,11 +291,12 @@ def danfse(
     nota = db.query(NfseNota).filter_by(billing_id=billing_id).first()
     if nota is None or nota.status != 'emitida' or not nota.chave_acesso:
         raise HTTPException(status_code=404, detail='NFS-e emitida não encontrada para esta cobrança')
-    if _provedor() is not nfse_nacional:
+    if (nota.provedor and nota.provedor != 'nacional') or (not nota.provedor and _provedor() is not nfse_nacional):
         raise HTTPException(status_code=400, detail='DANFSE disponível apenas no Emissor Nacional')
 
     try:
-        pdf = nfse_nacional.baixar_danfse(nota.chave_acesso)
+        kwargs = {'ambiente': nota.ambiente} if nota.ambiente else {}
+        pdf = nfse_nacional.baixar_danfse(nota.chave_acesso, **kwargs)
     except _ERROS_CONFIG as exc:
         # Erro de configuração nosso (ambiente/certificado ausente) — não é caso
         # de contingência; precisa ser corrigido, então estoura.
@@ -350,7 +355,7 @@ def _danfse_local_bytes(nota: NfseNota, db: Session, billing_id: int) -> bytes:
     try:
         return nfse_danfse.gerar_danfse_pdf(
             nota.xml_retorno,
-            nfse_nacional.url_consulta_publica(nota.chave_acesso) if nota.chave_acesso else None,
+            nfse_nacional.url_consulta_publica(nota.chave_acesso, ambiente=nota.ambiente) if nota.chave_acesso else None,
             municipio_por_cep=_municipio_do_tomador(db, billing_id),
             marca_dagua=marca,
         )
@@ -424,21 +429,9 @@ def consultar(
     if nota is None:
         raise HTTPException(status_code=404, detail='NFS-e não encontrada para esta cobrança')
     try:
-        # No Emissor Nacional a geração é síncrona: não existe protocolo a
-        # reconsultar. Se a nota saiu, revalidamos o XML pela chave de acesso.
-        if _provedor() is nfse_nacional:
-            if not nota.chave_acesso:
-                raise HTTPException(
-                    status_code=400,
-                    detail='Emissão pelo Emissor Nacional é síncrona — '
-                           'não há protocolo a consultar. Emita novamente.',
-                )
-            nota.xml_retorno = nfse_nacional.consultar_por_chave(nota.chave_acesso)
-            db.commit()
-            return nota
-
-        if not nota.protocolo:
-            raise HTTPException(status_code=400, detail='NFS-e ainda não enviada (sem protocolo)')
-        return nfse_joinville.consultar(db, nota)
+        resultado = nfse_provider.consultar_nfse(db, nota)
+        if resultado.lote_id:
+            nfse_lote._fechar_lote(db, resultado.lote_id)
+        return resultado
     except (*_ERROS_CONFIG, *_ERROS_API) as exc:
         _raise_nfse_error(exc)
