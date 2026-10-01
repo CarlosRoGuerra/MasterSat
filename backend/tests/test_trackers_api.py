@@ -1316,3 +1316,41 @@ class TestCadastroEmLote:
     def test_perfil_sem_permissao_nao_cadastra(self, http_fin):
         r = http_fin.post(PREFIX + '/lote', json=self._lote(['101010001']))
         assert r.status_code == 403
+
+
+class TestContratoParaRastreadorJaVinculado:
+    """Caso real (placa OOW0A60, 01/10/2026): rastreador já instalado no
+    veículo e sem contrato. A tela mandava só o PUT dos dados técnicos e o
+    plano escolhido sumia — três tentativas, nenhum contrato."""
+
+    def test_cria_so_o_contrato_sem_mexer_na_integracao(self, http, db, rastreador_instalado, veiculo, plan):
+        from app.models.contract import Contract
+        from app.models.multiportal_outbox import MultiportalOutbox
+        from app.models.tracker_history import TrackerHistory
+
+        rastreador_instalado.integration_status = 'sincronizado'
+        db.commit()
+        r = http.post(f"{PREFIX}/{rastreador_instalado.id}/link-vehicle", json={
+            "vehicle_id": veiculo.id, "plan_id": plan.id, "start_date": "2026-09-21", "billing_day": 10,
+        })
+        assert r.status_code == 200, r.text
+        assert r.json()["message"].startswith("Contrato criado")
+
+        contrato = db.query(Contract).filter(Contract.tracker_id == rastreador_instalado.id).one()
+        assert (contrato.vehicle_id, contrato.plan_id, contrato.start_date, contrato.billing_day) == (
+            veiculo.id, plan.id, date(2026, 9, 21), 10)
+        db.refresh(rastreador_instalado)
+        assert rastreador_instalado.integration_status == 'sincronizado'
+        assert rastreador_instalado.install_date == date(2024, 1, 15)
+        assert db.query(MultiportalOutbox).count() == 0
+        acoes = [h.action for h in db.query(TrackerHistory).filter_by(tracker_id=rastreador_instalado.id)]
+        assert acoes == ['contract_created']
+
+    def test_segundo_contrato_para_o_mesmo_vinculo_e_recusado(self, http, db, rastreador_instalado, veiculo, plan):
+        from app.models.contract import Contract
+
+        corpo = {"vehicle_id": veiculo.id, "plan_id": plan.id, "start_date": "2026-09-21"}
+        assert http.post(f"{PREFIX}/{rastreador_instalado.id}/link-vehicle", json=corpo).status_code == 200
+        r = http.post(f"{PREFIX}/{rastreador_instalado.id}/link-vehicle", json=corpo)
+        assert r.status_code == 409
+        assert db.query(Contract).filter(Contract.tracker_id == rastreador_instalado.id).count() == 1
