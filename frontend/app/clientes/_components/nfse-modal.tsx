@@ -57,7 +57,7 @@ export function NfseModal({
                 <Td className="text-xs">{n.data_emissao ? new Date(n.data_emissao).toLocaleDateString('pt-BR') : '—'}</Td>
                 <Td>
                   <Badge variant={n.status === 'emitida' ? 'success' : n.status === 'erro' ? 'danger' : 'warning'}>
-                    {n.status === 'emitida' ? 'Emitida' : n.status === 'erro' ? 'Erro' : 'Processando'}
+                    {n.status === 'emitida' ? 'Emitida' : n.status === 'erro' ? 'Erro' : n.status === 'desconhecido' ? 'Desfecho desconhecido — consultar em Notas Fiscais' : 'Processando'}
                   </Badge>
                 </Td>
                 <Td>

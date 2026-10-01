@@ -19,6 +19,7 @@ import { DonutChart } from '@/components/ui/donut-chart';
 import { Pagination } from '@/components/ui/pagination';
 import { apiFetch, API_URL } from '@/lib/api';
 import { entregarArquivo } from '@/lib/arquivo';
+import { precisaConsultarNfse } from '@/lib/nfse';
 import { useAuthGuard } from '@/lib/use-auth-guard';
 import { ROUTE_ROLES } from '@/lib/route-roles';
 import { useDebouncedValue } from '@/lib/use-debounced-value';
@@ -40,6 +41,7 @@ type LoteNota = {
   nota_id: number; billing_id: number; tomador: string; cpf_cnpj: string | null; valor: number;
   numero_nfse: string | null; status: string; chave_acesso: string | null;
   link_visualizacao: string | null; erro_codigo: string | null; erro_mensagem: string | null;
+  erro_tipo?: string | null;
 };
 type LoteDetalhe = LoteResumo & { itens: LoteNota[] };
 
@@ -48,12 +50,14 @@ type Nota = {
   cpf_cnpj: string | null; valor: number; nosso_numero: string | null; numero_nfse: string | null;
   status: string; chave_acesso: string | null; link_visualizacao: string | null;
   erro_codigo: string | null; erro_mensagem: string | null; tem_xml: boolean;
+  erro_tipo?: string | null;
   data_ocorrencia: string | null;
 };
 type Notas = { total: number; limit: number; offset: number; itens: Nota[] };
 type Resumo = {
   competencia: string; autorizadas: number; negadas: number; processando: number;
   total: number; total_geral: number;
+  desconhecidas: number;
 };
 
 type Certificado = {
@@ -88,7 +92,9 @@ function statusBadge(status: string) {
     case 'concluido':
       return <Badge variant="success">Concluído</Badge>;
     case 'erro':
-      return <Badge variant="danger">Negada</Badge>;
+      return <Badge variant="danger">Erro</Badge>;
+    case 'desconhecido':
+      return <Badge variant="warning">Desfecho desconhecido</Badge>;
     case 'com_erro':
       return <Badge variant="danger">Com erro</Badge>;
     case 'processing':
@@ -231,6 +237,7 @@ export default function NotasFiscaisPage() {
   const [selecionados, setSelecionados] = useState<Set<number>>(new Set());
   const [buscando, setBuscando] = useState(false);
   const [emitindo, setEmitindo] = useState(false);
+  const [consultandoNota, setConsultandoNota] = useState<number | null>(null);
 
   /* ── Carregamentos ── */
   const carregarResumo = useCallback(() => {
@@ -342,6 +349,17 @@ export default function NotasFiscaisPage() {
     } catch (err) { setError(parseErr(err)); }
   }
 
+  async function consultarDesfecho(billingId: number) {
+    setError('');
+    setConsultandoNota(billingId);
+    try {
+      await apiFetch(`/nfse/consultar/${billingId}`, { method: 'POST' }, token);
+      carregarNotas(); carregarResumo(); carregarLotes();
+      if (loteAberto) await abrirLote(loteAberto.id);
+    } catch (err) { setError(parseErr(err)); }
+    finally { setConsultandoNota(null); }
+  }
+
   async function salvarCertificado() {
     if (!arquivoCert || !senhaCert) {
       setError('Selecione o arquivo do certificado e informe a senha.');
@@ -436,9 +454,10 @@ export default function NotasFiscaisPage() {
                   <Td>{n.numero_nfse ?? '—'}</Td>
                   <Td>{statusBadge(n.status)}</Td>
                   <Td className="max-w-[280px] text-xs text-slate-500">
-                    {n.status === 'erro'
+                    {n.status === 'erro' || n.status === 'desconhecido'
                       ? <span className="text-rose-600 dark:text-rose-400">
                           {n.erro_codigo ? `${n.erro_codigo}: ` : ''}{n.erro_mensagem}
+                          {n.status === 'desconhecido' && ' Consulte o desfecho; não emita novamente.'}
                         </span>
                       : '—'}
                   </Td>
@@ -461,6 +480,11 @@ export default function NotasFiscaisPage() {
                           </AcaoIcone>
                         )}
                       </div>
+                    ) : precisaConsultarNfse(n) ? (
+                      <Button variant="secondary" disabled={consultandoNota !== null}
+                              onClick={() => consultarDesfecho(n.billing_id)}>
+                        {consultandoNota === n.billing_id ? 'Consultando…' : 'Consultar desfecho'}
+                      </Button>
                     ) : '—'}
                   </Td>
                 </Tr>
@@ -523,6 +547,8 @@ export default function NotasFiscaisPage() {
                         icon={<AlertTriangle className="h-4 w-4" />} />
             <MetricCard label="Processando" value={resumo?.processando ?? '—'}
                         icon={<Loader2 className="h-4 w-4" />} />
+            <MetricCard label="Desfecho desconhecido" value={resumo?.desconhecidas ?? '—'}
+                        icon={<AlertTriangle className="h-4 w-4" />} />
             <MetricCard label="Total emitido (geral)" value={resumo?.total_geral ?? '—'}
                         icon={<Receipt className="h-4 w-4" />} />
           </div>
@@ -537,6 +563,7 @@ export default function NotasFiscaisPage() {
                   { label: 'Autorizadas', value: resumo?.autorizadas ?? 0, color: '#10b981' },
                   { label: 'Negadas', value: resumo?.negadas ?? 0, color: '#f43f5e' },
                   { label: 'Processando', value: resumo?.processando ?? 0, color: '#f59e0b' },
+                  { label: 'Desfecho desconhecido', value: resumo?.desconhecidas ?? 0, color: '#8b5cf6' },
                 ]}
               />
             </div>
@@ -560,7 +587,8 @@ export default function NotasFiscaisPage() {
                       className="ml-2 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-900">
                 <option value="">Todas as situações</option>
                 <option value="emitida">Autorizada</option>
-                <option value="erro">Negada</option>
+                <option value="erro">Erro</option>
+                <option value="desconhecido">Desfecho desconhecido</option>
                 <option value="pending">Processando</option>
               </select>
             </div>
@@ -608,15 +636,22 @@ export default function NotasFiscaisPage() {
                       <Td className="tabular-nums">{n.numero_nfse ?? '—'}</Td>
                       <Td>{statusBadge(n.status)}</Td>
                       <Td className="max-w-[240px] text-xs text-slate-500">
-                        {n.status === 'erro'
+                        {n.status === 'erro' || n.status === 'desconhecido'
                           ? <span className="text-rose-600 dark:text-rose-400">
                               {n.erro_codigo ? `${n.erro_codigo}: ` : ''}{n.erro_mensagem}
+                              {n.status === 'desconhecido' && ' Consulte o desfecho; não emita novamente.'}
                             </span>
                           : '—'}
                       </Td>
                       <Td className="text-slate-500">{dataBR(n.data_ocorrencia)}</Td>
                       <Td>
                         <div className="flex items-center gap-1.5">
+                          {precisaConsultarNfse(n) && (
+                            <Button variant="secondary" disabled={consultandoNota !== null}
+                                    onClick={() => consultarDesfecho(n.billing_id)}>
+                              {consultandoNota === n.billing_id ? 'Consultando…' : 'Consultar desfecho'}
+                            </Button>
+                          )}
                           {n.status === 'emitida' && (
                             <>
                               <AcaoIcone title="DANFSE oficial (PDF do governo)" onClick={() => baixarArquivo(n.billing_id, 'danfse')}>

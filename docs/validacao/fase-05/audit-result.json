@@ -1,0 +1,12 @@
+{
+  "command": [
+    "docker",
+    "run",
+    "--rm",
+    "mastersat-f05-audit"
+  ],
+  "scanner": "pip-audit 2.10.0",
+  "target": "/usr/local/lib/python3.12/site-packages da imagem runtime Fase 05",
+  "source_sha": "a011aa1b00fe42505b67d09b5ab1cbafa28027b5",
+  "exit_code": 1
+}

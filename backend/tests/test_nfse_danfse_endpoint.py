@@ -64,6 +64,25 @@ def _oficial(monkeypatch, resultado):
     monkeypatch.setattr(nfse_nacional, 'baixar_danfse', _fn)
 
 
+def test_danfse_usa_ambiente_e_provedor_persistidos(db, http_fin, nota_emitida, monkeypatch):
+    from app.core.config import settings
+    nota_emitida.provedor = 'nacional'
+    nota_emitida.ambiente = 'producao_restrita'
+    db.commit()
+    monkeypatch.setattr(settings, 'nfse_provedor', 'joinville')
+    monkeypatch.setattr(settings, 'nfse_nac_ambiente', 'producao')
+    usados = []
+
+    def baixar(chave, *, ambiente):
+        usados.append(ambiente)
+        return OFICIAL
+
+    monkeypatch.setattr(nfse_nacional, 'baixar_danfse', baixar)
+    response = http_fin.get(f'/api/v1/nfse/{nota_emitida.billing_id}/danfse')
+    assert response.status_code == 200
+    assert response.content == OFICIAL and usados == ['producao_restrita']
+
+
 # ── Governo no ar: sai o oficial, não a reprodução ──────────────────────────
 
 def test_governo_no_ar_entrega_o_oficial(http, nota_emitida, monkeypatch):

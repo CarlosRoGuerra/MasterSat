@@ -1,0 +1,2 @@
+Executados: 2355  falhas: 38  conhecidas: 38  skips: 0
+BASELINE OK — só falhas conhecidas e triadas

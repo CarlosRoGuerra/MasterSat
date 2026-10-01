@@ -1,0 +1,61 @@
+docker : #0 building with "desktop-linux" instance using docker driver
+No linha:2 caractere:1
++ docker build -t mastersat-backend:fase05 backend *> docs/validacao/fa ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (#0 building wit...g docker driver:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 1.19kB done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/python:3.12-slim
+#2 DONE 0.1s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 1.78kB done
+#3 DONE 0.0s
+
+#4 [internal] load build context
+#4 DONE 0.0s
+
+#5 [1/6] FROM
+docker.io/library/python:3.12-slim@sha256:09f7da3bc104798d0afb40bc08d23ab2da20a76130cec1f2ef170848f5d85217
+#5 resolve docker.io/library/python:3.12-slim@sha256:09f7da3bc104798d0afb40bc08d23ab2da20a76130cec1f2ef170848f5d85217
+0.1s done
+#5 DONE 0.1s
+
+#4 [internal] load build context
+#4 transferring context: 2.47MB 0.2s done
+#4 DONE 0.2s
+
+#6 [2/6] WORKDIR /app
+#6 CACHED
+
+#7 [3/6] COPY requirements.txt .
+#7 CACHED
+
+#8 [4/6] RUN pip install --no-cache-dir "pip==26.2.1" && pip install --no-cache-dir -r requirements.txt
+#8 CACHED
+
+#9 [5/6] COPY . .
+#9 DONE 0.2s
+
+#10 [6/6] RUN useradd --create-home --uid 10001 appuser && chown -R appuser:appuser /app
+#10 DONE 1.3s
+
+#11 exporting to image
+#11 exporting layers
+#11 exporting layers 0.4s done
+#11 exporting manifest sha256:f5e12f2184abe4b00a5b1bbfdc9424f8465ad8497429f39432e79a667d9f98fd 0.0s done
+#11 exporting config sha256:e278bb87b0815f72b4ef672b3115f81854dcc781e162f437f659ec17ca9ec1c7 0.0s done
+#11 exporting attestation manifest sha256:6726197858ad58d5786710f6f2e5008179b9082a39c9e19cc664751d8fba40a7 0.0s done
+#11 exporting manifest list sha256:052a0a15aeaadd5be1e4bc9f9bbcc20e191a092e6906df1ac655ac4a729b3c62 0.0s done
+#11 naming to docker.io/library/mastersat-backend:fase05
+#11 naming to docker.io/library/mastersat-backend:fase05 done
+#11 unpacking to docker.io/library/mastersat-backend:fase05
+#11 unpacking to docker.io/library/mastersat-backend:fase05 0.2s done
+#11 DONE 0.7s
+
+View build details: docker-desktop://dashboard/build/desktop-linux/desktop-linux/rz7vobtssb53dw1mhr7uok9br

@@ -1,0 +1,474 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-8.3.3, pluggy-1.6.0
+rootdir: /app
+configfile: pytest.ini
+plugins: mock-3.14.0, platformdirs-4.12.2, anyio-4.15.1
+collected 2355 items
+
+tests/test_ailos_boleto_mapper.py ......                                 [  0%]
+tests/test_ailos_boletos_service.py ..............................       [  1%]
+tests/test_ailos_client_masking.py .......                               [  1%]
+tests/test_ailos_client_token.py ..........                              [  2%]
+tests/test_ailos_connect_callback.py ...............                     [  2%]
+tests/test_ailos_crypto.py .......                                       [  3%]
+tests/test_ailos_endpoints_api.py ................................       [  4%]
+tests/test_ailos_pdf_override.py ....                                    [  4%]
+tests/test_ailos_registration_reservation.py .                           [  4%]
+tests/test_ailos_request_retry.py .......                                [  5%]
+tests/test_ailos_retorno_service.py .....                                [  5%]
+tests/test_ailos_validators.py ..............................            [  6%]
+tests/test_audit_middleware.py .................                         [  7%]
+tests/test_auth_api.py ...........................F                      [  8%]
+tests/test_billing_closure_api.py ...................................... [ 10%]
+.                                                                        [ 10%]
+tests/test_billing_closure_service.py .................................. [ 11%]
+....................................................                     [ 13%]
+tests/test_billings_api.py ............F................................ [ 15%]
+.....................................                                    [ 17%]
+tests/test_billings_concurrency_guards.py .....                          [ 17%]
+tests/test_body_limit.py ..                                              [ 17%]
+tests/test_boleto_layout.py ........................                     [ 18%]
+tests/test_boletos_api.py ..........................                     [ 19%]
+tests/test_check_then_insert_race.py ..                                  [ 19%]
+tests/test_client_charge_items_api.py ..F..FF.....F....                  [ 20%]
+tests/test_client_timeline_api.py ..........................             [ 21%]
+tests/test_clients_api.py ...................................            [ 23%]
+tests/test_clients_contrato_armazenado.py ......                         [ 23%]
+tests/test_cnab_generators.py ....................                       [ 24%]
+tests/test_config_security.py .......                                    [ 24%]
+tests/test_contracts_api.py ...................F..........F............. [ 26%]
+..........F..F.............                                              [ 27%]
+tests/test_dashboard_api.py ........                                     [ 27%]
+tests/test_database_concurrency_postgres.py ..........                   [ 28%]
+tests/test_db03_contract_soft_delete.py .............                    [ 28%]
+tests/test_db03_timeline_serializer.py .....                             [ 29%]
+tests/test_delinquency_api.py ..............                             [ 29%]
+tests/test_documents_view_api.py .....                                   [ 29%]
+tests/test_exports_api.py ...............                                [ 30%]
+tests/test_fase01_ailos_state.py ..........                              [ 30%]
+tests/test_fase01_bootstrap.py ...........                               [ 31%]
+tests/test_fase01_capacidades.py ....................................... [ 32%]
+............................                                             [ 34%]
+tests/test_fase01_refresh_rotacao.py ......                              [ 34%]
+tests/test_fase01_reset.py .............                                 [ 34%]
+tests/test_fase01_senha.py ................................              [ 36%]
+tests/test_fase01_sessoes.py ........                                    [ 36%]
+tests/test_fase02_migrations_postgres.py ..............                  [ 37%]
+tests/test_fase02_obrigacoes.py ........................................ [ 38%]
+...........................                                              [ 40%]
+tests/test_fase02_postgres.py .....                                      [ 40%]
+tests/test_fase03_cnab.py .......                                        [ 40%]
+tests/test_fase03_conciliacao.py ...........                             [ 41%]
+tests/test_fase03_desfecho_ailos.py .............                        [ 41%]
+tests/test_fase03_historico_metricas.py .............                    [ 42%]
+tests/test_fase03_migration_postgres.py ....                             [ 42%]
+tests/test_fase03_payables.py .......                                    [ 42%]
+tests/test_fase03_postgres.py ......                                     [ 42%]
+tests/test_fase03_recebimento.py ...............                         [ 43%]
+tests/test_fase03_titulo_bancario.py .........................           [ 44%]
+tests/test_fase04_backfill.py ........                                   [ 44%]
+tests/test_fase04_coleta_download.py ................................... [ 46%]
+....                                                                     [ 46%]
+tests/test_fase04_postgres.py .....                                      [ 46%]
+tests/test_fase04_sgr.py .......................................         [ 48%]
+tests/test_fase05_postgres.py .....                                      [ 48%]
+tests/test_financial.py ...............................................  [ 50%]
+tests/test_financial_decimal_precision.py ............                   [ 51%]
+tests/test_financial_prorata.py ........................                 [ 52%]
+tests/test_integrations_api.py ..............                            [ 52%]
+tests/test_integrity_conflict.py ..........                              [ 53%]
+tests/test_multiportal_lifecycle.py .....                                [ 53%]
+tests/test_multiportal_outbox.py ..................................      [ 54%]
+tests/test_multiportal_service.py ...................................... [ 56%]
+.....................................................................    [ 59%]
+tests/test_nfse_certificado.py ..........................                [ 60%]
+tests/test_nfse_danfse.py ........................                       [ 61%]
+tests/test_nfse_danfse_endpoint.py ............                          [ 62%]
+tests/test_nfse_emissao.py ......................                        [ 63%]
+tests/test_nfse_fiscal.py ..........                                     [ 63%]
+tests/test_nfse_lote.py ............................................     [ 65%]
+tests/test_nfse_nacional.py ............................................ [ 67%]
+                                                                         [ 67%]
+tests/test_nfse_xmldsig.py .....                                         [ 67%]
+tests/test_overdue_status_worker.py ...                                  [ 67%]
+tests/test_payables_api.py ..........                                    [ 67%]
+tests/test_plans_api.py ..F.F..............F...........                  [ 69%]
+tests/test_reports_api.py ..........FFF..F..F..                          [ 70%]
+tests/test_saneamento_parcela_sgr_postgres.py .                          [ 70%]
+tests/test_schemas_contract.py .......FFFFFFF................            [ 71%]
+tests/test_schemas_tracker.py ...............................F.....FFFF. [ 73%]
+FFF.............                                                         [ 73%]
+tests/test_search_api.py .............................                   [ 75%]
+tests/test_security_hardening.py ....................................... [ 76%]
+...............                                                          [ 77%]
+tests/test_service_order_document_generation_api.py ................     [ 78%]
+tests/test_service_order_materials_api.py ...............                [ 78%]
+tests/test_service_order_signature_api.py ...........                    [ 79%]
+tests/test_service_orders_api.py ....................................... [ 80%]
+.........                                                                [ 81%]
+tests/test_service_products_api.py ..F.F..........F.....                 [ 82%]
+tests/test_settings_api.py ......                                        [ 82%]
+tests/test_sgr_client.py ....................................            [ 83%]
+tests/test_sgr_config.py ....                                            [ 84%]
+tests/test_sgr_importer.py .........................................     [ 85%]
+tests/test_sgr_mapping.py .........................................      [ 87%]
+tests/test_sgr_masking.py .........                                      [ 87%]
+tests/test_sgr_normalize.py .................................            [ 89%]
+tests/test_sgr_poc.py ..................                                 [ 90%]
+tests/test_sgr_report.py ........                                        [ 90%]
+tests/test_soft_delete_unique_reuse.py ...                               [ 90%]
+tests/test_timezone.py ....                                              [ 90%]
+tests/test_trackers_api.py ............................................. [ 92%]
+..................FF.................................................... [ 95%]
+.....                                                                    [ 95%]
+tests/test_user_unique_integrity.py .........                            [ 96%]
+tests/test_users_api.py ...................                              [ 97%]
+tests/test_vehicles_api.py ............................................. [ 99%]
+.........                                                                [ 99%]
+tests/test_verificacao_restauracao.py .............                      [100%]
+
+=================================== FAILURES ===================================
+__________________ TestRegisterClient.test_always_returns_403 __________________
+tests/test_auth_api.py:313: in test_always_returns_403
+    assert r.status_code == 403
+E   assert 422 == 403
+E    +  where 422 = <Response [422 Unprocessable Entity]>.status_code
+__________________ TestListBillings.test_operational_can_list __________________
+tests/test_billings_api.py:95: in test_operational_can_list
+    assert r.status_code == 200
+E   assert 403 == 200
+E    +  where 403 = <Response [403 Forbidden]>.status_code
+________________ TestListChargeItems.test_operational_can_list _________________
+tests/test_client_charge_items_api.py:56: in test_operational_can_list
+    assert r.status_code == 200
+E   assert 403 == 200
+E    +  where 403 = <Response [403 Forbidden]>.status_code
+______________ TestCreateChargeItem.test_create_with_auto_billing ______________
+tests/test_client_charge_items_api.py:84: in test_create_with_auto_billing
+    assert billings >= 1
+E   assert 0 >= 1
+________________ TestCreateChargeItem.test_create_installments _________________
+tests/test_client_charge_items_api.py:97: in test_create_installments
+    assert len(billings) == 3
+E   assert 0 == 3
+E    +  where 0 = len([])
+___________ TestUpdateChargeItem.test_update_nonexistent_returns_404 ___________
+tests/test_client_charge_items_api.py:136: in test_update_nonexistent_returns_404
+    assert r.status_code == 404
+E   assert 422 == 404
+E    +  where 422 = <Response [422 Unprocessable Entity]>.status_code
+____________ TestCreateContrato.test_generates_billings_by_default _____________
+tests/test_contracts_api.py:157: in test_generates_billings_by_default
+    assert len(billings) == 3
+E   assert 0 == 3
+E    +  where 0 = len([])
+___________ TestCreateContrato.test_billing_cycles_out_of_range_422 ____________
+tests/test_contracts_api.py:221: in test_billing_cycles_out_of_range_422
+    assert r.status_code == 422
+E   assert 200 == 422
+E    +  where 200 = <Response [200 OK]>.status_code
+_________________ TestGenerateBillings.test_generates_billings _________________
+tests/test_contracts_api.py:412: in test_generates_billings
+    assert r.status_code == 200
+E   assert 404 == 200
+E    +  where 404 = <Response [404 Not Found]>.status_code
+_________________ TestGenerateBillings.test_default_12_months __________________
+tests/test_contracts_api.py:432: in test_default_12_months
+    assert r.status_code == 200
+E   assert 404 == 200
+E    +  where 404 = <Response [404 Not Found]>.status_code
+____________________ TestListPlans.test_filter_active_only _____________________
+tests/test_plans_api.py:43: in test_filter_active_only
+    assert all(x["active"] for x in r.json())
+E   assert False
+E    +  where False = all(<generator object TestListPlans.test_filter_active_only.<locals>.<genexpr> at 0x766a64c518a0>)
+___________________ TestListPlans.test_operational_can_list ____________________
+tests/test_plans_api.py:53: in test_operational_can_list
+    assert r.status_code == 200
+E   assert 403 == 200
+E    +  where 403 = <Response [403 Forbidden]>.status_code
+______________ TestUpdatePlan.test_update_nonexistent_returns_404 ______________
+tests/test_plans_api.py:159: in test_update_nonexistent_returns_404
+    assert r.status_code == 404
+E   assert 422 == 404
+E    +  where 422 = <Response [422 Unprocessable Entity]>.status_code
+___________________ TestDelinquentsReport.test_returns_list ____________________
+tests/test_reports_api.py:145: in test_returns_list
+    assert isinstance(r.json(), list)
+E   AssertionError: assert False
+E    +  where False = isinstance({'clientes': [], 'total_clientes': 0, 'valor_total_inadimplencia': 0}, list)
+E    +    where {'clientes': [], 'total_clientes': 0, 'valor_total_inadimplencia': 0} = json()
+E    +      where json = <Response [200 OK]>.json
+____________ TestDelinquentsReport.test_includes_delinquent_client _____________
+tests/test_reports_api.py:162: in test_includes_delinquent_client
+    assert any(x["client_id"] == contrato.client_id for x in r.json())
+tests/test_reports_api.py:162: in <genexpr>
+    assert any(x["client_id"] == contrato.client_id for x in r.json())
+E   TypeError: string indices must be integers, not 'str'
+_____________________ TestDelinquentsReport.test_structure _____________________
+tests/test_reports_api.py:179: in test_structure
+    item = r.json()[0]
+E   KeyError: 0
+_______________ TestClientStatement.test_operational_can_access ________________
+tests/test_reports_api.py:198: in test_operational_can_access
+    assert r.status_code == 200
+E   assert 403 == 200
+E    +  where 403 = <Response [403 Forbidden]>.status_code
+_____________ TestExecutiveSummary.test_contracts_by_plan_included _____________
+tests/test_reports_api.py:216: in test_contracts_by_plan_included
+    assert "contracts_by_plan" in data
+E   AssertionError: assert 'contracts_by_plan' in {'bases': {'receita_6_meses': 'vencimento'}, 'contratos_por_plano': [{'contratos': 1, 'plano': 'Plano Teste'}], 'receita_6_meses': [], 'top_inadimplentes': []}
+__________ TestContractCreateBillingCycles.test_default_cycles_is_12 ___________
+tests/test_schemas_contract.py:92: in test_default_cycles_is_12
+    assert c.billing_cycles == 12
+/usr/local/lib/python3.12/site-packages/pydantic/main.py:856: in __getattr__
+    raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+E   AttributeError: 'ContractCreate' object has no attribute 'billing_cycles'
+____________ TestContractCreateBillingCycles.test_cycles_1_accepted ____________
+tests/test_schemas_contract.py:96: in test_cycles_1_accepted
+    assert c.billing_cycles == 1
+/usr/local/lib/python3.12/site-packages/pydantic/main.py:856: in __getattr__
+    raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+E   AttributeError: 'ContractCreate' object has no attribute 'billing_cycles'
+___________ TestContractCreateBillingCycles.test_cycles_60_accepted ____________
+tests/test_schemas_contract.py:100: in test_cycles_60_accepted
+    assert c.billing_cycles == 60
+/usr/local/lib/python3.12/site-packages/pydantic/main.py:856: in __getattr__
+    raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+E   AttributeError: 'ContractCreate' object has no attribute 'billing_cycles'
+____________ TestContractCreateBillingCycles.test_cycles_0_rejected ____________
+tests/test_schemas_contract.py:103: in test_cycles_0_rejected
+    with pytest.raises(ValidationError):
+E   Failed: DID NOT RAISE <class 'pydantic_core._pydantic_core.ValidationError'>
+___________ TestContractCreateBillingCycles.test_cycles_61_rejected ____________
+tests/test_schemas_contract.py:107: in test_cycles_61_rejected
+    with pytest.raises(ValidationError):
+E   Failed: DID NOT RAISE <class 'pydantic_core._pydantic_core.ValidationError'>
+________ TestContractCreateBillingCycles.test_cycles_negative_rejected _________
+tests/test_schemas_contract.py:111: in test_cycles_negative_rejected
+    with pytest.raises(ValidationError):
+E   Failed: DID NOT RAISE <class 'pydantic_core._pydantic_core.ValidationError'>
+_____ TestContractCreateDefaults.test_auto_generate_billings_default_true ______
+tests/test_schemas_contract.py:122: in test_auto_generate_billings_default_true
+    assert c.auto_generate_billings is True
+/usr/local/lib/python3.12/site-packages/pydantic/main.py:856: in __getattr__
+    raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+E   AttributeError: 'ContractCreate' object has no attribute 'auto_generate_billings'
+__________________ TestTrackerLinkPayload.test_valid_payload ___________________
+tests/test_schemas_tracker.py:180: in test_valid_payload
+    assert p.auto_generate_billings is True
+/usr/local/lib/python3.12/site-packages/pydantic/main.py:856: in __getattr__
+    raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+E   AttributeError: 'TrackerLinkPayload' object has no attribute 'auto_generate_billings'
+________________ TestTrackerLinkPayload.test_billing_cycles_min ________________
+tests/test_schemas_tracker.py:209: in test_billing_cycles_min
+    assert p.billing_cycles == 1
+/usr/local/lib/python3.12/site-packages/pydantic/main.py:856: in __getattr__
+    raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+E   AttributeError: 'TrackerLinkPayload' object has no attribute 'billing_cycles'
+________________ TestTrackerLinkPayload.test_billing_cycles_max ________________
+tests/test_schemas_tracker.py:214: in test_billing_cycles_max
+    assert p.billing_cycles == 999
+/usr/local/lib/python3.12/site-packages/pydantic/main.py:856: in __getattr__
+    raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+E   AttributeError: 'TrackerLinkPayload' object has no attribute 'billing_cycles'
+___________ TestTrackerLinkPayload.test_billing_cycles_zero_rejected ___________
+tests/test_schemas_tracker.py:217: in test_billing_cycles_zero_rejected
+    with pytest.raises(ValidationError):
+E   Failed: DID NOT RAISE <class 'pydantic_core._pydantic_core.ValidationError'>
+________ TestTrackerLinkPayload.test_billing_cycles_above_max_rejected _________
+tests/test_schemas_tracker.py:221: in test_billing_cycles_above_max_rejected
+    with pytest.raises(ValidationError):
+E   Failed: DID NOT RAISE <class 'pydantic_core._pydantic_core.ValidationError'>
+______________ TestTrackerLinkPayload.test_billing_modality_carne ______________
+tests/test_schemas_tracker.py:231: in test_billing_modality_carne
+    assert p.billing_cycles == 12
+/usr/local/lib/python3.12/site-packages/pydantic/main.py:856: in __getattr__
+    raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+E   AttributeError: 'TrackerLinkPayload' object has no attribute 'billing_cycles'
+____________ TestTrackerLinkPayload.test_installation_fee_positivo _____________
+tests/test_schemas_tracker.py:235: in test_installation_fee_positivo
+    assert p.installation_fee == 80.0
+/usr/local/lib/python3.12/site-packages/pydantic/main.py:856: in __getattr__
+    raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+E   AttributeError: 'TrackerLinkPayload' object has no attribute 'installation_fee'
+_______ TestTrackerLinkPayload.test_installation_fee_negativo_rejeitado ________
+tests/test_schemas_tracker.py:238: in test_installation_fee_negativo_rejeitado
+    with pytest.raises(ValidationError):
+E   Failed: DID NOT RAISE <class 'pydantic_core._pydantic_core.ValidationError'>
+______________ TestListServiceProducts.test_filter_auto_uninstall ______________
+tests/test_service_products_api.py:47: in test_filter_auto_uninstall
+    assert all(x["auto_add_on_uninstall"] for x in r.json())
+E   assert False
+E    +  where False = all(<generator object TestListServiceProducts.test_filter_auto_uninstall.<locals>.<genexpr> at 0x766a3b854860>)
+______________ TestListServiceProducts.test_operational_can_list _______________
+tests/test_service_products_api.py:57: in test_operational_can_list
+    assert r.status_code == 200
+E   assert 403 == 200
+E    +  where 403 = <Response [403 Forbidden]>.status_code
+_________ TestUpdateServiceProduct.test_update_nonexistent_returns_404 _________
+tests/test_service_products_api.py:123: in test_update_nonexistent_returns_404
+    assert r.status_code == 404
+E   assert 422 == 404
+E    +  where 422 = <Response [422 Unprocessable Entity]>.status_code
+____________ TestLinkVeiculo.test_link_with_plan_generates_billings ____________
+tests/test_trackers_api.py:558: in test_link_with_plan_generates_billings
+    assert len(billings) >= 3
+E   assert 0 >= 3
+E    +  where 0 = len([])
+_______________ TestLinkVeiculo.test_link_sem_prorata_gera_exato _______________
+tests/test_trackers_api.py:572: in test_link_sem_prorata_gera_exato
+    assert len(billings) == 3
+E   assert 0 == 3
+E    +  where 0 = len([])
+=============================== warnings summary ===============================
+../usr/local/lib/python3.12/site-packages/fastapi/testclient.py:1
+  /usr/local/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+app/core/config.py:309
+  /app/app/core/config.py:309: UserWarning: ⚠ SECRET_KEY fraca ou padrão — gere: python -c "import secrets; print(secrets.token_hex(32))"
+    settings.enforce_security()
+
+app/core/config.py:309
+  /app/app/core/config.py:309: UserWarning: ⚠ Senha do MinIO ainda é o valor padrão
+    settings.enforce_security()
+
+../usr/local/lib/python3.12/site-packages/passlib/utils/__init__.py:854
+  /usr/local/lib/python3.12/site-packages/passlib/utils/__init__.py:854: DeprecationWarning: 'crypt' is deprecated and slated for removal in Python 3.13
+    from crypt import crypt as _crypt
+
+../usr/local/lib/python3.12/site-packages/reportlab/lib/rl_safe_eval.py:12
+  /usr/local/lib/python3.12/site-packages/reportlab/lib/rl_safe_eval.py:12: DeprecationWarning: ast.NameConstant is deprecated and will be removed in Python 3.14; use ast.Constant instead
+    haveNameConstant = hasattr(ast,'NameConstant')
+
+app/main.py:900
+  /app/app/main.py:900: DeprecationWarning:
+          on_event is deprecated, use lifespan event handlers instead.
+
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+
+    @app.on_event('startup')
+
+../usr/local/lib/python3.12/site-packages/fastapi/applications.py:4744
+  /usr/local/lib/python3.12/site-packages/fastapi/applications.py:4744: DeprecationWarning:
+          on_event is deprecated, use lifespan event handlers instead.
+
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+tests/test_audit_middleware.py: 15 warnings
+tests/test_auth_api.py: 8 warnings
+tests/test_documents_view_api.py: 4 warnings
+tests/test_fase01_bootstrap.py: 1 warning
+tests/test_fase01_refresh_rotacao.py: 6 warnings
+tests/test_fase01_senha.py: 1 warning
+tests/test_fase01_sessoes.py: 7 warnings
+tests/test_security_hardening.py: 6 warnings
+tests/test_service_order_document_generation_api.py: 6 warnings
+tests/test_service_orders_api.py: 13 warnings
+tests/test_user_unique_integrity.py: 2 warnings
+  /usr/local/lib/python3.12/site-packages/jwt/api_jwt.py:149: InsecureKeyLengthWarning: The HMAC key is 30 bytes long, which is below the minimum recommended length of 32 bytes for SHA256. See RFC 7518 Section 3.2.
+    return self._jws.encode(
+
+tests/test_audit_middleware.py: 14 warnings
+tests/test_auth_api.py: 5 warnings
+tests/test_documents_view_api.py: 4 warnings
+tests/test_fase01_bootstrap.py: 1 warning
+tests/test_fase01_refresh_rotacao.py: 6 warnings
+tests/test_fase01_sessoes.py: 7 warnings
+tests/test_security_hardening.py: 6 warnings
+  /usr/local/lib/python3.12/site-packages/jwt/api_jwt.py:370: InsecureKeyLengthWarning: The HMAC key is 30 bytes long, which is below the minimum recommended length of 32 bytes for SHA256. See RFC 7518 Section 3.2.
+    decoded = self.decode_complete(
+
+tests/test_multiportal_service.py::TestFullSyncForTracker::test_all_succeed_returns_all_results
+  /app/app/services/multiportal.py:253: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    data=(when or datetime.utcnow()).strftime('%Y%m%d%H%M%S'),
+
+tests/test_multiportal_service.py::TestFullSyncForTracker::test_all_succeed_returns_all_results
+  /app/app/services/multiportal.py:265: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    data=(when or datetime.utcnow()).strftime('%Y%m%d%H%M%S'),
+
+tests/test_service_order_document_generation_api.py: 10 warnings
+  <string>:15: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+
+tests/test_service_order_document_generation_api.py::TestGenerateDocument::test_generate_with_materials_checklist_and_signature
+tests/test_service_order_signature_api.py::TestUploadSignature::test_technician_signature_sets_fields
+tests/test_service_order_signature_api.py::TestUploadSignature::test_client_signature_sets_fields
+tests/test_service_order_signature_api.py::TestUploadSignature::test_accepts_data_url_prefix
+tests/test_service_order_signature_api.py::TestUploadSignature::test_second_signature_replaces_document_reference
+tests/test_service_order_signature_api.py::TestUploadSignature::test_second_signature_replaces_document_reference
+tests/test_service_order_signature_api.py::TestCompletionGate::test_blocked_with_only_technician_signature
+tests/test_service_order_signature_api.py::TestCompletionGate::test_completes_once_all_three_present
+tests/test_service_order_signature_api.py::TestCompletionGate::test_completes_once_all_three_present
+  /app/app/api/v1/endpoints/service_orders.py:601: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    now = datetime.utcnow()
+
+tests/test_service_order_signature_api.py::TestCompletionGate::test_completes_once_all_three_present
+tests/test_service_orders_api.py::TestServiceOrderStatusTransition::test_in_progress_to_completed
+  /app/app/api/v1/endpoints/service_orders.py:344: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    item.executed_at = datetime.utcnow()
+
+tests/test_service_orders_api.py::TestServiceOrderStatusTransition::test_in_progress_to_completed
+  /app/tests/test_service_orders_api.py:246: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    ordem_servico.technician_signed_at = datetime.utcnow()
+
+tests/test_service_orders_api.py::TestServiceOrderStatusTransition::test_in_progress_to_completed
+  /app/tests/test_service_orders_api.py:247: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    ordem_servico.client_signed_at = datetime.utcnow()
+
+tests/test_verificacao_restauracao.py::test_aprova_quando_chave_pfx_e_objetos_conferem
+tests/test_verificacao_restauracao.py::test_saldo_em_centavos_sem_perda_de_precisao
+tests/test_verificacao_restauracao.py::test_certificado_ativo_vencido_so_avisa
+tests/test_verificacao_restauracao.py::test_objeto_ausente_reprova
+tests/test_verificacao_restauracao.py::test_objeto_com_tamanho_divergente_reprova
+tests/test_verificacao_restauracao.py::test_impressao_digital_igual_a_do_backup_sh
+tests/test_verificacao_restauracao.py::test_resultado_nao_contem_segredos_decifrados
+  /app/app/services/verificacao_restauracao.py:112: CryptographyDeprecationWarning: Properties that return a naïve datetime object have been deprecated. Please switch to not_valid_after_utc.
+    validade = certificado.not_valid_after.replace(tzinfo=timezone.utc)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+----------------- generated xml file: /evidence/full-suite.xml -----------------
+=========================== short test summary info ============================
+FAILED tests/test_auth_api.py::TestRegisterClient::test_always_returns_403 - ...
+FAILED tests/test_billings_api.py::TestListBillings::test_operational_can_list
+FAILED tests/test_client_charge_items_api.py::TestListChargeItems::test_operational_can_list
+FAILED tests/test_client_charge_items_api.py::TestCreateChargeItem::test_create_with_auto_billing
+FAILED tests/test_client_charge_items_api.py::TestCreateChargeItem::test_create_installments
+FAILED tests/test_client_charge_items_api.py::TestUpdateChargeItem::test_update_nonexistent_returns_404
+FAILED tests/test_contracts_api.py::TestCreateContrato::test_generates_billings_by_default
+FAILED tests/test_contracts_api.py::TestCreateContrato::test_billing_cycles_out_of_range_422
+FAILED tests/test_contracts_api.py::TestGenerateBillings::test_generates_billings
+FAILED tests/test_contracts_api.py::TestGenerateBillings::test_default_12_months
+FAILED tests/test_plans_api.py::TestListPlans::test_filter_active_only - asse...
+FAILED tests/test_plans_api.py::TestListPlans::test_operational_can_list - as...
+FAILED tests/test_plans_api.py::TestUpdatePlan::test_update_nonexistent_returns_404
+FAILED tests/test_reports_api.py::TestDelinquentsReport::test_returns_list - ...
+FAILED tests/test_reports_api.py::TestDelinquentsReport::test_includes_delinquent_client
+FAILED tests/test_reports_api.py::TestDelinquentsReport::test_structure - Key...
+FAILED tests/test_reports_api.py::TestClientStatement::test_operational_can_access
+FAILED tests/test_reports_api.py::TestExecutiveSummary::test_contracts_by_plan_included
+FAILED tests/test_schemas_contract.py::TestContractCreateBillingCycles::test_default_cycles_is_12
+FAILED tests/test_schemas_contract.py::TestContractCreateBillingCycles::test_cycles_1_accepted
+FAILED tests/test_schemas_contract.py::TestContractCreateBillingCycles::test_cycles_60_accepted
+FAILED tests/test_schemas_contract.py::TestContractCreateBillingCycles::test_cycles_0_rejected
+FAILED tests/test_schemas_contract.py::TestContractCreateBillingCycles::test_cycles_61_rejected
+FAILED tests/test_schemas_contract.py::TestContractCreateBillingCycles::test_cycles_negative_rejected
+FAILED tests/test_schemas_contract.py::TestContractCreateDefaults::test_auto_generate_billings_default_true
+FAILED tests/test_schemas_tracker.py::TestTrackerLinkPayload::test_valid_payload
+FAILED tests/test_schemas_tracker.py::TestTrackerLinkPayload::test_billing_cycles_min
+FAILED tests/test_schemas_tracker.py::TestTrackerLinkPayload::test_billing_cycles_max
+FAILED tests/test_schemas_tracker.py::TestTrackerLinkPayload::test_billing_cycles_zero_rejected
+FAILED tests/test_schemas_tracker.py::TestTrackerLinkPayload::test_billing_cycles_above_max_rejected
+FAILED tests/test_schemas_tracker.py::TestTrackerLinkPayload::test_billing_modality_carne
+FAILED tests/test_schemas_tracker.py::TestTrackerLinkPayload::test_installation_fee_positivo
+FAILED tests/test_schemas_tracker.py::TestTrackerLinkPayload::test_installation_fee_negativo_rejeitado
+FAILED tests/test_service_products_api.py::TestListServiceProducts::test_filter_auto_uninstall
+FAILED tests/test_service_products_api.py::TestListServiceProducts::test_operational_can_list
+FAILED tests/test_service_products_api.py::TestUpdateServiceProduct::test_update_nonexistent_returns_404
+FAILED tests/test_trackers_api.py::TestLinkVeiculo::test_link_with_plan_generates_billings
+FAILED tests/test_trackers_api.py::TestLinkVeiculo::test_link_sem_prorata_gera_exato
+========== 38 failed, 2317 passed, 151 warnings in 206.68s (0:03:26) ===========

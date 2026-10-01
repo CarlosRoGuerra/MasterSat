@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
@@ -42,7 +42,13 @@ logger = logging.getLogger(__name__)
 
 # Uma cobrança já "resolvida" (não deve reentrar num lote) tem nota nestes
 # estados. 'erro' fica de fora de propósito: falha pode ser reprocessada.
-_STATUS_BLOQUEIA_REEMISSAO = {'emitida', 'pending', 'processing'}
+_STATUS_BLOQUEIA_REEMISSAO = {'emitida', 'pending', 'processing', 'desconhecido'}
+_ERROS_REPROCESSAVEIS = ('local', 'rejeicao')
+_LEASE_FILA_SEGUNDOS = 120
+
+
+def _reprocessavel(nota: NfseNota) -> bool:
+    return nota.status == 'erro' and nota.erro_tipo in _ERROS_REPROCESSAVEIS
 
 
 class LoteError(Exception):
@@ -86,7 +92,7 @@ def listar_elegiveis(
     busca_alvo = (busca or '').strip().lower()
     itens: list[dict] = []
     ja_emitidas = 0
-    for billing, owner, nota, boleto in query.all():
+    for billing, owner, nota, boleto in query.populate_existing().all():
         tomador = resolver_pagador(db, billing, owner)
         # Só emite NF para tomador com issue_invoice == 'sim'.
         if (tomador.issue_invoice or '') != 'sim':
@@ -96,7 +102,7 @@ def listar_elegiveis(
         if busca_alvo and busca_alvo not in (tomador.name or '').lower() \
                 and busca_alvo not in (tomador.cpf_cnpj or '').lower():
             continue
-        if nota is not None and nota.status in _STATUS_BLOQUEIA_REEMISSAO:
+        if nota is not None and not _reprocessavel(nota):
             if nota.status == 'emitida':
                 ja_emitidas += 1
             continue
@@ -148,29 +154,36 @@ def criar_lote(
     if not billing_ids:
         raise LoteError('Nenhuma cobrança selecionada para emissão.')
 
-    elegiveis = {i['billing_id'] for i in listar_elegiveis(db, period_label)['itens']}
-    alvo = [bid for bid in dict.fromkeys(billing_ids) if bid in elegiveis]
-    if not alvo:
-        raise LoteError(
-            'Nenhum registro encontrado para emissão. As cobranças selecionadas '
-            'já foram emitidas ou não estão mais elegíveis (lote já processado).'
-        )
-
     try:
+        # A mesma ordem de locks em lotes concorrentes evita deadlocks. A
+        # elegibilidade é lida DEPOIS do lock; o mapa da tela não é uma reserva.
+        alvos = sorted(set(billing_ids))
+        db.query(Billing).filter(Billing.id.in_(alvos)).order_by(Billing.id).with_for_update().all()
+        elegiveis = {i['billing_id'] for i in listar_elegiveis(db, period_label)['itens']}
         lote = NfseLote(
             period_label=period_label,
             competencia=competencia,
             codigo_servico=codigo_servico,
             discriminacao=discriminacao,
             status='processando',
-            total_notas=len(alvo),
+            total_notas=0,
             criado_por=criado_por,
         )
         db.add(lote)
         db.flush()  # garante lote.id
 
-        for billing_id in alvo:
-            nota = db.query(NfseNota).filter_by(billing_id=billing_id).first()
+        for billing_id in alvos:
+            if billing_id not in elegiveis:
+                continue
+            nota = db.query(NfseNota).filter_by(billing_id=billing_id).populate_existing().with_for_update().first()
+            valores = dict(
+                lote_id=lote.id, status='pending', tentativa_id=None,
+                emissor_id=f'lote:{lote.id}', envio_iniciado_em=None,
+                lease_expires_at=datetime.now(timezone.utc) + timedelta(seconds=_LEASE_FILA_SEGUNDOS),
+                heartbeat_at=datetime.now(timezone.utc),
+                competencia=competencia, discriminacao=discriminacao,
+                codigo_servico=codigo_servico,
+            )
             if nota is None:
                 try:
                     # `db.add` acontece DENTRO do savepoint — ver comentário
@@ -178,7 +191,7 @@ def criar_lote(
                     # por que precisa ser assim (`begin_nested()` flusha
                     # pendências antes de abrir o SAVEPOINT).
                     with db.begin_nested():
-                        nota = NfseNota(billing_id=billing_id)
+                        nota = NfseNota(billing_id=billing_id, **valores)
                         db.add(nota)
                         db.flush()
                 except IntegrityError:
@@ -187,11 +200,30 @@ def criar_lote(
                     # (billing_id é UNIQUE — ver app/models/nfse_nota.py). O
                     # SAVEPOINT isola a falha: só esta iteração é descartada, o
                     # resto do lote (já commitado ou ainda por vir) segue intacto.
-                    nota = db.query(NfseNota).filter_by(billing_id=billing_id).first()
-            nota.lote_id = lote.id
-            nota.status = 'pending'
-            nota.erro_codigo = None
-            nota.erro_mensagem = None
+                    # O vencedor é dono da nota, mesmo que seu objeto ainda
+                    # pareça elegível nesta sessão. Nunca o anexar a este lote.
+                    db.query(NfseNota).filter_by(billing_id=billing_id).populate_existing().first()
+                    continue
+            elif _reprocessavel(nota):
+                from app.services.nfse_emissao import arquivar_tentativa
+                valores['tentativas_anteriores'] = arquivar_tentativa(nota)
+                # CAS também protege concorrentes que não usam o lock Billing.
+                alteradas = db.query(NfseNota).filter(
+                    NfseNota.id == nota.id, NfseNota.status == 'erro',
+                    NfseNota.erro_tipo.in_(_ERROS_REPROCESSAVEIS),
+                    NfseNota.tentativa_id == nota.tentativa_id,
+                ).update(valores, synchronize_session=False)
+                if not alteradas:
+                    continue
+            else:
+                continue
+            lote.total_notas += 1
+
+        if not lote.total_notas:
+            raise LoteError(
+                'Nenhum registro encontrado para emissão. As cobranças selecionadas '
+                'já foram emitidas ou não estão mais elegíveis (lote já processado).'
+            )
 
         db.commit()
     except Exception:
@@ -211,89 +243,135 @@ def _emitir_lote_worker(lote_id: int) -> None:
     from app.services import nfse_provider  # tardio: evita ciclo de import
 
     db = SessionLocal()
+    parar = threading.Event()
+    heartbeat = threading.Thread(target=_heartbeat_fila, args=(lote_id, parar), daemon=True)
+    heartbeat.start()
     try:
         lote = db.get(NfseLote, lote_id)
-        codigo = lote.codigo_servico if lote else None
+        if lote is None:
+            return
+        codigo = lote.codigo_servico
+        competencia, discriminacao = lote.competencia, lote.discriminacao
         notas = db.query(NfseNota).filter(
             NfseNota.lote_id == lote_id, NfseNota.status == 'pending'
         ).all()
         for nota in notas:
-            _emitir_uma(db, nota, nfse_provider.emitir_nfse, codigo)
+            _emitir_uma(db, nota, nfse_provider.emitir_nfse, codigo,
+                       competencia=competencia, discriminacao=discriminacao)
         _fechar_lote(db, lote_id)
     except Exception:  # pragma: no cover — rede de segurança da thread
         logger.exception('Falha inesperada ao processar lote NFS-e %s', lote_id)
         db.rollback()
     finally:
+        parar.set()
+        heartbeat.join(timeout=2)
         db.close()
 
 
-def _emitir_uma(db: Session, nota: NfseNota, emitir_fn, cod_trib_nacional=None) -> None:
+def _renovar_fila(db: Session, lote_id: int) -> int:
+    agora = datetime.now(timezone.utc)
+    alteradas = db.query(NfseNota).filter(
+        NfseNota.lote_id == lote_id, NfseNota.status == 'pending',
+        NfseNota.tentativa_id.is_(None), NfseNota.emissor_id == f'lote:{lote_id}',
+        NfseNota.lease_expires_at > agora,
+    ).update({
+        NfseNota.heartbeat_at: agora,
+        NfseNota.lease_expires_at: agora + timedelta(seconds=_LEASE_FILA_SEGUNDOS),
+    }, synchronize_session=False)
+    db.commit()
+    return alteradas
+
+
+def _heartbeat_fila(lote_id: int, parar: threading.Event) -> None:
+    while not parar.wait(30):
+        db = SessionLocal()
+        try:
+            _renovar_fila(db, lote_id)
+        except Exception:
+            db.rollback()
+            logger.exception('Falha ao renovar agendamento do lote NFS-e %s', lote_id)
+        finally:
+            db.close()
+
+
+def _erro_antes_da_reserva(db: Session, nota_id: int, lote_id: int | None, mensagem: str) -> None:
+    # O provider trata o resultado da tentativa com token. A proteção da fila
+    # só pode tratar falha anterior à reserva; nunca altera resultado fiscal.
+    db.rollback()
+    db.query(NfseNota).filter(
+        NfseNota.id == nota_id, NfseNota.lote_id == lote_id,
+        NfseNota.status == 'pending', NfseNota.tentativa_id.is_(None),
+        NfseNota.emissor_id == f'lote:{lote_id}',
+    ).update({
+        NfseNota.status: 'erro', NfseNota.erro_tipo: 'local',
+        NfseNota.erro_mensagem: mensagem[:2000],
+        NfseNota.lease_expires_at: None, NfseNota.emissor_id: None,
+    }, synchronize_session=False)
+    db.commit()
+
+
+def _emitir_uma(db: Session, nota: NfseNota, emitir_fn, cod_trib_nacional=None,
+               *, competencia: date | None = None, discriminacao: str | None = None) -> None:
+    db.refresh(nota)
+    if nota.status != 'pending':
+        return
+    nota_id, lote_id = nota.id, nota.lote_id
     billing = db.get(Billing, nota.billing_id)
     # Tomador = interveniente do contrato, quando houver; senão o cliente da cobrança.
     owner = db.get(Client, billing.client_id) if billing else None
     client = resolver_pagador(db, billing, owner) if (billing and owner) else None
     if billing is None or client is None:
-        nota.status = 'erro'
-        nota.erro_mensagem = 'Cobrança ou cliente não encontrado.'
-        db.commit()
+        _erro_antes_da_reserva(db, nota_id, lote_id, 'Cobrança ou cliente não encontrado.')
+        return
+    if billing.is_deleted or billing.status == BillingStatus.CANCELED or client.is_deleted:
+        _erro_antes_da_reserva(db, nota_id, lote_id, 'Cobrança cancelada/excluída ou tomador excluído.')
         return
     from app.services import nfse_provider  # tardio: evita ciclo de import (ver _processar_lote)
     erros_esperados = (*nfse_provider.ErrosConfig, *nfse_provider.ErrosApi)
 
     try:
-        emitir_fn(db, billing, client, cod_trib_nacional=cod_trib_nacional)
+        emitir_fn(db, billing, client, cod_trib_nacional=cod_trib_nacional,
+                  competencia=competencia, discriminacao=discriminacao, lote_id=lote_id)
     except erros_esperados as exc:
-        # emitir_nfse já pode ter marcado 'erro' e commitado; garante a mensagem.
-        db.rollback()
-        nota = db.get(NfseNota, nota.id)
-        nota.status = 'erro'
-        nota.erro_mensagem = (nota.erro_mensagem or str(exc))[:2000]
-        db.commit()
+        _erro_antes_da_reserva(db, nota_id, lote_id, str(exc))
     except Exception as exc:  # noqa: BLE001 — bug inesperado, não falha de negócio/API
         # Mesmo desfecho pro usuário (nota marcada 'erro', lote segue para as
         # próximas), mas logado como exceção pra distinguir de erro de negócio.
         logger.exception('Falha inesperada ao emitir NFS-e da nota %s', nota.id)
-        db.rollback()
-        nota = db.get(NfseNota, nota.id)
-        nota.status = 'erro'
-        nota.erro_mensagem = (nota.erro_mensagem or str(exc))[:2000]
-        db.commit()
+        _erro_antes_da_reserva(db, nota_id, lote_id, str(exc))
 
 
 def recuperar_notas_orfas(db: Session) -> int:
-    """Recupera notas presas em 'pending'/'processing' de uma execução anterior.
+    """Marca apenas leases expiradas para consulta, preservando outros workers.
 
-    A emissão roda em thread daemon; um reinício do processo (deploy, crash, OOM)
-    mata a thread em voo e deixa notas 'pending'/'processing' que NUNCA mais são
-    tocadas — e ``listar_elegiveis`` as trata como "em voo", então não reaparecem
-    para reprocessar. No boot ainda NÃO há worker ativo, logo qualquer nota nesses
-    estados é órfã: vira 'erro' (reprocessável) e o lote é fechado. Chamado no
-    startup. Retorna quantas notas foram recuperadas.
+    A migration já converte pendentes legados sem lease em desconhecido. Nenhuma
+    recuperação autoriza reenvio, nem consulta a rede durante o boot.
     """
-    orfas = db.query(NfseNota).filter(NfseNota.status.in_(('pending', 'processing'))).all()
-    if not orfas:
+    from app.services.nfse_emissao import recuperar_expiradas
+
+    ids = recuperar_expiradas(db)
+    if not ids:
         return 0
-    lote_ids = set()
-    for nota in orfas:
-        nota.status = 'erro'
-        nota.erro_mensagem = 'Emissão interrompida por reinício do servidor — reprocesse o lote.'
-        if nota.lote_id:
-            lote_ids.add(nota.lote_id)
-    db.commit()
+    lote_ids = {row[0] for row in db.query(NfseNota.lote_id).filter(
+        NfseNota.id.in_(ids), NfseNota.lote_id.is_not(None),
+    ).all()}
     for lote_id in lote_ids:
         _fechar_lote(db, lote_id)
-    return len(orfas)
+    return len(ids)
 
 
 def _fechar_lote(db: Session, lote_id: int) -> None:
     lote = db.get(NfseLote, lote_id)
     if lote is None:
         return
-    notas = db.query(NfseNota).filter(NfseNota.lote_id == lote_id).all()
+    notas = db.query(NfseNota).filter(NfseNota.lote_id == lote_id).populate_existing().all()
     lote.total_autorizadas = sum(1 for n in notas if n.status == 'emitida')
     lote.total_erro = sum(1 for n in notas if n.status == 'erro')
-    lote.status = 'com_erro' if lote.total_erro else 'concluido'
-    lote.concluido_em = datetime.now(timezone.utc)
+    todas_autorizadas = bool(notas) and len(notas) == lote.total_notas and all(n.status == 'emitida' for n in notas)
+    todas_terminais = bool(notas) and len(notas) == lote.total_notas and all(
+        n.status == 'emitida' or _reprocessavel(n) for n in notas)
+    lote.status = 'concluido' if todas_autorizadas else ('com_erro' if todas_terminais else 'processando')
+    lote.concluido_em = datetime.now(timezone.utc) if todas_terminais else None
     db.commit()
 
 
@@ -310,13 +388,14 @@ def consultar_lote(db: Session, lote_id: int) -> dict | None:
     lote = db.get(NfseLote, lote_id)
     if lote is None:
         return None
+    _fechar_lote(db, lote_id)
     rows = (
         db.query(NfseNota, Billing, Client)
         .join(Billing, Billing.id == NfseNota.billing_id)
         .join(Client, Client.id == Billing.client_id)
         .filter(NfseNota.lote_id == lote_id)
         .order_by(Client.name)
-        .all()
+        .populate_existing().all()
     )
     itens = []
     for nota, billing, client in rows:
@@ -333,6 +412,9 @@ def consultar_lote(db: Session, lote_id: int) -> dict | None:
             'link_visualizacao': nota.link_visualizacao,
             'erro_codigo': nota.erro_codigo,
             'erro_mensagem': nota.erro_mensagem,
+            'erro_tipo': nota.erro_tipo,
+            'competencia': nota.competencia.isoformat() if nota.competencia else None,
+            'discriminacao': nota.discriminacao,
         })
     return {**_lote_resumo(lote), 'itens': itens}
 
@@ -386,7 +468,7 @@ def listar_notas(
         query = query.filter(Billing.period_label == period_label)
 
     total = query.count()
-    rows = query.order_by(NfseNota.id.desc()).offset(max(offset, 0)).limit(limit).all()
+    rows = query.order_by(NfseNota.id.desc()).offset(max(offset, 0)).limit(limit).populate_existing().all()
 
     itens = []
     for nota, billing, client, boleto in rows:
@@ -405,6 +487,9 @@ def listar_notas(
             'link_visualizacao': nota.link_visualizacao,
             'erro_codigo': nota.erro_codigo,
             'erro_mensagem': nota.erro_mensagem,
+            'erro_tipo': nota.erro_tipo,
+            'competencia': nota.competencia.isoformat() if nota.competencia else None,
+            'discriminacao': nota.discriminacao,
             'tem_xml': bool(nota.xml_retorno),
             'data_ocorrencia': (nota.data_emissao or getattr(nota, 'created_at', None) or None)
                                and (nota.data_emissao or nota.created_at).isoformat(),
@@ -422,12 +507,14 @@ def resumo(db: Session, competencia: str | None = None) -> dict:
     autorizadas = base.filter(NfseNota.status == 'emitida').count()
     negadas = base.filter(NfseNota.status == 'erro').count()
     processando = base.filter(NfseNota.status.in_(('pending', 'processing'))).count()
+    desconhecidas = base.filter(NfseNota.status == 'desconhecido').count()
     return {
         'competencia': inicio.strftime('%m/%Y'),
         'autorizadas': autorizadas,
         'negadas': negadas,
         'processando': processando,
-        'total': autorizadas + negadas + processando,
+        'desconhecidas': desconhecidas,
+        'total': autorizadas + negadas + processando + desconhecidas,
         'total_geral': db.query(NfseNota).count(),
     }
 

@@ -1,0 +1,6 @@
+FROM mastersat-backend:fase05
+USER root
+COPY backend/requirements-test.txt /requirements-test.txt
+RUN python -m pip install --no-cache-dir -r /requirements-test.txt
+ENV DATABASE_URL=sqlite:///:memory: MULTIPORTAL_ENABLED=false NFSE_ENABLED=false TZ=America/Sao_Paulo PYTHONDONTWRITEBYTECODE=1
+WORKDIR /app

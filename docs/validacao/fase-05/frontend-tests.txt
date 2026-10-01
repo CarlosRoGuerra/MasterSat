@@ -1,0 +1,12 @@
+> rastreamento-frontend@1.0.0 test
+> vitest run lib/nfse.test.ts
+
+
+ RUN  v4.1.11 /app
+
+ ✓ lib/nfse.test.ts (7 tests) 4ms
+
+ Test Files  1 passed (1)
+      Tests  7 passed (7)
+   Start at  04:34:06
+   Duration  862ms (transform 58ms, setup 88ms, import 45ms, tests 4ms, environment 455ms)

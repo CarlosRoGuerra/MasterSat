@@ -1,0 +1,4 @@
+FROM mastersat-backend:fase05
+USER root
+RUN python -m venv /audit && /audit/bin/python -m pip install --no-cache-dir pip-audit==2.10.0
+ENTRYPOINT ["/audit/bin/python", "-m", "pip_audit", "--path", "/usr/local/lib/python3.12/site-packages", "-f", "json"]

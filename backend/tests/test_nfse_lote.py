@@ -120,7 +120,7 @@ def test_emitir_uma_usa_interveniente_como_tomador(db):
 
     capturado = {}
 
-    def fake(db_, billing_, client_, cod_trib_nacional=None):
+    def fake(db_, billing_, client_, cod_trib_nacional=None, **kwargs):
         capturado['tomador'] = client_.name
         n = db_.query(NfseNota).filter_by(billing_id=billing_.id).first()
         n.status = 'emitida'
@@ -203,7 +203,9 @@ def test_idempotencia_nota_em_voo_nao_reaparece(db, status_em_voo):
 def test_nota_com_erro_reaparece_para_reprocessamento(db):
     c = _client(db, 'CLIENTE')
     b = _billing(db, c)
-    _nota(db, b, status='erro')
+    nota = _nota(db, b, status='erro')
+    nota.erro_tipo = 'local'
+    db.commit()
 
     res = nfse_lote.listar_elegiveis(db, '07/2026')
     assert res['total_elegiveis'] == 1
@@ -257,7 +259,7 @@ def test_criar_lote_tudo_ja_emitido_avisa_lote_processado(db):
         nfse_lote.criar_lote(db, '07/2026', [b.id], emitir_async=False)
 
 
-def test_recuperar_notas_orfas_marca_erro_e_fecha_lote(db):
+def test_recuperar_notas_orfas_expiradas_exige_reconciliacao(db):
     # Simula um restart: notas ficaram presas em 'pending'/'processing'.
     c = _client(db, 'CLIENTE')
     b1, b2, b3 = _billing(db, c), _billing(db, c), _billing(db, c)
@@ -266,6 +268,9 @@ def test_recuperar_notas_orfas_marca_erro_e_fecha_lote(db):
     notas[0].status = 'emitida'      # já saiu antes do restart
     notas[1].status = 'pending'      # órfã
     notas[2].status = 'processing'   # órfã
+    from datetime import datetime, timedelta, timezone
+    for nota in notas[1:]:
+        nota.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=5)
     db.commit()
 
     recuperadas = nfse_lote.recuperar_notas_orfas(db)
@@ -273,12 +278,12 @@ def test_recuperar_notas_orfas_marca_erro_e_fecha_lote(db):
     for n in notas:
         db.refresh(n)
     assert notas[0].status == 'emitida'                 # intacta
-    assert notas[1].status == 'erro' and notas[2].status == 'erro'
-    assert 'reinício' in (notas[1].erro_mensagem or '')
-    # E o lote foi fechado (não fica 'processando' para sempre).
+    assert notas[1].status == 'desconhecido' and notas[2].status == 'desconhecido'
+    assert 'Lease expirada' in (notas[1].erro_mensagem or '')
+    # Consulta fiscal ainda necessária, sem conclusão fictícia.
     db.refresh(lote)
-    assert lote.status == 'com_erro'
-    assert lote.concluido_em is not None
+    assert lote.status == 'processando'
+    assert lote.concluido_em is None
 
 
 def test_recuperar_notas_orfas_sem_orfas_retorna_zero(db):
@@ -291,6 +296,8 @@ def test_criar_lote_reaproveita_nota_de_erro(db):
     c = _client(db, 'CLIENTE')
     b = _billing(db, c)
     nota_antiga = _nota(db, b, status='erro')
+    nota_antiga.erro_tipo = 'local'
+    db.commit()
 
     lote = nfse_lote.criar_lote(db, '07/2026', [b.id], emitir_async=False)
     db.refresh(nota_antiga)
@@ -310,7 +317,7 @@ def test_emitir_uma_sucesso_marca_emitida(db):
     lote = nfse_lote.criar_lote(db, '07/2026', [b.id], emitir_async=False)
     nota = db.query(NfseNota).filter_by(lote_id=lote.id).first()
 
-    def fake_ok(db_, billing_, client_, cod_trib_nacional=None):
+    def fake_ok(db_, billing_, client_, cod_trib_nacional=None, **kwargs):
         n = db_.query(NfseNota).filter_by(billing_id=billing_.id).first()
         n.status = 'emitida'
         n.numero_nfse = '2026000001'
@@ -331,7 +338,7 @@ def test_emitir_uma_repassa_codigo_de_tributacao(db):
 
     recebido = {}
 
-    def fake(db_, billing_, client_, cod_trib_nacional=None):
+    def fake(db_, billing_, client_, cod_trib_nacional=None, **kwargs):
         recebido['cod'] = cod_trib_nacional
         n = db_.query(NfseNota).filter_by(billing_id=billing_.id).first()
         n.status = 'emitida'
@@ -350,7 +357,7 @@ def test_emitir_uma_erro_marca_erro_com_mensagem(db):
     lote = nfse_lote.criar_lote(db, '07/2026', [b.id], emitir_async=False)
     nota = db.query(NfseNota).filter_by(lote_id=lote.id).first()
 
-    def fake_falha(db_, billing_, client_, cod_trib_nacional=None):
+    def fake_falha(db_, billing_, client_, cod_trib_nacional=None, **kwargs):
         raise NfseError('Certificado digital obrigatório para o Emissor Nacional.')
 
     nfse_lote._emitir_uma(db, nota, fake_falha)
@@ -367,6 +374,7 @@ def test_fechar_lote_deriva_situacao_dos_contadores(db):
     notas = db.query(NfseNota).filter_by(lote_id=lote.id).order_by(NfseNota.id).all()
     notas[0].status = 'emitida'
     notas[1].status = 'erro'
+    notas[1].erro_tipo = 'rejeicao'
     db.commit()
 
     nfse_lote._fechar_lote(db, lote.id)

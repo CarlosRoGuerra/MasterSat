@@ -1,0 +1,84 @@
+docker : /app/app/core/config.py:309: UserWarning: ⚠ SECRET_KEY fraca ou padrão — gere: python -c "import secrets;
+print(secrets.token_hex(32))"
+No linha:2 caractere:408
++ ... e.txt 2>&1; docker exec -e DATABASE_URL=postgresql+psycopg://postgres ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (/app/app/core/c...token_hex(32))":String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+
+  settings.enforce_security()
+/app/app/core/config.py:309: UserWarning: ⚠ Senha do MinIO ainda é o valor padrão
+  settings.enforce_security()
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.ddl.postgresql] Detected sequence named 'users_id_seq' as owned by integer column 'users(id)', assuming
+SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'documents_id_seq' as owned by integer column 'documents(id)',
+assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'closure_jobs_id_seq' as owned by integer column
+'closure_jobs(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'billing_charge_items_id_seq' as owned by integer column
+'billing_charge_items(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'billing_change_logs_id_seq' as owned by integer column
+'billing_change_logs(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'service_orders_id_seq' as owned by integer column
+'service_orders(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'system_settings_id_seq' as owned by integer column
+'system_settings(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'sgr_execucao_unidades_id_seq' as owned by integer column
+'sgr_execucao_unidades(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'sgr_vinculos_id_seq' as owned by integer column
+'sgr_vinculos(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'nfse_lotes_id_seq' as owned by integer column
+'nfse_lotes(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'cnab_remessas_id_seq' as owned by integer column
+'cnab_remessas(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'ailos_api_logs_id_seq' as owned by integer column
+'ailos_api_logs(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'sgr_arquivos_id_seq' as owned by integer column
+'sgr_arquivos(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'password_reset_tokens_id_seq' as owned by integer column
+'password_reset_tokens(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'nfse_notas_id_seq' as owned by integer column
+'nfse_notas(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'audit_logs_id_seq' as owned by integer column
+'audit_logs(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'sgr_conflitos_id_seq' as owned by integer column
+'sgr_conflitos(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'billing_adjustments_id_seq' as owned by integer column
+'billing_adjustments(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'sgr_documento_linhas_id_seq' as owned by integer column
+'sgr_documento_linhas(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'payables_id_seq' as owned by integer column 'payables(id)',
+assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'tracker_histories_id_seq' as owned by integer column
+'tracker_histories(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'integration_logs_id_seq' as owned by integer column
+'integration_logs(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'ailos_retorno_arquivos_id_seq' as owned by integer column
+'ailos_retorno_arquivos(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'payable_change_logs_id_seq' as owned by integer column
+'payable_change_logs(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'nfse_certificados_id_seq' as owned by integer column
+'nfse_certificados(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'multiportal_outbox_id_seq' as owned by integer column
+'multiportal_outbox(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'ailos_lotes_id_seq' as owned by integer column
+'ailos_lotes(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'service_order_materials_id_seq' as owned by integer column
+'service_order_materials(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'ailos_client_tokens_id_seq' as owned by integer column
+'ailos_client_tokens(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'cnab_remessa_itens_id_seq' as owned by integer column
+'cnab_remessa_itens(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'service_order_status_logs_id_seq' as owned by integer column
+'service_order_status_logs(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'ailos_boletos_id_seq' as owned by integer column
+'ailos_boletos(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'refresh_tokens_id_seq' as owned by integer column
+'refresh_tokens(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'uninstall_events_id_seq' as owned by integer column
+'uninstall_events(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'ailos_integrations_id_seq' as owned by integer column
+'ailos_integrations(id)', assuming SERIAL and omitting
+No new upgrade operations detected.

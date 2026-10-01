@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, Text
+from sqlalchemy import JSON, Date, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -19,9 +19,10 @@ class NfseNota(Base, TimestampMixin):
 
     status:
       pending    — registro criado, ainda não enviado
-      processing — lote recebido (tem protocolo), aguardando processamento
+      processing — tentativa reservada ou lote recebido, aguardando resultado
       emitida    — NFS-e gerada com sucesso
-      erro       — lote rejeitado (ver erro_mensagem)
+      erro       — falha local ou rejeição fiscal comprovada (erro_tipo)
+      desconhecido — resultado incerto; somente consulta, nunca reenvio automático
     """
 
     __tablename__ = 'nfse_notas'
@@ -52,3 +53,22 @@ class NfseNota(Base, TimestampMixin):
 
     xml_envio: Mapped[str | None] = mapped_column(Text, nullable=True)
     xml_retorno: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Reserva persistida; tentativa_id é também o fencing token de toda escrita.
+    tentativa_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    tentativa_numero: Mapped[int] = mapped_column(Integer, default=0, server_default='0')
+    emissor_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    envio_iniciado_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    erro_tipo: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    provedor: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    ambiente: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    prestador_cnpj: Mapped[str | None] = mapped_column(String(14), nullable=True)
+    prestador_im: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    codigo_municipio: Mapped[str | None] = mapped_column(String(7), nullable=True)
+    dps_id: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    competencia: Mapped[date | None] = mapped_column(Date, nullable=True)
+    discriminacao: Mapped[str | None] = mapped_column(Text, nullable=True)
+    codigo_servico: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    tentativas_anteriores: Mapped[list] = mapped_column(JSON, default=list, server_default='[]')

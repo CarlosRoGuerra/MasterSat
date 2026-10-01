@@ -19,6 +19,7 @@ import { ClientAutocomplete } from '@/components/ui/client-autocomplete';
 import { CarneTrackingModal, useCarneTracking } from '@/components/carne-tracking-modal';
 import { API_URL, apiFetch, apiFetchList } from '@/lib/api';
 import { entregarArquivo, nomeArquivoCliente } from '@/lib/arquivo';
+import { podeEmitirNfse, precisaConsultarNfse } from '@/lib/nfse';
 import { enviarBoletoEmail, enviarBoletoWhats } from '@/lib/boleto-mensagem';
 import { cancelarComConfirmacoes, corpoCancelamento } from '@/lib/cancelamento-cobranca';
 import { camposDiferenca, diferencaRecebimento, pendenciaDoFormulario, ROTULO_TRATAMENTO, type TratamentoDiferenca } from '@/lib/recebimento';
@@ -87,7 +88,7 @@ type PendenciaBancaria = { billing_id: number; nosso_numero?: string | null; est
 type Conciliacao = { carteira_monitorada: number; nunca_consultados: number; atraso_max_horas: number; janela_estimada_horas: number; desfecho_desconhecido: number; baixa_pendente: number; alerta_atraso: boolean };
 type CanaisBancarios = Record<'ailos_api' | 'cnab240' | 'cnab400', { habilitado: boolean; motivo: string | null }>;
 type DelinquentItem = { client_id: number; client_name: string; total_open: number; overdue_count: number };
-type Nfse = { billing_id: number; status: string; numero_nfse?: string | null; serie_nfse?: string | null; codigo_verificacao?: string | null; chave_acesso?: string | null; link_visualizacao?: string | null; protocolo?: string | null; situacao?: string | null; erro_codigo?: string | null; erro_mensagem?: string | null };
+type Nfse = { billing_id: number; status: string; numero_nfse?: string | null; serie_nfse?: string | null; codigo_verificacao?: string | null; chave_acesso?: string | null; link_visualizacao?: string | null; protocolo?: string | null; situacao?: string | null; erro_codigo?: string | null; erro_mensagem?: string | null; erro_tipo?: string | null };
 
 type PlanFormState = { name: string; price: string; description: string; active: boolean; billing_interval_months: string; default_installation_fee: string; default_uninstall_fee: string; default_billing_day: string; default_duration_months: string };
 type ServiceProductFormState = { name: string; category: string; default_price: string; description: string; active: boolean; allow_installments: boolean; remove_after_payment: boolean; auto_add_on_uninstall: boolean };
@@ -821,15 +822,25 @@ export default function FinanceiroPage() {
   }, [token, activeTab]);
 
   useEffect(() => {
+    let ativa = true;
     if (selectedBilling) {
       setReceiveForm({ ...initialReceiveForm, paid_amount: String(selectedBilling.amount || ''), payment_date: new Date().toISOString().slice(0, 10), payment_method: selectedBilling.payment_method || 'pix' });
       setAdjustForm({ amount: String(selectedBilling.amount || ''), due_date: selectedBilling.due_date || '', justification: '' });
       // Carrega o status da NFS-e desta cobrança (404 = ainda não emitida)
       setNfse(null);
       if (token) {
-        apiFetch<Nfse>(`/nfse/${selectedBilling.id}`, {}, token).then(setNfse).catch(() => setNfse(null));
+        setNfseLoading(true);
+        apiFetch<Nfse>(`/nfse/${selectedBilling.id}`, {}, token)
+          .then((nota) => { if (ativa) setNfse(nota); })
+          .catch((err: Error & { status?: number }) => {
+            if (ativa) setNfse(err.status === 404 ? null : {
+              billing_id: selectedBilling.id, status: 'desconhecido',
+              erro_mensagem: 'Não foi possível confirmar o estado fiscal. Consulte antes de emitir.',
+            });
+          }).finally(() => { if (ativa) setNfseLoading(false); });
       }
     }
+    return () => { ativa = false; };
   }, [selectedBilling, token]);
 
   // Ações contextuais do Assistente de Ações (Ctrl+K) enquanto uma cobrança
@@ -1393,7 +1404,7 @@ export default function FinanceiroPage() {
   }
 
   async function handleEmitirNfse() {
-    if (!token || !selectedBilling || !canEdit) return;
+    if (!token || !selectedBilling || !canEdit || nfseLoading || !podeEmitirNfse(nfse)) return;
     setNfseLoading(true);
     setError('');
     try {
@@ -1402,11 +1413,17 @@ export default function FinanceiroPage() {
       setFeedback(
         result.status === 'emitida'
           ? `NFS-e ${result.numero_nfse} emitida com sucesso.`
+          : result.status === 'desconhecido'
+            ? 'Desfecho fiscal desconhecido. Consulte o resultado antes de qualquer nova tentativa.'
           : result.status === 'erro'
             ? `Falha ao emitir NFS-e: ${result.erro_mensagem ?? 'erro desconhecido'}`
             : `NFS-e em processamento (protocolo ${result.protocolo}).`,
       );
-    } catch (err) { setError(parseError(err)); } finally { setNfseLoading(false); }
+    } catch (err) {
+      setError(parseError(err));
+      setNfse({ billing_id: selectedBilling.id, status: 'desconhecido',
+        erro_mensagem: 'A resposta da emissão não foi confirmada. Consulte o resultado.' });
+    } finally { setNfseLoading(false); }
   }
 
   // Abre o PDF da nota (DANFSe gerado por nós a partir do XML) em nova aba, em
@@ -2278,6 +2295,7 @@ export default function FinanceiroPage() {
                 {nfse?.status === 'emitida' && <Badge variant="success">Emitida</Badge>}
                 {nfse?.status === 'processing' && <Badge variant="warning">Processando</Badge>}
                 {nfse?.status === 'erro' && <Badge variant="danger">Erro</Badge>}
+                {nfse?.status === 'desconhecido' && <Badge variant="warning">Desfecho desconhecido</Badge>}
               </div>
 
               {nfse?.status === 'emitida' ? (
@@ -2297,15 +2315,15 @@ export default function FinanceiroPage() {
                     )}
                   </div>
                 </div>
-              ) : nfse?.status === 'erro' ? (
+              ) : nfse?.status === 'erro' && podeEmitirNfse(nfse) ? (
                 <div className="mt-2 space-y-2">
                   <p className="text-sm text-rose-600 dark:text-rose-400">{nfse.erro_mensagem || 'Falha ao emitir a NFS-e.'}</p>
                   <Button variant="secondary" disabled={!canEdit || nfseLoading} onClick={handleEmitirNfse}>{nfseLoading ? 'Emitindo…' : 'Tentar novamente'}</Button>
                 </div>
-              ) : nfse?.status === 'processing' ? (
+              ) : nfse && precisaConsultarNfse(nfse) ? (
                 <div className="mt-2 space-y-2">
-                  <p className="text-sm text-slate-500">Lote enviado{nfse.protocolo ? ` (protocolo ${nfse.protocolo})` : ''}. Aguardando processamento.</p>
-                  <Button variant="secondary" disabled={nfseLoading} onClick={handleConsultarNfse}>{nfseLoading ? 'Consultando…' : 'Atualizar status'}</Button>
+                  <p className="text-sm text-slate-500">{nfse.erro_mensagem || 'Aguardando confirmação fiscal.'} Consulte o desfecho; não emita novamente.</p>
+                  <Button variant="secondary" disabled={nfseLoading} onClick={handleConsultarNfse}>{nfseLoading ? 'Consultando…' : 'Consultar desfecho'}</Button>
                 </div>
               ) : (
                 <div className="mt-2">

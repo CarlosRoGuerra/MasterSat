@@ -21,5 +21,18 @@ def modulo():
     return nfse_joinville if settings.nfse_provedor == 'joinville' else nfse_nacional
 
 
-def emitir_nfse(db, billing, client, cod_trib_nacional=None):
-    return modulo().emitir_nfse(db, billing, client, cod_trib_nacional=cod_trib_nacional)
+def emitir_nfse(db, billing, client, cod_trib_nacional=None, *, competencia=None,
+                discriminacao=None, lote_id=None):
+    return modulo().emitir_nfse(db, billing, client, cod_trib_nacional=cod_trib_nacional,
+                               competencia=competencia, discriminacao=discriminacao, lote_id=lote_id)
+
+
+def consultar_nfse(db, nota):
+    """A identidade persistida determina a consulta, nunca NFSE_PROVEDOR atual."""
+    if nota.status == 'emitida':
+        return nota
+    if nota.provedor == 'nacional':
+        return nfse_nacional.consultar(db, nota)
+    if nota.provedor == 'joinville':
+        return nfse_joinville.consultar(db, nota)
+    raise nfse_nacional.NfseError('Provedor legado não identificado; reconciliação manual necessária.')

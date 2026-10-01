@@ -289,13 +289,13 @@ def test_criar_lote_races_on_nfse_nota_insert(postgres_api):
         notas = db.query(NfseNota).filter_by(billing_id=billing_id).all()
 
     # O UNIQUE em nfse_notas.billing_id impede duplicata no banco, e
-    # `criar_lote` agora trata o IntegrityError do perdedor da corrida
-    # (SAVEPOINT por item + reaproveita o registro vencedor) — as duas
-    # chamadas devem terminar "ok".
+    # O perdedor não pode tomar posse da nota do primeiro lote. A Fase 05
+    # devolve erro de domínio (HTTP 422), mantendo uma única reserva.
     assert len(notas) == 1, (
         f"Esperado exatamente 1 NfseNota (UNIQUE deveria impedir duplicata), achou {len(notas)}"
     )
     tipos = sorted(r[0] for r in resultados)
-    assert tipos == ["ok", "ok"], (
+    assert tipos == ["lote_error", "ok"], (
         f"Corrida ainda quebra o check-then-insert de NfseNota em criar_lote: {resultados}"
     )
+    assert notas[0].lote_id == next(value for kind, value in resultados if kind == 'ok')
