@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from sqlalchemy import func, literal, or_, select
 from sqlalchemy.orm import Session
 
+from app.core.permissions import Capability, roles_with
 from app.models.client import Client
 from app.models.contract import Contract
 from app.models.document import Document
@@ -33,8 +34,8 @@ from app.models.tracker import Tracker
 from app.models.vehicle import Vehicle
 from app.schemas.search import GlobalSearchOut, SearchResultItem
 
-STAFF_ROLES = (UserRole.ADMIN, UserRole.OPERATIONAL, UserRole.FINANCIAL)
-CONTRACT_ROLES = (UserRole.ADMIN, UserRole.FINANCIAL)
+STAFF_ROLES = roles_with(Capability.REGISTRY_READ)
+CONTRACT_ROLES = roles_with(Capability.FINANCIAL_READ)
 
 DEFAULT_LIMIT = 6
 MIN_QUERY_LENGTH = 2

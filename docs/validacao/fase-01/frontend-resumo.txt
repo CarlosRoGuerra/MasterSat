@@ -1,0 +1,17 @@
+# Frontend — node:20-alpine (Node 20.20.2 / npm 10.8.2), cópia limpa do repositório
+# SHA ddfe47af6ebca90ec4957250d8ee4604c926cc46
+
+npm ci             saída 0
+npm run lint       saída 0 — 0 erros, 41 avisos (mesma contagem da baseline da Fase 00)
+npm run typecheck  saída 0
+npm test           saída 0 — 20 arquivos, 172/172 testes (167 da baseline + 5 novos)
+npm run build      saída 0 — "Compiled successfully"
+npm audit --json   saída 0 — 0 vulnerabilidades (antes: 10; ver npm-audit-antes.json)
+
+Imagem de produção (frontend/Dockerfile, target runner) construída a partir
+de "git archive HEAD frontend": OK, next 15.5.26 dentro da imagem.
+
+CSS de produção com e sem o override postcss (next → "$postcss"):
+  839a386f0d563754d8bb4686a02f30a5b7519cf0f3eb47dc8d8f091987097ece  4353baf6ef7428c2.css
+  48297acafd613f5ba05e7e25adf83e1c6e4e237f3ce38c0e3fb4e4f5e321d49b  4ad9ec5c527b836c.css
+  (idênticos nos dois builds)

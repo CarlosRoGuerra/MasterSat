@@ -21,7 +21,12 @@ config.set_main_option("sqlalchemy.url", settings.database_url)
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False: as migrations rodam no startup da API
+    # (main._apply_database_migrations). Com o padrão (True), o fileConfig
+    # desligava os loggers do uvicorn e da aplicação já criados — depois do
+    # boot sumiam access log, "Application startup complete" e avisos como
+    # o de SMTP não configurado no reset de senha e os alertas do Ailos.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 
@@ -62,6 +67,16 @@ def run_migrations_online() -> None:
     and associate a connection with the context.
 
     """
+    # Conexão pronta passada por quem chama (padrão do cookbook do Alembic):
+    # os testes de migration usam um banco descartável sem mexer no
+    # DATABASE_URL do processo. Sem ela, o fluxo normal abaixo.
+    injected = config.attributes.get("connection")
+    if injected is not None:
+        context.configure(connection=injected, target_metadata=target_metadata)
+        with context.begin_transaction():
+            context.run_migrations()
+        return
+
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",

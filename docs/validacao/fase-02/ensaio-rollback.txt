@@ -1,0 +1,16 @@
+# SHA novo: db645310488aa710c0f4b7e0f059fc4414028cdd | SHA antigo: 71acf47f34a22105328c16bfc48458222f3e053c
+[apagar exit=0]
+[criar exit=0]
+== 1. codigo NOVO sobe e opera
+{"etapa": "preparar", "originais": [1, 2], "negociacao": 3, "liberada": 4, "cancel_status": 200, "versao": "e5c2a9d71f04", "billings": [["1", "09/2099", "CANCELED", "False", "2099-09-01", "False", "3"], ["2", "10/2099", "CANCELED", "False", "2099-10-01", "False", "3"], ["3", "11/2099", "PENDING", "False", "2099-11-01", "False", "None"], ["4", "11/2099", "CANCELED", "False", "2099-11-01", "True", "None"]]}
+[preparar exit=0]
+== 2. imagem NOVA faz downgrade
+{"etapa": "downgrade", "exit": 0, "versao": "d9e4f1a7b2c5", "liberadas_guardadas": [4], "erro": []}
+[downgrade exit=0]
+== 3. codigo ANTIGO (71acf47) sobe e opera
+{"etapa": "antigo", "status": [200, 200, 200], "mensalidade_rotulo_9": 5, "carne": [6, 7], "negociacao_antiga": 8, "versao": "d9e4f1a7b2c5", "billings": [["1", "09/2099", "CANCELED", "False"], ["2", "10/2099", "CANCELED", "False"], ["3", "11/2099", "PENDING", "False"], ["4", "11/2099", "CANCELED", "False"], ["5", "9/2099", "CANCELED", "False"], ["6", "10/2099", "CANCELED", "False"], ["7", "11/2099", "CANCELED", "False"], ["8", "12/2099", "PENDING", "False"]]}
+[antigo exit=0]
+== 4. codigo NOVO sobe de novo (reupgrade)
+{"etapa": "reupgrade", "alembic_check_exit": 0, "nova_mensalidade_no_mes_cancelado_pelo_codigo_antigo": 409, "versao": "e5c2a9d71f04", "billings": [["1", "09/2099", "CANCELED", "False", "2099-09-01", "False", "3"], ["2", "10/2099", "CANCELED", "False", "2099-10-01", "False", "3"], ["3", "11/2099", "PENDING", "False", "2099-11-01", "False", "None"], ["4", "11/2099", "CANCELED", "False", "2099-11-01", "True", "None"], ["5", "9/2099", "CANCELED", "False", "2099-09-01", "False", "None"], ["6", "10/2099", "CANCELED", "False", "2099-10-01", "False", "8"], ["7", "11/2099", "CANCELED", "False", "2099-11-01", "False", "8"], ["8", "12/2099", "PENDING", "False", "2099-12-01", "False", "None"]]}
+[reupgrade exit=0]
+[apagar exit=0]

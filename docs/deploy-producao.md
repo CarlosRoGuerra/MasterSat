@@ -22,7 +22,8 @@ Antes de subir a versão corrigida, faça uma limpeza no servidor atual:
 2. **Se encontrar qualquer sinal de acesso root pelo atacante** (chave SSH
    estranha, container desconhecido, binário em `/tmp` ou `/var/tmp`),
    o mais seguro é **recriar a VPS do zero** (nova instância) e restaurar
-   só o banco de dados a partir de um backup confiável — não dá para
+   banco **e** objetos a partir de um backup confiável, seguindo
+   [contingencia-recuperacao.md](contingencia-recuperacao.md) — não dá para
    confiar 100% num host que teve root comprometido.
 3. **Troque TODAS as credenciais** que estavam no `.env` antigo, mesmo que
    nada pareça comprometido — elas já foram expostas:
@@ -157,7 +158,10 @@ O `deploy.sh`:
 4. Sobe `db`, `redis`, `minio`, `backend`, `frontend` (sem portas publicadas).
 5. Emite o certificado SSL via DNS-01 (Cloudflare).
 6. Sobe `nginx` + `certbot` (renovação automática a cada 12h).
-7. Agenda o backup diário do banco às 02:00.
+7. Builda a imagem de backup e agenda às 02:00 o backup verificável (banco +
+   objetos do MinIO + manifest + envio externo conferido). Sem
+   `backup/backup.env` com destino externo o backup termina com FALHA — ver
+   [backup/README.md](../backup/README.md).
 8. Faz um teste de saúde em `https://app.mastersat.com.br/` e
    `https://api.mastersat.com.br/api/v1/auth/me`.
 
@@ -200,4 +204,10 @@ consegue conectar** antes de fechar a sessão atual.
 - [ ] `sudo ./scripts/harden-vps.sh` executado e acesso SSH confirmado
       em uma nova sessão
 - [ ] Backup diário (`crontab -l`) configurado e testado
-      (`docker compose --profile backup run --rm pg_dump`)
+      (`docker compose --profile backup run --rm pg_dump` sai 0 e
+      `/backup/last_run` mostra `OK`)
+- [ ] `backup/backup.env` com destino externo; execução remota tem `RESULT`
+- [ ] Chave Fernet, `.env` e senha do crypt no cofre; impressão digital
+      Fernet confere com a do `manifest.json`
+- [ ] Ensaio de recuperação executado (`backup/exercicio/exercicio_restauracao.sh`)
+      e decisões de RPO/RTO de [contingencia-recuperacao.md](contingencia-recuperacao.md) aprovadas

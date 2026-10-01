@@ -35,12 +35,17 @@ Ponto de ajuste documentado (assunção feita a partir da documentação):
 from __future__ import annotations
 
 import base64
+import logging
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
 import requests
+# Vinculado no import: testes substituem ``requests`` inteiro neste módulo e
+# a classificação de falha precisa das classes reais.
+from requests import exceptions as _req_exc
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -49,6 +54,8 @@ from app.db import session as db_session
 from app.models.ailos_api_log import AilosApiLog
 from app.models.ailos_client_token import AilosClientToken
 from app.models.ailos_integration import AilosIntegration
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Caminhos (relativos às bases configuradas)
@@ -66,6 +73,9 @@ _COOPERADO_TOKEN_LIFETIME = timedelta(minutes=30)
 # (o keepalive em background renova a cada 20 min, então normalmente nem chega
 # perto). Evita o token morrer entre uma operação e outra.
 _COOPERADO_REFRESH_MARGIN = timedelta(minutes=10)
+# Renovação que outro processo/requisição acabou de fazer (dentro desta
+# janela) não é repetida: quem esperava o lock reaproveita o token novo.
+_COOPERADO_REFRESH_DEDUP = timedelta(seconds=60)
 _MAX_ATTEMPTS = 3
 
 # Código de falha do WSO2 para access token expirado/inválido (Cartilha p.18).
@@ -106,6 +116,30 @@ def _mask_name(value: str) -> str:
 
 class AilosError(Exception):
     """Erro de configuração/estado da integração — nenhuma chamada à API foi feita."""
+
+
+class AilosDesfechoDesconhecido(AilosError):
+    """A requisição pode ter chegado à Ailos, mas não houve resposta (timeout de
+    leitura, conexão caída no meio). Para POST de registro isto NÃO é falha: o
+    boleto pode existir no banco. Quem chama não pode liberar a cobrança nem
+    repetir a emissão sem consultar antes (FIN-03)."""
+
+
+def _requisicao_pode_ter_chegado(exc: BaseException) -> bool:
+    """Só erro na fase de conexão garante que nada foi enviado ao banco."""
+    if isinstance(exc, _req_exc.ConnectTimeout):
+        return False
+    if isinstance(exc, _req_exc.ConnectionError):
+        texto = repr(exc)
+        if any(marca in texto for marca in (
+            'NewConnectionError', 'NameResolutionError', 'Failed to establish a new connection',
+            'Name or service not known', 'nodename nor servname', 'getaddrinfo failed',
+        )):
+            return False
+    if isinstance(exc, (_req_exc.InvalidURL, _req_exc.MissingSchema,
+                        _req_exc.InvalidSchema, _req_exc.InvalidHeader)):
+        return False
+    return True
 
 
 class AilosApiError(Exception):
@@ -242,6 +276,23 @@ def _log_call(
         log_db.commit()
     finally:
         log_db.close()
+
+
+def _registrar_log(*args) -> None:
+    """``_log_call`` sem poder derrubar a operação bancária.
+
+    O log roda depois da resposta da Ailos. Se o banco de log falhar e o erro
+    subisse, um boleto REGISTRADO no banco virava "erro de registro" aqui —
+    liberando edição e nova emissão de um título que existe (FIN-03). A falha
+    do log é registrada no log da aplicação e a resposta segue.
+    """
+    try:
+        _log_call(*args)
+    except Exception:  # noqa: BLE001 — log não pode mudar o desfecho bancário
+        logger.exception(
+            'Falha ao gravar ailos_api_logs para %s %s (billing %s); a resposta da Ailos foi mantida.',
+            args[0], args[1], args[-1],
+        )
 
 
 def _get_or_create_integration(db: Session) -> AilosIntegration:
@@ -402,6 +453,21 @@ def _obter_id_cooperado(db: Session, state: str) -> str:
         return resp.text.strip().strip('"')
 
 
+def _aware(value: datetime | None) -> datetime | None:
+    if value is not None and value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def _gravar_state(integration: AilosIntegration, state: str) -> None:
+    """Novo state de autorização, com prazo (FIN-09). Substitui o anterior:
+    só o state mais recente é aceito no callback."""
+    integration.state = state
+    integration.state_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ailos_state_ttl_minutes)
+    integration.status = 'pending'
+    integration.last_error = None
+
+
 def build_cooperado_login_url(db: Session) -> tuple[str, str]:
     """
     Inicia o fluxo de autorização do cooperado: obtém o id do cooperado na
@@ -418,9 +484,7 @@ def build_cooperado_login_url(db: Session) -> tuple[str, str]:
     login_url = f'{settings.ailos_apim_base_url}{_PATH_COOPERADO_AUTORIZAR}?id={quote(cooperado_id, safe="")}'
 
     integration = _get_or_create_integration(db)
-    integration.state = state
-    integration.status = 'pending'
-    integration.last_error = None
+    _gravar_state(integration, state)
     db.commit()
 
     return login_url, state
@@ -453,9 +517,7 @@ def autorizar_cooperado_directo(
     cooperado_id = _obter_id_cooperado(db, state)
 
     integration = _get_or_create_integration(db)
-    integration.state = state
-    integration.status = 'pending'
-    integration.last_error = None
+    _gravar_state(integration, state)
     db.commit()
 
     client_token = get_valid_client_token(db)
@@ -485,14 +547,40 @@ def autorizar_cooperado_directo(
 
 
 def handle_cooperado_callback(db: Session, state: str, code: str) -> AilosIntegration:
-    """Valida o ``state`` recebido no callback e persiste o token do cooperado."""
+    """Valida o ``state`` recebido no callback e persiste o token do cooperado.
+
+    FIN-09: o state vale AILOS_STATE_TTL_MINUTES e uma única vez. O consumo é
+    um UPDATE condicional (state ainda igual ao recebido): dois callbacks
+    simultâneos com o mesmo state se serializam na linha e só um grava o
+    token. State sem prazo (gravado antes desta versão) conta como expirado.
+    O protocolo com a Ailos não muda: ``code`` continua sendo o token do
+    cooperado entregue no callback (não há code exchange/PKCE no contrato).
+    """
+    invalido = AilosError('state inválido ou expirado')
+    if not state:
+        raise invalido
     integration = db.query(AilosIntegration).filter(
         AilosIntegration.state == state,
         AilosIntegration.state.isnot(None),
     ).first()
     if integration is None:
-        raise AilosError('state inválido ou expirado')
+        raise invalido
 
+    consumido = db.execute(
+        update(AilosIntegration)
+        .where(AilosIntegration.id == integration.id, AilosIntegration.state == state)
+        .values(state=None, state_expires_at=None)
+        .execution_options(synchronize_session=False)
+    ).rowcount
+    expira_em = _aware(integration.state_expires_at)
+    if consumido != 1:
+        db.rollback()
+        raise invalido
+    if expira_em is None or expira_em <= datetime.now(timezone.utc):
+        db.commit()  # state vencido é descartado, não fica reutilizável
+        raise invalido
+
+    db.refresh(integration)
     integration.cooperado_token_encrypted = encrypt_token(code)
     integration.cooperado_token_expires_at = datetime.now(timezone.utc) + _COOPERADO_TOKEN_LIFETIME
     integration.status = 'authorized'
@@ -553,12 +641,41 @@ def get_valid_cooperado_token(db: Session) -> str:
 
 
 def refresh_cooperado_token(db: Session) -> str:
-    """Renova o token de cooperado via GET .../cooperado/token/refresh?code=<atual>."""
+    """Renova o token de cooperado via GET .../cooperado/token/refresh?code=<atual>.
+
+    FIN-09: requisições e o keepalive podiam renovar ao mesmo tempo, com o
+    mesmo token atual — duas chamadas à Ailos e o último a gravar vencia
+    (sem saber se a Ailos invalida o token anterior). Agora a linha da
+    integração fica travada (SELECT ... FOR UPDATE) do início ao fim da
+    renovação, limitada por AILOS_TIMEOUT_SECONDS; quem estava esperando
+    revalida e, se a renovação acabou de acontecer, usa o token novo sem
+    chamar a Ailos de novo.
+    """
     integration = db.query(AilosIntegration).order_by(AilosIntegration.id.asc()).first()
     if integration is None or not integration.cooperado_token_encrypted:
         raise AilosError('Cooperado Ailos ainda não autorizado')
 
+    # Pode fazer commit (renova o token de aplicação): antes do lock.
     client_token = get_valid_client_token(db)
+
+    integration = (
+        db.query(AilosIntegration)
+        .filter(AilosIntegration.id == integration.id)
+        .with_for_update()
+        .populate_existing()
+        .one()
+    )
+    ultimo = _aware(integration.last_refresh_at)
+    if (
+        integration.status == 'authorized'
+        and integration.cooperado_token_encrypted
+        and ultimo is not None
+        and datetime.now(timezone.utc) - ultimo < _COOPERADO_REFRESH_DEDUP
+    ):
+        token_atual = decrypt_token(integration.cooperado_token_encrypted)
+        db.commit()  # libera o lock
+        return token_atual
+
     current_token = decrypt_token(integration.cooperado_token_encrypted)
 
     headers = {
@@ -759,7 +876,12 @@ def request(
                 timeout=settings.ailos_timeout_seconds,
             )
         except requests.RequestException as exc:
-            _log_call(method, path, json_body, None, None, False, str(exc), None, billing_id)
+            _registrar_log(method, path, json_body, None, None, False, str(exc), None, billing_id)
+            if _requisicao_pode_ter_chegado(exc):
+                raise AilosDesfechoDesconhecido(
+                    f'Falha de conexão com a API Ailos ({path}): {exc}. A resposta não chegou — '
+                    'o pedido pode ter sido processado.'
+                ) from exc
             raise AilosError(f'Falha de conexão com a API Ailos ({path}): {exc}') from exc
 
         if resp.status_code == 401:
@@ -809,7 +931,7 @@ def request(
     correlation_id = resp.headers.get('X-Correlation-Id') or resp.headers.get('correlationId')
     error_message = None if success else (_extract_message(body_json) or resp.text[:500])
 
-    _log_call(
+    _registrar_log(
         method, path, json_body, body_json, resp.status_code, success,
         error_message, correlation_id, billing_id,
     )

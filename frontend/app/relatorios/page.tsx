@@ -49,14 +49,21 @@ async function abrirPdfInadimplentes(token: string, de?: string, ate?: string) {
 }
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
+// Bases (PROD-01, docs/financeiro/dicionario-metricas.md): emitido, recebido
+// e aberto pela base escolhida (vencimento ou competência), canceladas fora;
+// *_caixa pela data do pagamento.
+type RevenueBase = 'vencimento' | 'competencia';
 type RevenueMonth = {
   ano: number; mes: number; label: string;
   total_cobrancas: number; total_emitido: number;
   total_recebido: number; total_aberto: number;
+  emitido_recorrente?: number; emitido_avulso?: number;
+  total_recebido_caixa?: number; encargos_caixa?: number; recebido_principal_caixa?: number;
 };
 type RevenueTotals = {
   total_emitido: number; total_recebido: number;
   total_aberto: number; taxa_recebimento: number;
+  total_recebido_caixa?: number; encargos_caixa?: number;
 };
 type DelinquentClient = {
   client_id: number; nome: string; cpf_cnpj: string;
@@ -142,6 +149,7 @@ export default function RelatoriosPage() {
   const [revenue, setRevenue] = useState<RevenueMonth[]>([]);
   const [revenueTotals, setRevenueTotals] = useState<RevenueTotals | null>(null);
   const [revenueLoading, setRevenueLoading] = useState(false);
+  const [revenueBase, setRevenueBase] = useState<RevenueBase>('vencimento');
 
   /* ── Delinquency state ── */
   const [delinquents, setDelinquents] = useState<DelinquentClient[]>([]);
@@ -159,14 +167,14 @@ export default function RelatoriosPage() {
   const [feedback, setFeedback] = useState('');
 
   /* ── Load functions ── */
-  const loadRevenue = useCallback(async (t: string, from: string, to: string) => {
+  const loadRevenue = useCallback(async (t: string, from: string, to: string, base: RevenueBase = 'vencimento') => {
     setRevenueLoading(true);
     try {
       // O período vai inteiro para a API. Antes só o ANO da data inicial era
       // enviado e o recorte acontecia aqui — um intervalo que cruzasse a
       // virada do ano (dez/2025→jan/2026) perdia os meses do segundo ano, que
       // nunca chegavam a ser consultados.
-      const params = new URLSearchParams({ date_from: from, date_to: to });
+      const params = new URLSearchParams({ date_from: from, date_to: to, base });
       const data = await apiFetch<{ meses: RevenueMonth[]; totais: RevenueTotals }>(
         `/reports/revenue?${params.toString()}`, {}, t,
       );
@@ -219,7 +227,7 @@ export default function RelatoriosPage() {
 
   useEffect(() => {
     if (!token) return;
-    loadRevenue(token, dateFrom, dateTo);
+    loadRevenue(token, dateFrom, dateTo, revenueBase);
     loadDelinquents(token);
   }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -252,7 +260,7 @@ export default function RelatoriosPage() {
           <ErrorBanner message={guardError || error} />
           {error && !guardError && token && (
             <button
-              onClick={() => { setError(''); loadRevenue(token, dateFrom, dateTo); loadDelinquents(token); }}
+              onClick={() => { setError(''); loadRevenue(token, dateFrom, dateTo, revenueBase); loadDelinquents(token); }}
               className="mt-2 rounded-lg border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
             >
               Tentar novamente
@@ -344,7 +352,7 @@ export default function RelatoriosPage() {
                 type="button"
                 onClick={() => {
                   const { from, to } = applyPreset(p.key);
-                  if (token) loadRevenue(token, from, to);
+                  if (token) loadRevenue(token, from, to, revenueBase);
                 }}
                 className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
                   preset === p.key
@@ -378,7 +386,7 @@ export default function RelatoriosPage() {
               />
             </label>
             <Button
-              onClick={() => { if (token) loadRevenue(token, dateFrom, dateTo); }}
+              onClick={() => { if (token) loadRevenue(token, dateFrom, dateTo, revenueBase); }}
               className="text-xs"
             >
               Aplicar
@@ -509,6 +517,19 @@ export default function RelatoriosPage() {
             <div className="flex items-center gap-2">
               <BarChart2 className="h-4 w-4 text-brand-700" />
               <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Receita por período</h3>
+              <select
+                aria-label="Base do mês"
+                className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-900"
+                value={revenueBase}
+                onChange={(e) => {
+                  const base = e.target.value as RevenueBase;
+                  setRevenueBase(base);
+                  if (token) loadRevenue(token, dateFrom, dateTo, base);
+                }}
+              >
+                <option value="vencimento">Mês do vencimento</option>
+                <option value="competencia">Mês da competência</option>
+              </select>
             </div>
             {token && (
               <ExportButton
@@ -521,11 +542,12 @@ export default function RelatoriosPage() {
 
           {/* KPI mini-row */}
           {revenueTotals && (
-            <div className="mb-5 grid grid-cols-3 gap-2">
+            <div className="mb-5 grid grid-cols-2 gap-2 sm:grid-cols-4">
               {[
                 { label: 'Emitido',    value: revenueTotals.total_emitido,  color: 'text-slate-700 dark:text-slate-200' },
-                { label: 'Recebido',   value: revenueTotals.total_recebido, color: 'text-emerald-700 dark:text-emerald-400' },
+                { label: 'Recebido do emitido', value: revenueTotals.total_recebido, color: 'text-emerald-700 dark:text-emerald-400' },
                 { label: 'Em aberto',  value: revenueTotals.total_aberto,   color: revenueTotals.total_aberto > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-500' },
+                { label: 'Caixa (pago no período)', value: revenueTotals.total_recebido_caixa ?? 0, color: 'text-emerald-700 dark:text-emerald-400' },
               ].map(({ label, value, color }) => (
                 <div key={label} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5 dark:border-slate-800 dark:bg-slate-900/50">
                   <p className={labelClass}>{label}</p>
@@ -560,6 +582,8 @@ export default function RelatoriosPage() {
                     <Th className="text-2xs uppercase tracking-[0.04em]">Emitido</Th>
                     <Th className="text-2xs uppercase tracking-[0.04em]">Recebido</Th>
                     <Th className="text-2xs uppercase tracking-[0.04em]">Em aberto</Th>
+                    <Th className="text-2xs uppercase tracking-[0.04em]">Caixa</Th>
+                    <Th className="text-2xs uppercase tracking-[0.04em]">Encargos</Th>
                   </TableHead>
                   <TableBody>
                     {revenue.map((m) => (
@@ -571,6 +595,8 @@ export default function RelatoriosPage() {
                         <Td className={`font-mono text-body ${m.total_aberto > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-500'}`}>
                           {fmt(m.total_aberto)}
                         </Td>
+                        <Td className="font-mono text-body">{fmt(m.total_recebido_caixa ?? 0)}</Td>
+                        <Td className="font-mono text-body text-slate-500">{fmt(m.encargos_caixa ?? 0)}</Td>
                       </Tr>
                     ))}
                   </TableBody>

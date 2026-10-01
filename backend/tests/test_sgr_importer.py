@@ -1,6 +1,8 @@
 """
-Importação SGR -> MasterSat: só insere o que falta, nunca duplica e nunca
-sobrescreve dado que já está no MasterSat.
+Importação SGR -> MasterSat: não duplica, não sobrescreve correção local e
+só libera cobrança de documento conciliado (soma das linhas = total da
+origem). As entradas de cobrança aqui imitam a saída de map_boleto: cada uma
+carrega o documento de origem em ``sgr_payload`` (código e valor total).
 """
 from __future__ import annotations
 
@@ -271,7 +273,8 @@ class TestHistoricoDeCobranca:
                   'period_label': '08/2026', 'due_date': '2026-08-15', 'payment_date': None,
                   'paid_amount': None, 'payment_method': None, 'receipt_number': '211558',
                   'installment_number': 1, 'installment_total': 10, 'status': 'pendente',
-                  'title': 'Boleto SGR 211558', **over}
+                  'title': 'Boleto SGR 211558', 'sgr_payload': {'cod_boleto': '7370', 'valor': '49,99'},
+                  **over}
         resultado = _resultado()
         resultado.clients[0].billings = [boleto]
         return resultado
@@ -326,7 +329,7 @@ class TestHistoricoDeCobranca:
              'due_date': '2021-04-12', 'payment_date': None, 'paid_amount': None,
              'payment_method': None, 'installment_number': 1, 'installment_total': 1,
              'billing_type': 'recorrente', 'title': f'Boleto SGR {cod} - ABC1234',
-             'receipt_number': cod, 'status': status, 'sgr_payload': {'cod_boleto': cod}}
+             'receipt_number': cod, 'status': status, 'sgr_payload': {'cod_boleto': cod, 'valor': '59,99'}}
             for cod, status in boletos
         ]
         return resultado
@@ -383,7 +386,7 @@ class TestHistoricoDeCobranca:
              'period_label': '07/2019', 'due_date': '2019-08-15', 'payment_date': None,
              'paid_amount': None, 'payment_method': None, 'receipt_number': '11751',
              'installment_number': None, 'installment_total': None, 'status': 'paga',
-             'title': f'Boleto SGR 11751 - {p}'}
+             'title': f'Boleto SGR 11751 - {p}', 'sgr_payload': {'cod_boleto': '11751', 'valor': '134,97'}}
             for p in ('MAQ2501', 'MAQ2502', 'MAQ2503')
         ]
         stats = import_poc_result(db, resultado, dry_run=False)
@@ -391,25 +394,32 @@ class TestHistoricoDeCobranca:
         assert stats.billings_created == 3
         assert db.query(Billing).count() == 3
 
-    def test_mesma_placa_com_ajustes_no_mesmo_boleto_mantem_as_linhas(self, db):
-        # Caso real (MGU2E86 em 07/2026): mensalidade, desconto e serviço no
-        # mesmo documento, mesma placa e mesma competência. As duas linhas
-        # positivas entram; o desconto fica de fora e é reportado.
+    def test_mesma_placa_com_desconto_no_mesmo_boleto_soma_o_liquido(self, db):
+        # SGR-01 — caso real (MGU2E86 em 07/2026): mensalidade, desconto e
+        # serviço no mesmo documento, mesma placa e competência. Antes o
+        # desconto era descartado e o MasterSat ficava com R$ 169,99 de um
+        # boleto de R$ 128,34. Agora o desconto abate a mensalidade da placa
+        # e a soma das cobranças é exatamente o total do documento.
         resultado = _resultado()
         resultado.clients[0].billings = [
             {'external_id': '19133', 'amount': valor, 'vehicle_plate': 'ABC1234',
              'period_label': '07/2026', 'due_date': '2026-07-15', 'payment_date': None,
              'paid_amount': None, 'payment_method': None, 'receipt_number': '19133',
              'installment_number': None, 'installment_total': None, 'status': 'paga',
-             'title': 'Boleto SGR 19133 - ABC1234'}
-            for valor in (49.99, -41.65, 120.00)
+             'billing_type': tipo, 'produto': produto,
+             'title': 'Boleto SGR 19133 - ABC1234', 'sgr_payload': {'cod_boleto': '19133', 'valor': '128,34'}}
+            for valor, tipo, produto in ((49.99, 'recorrente', 'MENSALIDADE'),
+                                         (-41.65, 'prorata', 'DESCONTO PRORATA'),
+                                         (120.00, 'avulsa', 'SERVICO'))
         ]
         stats = import_poc_result(db, resultado, dry_run=False)
 
         assert stats.billings_created == 2
-        assert stats.billings_skipped == 1
-        assert any('negativo' in motivo for motivo in stats.skips)
-        assert sorted(float(b.amount) for b in db.query(Billing).all()) == [49.99, 120.0]
+        assert stats.descontos_centavos == 4165
+        assert not any('negativo' in motivo for motivo in stats.skips)
+        valores = {b.billing_type: b.amount for b in db.query(Billing).all()}
+        assert valores == {'recorrente': Decimal('8.34'), 'avulsa': Decimal('120.00')}
+        assert sum(valores.values()) == Decimal('128.34')
 
     def test_boleto_nao_pago_entra_sem_valor_pago(self, db):
         # O SGR manda valor_pagamento '0,00' em boleto não pago. Gravar 0.0
@@ -422,10 +432,11 @@ class TestHistoricoDeCobranca:
         """Trava de regressão: o que o importador grava, a listagem devolve."""
         from app.api.v1.endpoints.billings import base_query, serialize_billing
 
-        resultado = self._com_boleto()
+        resultado = self._com_boleto(sgr_payload={'cod_boleto': '7370', 'valor': '8,34'})
         resultado.clients[0].billings.append({
             **resultado.clients[0].billings[0],
             'amount': -41.65, 'paid_amount': 0.0, 'title': 'Boleto SGR 211558 - ABC1234 (ajuste)',
+            'produto': 'DESCONTO',
         })
         import_poc_result(db, resultado, dry_run=False)
 
@@ -455,8 +466,10 @@ class TestNotasFiscais:
         assert stats.invoices_skipped == 1
         assert any('2210' in motivo for motivo in stats.skips)
 
-    def test_dry_run_nao_baixa_nem_grava_no_storage(self, db):
+    def test_dry_run_nao_baixa_nem_grava_no_storage(self, db, monkeypatch):
         # O rollback desfaz o banco, mas não removeria o objeto do MinIO.
+        from app.core.config import settings
+        monkeypatch.setattr(settings, 'sgr_download_hosts', 'gateway.exemplo')
         stats = import_poc_result(db, self._com_nota(), dry_run=True)
         assert stats.invoices_created == 1
         assert db.query(Document).count() == 0
@@ -471,7 +484,8 @@ class TestDocumentoDoBoleto:
                   'period_label': '09/2026', 'due_date': '2026-09-10', 'payment_date': None,
                   'paid_amount': None, 'payment_method': None, 'receipt_number': '17946',
                   'installment_number': None, 'installment_total': None, 'status': 'pendente',
-                  'title': 'Boleto SGR 17946 - ABC1234', **over}
+                  'title': 'Boleto SGR 17946 - ABC1234',
+                  'sgr_payload': {'cod_boleto': '17946', 'valor': '64,99'}, **over}
         resultado = _resultado()
         resultado.clients[0].billings = [boleto]
         return resultado
@@ -493,7 +507,9 @@ class TestDocumentoDoBoleto:
         notes = db.query(Billing).one().notes
         assert notes == 'Importado do SGR (Hinova).'
 
-    def test_pdf_do_boleto_nao_e_baixado_em_dry_run(self, db):
+    def test_pdf_do_boleto_nao_e_baixado_em_dry_run(self, db, monkeypatch):
+        from app.core.config import settings
+        monkeypatch.setattr(settings, 'sgr_download_hosts', 'sgr.exemplo')
         stats = import_poc_result(db, self._com_boleto(
             link_boleto='https://sgr.exemplo/boleto/abc?download=true',
         ), dry_run=True)

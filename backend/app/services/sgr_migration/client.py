@@ -47,6 +47,8 @@ tem. Importação em lote precisa ser agendada dentro dessa janela.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from dataclasses import dataclass, field
 
@@ -100,6 +102,121 @@ class SGRConnectionError(SGRApiError):
 
 class SGRInvalidResponseError(SGRApiError):
     """A resposta não é JSON, não tem o formato esperado, ou Error=true."""
+
+
+class SGRPaginacaoError(SGRApiError):
+    """A paginação não conseguiu provar que leu tudo: página repetida quando
+    a anterior veio cheia, registros deslocados entre páginas ou teto de
+    páginas atingido. Resultado parcial NÃO pode ser tratado como completo."""
+
+
+# ---------------------------------------------------------------------------
+# Paginação exaustiva (SGR-05)
+#
+# Antes, cada caminho decidia sozinho: o período paginava, clientes paginava,
+# mas veículos, vínculos e boletos por cliente liam UMA página de 200 e
+# paravam — um cliente com 201 veículos perdia o último sem aviso. Aqui fica a
+# regra única:
+#   * `indice` é deslocamento (é como todos os endpoints do SGR foram usados);
+#     avança pelo número de registros RECEBIDOS, não pelo pedido — a API pode
+#     limitar o lote abaixo do `total` solicitado;
+#   * página curta não prova o fim: pede-se a seguinte, que tem de vir vazia
+#     (ou 404). Custa 1 requisição por coleção e é o que cobre o limite real
+#     menor que o pedido;
+#   * página idêntica à anterior: se a anterior veio curta, o endpoint ignora
+#     `indice` e já devolveu tudo (fica anotado); se veio cheia, é erro;
+#   * registro repetido entre páginas diferentes = origem mudou durante a
+#     leitura (inserção desloca o índice) → coleta marcada incompleta.
+# ---------------------------------------------------------------------------
+
+_MAX_PAGINAS = 2000
+
+
+@dataclass
+class ColetaPaginada:
+    """Manifesto de completude de uma coleção paginada. Sem dado pessoal:
+    `escopo` usa só códigos de origem (cod_cliente, cod_veiculo, mês)."""
+
+    endpoint: str
+    escopo: str
+    paginas: int = 0
+    registros: int = 0
+    repetidos: int = 0
+    completa: bool = False
+    observacao: str | None = None
+    erro: str | None = None
+
+    def as_dict(self) -> dict:
+        return {
+            'endpoint': self.endpoint, 'escopo': self.escopo, 'paginas': self.paginas,
+            'registros': self.registros, 'repetidos': self.repetidos, 'completa': self.completa,
+            'observacao': self.observacao, 'erro': self.erro,
+        }
+
+
+def _impressao(registro) -> str:
+    return hashlib.sha1(
+        json.dumps(registro, sort_keys=True, default=str, ensure_ascii=False).encode('utf-8'),
+    ).hexdigest()
+
+
+def iterar_paginas(buscar, tamanho: int, coleta: ColetaPaginada, max_paginas: int = _MAX_PAGINAS):
+    """Gera os lotes de `buscar(total, indice)` até provar o fim da coleção.
+
+    Quem interrompe a iteração antes do fim (ex.: limite de clientes) deixa a
+    coleta com `completa=False` — é leitura parcial por escolha, e o
+    manifesto mostra isso.
+    """
+    indice = 0
+    vistos: set[str] = set()
+    anterior: list[str] | None = None
+    anterior_curta = False
+    while True:
+        if coleta.paginas >= max_paginas:
+            coleta.erro = f'teto de {max_paginas} páginas atingido sem chegar ao fim'
+            raise SGRPaginacaoError(f'{coleta.endpoint} ({coleta.escopo}): {coleta.erro}')
+        try:
+            lote = buscar(tamanho, indice)
+        except SGRNotFoundError:
+            if coleta.paginas and anterior_curta:
+                coleta.completa = True
+                coleta.observacao = 'fim sinalizado por 404 depois de página curta'
+                return
+            coleta.erro = 'SGRNotFoundError'
+            raise
+        except SGRApiError as exc:
+            coleta.erro = type(exc).__name__
+            raise
+        coleta.paginas += 1
+        if not lote:
+            coleta.completa = True
+            return
+        impressoes = [_impressao(r) for r in lote]
+        if impressoes == anterior:
+            if anterior_curta:
+                coleta.completa = True
+                coleta.observacao = 'endpoint ignora o índice; a página única já trazia tudo'
+                return
+            coleta.erro = 'página repetida depois de página cheia'
+            raise SGRPaginacaoError(f'{coleta.endpoint} ({coleta.escopo}): {coleta.erro}')
+        repetidos = sum(1 for imp in impressoes if imp in vistos)
+        if repetidos:
+            coleta.repetidos += repetidos
+            coleta.erro = 'registros repetidos entre páginas (a origem mudou durante a leitura?)'
+            raise SGRPaginacaoError(f'{coleta.endpoint} ({coleta.escopo}): {coleta.erro}')
+        vistos.update(impressoes)
+        anterior = impressoes
+        anterior_curta = len(lote) < tamanho
+        coleta.registros += len(lote)
+        indice += len(lote)
+        yield lote
+
+
+def paginar(buscar, tamanho: int, coleta: ColetaPaginada, max_paginas: int = _MAX_PAGINAS) -> list[dict]:
+    registros: list[dict] = []
+    for lote in iterar_paginas(buscar, tamanho, coleta, max_paginas):
+        registros.extend(lote)
+    return registros
 
 
 def _ci_get(payload: dict, *keys: str):
@@ -455,6 +572,7 @@ class SGRClient:
 
     def buscar_boletos_periodo(
         self, data_inicio: str, data_fim: str, campo: str = 'vencimento', linha_digitavel: bool = False,
+        coleta: ColetaPaginada | None = None,
     ) -> list[dict]:
         """GET /buscar_boletos — boletos de TODOS os clientes num período.
 
@@ -480,13 +598,11 @@ class SGRClient:
             'credito_banco': 'data_credito_banco',
         }[campo]
 
-        coletados: list[dict] = []
-        indice = 0
-        while True:
+        def _pagina(total: int, indice: int) -> list[dict]:
             params = {
                 f'{prefixo}_inicio': data_inicio,
                 f'{prefixo}_fim': data_fim,
-                'total': self._PAGINA_BOLETOS,
+                'total': total,
                 'indice': indice,
             }
             if linha_digitavel:
@@ -494,13 +610,10 @@ class SGRClient:
             # Gerar linha digitável e PIX é caro do lado deles: os meses com
             # muitos boletos em aberto (os futuros) estouravam o timeout
             # padrão de 30s de forma consistente.
-            body = self.get('/buscar_boletos', params, timeout=_TIMEOUT_BOLETOS)
-            lote = self.extract_data(body)
-            coletados.extend(lote)
-            if len(lote) < self._PAGINA_BOLETOS:
-                break
-            indice += self._PAGINA_BOLETOS
-        return coletados
+            return self.extract_data(self.get('/buscar_boletos', params, timeout=_TIMEOUT_BOLETOS))
+
+        coleta = coleta or ColetaPaginada('/buscar_boletos', f'{campo}:{data_inicio[:7]}')
+        return paginar(_pagina, self._PAGINA_BOLETOS, coleta)
 
     def buscar_xml_nota_fiscal(self, cod_boleto) -> str | None:
         """GET /buscar_xml_nota_fiscal — devolve a URL do XML da NFS-e do

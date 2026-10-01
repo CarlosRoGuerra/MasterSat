@@ -81,6 +81,10 @@ class TestBuildCooperadoLoginUrl:
         assert integration is not None
         assert integration.state == state
         assert integration.status == 'pending'
+        # FIN-09: state nasce com prazo
+        expira = integration.state_expires_at
+        expira = expira if expira.tzinfo else expira.replace(tzinfo=timezone.utc)
+        assert timedelta(0) < expira - datetime.now(timezone.utc) <= timedelta(minutes=settings.ailos_state_ttl_minutes)
 
     def test_missing_callback_url_raises_ailos_error(self, db, monkeypatch):
         monkeypatch.setattr(settings, 'ailos_callback_url', '')
@@ -105,6 +109,7 @@ class TestHandleCooperadoCallback:
             codigo_carteira=1,
             status='pending',
             state='abc-state-123',
+            state_expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
         )
         db.add(integration)
         db.commit()
@@ -152,6 +157,7 @@ class TestCallbackEndpoint:
             codigo_carteira=1,
             status='pending',
             state='state-456',
+            state_expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
         )
         db.add(integration)
         db.commit()

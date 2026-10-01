@@ -930,3 +930,14 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_ailos_client_tokens_environment'), table_name='ailos_client_tokens')
     op.drop_table('ailos_client_tokens')
     # ### end Alembic commands ###
+
+    # Os tipos enum nativos que o upgrade criou junto com as tabelas. O
+    # autogenerate não os remove; sem isto, downgrade base "dava certo" e o
+    # upgrade seguinte falhava com 'type "clientstatus" already exists'
+    # (DB-04). Sem CASCADE: se algo fora desta baseline passou a usar um
+    # destes tipos, o downgrade para aqui em vez de apagar o que não é dele.
+    for enum_name in (
+        'billingstatus', 'orderstatus', 'ordertype', 'trackerstatus',
+        'vehiclestatus', 'userrole', 'documentreviewstatus', 'clientstatus',
+    ):
+        op.execute(f'DROP TYPE IF EXISTS {enum_name}')

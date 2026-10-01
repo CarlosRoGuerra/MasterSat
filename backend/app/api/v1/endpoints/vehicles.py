@@ -32,11 +32,13 @@ from app.models.vehicle import Vehicle
 from app.schemas.document import DocumentDeleteOut, DocumentOut, DocumentReviewUpdate
 from app.schemas.pagination import Page
 from app.schemas.vehicle import VehicleCreate, VehicleOut, VehicleUpdate
+from app.services import titulo_bancario
 from app.services.financial import (
     add_months,
     contract_payer_client_id,
     current_cycle_bounds,
     decimal_to_float,
+    lock_billings_for_update,
     period_label_for_date,
     prorated_amount,
 )
@@ -383,6 +385,7 @@ def uninstall_vehicle(
     uninstall_fee_billing_id = None
 
     source_prorated_total = Decimal('0')
+    ajustes_pro_rata_pendentes: list[dict] = []
     for contract in contracts:
         plan = db.get(Plan, contract.plan_id)
         if plan and plan.active:
@@ -400,6 +403,33 @@ def uninstall_vehicle(
                 Billing.is_deleted.is_(False),
             ))
             if current_billing:
+                # Mesma política de todos os escritores (FIN-02/FIN-03): valor
+                # de cobrança com título no banco não muda aqui — o boleto
+                # continuaria com o valor antigo. Fica registrado como ajuste
+                # pendente para o financeiro (cancelar/reemitir ou conceder
+                # desconto no recebimento).
+                locked = lock_billings_for_update(db, [current_billing.id])
+                current_billing = locked[0] if locked else None
+                if current_billing is None or current_billing.status not in (
+                    BillingStatus.PENDING, BillingStatus.OVERDUE,
+                ):
+                    continue
+                titulo = titulo_bancario.titulos_bancarios(db, [current_billing.id])[current_billing.id]
+                if titulo.estado != titulo_bancario.SEM_TITULO:
+                    ajustes_pro_rata_pendentes.append({
+                        'billing_id': current_billing.id,
+                        'valor_atual': decimal_to_float(current_billing.amount),
+                        'valor_pro_rata': decimal_to_float(source_amount),
+                        'estado_bancario': titulo.estado,
+                    })
+                    marcador = (
+                        f'[AJUSTE PENDENTE] Pró-rata até {uninstall_date.strftime("%d/%m/%Y")} seria '
+                        f'R$ {source_amount:.2f}; valor mantido porque há título no banco ({titulo.estado}).'
+                    )
+                    current_billing.notes = (
+                        f'{current_billing.notes} | {marcador}' if current_billing.notes else marcador
+                    )
+                    continue
                 current_billing.amount = source_amount
                 current_billing.title = f'Plano pró-rata até desinstalação • {vehicle.plate}'
                 current_billing.notes = f'Cobrança proporcional até {uninstall_date.strftime("%d/%m/%Y")}'
@@ -490,6 +520,8 @@ def uninstall_vehicle(
         'message': 'Desinstalação registrada com sucesso.',
         'source_prorated_amount': source_prorated,
         'uninstall_fee_billing_id': uninstall_fee_billing_id,
+        # Pró-rata não aplicado porque a mensalidade já tem título no banco.
+        'ajustes_pro_rata_pendentes': ajustes_pro_rata_pendentes,
         'tracker_returned_to_stock': bool(trackers),
         'trackers_returned_to_stock': len(trackers),
         'multiportal_unlinked': lifecycle.managed_externally,

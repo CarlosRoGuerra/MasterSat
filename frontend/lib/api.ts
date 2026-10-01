@@ -29,26 +29,49 @@ function loginPathForCurrentPage() {
 // Single-flight: vários 401 simultâneos disparam UM refresh só; os demais aguardam.
 let refreshPromise: Promise<string | null> | null = null;
 
+// Quantas vezes insistir quando o backend responde 409 ao refresh.
+const REFRESH_CONFLICT_RETRIES = 3;
+
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 // O refresh token não passa mais por aqui: vive num cookie httpOnly (setado
 // pelo backend via Set-Cookie em /auth/login e /auth/refresh), então o
 // próprio navegador o envia com credentials:'include' — o JS nunca lê nem
 // grava esse valor. Sem isto o refresh token era só localStorage: XSS
 // exfiltrava e um invasor ficava com acesso válido por até 7 dias.
-async function refreshAccessToken(): Promise<string | null> {
+//
+// Várias abas: o refresh token é de uso único (SEC-02). Se duas abas renovam
+// juntas com o mesmo cookie, uma vence e a outra recebe 409 — sem perder a
+// sessão. A perdedora espera um pouco: a vencedora grava o access novo no
+// localStorage (compartilhado entre abas) e o navegador passa a ter o cookie
+// novo; então ou reaproveita esse access, ou renova de novo com o cookie novo.
+async function refreshAccessToken(failedToken?: string): Promise<string | null> {
   if (typeof window === 'undefined') return null;
   if (!refreshPromise) {
     refreshPromise = (async () => {
       try {
-        const resp = await fetch(buildApiUrl('/auth/refresh'), {
-          method: 'POST',
-          credentials: 'include',
-          cache: 'no-store',
-        });
-        if (!resp.ok) return null;
-        const data = await resp.json();
-        if (!data?.access_token) return null;
-        localStorage.setItem('access_token', data.access_token);
-        return data.access_token as string;
+        for (let attempt = 0; attempt <= REFRESH_CONFLICT_RETRIES; attempt++) {
+          const stored = localStorage.getItem('access_token');
+          if (failedToken && stored && stored !== failedToken) return stored;
+
+          const resp = await fetch(buildApiUrl('/auth/refresh'), {
+            method: 'POST',
+            credentials: 'include',
+            cache: 'no-store',
+          });
+          if (resp.status === 409) {
+            await wait(300 * (attempt + 1));
+            continue;
+          }
+          if (!resp.ok) return null;
+          const data = await resp.json();
+          if (!data?.access_token) return null;
+          localStorage.setItem('access_token', data.access_token);
+          return data.access_token as string;
+        }
+        return null;
       } catch {
         return null;
       } finally {
@@ -63,13 +86,20 @@ async function refreshAccessToken(): Promise<string | null> {
 // Logout de verdade: revoga o refresh token no servidor (não só limpa o
 // access token local) — sem isto, um cookie vazado antes do clique em "Sair"
 // continuava válido normalmente até expirar sozinho.
+//
+// O logout encerra só ESTA sessão (as outras abas deste navegador compartilham
+// a mesma sessão e caem junto; outros dispositivos continuam logados). O
+// access token vai junto: o backend revoga a sessão dele mesmo se o cookie
+// não chegar.
 export async function logout(loginPath: string = '/login/admin'): Promise<void> {
   if (typeof window === 'undefined') return;
+  const accessToken = localStorage.getItem('access_token');
   try {
     await fetch(buildApiUrl('/auth/logout'), {
       method: 'POST',
       credentials: 'include',
       cache: 'no-store',
+      headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined,
     });
   } catch {
     // Falha de rede não pode travar o logout local — a sessão local é
@@ -109,7 +139,7 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}, token
   // Access token expirou (30 min): renova com o refresh token (7 dias) e
   // repete a requisição — o usuário não é deslogado no meio do trabalho.
   if (response.status === 401 && effectiveToken && typeof window !== 'undefined') {
-    const newToken = await refreshAccessToken();
+    const newToken = await refreshAccessToken(effectiveToken);
     if (newToken) response = await doFetch(newToken);
   }
 

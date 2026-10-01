@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from calendar import monthrange
 from datetime import date, datetime, timedelta
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 from typing import Iterable
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.timezone import hoje
-from app.models.ailos_boleto import AilosBoleto
-from app.models.billing import Billing
+from app.models.billing import RECURRING_BILLING_TYPES, Billing
+from app.models.billing_change_log import BillingChangeLog
 from app.models.billing_charge_item import BillingChargeItem
 from app.models.client import Client
 from app.models.client_charge_item import ClientChargeItem
@@ -18,6 +18,8 @@ from app.models.contract import Contract
 from app.models.enums import BillingStatus
 from app.models.plan import Plan
 from app.models.service_product import ServiceProduct
+from app.services import titulo_bancario
+from app.services.competencia import competencia_do_rotulo
 
 
 def lock_billings_for_update(db: Session, billing_ids: Iterable[int]) -> list[Billing]:
@@ -148,26 +150,68 @@ def period_label_for_date(reference: date, interval_months: int = 1) -> str:
 # usada tanto pelo fechamento mensal (não gerar por cima de um carnê) quanto
 # pelo parcelamento manual (não gerar carnê por cima de um mês já fechado).
 # As duas listas divergentes já causaram cobrança duplicada em produção.
-RECURRING_BILLING_TYPES = ('recorrente', 'prorata', 'primeira_mensalidade', 'carne')
+# A tupla mora em app/models/billing.py (o índice único usa a mesma) e é
+# reexportada aqui por compatibilidade com quem já a importa deste módulo.
+
+
+def occupying_recurring_filter():
+    """Condições para uma cobrança ocupar o mês do contrato — as mesmas do
+    índice uq_billings_contract_competencia_recorrente.
+
+    Cancelada continua ocupando (é o que impede recobrar um mês consolidado,
+    negociado ou dispensado). Só sai quem foi removido ou teve a competência
+    liberada explicitamente (release_billing_competencia).
+    """
+    return (
+        Billing.is_deleted.is_(False),
+        Billing.competencia_liberada.is_(False),
+        Billing.billing_type.in_(RECURRING_BILLING_TYPES),
+    )
 
 
 def existing_recurring_periods(
     db: Session, contract_id: int | None, period_labels: Iterable[str],
 ) -> set[str]:
     """Dentre os period_labels informados, quais já têm mensalidade/carnê/
-    pró-rata lançados para este contrato (RECURRING_BILLING_TYPES)."""
+    pró-rata lançados para este contrato (RECURRING_BILLING_TYPES).
+
+    A comparação é pela competência canônica: ``9/2026`` conflita com
+    ``09/2026``. Rótulo sem competência (legado fora de formato) só conflita
+    com o mesmo texto — é o comportamento antigo, e o relatório de saneamento
+    lista esses casos.
+    """
     labels = {label for label in period_labels if label}
     if not labels or not contract_id:
         return set()
-    rows = db.scalars(
-        select(Billing.period_label).where(
-            Billing.is_deleted.is_(False),
-            Billing.contract_id == contract_id,
-            Billing.period_label.in_(labels),
-            Billing.billing_type.in_(RECURRING_BILLING_TYPES),
-        )
-    ).all()
-    return set(rows)
+    by_competencia: dict = {}
+    textual: set[str] = set()
+    for label in labels:
+        competencia = competencia_do_rotulo(label)
+        if competencia is None:
+            textual.add(label)
+        else:
+            by_competencia.setdefault(competencia, set()).add(label)
+
+    found: set[str] = set()
+    if by_competencia:
+        rows = db.scalars(
+            select(Billing.competencia).where(
+                Billing.contract_id == contract_id,
+                Billing.competencia.in_(list(by_competencia)),
+                *occupying_recurring_filter(),
+            )
+        ).all()
+        for competencia in rows:
+            found.update(by_competencia.get(competencia, ()))
+    if textual:
+        found.update(db.scalars(
+            select(Billing.period_label).where(
+                Billing.contract_id == contract_id,
+                Billing.period_label.in_(textual),
+                *occupying_recurring_filter(),
+            )
+        ).all())
+    return found
 
 
 def plan_title(plan) -> str:
@@ -280,6 +324,15 @@ def generate_receipt_number(billing_id: int) -> str:
     return f'RCB-{now}-{billing_id:05d}'
 
 
+def _regravavel(db: Session, billing: Billing) -> bool:
+    """``force`` só regrava cobrança em aberto e sem título no banco: valor
+    novo sobre boleto registrado deixaria banco e sistema divergentes."""
+    if billing.status not in (BillingStatus.PENDING, BillingStatus.OVERDUE):
+        return False
+    titulo = titulo_bancario.titulos_bancarios(db, [billing.id])[billing.id]
+    return titulo.estado == titulo_bancario.SEM_TITULO
+
+
 def _quantize_amount(value: float | Decimal) -> Decimal:
     return Decimal(str(value)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
@@ -389,6 +442,8 @@ def generate_monthly_billings(db: Session, contract: Contract, cycles: int = 12,
         notes = f'Cobrança recorrente automática do plano {plan.name}'
         if existing and not force:
             continue
+        if existing and not _regravavel(db, existing):
+            continue
         if existing and force:
             existing.amount = plan.price
             existing.due_date = due_date
@@ -426,6 +481,58 @@ def generate_monthly_billings(db: Session, contract: Contract, cycles: int = 12,
     return created
 
 
+class InstallmentSplitError(ValueError):
+    """Valor não comporta a quantidade de parcelas pedida."""
+
+
+def split_amount_in_installments(total: Decimal | float | str, installments: int) -> list[Decimal]:
+    """Divide ``total`` em ``installments`` parcelas que somam exatamente o total,
+    todas com pelo menos R$ 0,01.
+
+    Regra histórica preservada: base arredondada (ROUND_HALF_UP) e a diferença
+    na última parcela — é o que já foi emitido até hoje (100/3 → 33,33 +
+    33,33 + 33,34). Quando essa regra deixaria a última parcela zerada ou
+    negativa (0,02 em 4 dava 0,01×3 e -0,01; 1,00 em 60 dava -0,18), a base é
+    truncada, o que mantém a última ≥ base > 0. Se nem um centavo por parcela
+    cabe no total, recusa em vez de gerar parcela zero (FIN-11).
+    """
+    count = int(installments)
+    if count < 1:
+        raise InstallmentSplitError('Quantidade de parcelas deve ser pelo menos 1.')
+    amount = _quantize_amount(total)
+    if amount <= 0:
+        raise InstallmentSplitError('Valor total deve ser maior que zero.')
+    cents = int(amount * 100)
+    if cents < count:
+        raise InstallmentSplitError(
+            f'R$ {amount:.2f} não comporta {count} parcelas de pelo menos R$ 0,01. '
+            f'Use no máximo {cents} parcela(s).'
+        )
+    base = (amount / count).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    last = amount - base * (count - 1)
+    if last <= 0:
+        base = (amount / count).quantize(Decimal('0.01'), rounding=ROUND_DOWN)
+        last = amount - base * (count - 1)
+    return [base] * (count - 1) + [last]
+
+
+def _occupied_item_installments(db: Session, item_id: int) -> set[int]:
+    """Números de parcela já ocupados — mesma regra do índice
+    uq_billings_item_parcela_efetiva: não removida e não cancelada, ou
+    cancelada porque foi substituída (a dívida está no substituto)."""
+    return set(db.scalars(
+        select(Billing.installment_number).where(
+            Billing.item_id == item_id,
+            Billing.installment_number.is_not(None),
+            Billing.is_deleted.is_(False),
+            or_(
+                Billing.status != BillingStatus.CANCELED,
+                Billing.substituted_by_id.is_not(None),
+            ),
+        )
+    ).all())
+
+
 def generate_item_billings(
     db: Session, item: ClientChargeItem, force: bool = False, *, commit: bool = True,
 ) -> list[Billing]:
@@ -434,17 +541,38 @@ def generate_item_billings(
     ``commit=False`` para uso dentro de uma transação maior (o fechamento
     mensal): quem orquestra é que decide quando confirmar, senão um erro
     posterior deixa o fechamento gravado pela metade.
+
+    Trava o item antes de conferir as parcelas (FIN-12). Dois fechamentos de
+    meses diferentes selecionam o mesmo serviço pendente; sem a trava os dois
+    viam "parcela 1 não existe" e inseriam. Agora o segundo espera o primeiro
+    confirmar, relê o item (já faturado, inativo) e não gera nada. O índice
+    uq_billings_item_parcela_efetiva é a barreira final se algum caminho novo
+    esquecer a trava.
     """
-    total_amount = _quantize_amount(item.total_amount)
+    locked = lock_charge_items_for_update(db, [item.id])
+    if not locked:
+        return []
+    item = locked[0]
+    if not force and (item.is_deleted or not item.active):
+        # Outro fechamento faturou (ou alguém removeu) enquanto este esperava.
+        return []
+
     installments = max(int(item.installment_count or 1), 1)
-    base_amount = (total_amount / installments).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-    remainder = total_amount - (base_amount * installments)
+    amounts = split_amount_in_installments(item.total_amount, installments)
     created: list[Billing] = []
     payer_client_id = charge_item_payer_client_id(db, item)
+    occupied = _occupied_item_installments(db, item.id)
+    if not force and charge_item_effective_billing_count(db, item.id) >= installments:
+        # Serviço já coberto por cobrança combinada (1ª mensalidade) ou
+        # negociação: parcelas por item_id não enxergam esses vínculos.
+        occupied = set(range(1, installments + 1))
 
     for index in range(installments):
         due_date = normalize_due_date(item.start_date, index, item.start_date.day if item.start_date.day <= 28 else 28, 1)
-        amount = base_amount + (remainder if index == installments - 1 else Decimal('0.00'))
+        amount = amounts[index]
+        title = item.title if installments == 1 else f'{item.title} • parcela {index + 1}/{installments}'
+        # force regrava a parcela em aberto com os dados atuais do item; sem
+        # force, parcela ocupada nunca é tocada.
         existing = (
             db.query(Billing)
             .filter(
@@ -454,11 +582,13 @@ def generate_item_billings(
                 Billing.status != BillingStatus.CANCELED,
             )
             .first()
-        )
-        title = item.title if installments == 1 else f'{item.title} • parcela {index + 1}/{installments}'
-        if existing and not force:
+        ) if force else None
+        if existing and not _regravavel(db, existing):
+            # Paga ou com título no banco: não se regrava, mas a parcela
+            # continua ocupada (não gera outra por cima).
+            created.append(existing)
             continue
-        if existing and force:
+        if existing:
             existing.amount = amount
             existing.due_date = due_date
             existing.title = title
@@ -468,6 +598,8 @@ def generate_item_billings(
             existing.vehicle_id = item.vehicle_id
             existing.tracker_id = getattr(item, 'tracker_id', None)
             created.append(existing)
+            continue
+        if (index + 1) in occupied:
             continue
 
         billing = Billing(
@@ -529,12 +661,18 @@ def marcar_billing_pago(
         billing = locked[0]
         if billing.status == BillingStatus.PAID:
             return billing
+    if billing.status == BillingStatus.CANCELED:
+        # Cancelada entre a leitura e a trava: pagamento de cobrança cancelada
+        # é pendência de conciliação, nunca quitação silenciosa.
+        raise ValueError(f'Cobrança #{billing.id} está cancelada e não pode ser quitada.')
 
     billing.status = BillingStatus.PAID
     billing.payment_date = payment_date
     billing.payment_method = payment_method
     if notes:
-        billing.notes = notes
+        # Acrescenta: sobrescrever apagava o histórico de cancelamento,
+        # negociação e liberação registrado nas notas.
+        billing.notes = f'{billing.notes} | {notes}' if billing.notes else notes
     billing.paid_amount = paid_amount if paid_amount else billing.amount
     if not billing.receipt_number:
         billing.receipt_number = generate_receipt_number(billing.id)
@@ -682,9 +820,6 @@ def refresh_charge_items_for_billing(
         db.flush()
 
 
-_AILOS_REGISTRATION_IN_PROGRESS = ('REGISTRANDO', 'PROCESSANDO')
-
-
 def cancel_open_billings_for_contract(
     db: Session,
     contract_id: int,
@@ -706,31 +841,28 @@ def cancel_open_billings_for_contract(
     if not ids:
         return []
     billings = lock_billings_for_update(db, ids)
-    inflight = [
-        row[0] for row in db.query(AilosBoleto.billing_id).filter(
-            AilosBoleto.billing_id.in_(ids),
-            AilosBoleto.status_ailos.in_(_AILOS_REGISTRATION_IN_PROGRESS),
-        ).all()
-    ]
-    if inflight:
+    try:
+        # Excluir o contrato é a confirmação: título registrado é cancelado e
+        # fica com baixa pendente. Registro em andamento ou com desfecho
+        # desconhecido bloqueia — não dá para saber se há título no banco.
+        titulos = titulo_bancario.exigir(db, titulo_bancario.CANCELAR, ids, confirmado=True)
+    except titulo_bancario.PoliticaBancariaError as exc:
         raise ValueError(
-            f'Cobranças {inflight} aguardando registro na Ailos — tente excluir o contrato novamente em instantes.'
-        )
+            f'Cobranças {exc.billing_ids} do contrato: {exc.message} Tente excluir o contrato depois.'
+        ) from exc
     lock_charge_items_for_billings(db, billings)
-    boletos_ativos: list[dict] = []
     for billing in billings:
         billing.status = BillingStatus.CANCELED
         marker = f'Cancelada automaticamente: {reason}'
-        ab = db.query(AilosBoleto).filter_by(billing_id=billing.id).first()
-        if ab and ab.linha_digitavel and ab.codigo_barras:
-            boletos_ativos.append({'billing_id': billing.id, 'nosso_numero': ab.nosso_numero})
+        titulo = titulos.get(billing.id)
+        if titulo is not None and titulo.ativo_no_banco:
             marker += (
-                f' | [ATENÇÃO] Boleto Ailos (nosso número {ab.nosso_numero or "—"}) '
+                f' | [ATENÇÃO] Boleto Ailos (nosso número {titulo.nosso_numero or "—"}) '
                 'segue ativo no banco — baixa manual pendente.'
             )
         billing.notes = f'{billing.notes} | {marker}' if billing.notes else marker
         refresh_charge_items_for_billing(db, billing, commit=False)
-    return boletos_ativos
+    return titulo_bancario.marcar_baixa_pendente(db, ids, f'cancelada: {reason}')
 
 
 def transfer_charge_items_to_billing(
@@ -762,6 +894,190 @@ def transfer_charge_items_to_billing(
         item = db.get(ClientChargeItem, item_id)
         if item:
             associate_billing_charge_item(db, target, item, amount)
+
+
+# ---------------------------------------------------------------------------
+# Substituição e liberação de competência (FIN-01)
+#
+# Boleto único do fechamento e negociação (/billings/unificar) cancelam as
+# originais e passam a dívida para um título novo. Até a Fase 02 o vínculo só
+# existia no texto de ``notes``; excluir o substituto deixava as originais
+# canceladas ocupando os meses sem nenhuma cobrança em aberto. Agora:
+#
+# * a original guarda ``substituted_by_id`` e continua ocupando mês/parcela;
+# * cancelar/excluir o substituto exige reverter a substituição, e a reversão
+#   reabre as originais (a dívida volta a ser a delas);
+# * cancelamento simples continua ocupando o mês. Para cobrar o mês de novo,
+#   o financeiro libera a competência — ato explícito e registrado.
+# ---------------------------------------------------------------------------
+
+class BillingSubstitutionError(ValueError):
+    """Operação recusada por causa de um vínculo de substituição."""
+
+    def __init__(self, code: str, message: str, billing_ids: list[int]):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.billing_ids = billing_ids
+
+    def detail(self) -> dict:
+        return {'code': self.code, 'message': self.message, 'billing_ids': self.billing_ids}
+
+
+def mark_billings_substituted(originals: Iterable[Billing], substitute: Billing, marker: str) -> None:
+    """Cancela as originais apontando para o título que assumiu a dívida."""
+    for billing in originals:
+        billing.status = BillingStatus.CANCELED
+        billing.substituted_by_id = substitute.id
+        billing.notes = f'{billing.notes} | {marker}' if billing.notes else marker
+
+
+def substituted_originals(db: Session, substitute_id: int) -> list[Billing]:
+    return list(db.scalars(
+        select(Billing)
+        .where(
+            Billing.substituted_by_id == substitute_id,
+            Billing.is_deleted.is_(False),
+        )
+        .order_by(Billing.id.asc())
+    ).all())
+
+
+def substitute_is_effective(db: Session, billing: Billing) -> bool:
+    """A original está coberta por um substituto que ainda vale?"""
+    if not billing.substituted_by_id:
+        return False
+    substitute = db.get(Billing, billing.substituted_by_id)
+    return bool(
+        substitute
+        and not substitute.is_deleted
+        and substitute.status != BillingStatus.CANCELED
+    )
+
+
+def restore_substituted_originals(
+    db: Session,
+    substitute: Billing,
+    *,
+    user_id: int | None,
+    reason: str,
+) -> list[int]:
+    """Desfaz a substituição: as originais voltam a ser a dívida em aberto.
+
+    Chamada antes de cancelar/excluir o substituto, na mesma transação. Não
+    mexe no substituto — quem chama decide se ele é cancelado ou removido.
+    """
+    candidates = substituted_originals(db, substitute.id)
+    if not candidates:
+        return []
+    originals = [
+        billing for billing in lock_billings_for_update(db, [b.id for b in candidates])
+        if not billing.is_deleted and billing.substituted_by_id == substitute.id
+    ]
+    try:
+        titulo_bancario.exigir(db, titulo_bancario.REABRIR, [b.id for b in originals])
+    except titulo_bancario.PoliticaBancariaError as exc:
+        raise BillingSubstitutionError(
+            'original_com_boleto_registrado',
+            'Cobranças originais com boleto registrado (ou em registro) na Ailos não podem ser '
+            'reabertas automaticamente. Resolva a situação bancária delas antes de reverter.',
+            exc.billing_ids,
+        ) from exc
+    lock_charge_items_for_billings(db, originals)
+    today = hoje()
+    for billing in originals:
+        new_status = BillingStatus.PENDING if billing.due_date >= today else BillingStatus.OVERDUE
+        db.add(BillingChangeLog(
+            billing_id=billing.id,
+            changed_by_user_id=user_id,
+            field_name='status',
+            previous_value=BillingStatus.CANCELED.value,
+            new_value=new_status.value,
+            justification=f'Substituição pela cobrança #{substitute.id} revertida: {reason}',
+        ))
+        billing.substituted_by_id = None
+        billing.status = new_status
+        marker = f'Reaberta: substituição pela cobrança #{substitute.id} revertida.'
+        billing.notes = f'{billing.notes} | {marker}' if billing.notes else marker
+    db.flush()
+    for billing in originals:
+        refresh_charge_items_for_billing(db, billing, commit=False)
+    return [billing.id for billing in originals]
+
+
+def ensure_substitution_allows_removal(
+    db: Session, billing: Billing, *, revert_substitution: bool,
+) -> list[Billing]:
+    """Valida cancelar/excluir um título envolvido em substituição.
+
+    Devolve as originais que precisam ser reabertas (vazio se não há). Recusa
+    remover uma original cujo substituto ainda vale — isso liberaria o mês que
+    a dívida do substituto está cobrindo.
+    """
+    if substitute_is_effective(db, billing):
+        raise BillingSubstitutionError(
+            'titulo_substituido',
+            f'Esta cobrança foi substituída pela #{billing.substituted_by_id} e continua '
+            'representando o período. Cancele ou reverta a cobrança substituta.',
+            [billing.substituted_by_id],
+        )
+    originals = substituted_originals(db, billing.id)
+    if originals and not revert_substitution:
+        ids = [original.id for original in originals]
+        raise BillingSubstitutionError(
+            'titulo_substituto',
+            f'Esta cobrança substitui {len(ids)} cobrança(s) '
+            f'({", ".join(f"#{i}" for i in ids)}). Cancelar ou remover sem reverter deixaria '
+            'esses períodos sem cobrança em aberto. Confirme a reversão para reabrir as originais.',
+            ids,
+        )
+    return originals
+
+
+def release_billing_competencia(
+    db: Session,
+    billing: Billing,
+    *,
+    user_id: int | None,
+    justification: str,
+) -> None:
+    """Devolve o mês de uma mensalidade cancelada para ser cobrado de novo."""
+    if billing.billing_type not in RECURRING_BILLING_TYPES:
+        raise BillingSubstitutionError(
+            'competencia_nao_ocupada',
+            'Só mensalidade, pró-rata, 1ª cobrança e parcela de carnê ocupam a competência do contrato.',
+            [billing.id],
+        )
+    if billing.status != BillingStatus.CANCELED:
+        raise BillingSubstitutionError(
+            'cobranca_nao_cancelada',
+            'Só cobrança cancelada pode ter a competência liberada.',
+            [billing.id],
+        )
+    if billing.competencia_liberada:
+        return
+    if substitute_is_effective(db, billing):
+        raise BillingSubstitutionError(
+            'titulo_substituido',
+            f'Esta cobrança foi substituída pela #{billing.substituted_by_id}; o período está '
+            'coberto por ela. Reverta a substituição em vez de liberar a competência.',
+            [billing.substituted_by_id],
+        )
+    # Título ainda pagável no banco (ou desfecho desconhecido) não libera o
+    # mês: a nova mensalidade seria uma segunda cobrança do mesmo período
+    # enquanto o boleto antigo continua valendo (FIN-02).
+    titulo_bancario.exigir(db, titulo_bancario.LIBERAR_COMPETENCIA, [billing.id])
+    db.add(BillingChangeLog(
+        billing_id=billing.id,
+        changed_by_user_id=user_id,
+        field_name='competencia_liberada',
+        previous_value='false',
+        new_value='true',
+        justification=justification,
+    ))
+    billing.competencia_liberada = True
+    marker = f'Competência {billing.period_label or "—"} liberada: {justification}'
+    billing.notes = f'{billing.notes} | {marker}' if billing.notes else marker
 
 def current_cycle_bounds(contract: Contract, plan: Plan, reference_date: date) -> tuple[date, date]:
     interval = max(int(getattr(plan, 'billing_interval_months', 1) or 1), 1)

@@ -17,6 +17,7 @@ from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response, StreamingResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -32,16 +33,19 @@ from app.models.ailos_boleto import AilosBoleto
 from app.models.ailos_lote import AilosLote
 from app.models.billing import Billing
 from app.models.client import Client
+from app.models.cnab_remessa import CnabRemessa
 from app.models.enums import BillingStatus, UserRole
 from app.models.vehicle import Vehicle
-from app.services import ailos_boletos
+from app.services import ailos_boletos, cnab_remessa
 from app.services.ailos_boletos import aplicar_dados_oficiais_ailos
 from app.services.boleto_ailos import gerar_dados_boleto, DadosBoleto
 from app.services.boleto_pdf import gerar_boleto_pdf, gerar_carne_pdf
-from app.services.cnab400 import gerar_arquivo_cnab400
-from app.services.cnab240 import gerar_arquivo_cnab240
 
 router = APIRouter()
+
+
+class RemessaDescarteIn(BaseModel):
+    motivo: str = Field(min_length=3, max_length=500)
 
 # Rotas públicas (sem JWT) — boleto por link tokenizado, para envio ao cliente
 # por WhatsApp/e-mail. Montado em /public no api.py.
@@ -200,6 +204,42 @@ def listar_carnes(
 
 
 # ---------------------------------------------------------------------------
+# GET /boletos/remessas e /boletos/canais (Fase 03, FIN-07)
+# Também ANTES de /{billing_id}, pelo mesmo motivo de /carne.
+# ---------------------------------------------------------------------------
+
+@router.get("/remessas")
+def listar_remessas(
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    remessas = db.scalars(select(CnabRemessa).order_by(CnabRemessa.id.desc()).limit(200)).all()
+    return [
+        {
+            'id': r.id, 'layout': r.layout, 'sequencial': r.sequencial, 'status': r.status,
+            'arquivo_sha256': r.arquivo_sha256, 'total_titulos': r.total_titulos,
+            'valor_total': float(r.valor_total), 'criada_em': r.created_at,
+            'descartada_em': r.descartada_em, 'descarte_motivo': r.descarte_motivo,
+        }
+        for r in remessas
+    ]
+
+
+@router.get("/canais")
+def canais_bancarios(_: object = Depends(require_roles(*ALLOWED_ROLES))):
+    """Matriz de canais de emissão: o que está disponível e por quê."""
+    cnab = cnab_remessa.canal_habilitado()
+    motivo_cnab = None if cnab else (
+        'Layout não homologado com o banco e sem leitura de retorno CNAB.'
+    )
+    return {
+        'ailos_api': {'habilitado': True, 'emissao': True, 'conciliacao': True, 'motivo': None},
+        'cnab240': {'habilitado': cnab, 'emissao': cnab, 'conciliacao': False, 'motivo': motivo_cnab},
+        'cnab400': {'habilitado': cnab, 'emissao': cnab, 'conciliacao': False, 'motivo': motivo_cnab},
+    }
+
+
+# ---------------------------------------------------------------------------
 # GET /boletos/{billing_id}  — dados do boleto (JSON)
 # ---------------------------------------------------------------------------
 
@@ -274,6 +314,20 @@ def boleto_registrado(billing_id: int, db: Session) -> AilosBoleto | None:
     """
     ab = db.query(AilosBoleto).filter_by(billing_id=billing_id).first()
     return ab if (ab and ab.linha_digitavel and ab.codigo_barras) else None
+
+
+def _recusar_titulo_baixado(ailos_boleto: AilosBoleto) -> None:
+    """Baixa pendente/confirmada (Fase 03): a cobrança deixou de valer ou o
+    título foi baixado — não sai PDF nem e-mail para pagamento."""
+    if ailos_boleto.baixa_status is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'code': 'boleto_ailos_baixado',
+                'message': 'Este boleto foi baixado (ou está com baixa pendente) no banco e não deve '
+                           'ser enviado para pagamento.',
+            },
+        )
 
 
 def _placa_do_billing(b: Billing, db: Session) -> str:
@@ -361,6 +415,7 @@ def get_boleto_pdf(
             detail='Esta cobrança ainda não tem boleto emitido na Ailos, então não há '
                    'PDF para baixar. Gere o boleto na aba Ailos do Financeiro.',
         )
+    _recusar_titulo_baixado(ailos_boleto)
     c = _pagador_do_billing(b, db)
     pdf_bytes, filename = _montar_pdf_boleto(b, c, db, ailos_boleto)
     return Response(
@@ -397,6 +452,7 @@ def enviar_boleto_email(
             detail='Esta cobrança ainda não tem boleto emitido na Ailos, então não pode ser enviada. '
                    'Gere o boleto na aba Ailos do Financeiro.',
         )
+    _recusar_titulo_baixado(ailos_boleto)
     c = _pagador_do_billing(b, db)
     if not c.email:
         raise HTTPException(status_code=400, detail='Cliente sem e-mail cadastrado.')
@@ -475,10 +531,12 @@ def get_carne_pdf(
     # A ordem das parcelas é a ordem em que os billing_ids foram enviados.
     for billing_id in (lote.billing_ids or []):
         ab = boleto_registrado(billing_id, db)
-        if ab is None:
+        if ab is None or ab.baixa_status is not None:
+            # Sem registro, ou parcela cancelada/recebida por fora/baixada:
+            # não vai para o carnê que o cliente paga (Fase 03).
             continue
         b = db.get(Billing, billing_id)
-        if not b or b.is_deleted:
+        if not b or b.is_deleted or b.status == BillingStatus.CANCELED:
             continue
         c = ailos_boletos.resolver_pagador(db, b, db.get(Client, b.client_id))
         if not c:
@@ -532,6 +590,10 @@ def get_boleto_publico(
     ailos_boleto = boleto_registrado(billing_id, db)
     if ailos_boleto is None:
         raise HTTPException(status_code=404, detail="Boleto não encontrado")
+    # Baixa pendente/confirmada = a cobrança deixou de valer (recebida por
+    # fora, cancelada) ou o título foi baixado: não entregar para pagamento.
+    if ailos_boleto.baixa_status is not None:
+        raise HTTPException(status_code=404, detail="Boleto não encontrado")
     c = _pagador_do_billing(b, db)
     pdf_bytes, filename = _montar_pdf_boleto(b, c, db, ailos_boleto)
     return Response(
@@ -545,33 +607,61 @@ def get_boleto_publico(
 # POST /boletos/cnab400  — arquivo remessa CNAB400
 # ---------------------------------------------------------------------------
 
+def _remessa_response(gerada: cnab_remessa.RemessaGerada) -> Response:
+    remessa = gerada.remessa
+    hoje = date.today().strftime("%Y%m%d")
+    filename = f"remessa_cnab{remessa.layout}_{hoje}_{remessa.sequencial:06d}.rem"
+    return Response(
+        content=gerada.arquivo,
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Remessa-Id": str(remessa.id),
+            "X-Remessa-Sequencial": str(remessa.sequencial),
+            "X-Remessa-SHA256": remessa.arquivo_sha256,
+        },
+    )
+
+
+def _gerar_remessa_endpoint(
+    layout: str, billing_ids: list[int] | None, status: str, db: Session, user_id: int | None,
+) -> Response:
+    try:
+        cnab_remessa.exigir_canal_habilitado()
+        billings = _buscar_billings(billing_ids, status, db)
+        if not billings:
+            raise HTTPException(status_code=404, detail="Nenhuma cobrança encontrada para os critérios informados")
+        items = _preparar_items(billings, db)
+        sem_pagador = sorted({b.id for b in billings} - {item["billing_id"] for item in items})
+        if sem_pagador:
+            raise cnab_remessa.RemessaError(
+                'selecao_invalida', 'Há cobranças sem cliente ativo para o sacado.',
+                extra={'motivos': {str(bid): 'cliente_removido' for bid in sem_pagador}},
+            )
+        gerada = cnab_remessa.gerar_remessa(db, layout, billings, items, user_id=user_id)
+    except cnab_remessa.RemessaError as exc:
+        db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail()) from exc
+    return _remessa_response(gerada)
+
+
 @router.post("/cnab400")
 def gerar_cnab400(
     billing_ids: list[int] | None = None,
     status: str = Query(default="pendente", description="pending ou overdue"),
     db: Session = Depends(get_db),
-    _: object = Depends(require_roles(*ALLOWED_ROLES)),
+    current_user=Depends(require_roles(*ALLOWED_ROLES)),
 ):
     """
     Gera arquivo de remessa CNAB400 para envio ao banco Ailos.
 
-    Se billing_ids for fornecido, gera apenas para esses boletos.
-    Caso contrário, gera para todos os boletos pendentes ou vencidos.
+    Canal desligado até homologação (409 ``canal_cnab_indisponivel``). Ligado:
+    com billing_ids, só cobranças em aberto, sem repetição e sem título em
+    nenhum canal (senão 409/422 com o motivo de cada uma); sem billing_ids,
+    as pendentes ou vencidas livres. A remessa fica registrada (sequência,
+    hash, títulos reservados) — ver GET /boletos/remessas.
     """
-    billings = _buscar_billings(billing_ids, status, db)
-    if not billings:
-        raise HTTPException(status_code=404, detail="Nenhuma cobrança encontrada para os critérios informados")
-
-    items = _preparar_items(billings, db)
-    arquivo = gerar_arquivo_cnab400(items)
-
-    hoje = date.today().strftime("%Y%m%d")
-    filename = f"remessa_cnab400_{hoje}.rem"
-    return Response(
-        content=arquivo,
-        media_type="application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
+    return _gerar_remessa_endpoint('400', billing_ids, status, db, current_user.id)
 
 
 # ---------------------------------------------------------------------------
@@ -583,25 +673,46 @@ def gerar_cnab240(
     billing_ids: list[int] | None = None,
     status: str = Query(default="pendente"),
     db: Session = Depends(get_db),
-    _: object = Depends(require_roles(*ALLOWED_ROLES)),
+    current_user=Depends(require_roles(*ALLOWED_ROLES)),
 ):
     """
-    Gera arquivo de remessa CNAB240 para envio ao banco Ailos.
+    Gera arquivo de remessa CNAB240 para envio ao banco Ailos (mesmas regras
+    do CNAB400).
     """
-    billings = _buscar_billings(billing_ids, status, db)
-    if not billings:
-        raise HTTPException(status_code=404, detail="Nenhuma cobrança encontrada para os critérios informados")
+    return _gerar_remessa_endpoint('240', billing_ids, status, db, current_user.id)
 
-    items = _preparar_items(billings, db)
-    arquivo = gerar_arquivo_cnab240(items)
 
-    hoje = date.today().strftime("%Y%m%d")
-    filename = f"remessa_cnab240_{hoje}.rem"
-    return Response(
-        content=arquivo,
-        media_type="application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
+# ---------------------------------------------------------------------------
+# Remessas registradas e matriz de canais (Fase 03, FIN-07)
+# ---------------------------------------------------------------------------
+
+@router.get("/remessas/{remessa_id}/arquivo")
+def baixar_remessa(
+    remessa_id: int,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    """Os mesmos bytes (mesmo hash) da geração — baixar de novo não cria remessa."""
+    remessa = db.get(CnabRemessa, remessa_id)
+    if remessa is None:
+        raise HTTPException(status_code=404, detail='Remessa não encontrada')
+    return _remessa_response(cnab_remessa.RemessaGerada(remessa=remessa, arquivo=remessa.arquivo))
+
+
+@router.post("/remessas/{remessa_id}/descartar")
+def descartar_remessa(
+    remessa_id: int,
+    payload: RemessaDescarteIn,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(UserRole.ADMIN)),
+):
+    """Só para remessa que NÃO foi enviada ao banco: libera os títulos para
+    outro canal. Remessa enviada não se descarta — o título existe no banco."""
+    try:
+        remessa = cnab_remessa.descartar_remessa(db, remessa_id, motivo=payload.motivo.strip())
+    except cnab_remessa.RemessaError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail()) from exc
+    return {'id': remessa.id, 'status': remessa.status, 'descartada_em': remessa.descartada_em}
 
 
 # ---------------------------------------------------------------------------
@@ -613,12 +724,10 @@ def _buscar_billings(
     status: str,
     db: Session,
 ) -> list[Billing]:
-    """Busca billings por IDs ou por status."""
+    """Seleção validada (explícita) ou automática (por status). Pagas,
+    canceladas, repetidas ou com título em qualquer canal não entram."""
     if billing_ids:
-        return [
-            b for b in [db.get(Billing, bid) for bid in billing_ids]
-            if b and not b.is_deleted
-        ]
+        return cnab_remessa.validar_selecao(db, list(billing_ids))
 
     status_map = {
         "pendente": BillingStatus.PENDING,
@@ -627,12 +736,7 @@ def _buscar_billings(
         "overdue":  BillingStatus.OVERDUE,
     }
     bs = status_map.get(status, BillingStatus.PENDING)
-    return db.scalars(
-        select(Billing)
-        .where(Billing.status == bs, Billing.is_deleted.is_(False))
-        .order_by(Billing.due_date.asc())
-        .limit(500)
-    ).all()
+    return cnab_remessa.selecionar_por_status(db, bs, limite=500)
 
 
 def _preparar_items(billings: list[Billing], db: Session) -> list[dict]:

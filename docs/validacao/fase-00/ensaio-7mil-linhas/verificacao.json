@@ -1,0 +1,90 @@
+{
+  "aprovado": true,
+  "erros": [],
+  "avisos": [],
+  "alembic_revision": "b3f8a1c9d2e7",
+  "fernet_key_fingerprint": "sha256:022415674e671483",
+  "segredos": {
+    "ailos_client_tokens": {
+      "total": 1,
+      "decifrados": 1,
+      "falhas": 0
+    },
+    "ailos_integrations": {
+      "total": 1,
+      "decifrados": 1,
+      "falhas": 0
+    },
+    "smtp_password": {
+      "total": 1,
+      "decifrados": 1,
+      "falhas": 0
+    },
+    "nfse_certificados": {
+      "total": 1,
+      "decifrados": 1,
+      "falhas": 0
+    }
+  },
+  "certificados": [
+    {
+      "id": 1,
+      "ativo": true,
+      "abre": true,
+      "valido_ate": "2027-09-30T10:14:37+00:00",
+      "vencido": false
+    }
+  ],
+  "objetos": {
+    "referencias_obrigatorias": 188,
+    "ausentes": 0,
+    "tamanho_divergente": 0,
+    "inativos_sem_objeto": 8
+  },
+  "financeiro": {
+    "billings[PENDING]": {
+      "quantidade": 1188,
+      "valor_centavos": 14230120,
+      "pago_centavos": 0
+    },
+    "billings[PENDING|excluida]": {
+      "quantidade": 12,
+      "valor_centavos": 148880,
+      "pago_centavos": 0
+    },
+    "billings[PAID]": {
+      "quantidade": 2376,
+      "valor_centavos": 28487240,
+      "pago_centavos": 28487240
+    },
+    "billings[PAID|excluida]": {
+      "quantidade": 24,
+      "valor_centavos": 281760,
+      "pago_centavos": 281760
+    },
+    "billings[OVERDUE]": {
+      "quantidade": 1188,
+      "valor_centavos": 14235120,
+      "pago_centavos": 0
+    },
+    "billings[OVERDUE|excluida]": {
+      "quantidade": 12,
+      "valor_centavos": 140880,
+      "pago_centavos": 0
+    },
+    "billings[CANCELED]": {
+      "quantidade": 1188,
+      "valor_centavos": 14236120,
+      "pago_centavos": 0
+    },
+    "billings[CANCELED|excluida]": {
+      "quantidade": 12,
+      "valor_centavos": 143880,
+      "pago_centavos": 0
+    },
+    "payables": {
+      "quantidade": 300,
+      "valor_centavos": 8995500
+    }
+  }
+}

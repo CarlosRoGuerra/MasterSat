@@ -1,5 +1,5 @@
 from datetime import date
-from sqlalchemy import Boolean, Date, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, CheckConstraint, Date, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -8,6 +8,15 @@ from app.models.base import SoftDeleteMixin, TimestampMixin
 
 class ClientChargeItem(Base, TimestampMixin, SoftDeleteMixin):
     __tablename__ = "client_charge_items"
+    __table_args__ = (
+        # Mesmos limites do schema da API (DB-02). O teto de 60 parcelas fica
+        # só na API: importação/legado podem ter mais e isso não é incoerente.
+        # Removido não é validado (histórico; remover é o saneamento).
+        CheckConstraint('is_deleted OR quantity >= 1', name='ck_client_charge_items_quantidade'),
+        CheckConstraint('is_deleted OR installment_count >= 1', name='ck_client_charge_items_parcelas'),
+        CheckConstraint('is_deleted OR unit_price > 0', name='ck_client_charge_items_preco_positivo'),
+        CheckConstraint('is_deleted OR total_amount > 0', name='ck_client_charge_items_total_positivo'),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     client_id: Mapped[int] = mapped_column(ForeignKey('clients.id'), index=True)

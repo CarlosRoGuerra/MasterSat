@@ -1,0 +1,5 @@
+# Scripts executados em containers Linux: CRLF quebra o bash
+# ("$'\r': command not found"). Com core.autocrlf=true no Windows, um clone
+# novo converteria esses arquivos sem esta regra.
+*.sh text eol=lf
+Dockerfile text eol=lf

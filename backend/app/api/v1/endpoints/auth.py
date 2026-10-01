@@ -1,15 +1,15 @@
 from datetime import datetime, timedelta, timezone
-from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from jose import JWTError, jwt
-from sqlalchemy import select
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.config import settings
 from app.core.limiter import limiter
 from app.core.security import (
+    JWTError,
+    decode_token,
     create_access_token,
     create_refresh_token,
     get_password_hash,
@@ -19,9 +19,14 @@ from app.core.security import (
 from app.db.session import get_db
 from app.models.client import Client
 from app.models.enums import ClientStatus, UserRole
-from app.models.password_reset_token import PasswordResetToken
 from app.models.refresh_token import RefreshToken
 from app.models.user import User
+from app.services.password_reset import (
+    MENSAGEM_GENERICA,
+    consumir_token,
+    entregar_email_reset,
+    solicitar_reset,
+)
 from app.schemas.auth import (
     ForgotPasswordRequest,
     ForgotPasswordResponse,
@@ -61,8 +66,8 @@ def _clear_refresh_cookie(response: Response) -> None:
     response.delete_cookie(key=REFRESH_COOKIE_NAME, path=REFRESH_COOKIE_PATH)
 
 
-def _issue_refresh_token(db: Session, user_id: int, family: str | None = None) -> tuple[str, str]:
-    """Emite (e persiste o estado de) um refresh token novo. Retorna (token, jti).
+def _issue_refresh_token(db: Session, user_id: int, family: str | None = None) -> tuple[str, str, str]:
+    """Emite (e persiste o estado de) um refresh token novo. Retorna (token, jti, family).
 
     family=None → login novo, começa uma família. family=<existente> → é uma
     ROTAÇÃO dentro do /refresh (ver _rotate_refresh_token).
@@ -70,7 +75,7 @@ def _issue_refresh_token(db: Session, user_id: int, family: str | None = None) -
     token, jti, family = create_refresh_token(str(user_id), family=family)
     expires_at = datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days)
     db.add(RefreshToken(user_id=user_id, jti=jti, family=family, expires_at=expires_at))
-    return token, jti
+    return token, jti, family
 
 
 def _revoke_family(db: Session, family: str) -> None:
@@ -80,8 +85,41 @@ def _revoke_family(db: Session, family: str) -> None:
     ).update({'revoked_at': datetime.now(timezone.utc)}, synchronize_session=False)
 
 
-def _rotate_refresh_token(db: Session, token: str) -> tuple[User, str]:
-    """Valida um refresh token, detecta reuso e rotaciona. Retorna (user, novo_token).
+def _aware(value: datetime | None) -> datetime | None:
+    if value is not None and value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def _refresh_ja_usado(db: Session, row_id: int, family: str) -> HTTPException:
+    """Decide o que fazer com um refresh que já foi trocado por um sucessor.
+
+    - rotacionado há menos de REFRESH_REUSE_GRACE_SECONDS: duas abas do mesmo
+      navegador renovaram juntas com o mesmo cookie. Uma venceu; esta perde
+      com 409 — nada é emitido e nada é revogado. O navegador já recebeu o
+      cookie do vencedor, então a aba tenta de novo e segue logada.
+    - depois disso (ou revogado): reuso de token antigo = sinal de vazamento.
+      A família inteira é revogada e todos daquela sessão fazem novo login.
+    """
+    row = db.get(RefreshToken, row_id)
+    db.refresh(row)
+    rotated_at = _aware(row.rotated_at)
+    if (
+        row.revoked_at is None
+        and rotated_at is not None
+        and datetime.now(timezone.utc) - rotated_at <= timedelta(seconds=settings.refresh_reuse_grace_seconds)
+    ):
+        return HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail='Sessão renovada em outra aba. Tente novamente.',
+        )
+    _revoke_family(db, family)
+    db.commit()
+    return HTTPException(status_code=401, detail='Sessão expirada. Faça login novamente.')
+
+
+def _rotate_refresh_token(db: Session, token: str) -> tuple[User, str, str]:
+    """Valida um refresh token, detecta reuso e rotaciona. Retorna (user, novo_token, family).
 
     Reuso = apresentar um jti que já tem replaced_by_jti (foi rotacionado) ou
     já está revoked_at (família comprometida/logout). É o sinal de que um
@@ -89,10 +127,17 @@ def _rotate_refresh_token(db: Session, token: str) -> tuple[User, str]:
     inteira é revogada, forçando novo login em todos os dispositivos daquela
     sessão. Sem isto, rotacionar sozinho não detecta token roubado, só atrasa
     o problema.
+
+    Consumo único (SEC-02): o pai é marcado com um UPDATE condicional
+    (compare-and-set em replaced_by_jti IS NULL). No PostgreSQL, duas
+    rotações simultâneas do mesmo token se serializam nessa linha: a segunda
+    espera o commit da primeira, reavalia o WHERE e altera 0 linhas — só uma
+    ganha sucessor. Antes, as duas liam "não usado" e ambas emitiam filhos
+    válidos (bifurcação da sessão).
     """
     credenciais_invalidas = HTTPException(status_code=401, detail='Sessão expirada. Faça login novamente.')
     try:
-        decoded = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+        decoded = decode_token(token)
         if decoded.get('type') != 'refresh':
             raise HTTPException(status_code=401, detail='Token inválido')
         user_id = decoded.get('sub')
@@ -114,20 +159,36 @@ def _rotate_refresh_token(db: Session, token: str) -> tuple[User, str]:
         raise credenciais_invalidas
 
     if row.revoked_at is not None or row.replaced_by_jti is not None:
-        _revoke_family(db, row.family)
-        db.commit()
+        raise _refresh_ja_usado(db, row.id, row.family)
+
+    if _aware(row.expires_at) < datetime.now(timezone.utc):
         raise credenciais_invalidas
 
-    expira_em = row.expires_at
-    if expira_em.tzinfo is None:
-        expira_em = expira_em.replace(tzinfo=timezone.utc)
-    if expira_em < datetime.now(timezone.utc):
-        raise credenciais_invalidas
+    new_token, new_jti, family = create_refresh_token(str(user.id), family=row.family)
+    agora = datetime.now(timezone.utc)
+    consumido = db.execute(
+        update(RefreshToken)
+        .where(
+            RefreshToken.id == row.id,
+            RefreshToken.replaced_by_jti.is_(None),
+            RefreshToken.revoked_at.is_(None),
+        )
+        .values(replaced_by_jti=new_jti, rotated_at=agora)
+        .execution_options(synchronize_session=False)
+    ).rowcount
+    if consumido != 1:
+        # Outra requisição consumiu este token entre o SELECT e o UPDATE.
+        db.rollback()
+        raise _refresh_ja_usado(db, row.id, row.family)
 
-    new_token, new_jti = _issue_refresh_token(db, user.id, family=family)
-    row.replaced_by_jti = new_jti
+    db.add(RefreshToken(
+        user_id=user.id,
+        jti=new_jti,
+        family=family,
+        expires_at=agora + timedelta(days=settings.refresh_token_expire_days),
+    ))
     db.commit()
-    return user, new_token
+    return user, new_token, family
 
 
 def build_full_address(payload: RegisterClientRequest) -> str:
@@ -153,11 +214,13 @@ def login(request: Request, response: Response, payload: LoginRequest, db: Sessi
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='O acesso de clientes foi desativado. Utilize o painel administrativo.')
     role_value = user.role.value if hasattr(user.role, 'value') else str(user.role)
 
-    refresh_token, _jti = _issue_refresh_token(db, user.id)
+    refresh_token, _jti, family = _issue_refresh_token(db, user.id)
     db.commit()
     _set_refresh_cookie(response, refresh_token)
 
-    return TokenResponse(access_token=create_access_token(str(user.id), name=user.name, role=role_value))
+    return TokenResponse(access_token=create_access_token(
+        str(user.id), name=user.name, role=role_value, session_id=family,
+    ))
 
 
 @router.post('/register-client', response_model=RegisterClientResponse)
@@ -175,91 +238,104 @@ def refresh(request: Request, response: Response, db: Session = Depends(get_db))
     if not token:
         raise HTTPException(status_code=401, detail='Sessão expirada. Faça login novamente.')
 
-    user, new_refresh_token = _rotate_refresh_token(db, token)
+    user, new_refresh_token, family = _rotate_refresh_token(db, token)
     _set_refresh_cookie(response, new_refresh_token)
 
     role_value = user.role.value if hasattr(user.role, 'value') else str(user.role)
-    return TokenResponse(access_token=create_access_token(str(user.id), name=user.name, role=role_value))
+    return TokenResponse(access_token=create_access_token(
+        str(user.id), name=user.name, role=role_value, session_id=family,
+    ))
+
+
+def _sessao_do_token(token: str | None, tipo: str) -> str | None:
+    """Família (sessão) de um refresh ('family') ou access ('sid') assinado.
+    Token inválido/expirado → None: não há o que revogar."""
+    if not token:
+        return None
+    try:
+        decoded = decode_token(token)
+    except JWTError:
+        return None
+    if decoded.get('type') != tipo:
+        return None
+    return decoded.get('family' if tipo == 'refresh' else 'sid')
 
 
 @router.post('/logout')
 def logout(request: Request, response: Response, db: Session = Depends(get_db)):
-    """Revoga a família do refresh token apresentado (server-side) e limpa o
-    cookie. Sem isto, 'logout' era só um efeito visual do front — um cookie
-    vazado antes do clique continuava válido normalmente até expirar sozinho."""
-    token = request.cookies.get(REFRESH_COOKIE_NAME)
-    if token:
-        try:
-            decoded = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
-            family = decoded.get('family')
-            if family:
-                _revoke_family(db, family)
-                db.commit()
-        except JWTError:
-            pass  # cookie inválido/expirado — nada pra revogar, só limpa
+    """Encerra ESTA sessão (SEC-06): revoga a família do refresh token e,
+    com ela, todo access token emitido para a mesma sessão ('sid') — que
+    passa a levar 401 na hora, não só quando expirar. Outros dispositivos
+    do mesmo usuário continuam logados; para derrubar todos, troque a senha.
+
+    A sessão vem do cookie de refresh e, na falta dele, do Bearer enviado.
+    Sempre 200: logout não revela se o token existia."""
+    families = {
+        _sessao_do_token(request.cookies.get(REFRESH_COOKIE_NAME), 'refresh'),
+    }
+    auth_header = request.headers.get('authorization') or ''
+    if auth_header.lower().startswith('bearer '):
+        families.add(_sessao_do_token(auth_header[7:].strip(), 'access'))
+    families.discard(None)
+    for family in families:
+        _revoke_family(db, family)
+    if families:
+        db.commit()
     _clear_refresh_cookie(response)
     return {'message': 'Sessão encerrada.'}
 
 
 @router.post('/forgot-password', response_model=ForgotPasswordResponse)
-def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db)):
-    # Resposta IDÊNTICA exista ou não o e-mail — não revela quais e-mails têm
-    # conta (evita enumeração de usuários).
-    generic_message = 'Se o e-mail existir, você receberá as instruções de redefinição.'
+@limiter.limit(settings.rate_limit_forgot_password)
+def forgot_password(
+    request: Request,
+    payload: ForgotPasswordRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """Envia o link de redefinição por e-mail (SEC-05).
 
-    user = db.scalar(select(User).where(User.email == payload.email, User.is_deleted.is_(False)))
-    if not user:
-        return ForgotPasswordResponse(message=generic_message)
+    Resposta IDÊNTICA para e-mail existente, inexistente, inativo ou acima
+    do limite por conta — não revela quais e-mails têm conta. O envio roda
+    depois da resposta (services/password_reset.py), então o SMTP também
+    não altera o tempo de resposta."""
+    emitido = solicitar_reset(db, payload.email)
+    if emitido is None:
+        return ForgotPasswordResponse(message=MENSAGEM_GENERICA)
 
-    db.query(PasswordResetToken).filter(
-        PasswordResetToken.user_id == user.id,
-        PasswordResetToken.used_at.is_(None),
-    ).update({'used_at': datetime.now(timezone.utc)})
-
-    expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.password_reset_expire_minutes)
-    reset_token = uuid4().hex
-    token_row = PasswordResetToken(user_id=user.id, token=reset_token, expires_at=expires_at)
-    db.add(token_row)
-    db.commit()
-
+    row, _user, token = emitido
+    background_tasks.add_task(entregar_email_reset, row.id, token)
     return ForgotPasswordResponse(
-        message=generic_message,
+        message=MENSAGEM_GENERICA,
         # Só em modo debug (desligado em produção) o token volta no response.
-        reset_token=reset_token if settings.debug_return_reset_token else None,
-        expires_at=expires_at if settings.debug_return_reset_token else None,
+        reset_token=token if settings.debug_return_reset_token else None,
+        expires_at=row.expires_at if settings.debug_return_reset_token else None,
     )
 
 
 @router.post('/reset-password')
 def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db)):
-    reset_row = db.scalar(select(PasswordResetToken).where(PasswordResetToken.token == payload.token))
-    if not reset_row or reset_row.used_at is not None:
-        raise HTTPException(status_code=400, detail='Token de redefinição inválido')
-
-    # expires_at pode voltar SEM tzinfo (o driver nem sempre preserva o fuso);
-    # comparar naive com aware estoura TypeError e virava 500 no lugar do 400.
-    expira_em = reset_row.expires_at
-    if expira_em.tzinfo is None:
-        expira_em = expira_em.replace(tzinfo=timezone.utc)
-    if expira_em < datetime.now(timezone.utc):
-        raise HTTPException(status_code=400, detail='Token de redefinição expirado')
-
-    user = db.get(User, reset_row.user_id)
-    if not user or user.is_deleted:
-        raise HTTPException(status_code=404, detail='Usuário não encontrado')
+    """Troca a senha com o token do e-mail. Uso único: o consumo é um UPDATE
+    condicional, então dois envios simultâneos do mesmo token não trocam a
+    senha duas vezes. Conta excluída/inativa não é reativada por aqui."""
+    try:
+        _row, user = consumir_token(db, payload.token)
+    except ValueError as exc:
+        if str(exc) == 'expirado':
+            raise HTTPException(status_code=400, detail='Token de redefinição expirado') from exc
+        raise HTTPException(status_code=400, detail='Token de redefinição inválido') from exc
 
     user.password_hash = get_password_hash(payload.new_password)
     # Derruba TODA sessao anterior: sem isto, um refresh token roubado seguia
     # valido por ate 7 dias depois da troca de senha — a senha nova nao
     # expulsava o invasor. tokens_valid_from cobre os access tokens já
     # emitidos (via 'iat'); a revogação abaixo cobre os refresh tokens
-    # rastreados nesta tabela, reforçando o mesmo corte.
+    # rastreados nesta tabela e, pelo 'sid', os access das mesmas sessões.
     user.tokens_valid_from = datetime.now(timezone.utc)
     db.query(RefreshToken).filter(
         RefreshToken.user_id == user.id,
         RefreshToken.revoked_at.is_(None),
     ).update({'revoked_at': datetime.now(timezone.utc)}, synchronize_session=False)
-    reset_row.used_at = datetime.now(timezone.utc)
     db.commit()
 
     return {'message': 'Senha redefinida com sucesso.'}

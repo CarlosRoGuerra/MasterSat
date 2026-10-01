@@ -22,7 +22,7 @@
     "clsx": "^2.1.1",
     "leaflet": "^1.9.4",
     "lucide-react": "^1.14.0",
-    "next": "15.5.22",
+    "next": "15.5.26",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "react-leaflet": "^4.2.1"
@@ -40,7 +40,7 @@
     "@vitejs/plugin-react": "^6.1.0",
     "autoprefixer": "^10.4.20",
     "eslint": "^9.39.5",
-    "eslint-config-next": "^15.5.22",
+    "eslint-config-next": "^15.5.26",
     "eslint-config-prettier": "^10.1.8",
     "jsdom": "^29.1.1",
     "openapi-typescript": "^7.13.0",
@@ -49,5 +49,10 @@
     "tailwindcss": "^3.4.14",
     "typescript": "^5.6.3",
     "vitest": "^4.1.11"
+  },
+  "overrides": {
+    "next": {
+      "postcss": "$postcss"
+    }
   }
 }

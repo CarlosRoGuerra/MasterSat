@@ -10,6 +10,7 @@ GET  /ailos/lotes/{ticket}         → Consulta status de um lote/carnê
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_roles
@@ -23,31 +24,42 @@ from app.models.ailos_boleto import AilosBoleto
 from app.models.ailos_lote import AilosLote
 from app.models.billing import Billing
 from app.models.client import Client
+from app.models.enums import UserRole
 from app.schemas.ailos import (
     AilosBoletoOut,
+    AilosDesfechoOut,
     AilosGerarBoletoIn,
     AilosGerarLoteIn,
+    AilosJustificativaIn,
     AilosLoteOut,
     AilosLoteStatusOut,
     AilosPagamentoOut,
+    AilosPendenciaOut,
 )
 from app.services.ailos_boletos import (
+    confirmar_baixa_manual,
     consultar_boleto,
     consultar_lote,
+    declarar_nao_registrado,
     gerar_boleto,
     gerar_boleto_lote,
     gerar_carne_lote,
+    metricas_conciliacao,
     parcelas_do_lote,
     registrar_parcela_individual,
     registrar_pendentes_do_lote,
+    resolver_desfecho,
+    resolver_pendencia,
     verificar_pagamento,
 )
+from app.services import titulo_bancario
 from app.services.ailos_client import AilosApiError, AilosError
 from app.services.ailos_validators import AilosValidationError
+from app.services.titulo_bancario import PoliticaBancariaError
 
 router = APIRouter()
 
-_AILOS_EXCEPTIONS = (AilosValidationError, AilosError, AilosApiError)
+_AILOS_EXCEPTIONS = (AilosValidationError, AilosError, AilosApiError, PoliticaBancariaError)
 
 
 def _resolve_billings_and_clients(billing_ids: list[int], db: Session) -> tuple[list[Billing], dict[int, Client]]:
@@ -253,3 +265,126 @@ def registrar_pendentes_endpoint(
     if lote is None:
         raise HTTPException(status_code=404, detail='Lote não encontrado')
     return registrar_pendentes_do_lote(db, lote)
+
+
+# ---------------------------------------------------------------------------
+# Desfecho desconhecido, baixa e pendências (Fase 03 — FIN-02/03/05/06)
+# ---------------------------------------------------------------------------
+
+@router.post('/boletos/{billing_id}/consultar-desfecho', response_model=AilosDesfechoOut)
+def consultar_desfecho_endpoint(
+    billing_id: int,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    """Consulta a Ailos pelo número do documento para resolver um registro
+    com desfecho desconhecido (timeout/5xx/reserva órfã). Não reenvia nada."""
+    _get_billing_or_404(billing_id, db)
+    return AilosDesfechoOut(billing_id=billing_id, **resolver_desfecho(db, billing_id))
+
+
+@router.post('/boletos/{billing_id}/declarar-nao-registrado', response_model=AilosDesfechoOut)
+def declarar_nao_registrado_endpoint(
+    billing_id: int,
+    payload: AilosJustificativaIn,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles(UserRole.ADMIN)),
+):
+    """Saída manual (só administrador, com justificativa no histórico) quando
+    a consulta não resolve e foi conferido no banco que o título não existe."""
+    _get_billing_or_404(billing_id, db)
+    try:
+        declarar_nao_registrado(db, billing_id, user_id=current_user.id, justificativa=payload.justificativa.strip())
+    except PoliticaBancariaError as exc:
+        raise_ailos_error(exc)
+    return AilosDesfechoOut(
+        billing_id=billing_id, resultado='nao_registrado', estado=titulo_bancario.SEM_TITULO,
+        mensagem='Registro declarado como não realizado; a cobrança volta a aceitar emissão.',
+    )
+
+
+@router.post('/boletos/{billing_id}/confirmar-baixa', response_model=AilosBoletoOut)
+def confirmar_baixa_endpoint(
+    billing_id: int,
+    payload: AilosJustificativaIn,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles(UserRole.ADMIN)),
+):
+    """Administrador confirma que baixou o título no internet banking. O
+    caminho normal é automático: a conciliação confirma quando a consulta
+    devolve situação 3 (baixado)."""
+    try:
+        return confirmar_baixa_manual(db, billing_id, user_id=current_user.id, justificativa=payload.justificativa.strip())
+    except PoliticaBancariaError as exc:
+        raise_ailos_error(exc)
+
+
+@router.post('/boletos/{billing_id}/resolver-pendencia', response_model=AilosBoletoOut)
+def resolver_pendencia_endpoint(
+    billing_id: int,
+    payload: AilosJustificativaIn,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles(*ALLOWED_ROLES)),
+):
+    """Encerra uma pendência de conciliação já tratada, com justificativa."""
+    try:
+        return resolver_pendencia(db, billing_id, user_id=current_user.id, justificativa=payload.justificativa.strip())
+    except PoliticaBancariaError as exc:
+        raise_ailos_error(exc)
+
+
+@router.get('/conciliacao')
+def conciliacao_status(
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    """Métricas da conciliação: carteira monitorada, atraso da consulta mais
+    antiga, janela estimada, desfechos desconhecidos, baixas e pendências."""
+    return metricas_conciliacao(db)
+
+
+@router.get('/pendencias', response_model=list[AilosPendenciaOut])
+def listar_pendencias(
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    """Tudo que precisa de ação humana: desfecho desconhecido, baixa pendente
+    no banco e divergência de pagamento — mais antigos primeiro."""
+    rows = (
+        db.query(AilosBoleto, Billing, Client.name)
+        .join(Billing, Billing.id == AilosBoleto.billing_id)
+        .outerjoin(Client, Client.id == func.coalesce(Billing.payer_client_id, Billing.client_id))
+        .filter(or_(
+            AilosBoleto.pendencia.isnot(None),
+            AilosBoleto.baixa_status == 'pendente',
+            AilosBoleto.status_ailos == titulo_bancario.STATUS_DESFECHO_DESCONHECIDO,
+            AilosBoleto.status_ailos.in_(titulo_bancario.STATUS_EM_REGISTRO),
+        ))
+        .order_by(AilosBoleto.id.asc())
+        .limit(1000)
+        .all()
+    )
+    resultado = []
+    for boleto, billing, cliente in rows:
+        estado = titulo_bancario.estado_do_boleto(boleto)
+        if estado == titulo_bancario.EM_REGISTRO and not boleto.pendencia and boleto.baixa_status != 'pendente':
+            continue  # registro recente, ainda dentro do prazo normal
+        resultado.append(AilosPendenciaOut(
+            billing_id=billing.id,
+            nosso_numero=boleto.nosso_numero,
+            status_ailos=boleto.status_ailos,
+            estado=estado,
+            baixa_status=boleto.baixa_status,
+            baixa_solicitada_em=boleto.baixa_solicitada_em,
+            pendencia=boleto.pendencia,
+            pendencia_detalhe=boleto.pendencia_detalhe,
+            pendencia_desde=boleto.pendencia_desde,
+            ultima_consulta_em=boleto.ultima_consulta_em,
+            ultima_consulta_erro=boleto.ultima_consulta_erro,
+            billing_status=billing.status.value,
+            billing_removida=bool(billing.is_deleted),
+            valor=float(billing.amount),
+            vencimento=billing.due_date,
+            cliente=cliente,
+        ))
+    return resultado

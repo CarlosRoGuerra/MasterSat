@@ -22,18 +22,23 @@ from sqlalchemy.orm import Session
 from app.core.limiter import limiter
 
 from app.api.deps import require_roles
+from app.core.permissions import Capability, require_capability, roles_with
 from app.db.session import get_db
 from app.models.billing import Billing
 from app.models.client import Client
 from app.models.contract import Contract
-from app.models.enums import BillingStatus, UserRole
+from app.models.enums import BillingStatus
 from app.models.plan import Plan
 from app.models.tracker import Tracker
 from app.models.vehicle import Vehicle
 
 router = APIRouter()
 
-VIEW_ROLES = (UserRole.ADMIN, UserRole.FINANCIAL, UserRole.OPERATIONAL)
+# Cadastro (clientes/veículos/rastreadores) × financeiro (cobranças,
+# relatório de cobranças, inadimplentes): o arquivo exportado carrega o
+# mesmo dado que /billings e /reports, então exige a mesma capacidade
+# (SEC-01 — antes o operacional baixava aqui o que lá recebia 403).
+VIEW_ROLES = roles_with(Capability.REGISTRY_READ)
 
 
 # Célula de texto começando com um destes é interpretada como fórmula por
@@ -234,7 +239,7 @@ def export_billings(
     date_from: date | None = None,
     date_to: date | None = None,
     db: Session = Depends(get_db),
-    _: object = Depends(require_roles(*VIEW_ROLES)),
+    _: object = Depends(require_capability(Capability.FINANCIAL_READ)),
 ):
     query = db.query(Billing).filter(Billing.is_deleted.is_(False))
     if status:
@@ -365,7 +370,7 @@ def export_billings_report(
     date_to: date | None = None,
     client_id: int | None = None,
     db: Session = Depends(get_db),
-    _: object = Depends(require_roles(*VIEW_ROLES)),
+    _: object = Depends(require_capability(Capability.FINANCIAL_READ)),
 ):
     """
     Relatório de cobranças por período.
@@ -516,7 +521,7 @@ def export_delinquents(
     due_from: date | None = Query(default=None, description='Vencimento a partir de'),
     due_to: date | None = Query(default=None, description='Vencimento até'),
     db: Session = Depends(get_db),
-    _: object = Depends(require_roles(*VIEW_ROLES)),
+    _: object = Depends(require_capability(Capability.FINANCIAL_READ)),
 ):
     """
     Cobranças vencidas, uma linha por cobrança (com valor, vencimento e nosso

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -15,6 +15,7 @@ from app.models.contract import Contract
 from app.models.enums import BillingStatus
 from app.models.vehicle import Vehicle
 from app.services.billing_closure.shared import _apply_client_scope
+from app.services.financial import InstallmentSplitError, split_amount_in_installments
 
 
 def _effective_billing_counts_bulk(db: Session, item_ids: list[int]) -> dict[int, int]:
@@ -114,8 +115,16 @@ def _pending_charge_items(
         client = client_map.get(item.client_id)
         vehicle = vehicle_map.get(item.vehicle_id) if item.vehicle_id else None
         remaining = installments - billing_count
-        total = Decimal(str(item.total_amount))
-        per_installment = (total / installments).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+        # Mesma divisão que generate_item_billings vai gravar: a prévia não
+        # pode prometer um total diferente do que o fechamento cria.
+        try:
+            parcelas = split_amount_in_installments(item.total_amount, installments)
+        except InstallmentSplitError as exc:
+            raise ValueError(
+                f'Lançamento #{item.id} ({item.title}): {exc} Ajuste o lançamento antes do fechamento.'
+            ) from exc
+        per_installment = parcelas[0]
+        restantes = parcelas[billing_count:]
 
         result.append({
             'type': 'servico',
@@ -129,7 +138,7 @@ def _pending_charge_items(
             'generated_count': billing_count,
             'remaining_installments': remaining,
             'per_installment_amount': float(per_installment),
-            'total_remaining': float(per_installment * remaining),
+            'total_remaining': float(sum(restantes, Decimal('0.00'))),
             'start_date': item.start_date,
         })
 

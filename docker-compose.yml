@@ -69,12 +69,13 @@ services:
     volumes: ["./frontend:/app", "/app/node_modules"]
 
   # ─────────────────────────────────────────────────────────────────────────
-  # Serviço de backup automático
-  # Executa pg_dump diariamente às 02:00 e sobe os arquivos para a nuvem.
-  # Configurar no .env:
-  #   BACKUP_KEEP_DAYS=30
-  #   RCLONE_REMOTE=b2:mastersat-backups   (ou s3:bucket, gdrive:pasta, etc.)
-  #   ALERT_WEBHOOK=https://...             (Discord/Slack webhook, opcional)
+  # Arquivo local do volume backup_data (docker-volume-backup).
+  # NÃO é o backup do sistema e NÃO envia nada para a nuvem: só empacota, às
+  # 02:00, o que já está no volume backup_data dentro do próprio container
+  # (/archive, sem volume — some se o container for recriado). O deploy de
+  # produção nem sobe este serviço. O backup verificável (banco + objetos +
+  # manifest + envio externo conferido) é o serviço pg_dump abaixo; ver
+  # backup/README.md.
   # ─────────────────────────────────────────────────────────────────────────
   backup:
     image: ghcr.io/offen/docker-volume-backup:v2
@@ -94,29 +95,44 @@ services:
     depends_on:
       db: { condition: service_healthy }
 
-  # pg_dump dedicado — executa antes do backup acima capturar os arquivos
+  # Backup verificável: banco (snapshot consistente) + objetos do MinIO +
+  # manifest/checksums + envio externo conferido. Ver backup/README.md.
+  #   docker compose --profile backup run --rm pg_dump
+  # Restauração/ensaio (nunca sobre o banco em uso):
+  #   docker compose --profile backup run --rm pg_dump /opt/mastersat-backup/restore.sh ajuda
+  # O nome "pg_dump" foi mantido para o cron já instalado pelo deploy.sh
+  # continuar funcionando.
   pg_dump:
-    image: postgres:16
+    build: { context: ./backup }
+    image: mastersat-backup:latest
     restart: "no"
+    # Credenciais do destino externo (RCLONE_REMOTE + RCLONE_CONFIG_<REMOTO>_*),
+    # webhook e GPG ficam num arquivo SÓ do backup — o .env da aplicação
+    # (com a chave Fernet) não é entregue a este container.
+    env_file:
+      - path: "${BACKUP_ENV_FILE:-./backup/backup.env}"
+        required: false
     environment:
-      PGPASSWORD: "${POSTGRES_PASSWORD:-postgres}"
+      POSTGRES_HOST: db
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-postgres}"
       POSTGRES_USER: "${POSTGRES_USER:-postgres}"
       POSTGRES_DB: "${POSTGRES_DB:-rastreamento}"
+      BACKUP_DIR: /backup
+      BACKUP_KEEP_DAYS: "${BACKUP_KEEP_DAYS:-30}"
+      MASTERSAT_GIT_SHA: "${MASTERSAT_GIT_SHA:-desconhecido}"
+      # Objetos: o rclone lê o bucket direto do MinIO (S3), sem mc.
+      BACKUP_MINIO_SOURCE: "minio_src:${MINIO_BUCKET:-rastreamento}"
+      RCLONE_CONFIG_MINIO_SRC_TYPE: s3
+      RCLONE_CONFIG_MINIO_SRC_PROVIDER: Minio
+      RCLONE_CONFIG_MINIO_SRC_ENDPOINT: http://minio:9000
+      RCLONE_CONFIG_MINIO_SRC_ACCESS_KEY_ID: "${MINIO_ROOT_USER:-minioadmin}"
+      RCLONE_CONFIG_MINIO_SRC_SECRET_ACCESS_KEY: "${MINIO_ROOT_PASSWORD:-minioadmin}"
     volumes:
       - backup_data:/backup
-      - ./backup/backup.sh:/backup.sh:ro
-    entrypoint: >
-      sh -c "
-        export PGPASSWORD=$$PGPASSWORD &&
-        mkdir -p /backup/db &&
-        pg_dump -h db -U $$POSTGRES_USER -d $$POSTGRES_DB --format=custom |
-        gzip -9 > /backup/db/mastersat_db_$$(date +%Y%m%d_%H%M%S).sql.gz &&
-        find /backup/db -name '*.sql.gz' -mtime +${BACKUP_KEEP_DAYS:-30} -delete &&
-        echo 'pg_dump concluído'
-      "
     depends_on:
       db: { condition: service_healthy }
-    profiles: ["backup"]   # execute com: docker compose --profile backup run pg_dump
+      minio: { condition: service_started }
+    profiles: ["backup"]
 
 volumes:
   postgres_data:

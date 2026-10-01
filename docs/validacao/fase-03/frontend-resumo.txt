@@ -1,0 +1,6 @@
+# Frontend — node:20-alpine, cópia do frontend/ do commit 1b14099298e6ab515ef64edad606e91443e6b734 (git archive); node_modules do npm ci (package-lock inalterado)
+node v20.20.2 / npm 10.8.2
+npm run lint       saída 0 — 40 problems (0 errors, 40 warnings)
+npm run typecheck  saída 0
+npm test           saída 0 —  Test Files 23 passed (23)  Tests 189 passed (189) 
+npm run build      saída 0 — Compiled successfully

@@ -8,8 +8,10 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_roles
+from app.core.permissions import Capability, has_capability, roles_with
 from app.db.session import get_db
 from app.models.enums import UserRole
+from app.models.user import User
 from app.services.financial import mark_delinquent_clients
 
 router = APIRouter()
@@ -35,14 +37,18 @@ def run_delinquency_check(
 @router.get('/status')
 def delinquency_status(
     db: Session = Depends(get_db),
-    _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL, UserRole.OPERATIONAL)),
+    current_user: User = Depends(require_roles(*roles_with(Capability.REGISTRY_READ))),
 ):
+    """Quantos clientes estão inadimplentes (o operacional usa para bloqueio
+    e desinstalação). Quantidade e valor dos títulos vencidos são dado
+    financeiro: para perfil sem FINANCIAL_READ voltam null (SEC-01)."""
     from sqlalchemy import func
     from app.models.billing import Billing
     from app.models.client import Client
     from app.models.enums import BillingStatus, ClientStatus
 
-    overdue_billings = (
+    ver_financeiro = has_capability(current_user.role, Capability.FINANCIAL_READ)
+    overdue_billings = None if not ver_financeiro else (
         db.query(
             func.count(Billing.id).label('qtd'),
             func.sum(Billing.amount).label('valor'),
@@ -71,6 +77,6 @@ def delinquency_status(
 
     return {
         'clientes_inadimplentes': delinquent_clients,
-        'cobrancas_vencidas': overdue_billings.qtd or 0,
-        'valor_total_vencido': float(overdue_billings.valor or 0),
+        'cobrancas_vencidas': (overdue_billings.qtd or 0) if ver_financeiro else None,
+        'valor_total_vencido': float(overdue_billings.valor or 0) if ver_financeiro else None,
     }

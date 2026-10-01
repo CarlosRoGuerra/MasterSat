@@ -2,6 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, field_validator, model_validator
 
+from app.core.password_policy import validate_password
 from app.models.enums import UserRole
 
 
@@ -126,17 +127,7 @@ class RegisterClientRequest(BaseModel):
     @field_validator('password')
     @classmethod
     def strong_password(cls, value: str) -> str:
-        if len(value) < 8:
-            raise ValueError('A senha deve ter ao menos 8 caracteres')
-        checks = [
-            any(c.islower() for c in value),
-            any(c.isupper() for c in value),
-            any(c.isdigit() for c in value),
-            any(not c.isalnum() for c in value),
-        ]
-        if not all(checks):
-            raise ValueError('A senha deve conter letra maiúscula, minúscula, número e caractere especial')
-        return value
+        return validate_password(value)
 
     @model_validator(mode='after')
     def passwords_match(self):
@@ -183,17 +174,7 @@ class ResetPasswordRequest(BaseModel):
     @field_validator('new_password')
     @classmethod
     def strong_password(cls, value: str) -> str:
-        if len(value) < 8:
-            raise ValueError('A senha deve ter ao menos 8 caracteres')
-        checks = [
-            any(c.islower() for c in value),
-            any(c.isupper() for c in value),
-            any(c.isdigit() for c in value),
-            any(not c.isalnum() for c in value),
-        ]
-        if not all(checks):
-            raise ValueError('A senha deve conter letra maiúscula, minúscula, número e caractere especial')
-        return value
+        return validate_password(value)
 
     @model_validator(mode='after')
     def passwords_match(self):

@@ -47,7 +47,7 @@ export default function ForgotPasswordPage() {
   return (
     <AuthShell
       title="Esqueci minha senha"
-      subtitle="Informe seu e-mail para gerar um token de redefinição."
+      subtitle="Informe seu e-mail de acesso. Enviaremos um link para você criar uma nova senha."
       roleLabel="Acesso"
     >
       <form onSubmit={handleSubmit} className="space-y-4">
@@ -68,7 +68,7 @@ export default function ForgotPasswordPage() {
           <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-200">
             <p className="font-semibold">Ambiente de desenvolvimento</p>
             <p className="mt-1 break-all">Token: {token}</p>
-            <Link href={`/resetar-senha?token=${token}`} className="mt-3 inline-flex font-semibold text-brand-700 hover:underline dark:text-brand-400">
+            <Link href={`/resetar-senha?token=${encodeURIComponent(token)}`} className="mt-3 inline-flex font-semibold text-brand-700 hover:underline dark:text-brand-400">
               Redefinir agora
             </Link>
           </div>
@@ -81,7 +81,7 @@ export default function ForgotPasswordPage() {
             Voltar ao login
           </Link>
           <Button type="submit" disabled={loading}>
-            {loading ? 'Enviando...' : 'Gerar token'}
+            {loading ? 'Enviando...' : 'Enviar link'}
           </Button>
         </div>
       </form>

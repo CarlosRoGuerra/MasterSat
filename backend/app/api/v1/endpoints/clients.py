@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import require_roles
 from app.core.integrity import raise_integrity_conflict
+from app.core.permissions import Capability, has_capability
 from app.core.security import create_file_access_token, get_password_hash
 from app.core.config import settings
 from app.core.uploads import read_limited, safe_object_name, validate_content_type
@@ -433,15 +434,20 @@ def client_timeline(
 def client_timeline_pdf(
     item_id: int,
     db: Session = Depends(get_db),
-    _: object = Depends(require_roles(*VIEW_ROLES)),
+    current_user: User = Depends(require_roles(*VIEW_ROLES)),
 ):
     client = _get_client_or_404(item_id, db)
+    # Mesma regra da timeline JSON (services/client_timeline.py): contratos e
+    # cobranças só para quem tem FINANCIAL_READ. Sem isto o operacional lia
+    # no PDF os valores que o JSON e /billings lhe negavam (SEC-01). As
+    # consultas nem rodam — nada financeiro chega ao arquivo.
+    ver_financeiro = has_capability(current_user.role, Capability.FINANCIAL_READ)
 
     contracts = db.scalars(
         select(Contract)
         .where(Contract.client_id == item_id, Contract.is_deleted.is_(False))
         .order_by(Contract.created_at.desc())
-    ).all()
+    ).all() if ver_financeiro else []
 
     orders = db.scalars(
         select(ServiceOrder)
@@ -455,7 +461,7 @@ def client_timeline_pdf(
         .where(Billing.client_id == item_id, Billing.is_deleted.is_(False))
         .order_by(Billing.due_date.desc())
         .limit(50)
-    ).all()
+    ).all() if ver_financeiro else []
 
     plan_cache: dict[int, str] = {}
     vehicle_cache: dict[int, str] = {}
@@ -505,6 +511,11 @@ def client_timeline_pdf(
     pdf.setLineWidth(0.5)
     pdf.line(margin, y, page_w - margin, y)
     y -= 20
+
+    if not ver_financeiro:
+        pdf.setFont('Helvetica-Oblique', 9)
+        pdf.drawString(margin, y, 'Contratos e cobranças omitidos: seu perfil não tem acesso a dados financeiros.')
+        y -= 20
 
     if contracts:
         pdf.setFont('Helvetica-Bold', 12)

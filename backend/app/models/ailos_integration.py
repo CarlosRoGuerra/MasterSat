@@ -27,6 +27,9 @@ class AilosIntegration(Base, TimestampMixin):
     conta_digito: Mapped[str | None] = mapped_column(String(4), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default='pending')
     state: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # Prazo do state (AILOS_STATE_TTL_MINUTES). State sem prazo — gravado
+    # antes desta coluna existir — é tratado como expirado no callback.
+    state_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     cooperado_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     cooperado_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     authorized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

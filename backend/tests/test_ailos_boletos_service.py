@@ -50,7 +50,9 @@ def _criar_billing_futuro(db, contrato, due_date=date(2099, 6, 30), title='Plano
         due_date=due_date,
         status=BillingStatus.PENDING,
         billing_type='recorrente',
-        period_label='06/2099',
+        # Um mês por mensalidade do contrato: o índice único de competência
+        # (que o SQLite dos testes agora também tem) recusa dois no mesmo mês.
+        period_label=due_date.strftime('%m/%Y'),
         title=title,
     )
     db.add(b)
@@ -214,15 +216,21 @@ class TestGerarBoleto:
         assert boleto.nosso_numero == '99999999'
         assert mock_requests.request.call_count == 2  # POST (falhou) + GET (recuperou)
 
-    def test_ja_cadastrado_mas_consulta_vazia_propaga_erro(self, db, billing_pendente, cliente):
+    def test_ja_cadastrado_mas_consulta_vazia_fica_desfecho_desconhecido(self, db, billing_pendente, cliente):
+        # Fase 03 (FIN-03): o banco AFIRMOU que o título existe; sem os dados
+        # dele, a cobrança não pode voltar a "erro" (que liberava edição e
+        # nova emissão). Fica bloqueada até a consulta resolver.
         _preencher_endereco(cliente, db)
         erro_400 = _resp(400, json_data={'mensagem': 'Boleto já cadastrado'})
         consulta_vazia = _resp(200, json_data=[])
 
         with patch('app.services.ailos_client.requests') as mock_requests:
             mock_requests.request.side_effect = [erro_400, consulta_vazia]
-            with pytest.raises(ailos_client.AilosApiError):
+            with pytest.raises(ailos_client.AilosDesfechoDesconhecido):
                 gerar_boleto(db, billing_pendente, cliente)
+
+        reserva = db.query(AilosBoleto).filter_by(billing_id=billing_pendente.id).one()
+        assert reserva.status_ailos == 'DESFECHO_DESCONHECIDO'
 
     def test_reexecucao_idempotente_nao_reregistra(self, db, billing_pendente, cliente):
         # Já registrado (tem linha digitável) → re-executar NÃO chama a Ailos de

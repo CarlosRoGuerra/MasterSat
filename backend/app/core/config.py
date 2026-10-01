@@ -20,7 +20,18 @@ class Settings(BaseSettings):
     algorithm: str = 'HS256'
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
+    # Janela (s) em que reapresentar um refresh JÁ rotacionado é tratado como
+    # disputa entre abas (409, sem emitir nada e sem revogar). Depois dela, é
+    # reuso de token vazado: a família inteira é revogada. Ver
+    # docs/seguranca/sessoes-e-credenciais.md.
+    refresh_reuse_grace_seconds: int = 15
     password_reset_expire_minutes: int = 30
+    # Reset por e-mail (SEC-05): no máximo N pedidos por conta na janela;
+    # acima disso nada é emitido (resposta continua a mesma).
+    password_reset_max_per_window: int = 3
+    password_reset_window_minutes: int = 15
+    # Tentativas de envio do e-mail de reset (SMTP do painel), com espera crescente.
+    password_reset_email_attempts: int = 3
     # Produção: sempre False — nunca retorna token de reset no response
     debug_return_reset_token: bool = False
     # Swagger/OpenAPI: desabilitado por padrão (não expor a superfície da API em produção)
@@ -31,8 +42,10 @@ class Settings(BaseSettings):
     # Webhook de alertas (Discord/Slack) — mesmo canal usado pelo backup.
     # Usado p/ avisar quando a sessão do cooperado Ailos morre (emissão parada).
     alert_webhook: str = ''
-    # Admin inicial (criado só se o banco não tiver esse e-mail). Se a senha não
-    # for definida, é gerada uma aleatória e logada uma vez — NUNCA usar senha pública.
+    # Admin inicial: criado só em instalação nova (banco sem nenhum usuário),
+    # com esta senha, que passa pela política de senha. Vazia = nada é criado
+    # e nenhuma senha é gerada/logada; use scripts/reset_admin_senha.py --criar.
+    # Ver services/admin_bootstrap.py (SEC-03).
     initial_admin_email: str = 'admin@rastreamento.local'
     initial_admin_password: str = ''
     database_url: str = 'postgresql+psycopg://postgres:postgres@db:5432/rastreamento'
@@ -73,6 +86,9 @@ class Settings(BaseSettings):
     ailos_client_secret: str = ''
     ailos_developer_key: str = ''
     ailos_callback_url: str = ''
+    # Validade do 'state' do fluxo de autorização do cooperado (FIN-09): o
+    # callback só aceita state emitido há menos que isto, e uma única vez.
+    ailos_state_ttl_minutes: int = 15
     ailos_timeout_seconds: int = 30
     ailos_numero_convenio: str = '102004'
     ailos_default_carteira: int = 1
@@ -92,6 +108,21 @@ class Settings(BaseSettings):
     ailos_cooperado_conta: str = ''
     ailos_cooperado_senha: str = ''
     ailos_token_encryption_key: str = ''
+    # ── Desfecho de registro e conciliação (Fase 03) ─────────────────────────
+    # Reserva REGISTRANDO/PROCESSANDO sem resposta há mais que isto vira
+    # desfecho desconhecido (o processo caiu entre o envio e a resposta).
+    ailos_reserva_orfa_minutos: int = 30
+    # A consulta só pode concluir "não existe no banco" depois deste tempo
+    # desde o envio — antes disso a Ailos pode não ter processado ainda.
+    ailos_ausencia_confirmada_minutos: int = 10
+    # Títulos consultados por execução do worker (1 execução por hora).
+    # Janela de conciliação da carteira ≈ carteira / orçamento horas.
+    ailos_conciliacao_orcamento: int = 300
+    # Alerta quando algum título monitorado está há mais que isto sem consulta.
+    ailos_conciliacao_atraso_alerta_horas: int = 26
+    # Remessa CNAB 240/400 (FIN-07). Desligada: o layout nunca foi homologado
+    # com o banco e não há leitura de retorno. Ligar só em homologação.
+    cnab_remessa_habilitada: bool = False
 
     # ── Integração NFS-e Joinville (Pública / Nota Nacional, SOAP) ────────────
     # Emissão comprovada SEM certificado (homologação aceita RPS sem assinatura);
@@ -175,6 +206,8 @@ class Settings(BaseSettings):
     rate_limit_default: str = '200/minute'
     rate_limit_login: str = '5/minute'
     rate_limit_exports: str = '10/minute'
+    # /auth/forgot-password por IP (o limite por conta é à parte, acima)
+    rate_limit_forgot_password: str = '5/minute'
 
     # Retenção de logs de integração Ailos (request/response mascarados —
     # segredos, CPF/CNPJ, nome e endereço; valores e datas ficam em texto
@@ -197,6 +230,17 @@ class Settings(BaseSettings):
     sgr_timeout_seconds: int = 30
     # Teto de clientes consultados pela POC de migração — nunca usar em lote real.
     sgr_migration_limit: int = 10
+    # Downloads de PDF de boleto / XML de NFS-e devolvidos pela origem (SGR-06).
+    # Só HTTPS, só para estes hosts (separados por vírgula; ".dominio.com"
+    # libera os subdomínios) e nunca para IP privado/loopback/link-local —
+    # a checagem se repete a cada redirect. O host de SGR_BASE_URL entra
+    # sempre. Host fora da lista deixa o arquivo "bloqueado" no outbox
+    # (sgr_arquivos), para ser baixado quando o host for aprovado.
+    sgr_download_hosts: str = ''
+    sgr_download_max_bytes: int = 10 * 1024 * 1024
+    sgr_download_max_redirects: int = 3
+    # Tentativas de download por arquivo antes de exigir ação humana.
+    sgr_download_max_tentativas: int = 5
 
     # Retenção de audit_logs (trilha de auditoria — SEC-06). Não guarda
     # payload, só quem fez o quê: user_id/user_name/user_role, method, path,

@@ -248,7 +248,11 @@ export default function UsersPage() {
                 </Select>
               </FormField>
 
-              <FormField label={selected ? 'Nova senha (opcional)' : 'Senha inicial'} required={!selected}>
+              <FormField
+                label={selected ? 'Nova senha (opcional)' : 'Senha inicial'}
+                required={!selected}
+                hint="Mínimo de 8 caracteres, com maiúscula, minúscula, número e caractere especial."
+              >
                 <Input
                   type="password"
                   value={form.password}

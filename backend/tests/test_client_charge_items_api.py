@@ -162,7 +162,19 @@ class TestDeleteChargeItem:
         r = http.delete(f"{PREFIX}/99999")
         assert r.status_code == 404
 
-    def test_operational_cannot_delete(self, http_op, cliente, contrato):
-        item_id = self._create(http, cliente, contrato)
-        r = http_op.delete(f"{PREFIX}/{item_id}")
+    def test_operational_cannot_delete(self, http_op, db, cliente, contrato):
+        # O item nasce direto no banco: os clientes HTTP de teste compartilham
+        # o mesmo override de usuário, então criar via `http` (admin) no mesmo
+        # teste faria a chamada abaixo rodar como admin também.
+        from app.models.client_charge_item import ClientChargeItem
+        item = ClientChargeItem(
+            client_id=cliente.id, contract_id=contrato.id, title="Cobrança de teste",
+            quantity=1, unit_price=Decimal("150.00"), total_amount=Decimal("150.00"),
+            installment_count=1, start_date=date(2025, 6, 1), active=True,
+        )
+        db.add(item)
+        db.commit()
+        r = http_op.delete(f"{PREFIX}/{item.id}")
         assert r.status_code == 403
+        db.refresh(item)
+        assert item.is_deleted is False

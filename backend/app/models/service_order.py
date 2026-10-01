@@ -1,11 +1,12 @@
 from datetime import datetime
 from sqlalchemy import DateTime, Enum, ForeignKey, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
-from app.models.base import SoftDeleteMixin, TimestampMixin
+from app.models.base import SoftDeleteMixin, TimestampMixin, trigram_index
 from app.models.enums import OrderPriority, OrderStatus, OrderType
 from app.db.session import Base
 class ServiceOrder(Base, TimestampMixin, SoftDeleteMixin):
     __tablename__='service_orders'
+    __table_args__=(trigram_index('ix_service_orders_number_trgm', 'number'),)
     id: Mapped[int]=mapped_column(primary_key=True, index=True)
     number: Mapped[str]=mapped_column(String(30), unique=True, index=True)
     type: Mapped[OrderType]=mapped_column(Enum(OrderType))
@@ -14,7 +15,8 @@ class ServiceOrder(Base, TimestampMixin, SoftDeleteMixin):
     # sa.Enum(PyEnumClass) grava .name no Postgres por padrão (confirmado nos
     # enums já existentes: orderstatus guarda 'OPEN', não 'aberta').
     priority: Mapped[OrderPriority]=mapped_column(Enum(OrderPriority), default=OrderPriority.NORMAL, nullable=False, server_default=OrderPriority.NORMAL.name)
-    client_id: Mapped[int]=mapped_column(ForeignKey('clients.id'))
+    # index: migration a1c9e4f2b6d3 (linha do tempo do cliente).
+    client_id: Mapped[int]=mapped_column(ForeignKey('clients.id'), index=True)
     vehicle_id: Mapped[int|None]=mapped_column(ForeignKey('vehicles.id'), nullable=True)
     tracker_id: Mapped[int|None]=mapped_column(ForeignKey('trackers.id'), nullable=True)
     technician_id: Mapped[int|None]=mapped_column(ForeignKey('users.id'), nullable=True)

@@ -1,0 +1,3 @@
+# comando-base do prompt (backend): python -m pytest tests/test_auth_api.py tests/test_security_hardening.py tests/test_users_api.py tests/test_exports_api.py tests/test_ailos_connect_callback.py -q
+FAILED tests/test_auth_api.py::TestRegisterClient::test_always_returns_403
+================= 1 failed, 130 passed, 32 warnings in 10.34s ==================

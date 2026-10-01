@@ -1,0 +1,24 @@
+# SHA: 1ad34eb58c0ea4dbbd5f9bacd2ce145c5fd9be3c — backend/ montado com .env vazio; TZ=America/Sao_Paulo; PostgreSQL 16 descartável (rede docker --internal f04-net)
+Python 3.12.14
+alembic 1.13.2 sqlalchemy 2.0.35 psycopg 3.2.1 fastapi 0.142.2 pydantic 2.9.2 requests 2.33.0 lxml 5.3.0
+
+$ python -m pytest tests/test_sgr_client.py tests/test_sgr_poc.py tests/test_sgr_importer.py tests/test_sgr_mapping.py tests/test_sgr_normalize.py tests/test_sgr_report.py -q
+======================= 177 passed, 7 warnings in 18.79s =======================
+
+$ python -m pytest tests/test_fase04_*.py tests/test_sgr_config.py tests/test_sgr_masking.py -q
+======================= 104 passed, 7 warnings in 10.62s =======================
+
+$ python -m pytest tests -q --junitxml=/tmp/junit.xml
+========== 38 failed, 2276 passed, 144 warnings in 172.98s (0:02:52) ===========
+$ python scripts/checar_baseline_testes.py /tmp/junit.xml
+Executados: 2314  falhas: 38  conhecidas: 38  skips: 0
+BASELINE OK — só falhas conhecidas e triadas
+exit=0
+
+$ python -m pytest tests -q -m postgres
+========= 52 passed, 2262 deselected, 11 warnings in 93.02s (0:01:33) ==========
+
+$ DATABASE_URL=.../f04check python -m alembic upgrade head && python -m alembic check
+INFO  [alembic.runtime.migration] Fase 04: 0 cobrança(s) importada(s) do SGR sem documento de origem registrado — rode scripts/sgr_backfill.py (simulação) para o relatório de reconstrução.
+No new upgrade operations detected.
+exit=0

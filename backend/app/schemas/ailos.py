@@ -50,6 +50,10 @@ class AilosBoletoOut(BaseModel):
     pix_emv: str | None = None
     created_at: datetime
     updated_at: datetime
+    # Fase 03: baixa do título no banco e pendência de conciliação.
+    baixa_status: str | None = None
+    pendencia: str | None = None
+    ultima_consulta_em: datetime | None = None
 
     model_config = {'from_attributes': True}
 
@@ -61,6 +65,40 @@ class AilosPagamentoOut(BaseModel):
     mensagem: str
     data_pagamento: date | None = None
     valor_pago: float | None = None
+    # Divergência registrada para revisão (ex.: pagamento_divergente).
+    pendencia: str | None = None
+    # True só quando esta consulta quitou a cobrança.
+    quitada: bool = False
+
+
+class AilosDesfechoOut(BaseModel):
+    billing_id: int
+    resultado: str      # registrado | nao_registrado | aguardar | indisponivel | sem_pendencia
+    estado: str
+    mensagem: str
+
+
+class AilosJustificativaIn(BaseModel):
+    justificativa: str = Field(min_length=3, max_length=500)
+
+
+class AilosPendenciaOut(BaseModel):
+    billing_id: int
+    nosso_numero: str | None = None
+    status_ailos: str | None = None
+    estado: str
+    baixa_status: str | None = None
+    baixa_solicitada_em: datetime | None = None
+    pendencia: str | None = None
+    pendencia_detalhe: dict | None = None
+    pendencia_desde: datetime | None = None
+    ultima_consulta_em: datetime | None = None
+    ultima_consulta_erro: str | None = None
+    billing_status: str
+    billing_removida: bool
+    valor: float
+    vencimento: date
+    cliente: str | None = None
 
 
 class AilosLoteOut(BaseModel):

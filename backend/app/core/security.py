@@ -2,12 +2,31 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
-from jose import JWTError, jwt
+import jwt
+from jwt import PyJWTError as JWTError
 from passlib.context import CryptContext
 
 from app.core.config import settings
 
 pwd_context = CryptContext(schemes=['bcrypt'], deprecated='auto')
+
+
+def decode_token(token: str) -> dict[str, Any]:
+    """Decodifica e valida um JWT nosso (assinatura, algoritmo permitido, exp).
+
+    Única porta de entrada de decodificação (deps, auth, auditoria, links de
+    documento). PyJWT substituiu o python-jose (DEP-01); o formato HS256 é o
+    mesmo, então tokens emitidos antes continuam válidos. 'iat' futuro não é
+    recusado — paridade com o python-jose e sem derrubar sessões num ajuste
+    de relógio; o 'iat' segue sendo usado no corte de token_revogado.
+    Levanta JWTError.
+    """
+    return jwt.decode(
+        token,
+        settings.secret_key,
+        algorithms=[settings.algorithm],
+        options={'verify_iat': False},
+    )
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -61,8 +80,19 @@ def token_revogado(payload: dict[str, Any], tokens_valid_from: datetime | None) 
     return emitido_em < corte
 
 
-def create_access_token(subject: str, name: str | None = None, role: str | None = None) -> str:
+def create_access_token(
+    subject: str,
+    name: str | None = None,
+    role: str | None = None,
+    session_id: str | None = None,
+) -> str:
+    """Access token (30 min). 'sid' é a família do refresh token do mesmo
+    login: get_current_user recusa o access cuja sessão foi revogada (logout,
+    reuso detectado, troca de senha). Sem isto o logout só derrubava o
+    refresh e o access copiado seguia valendo até expirar (SEC-06)."""
     extra: dict[str, str] = {}
+    if session_id:
+        extra['sid'] = session_id
     if name:
         extra['name'] = name
     if role:
@@ -100,7 +130,7 @@ def create_file_access_token(document_id: int, expires_hours: int = 2) -> str:
 
 def decode_file_access_token(token: str) -> int:
     try:
-        payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+        payload = decode_token(token)
         if payload.get('type') != 'file_access':
             raise ValueError('invalid token type')
         subject = payload.get('sub')

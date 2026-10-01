@@ -1,0 +1,5 @@
+# Comando-base da auditoria (em backend/), SHA 1ad34eb, container mastersat-f01-test:new, Python 3.12.14, .env vazio
+python -m pytest tests/test_sgr_client.py tests/test_sgr_poc.py tests/test_sgr_importer.py tests/test_sgr_mapping.py tests/test_sgr_normalize.py tests/test_sgr_report.py -q
+=> 177 passed (saída completa em backend-suite.txt)
+# CLI contra API simulada: NÃO EXECUTADO (o script instancia o SGRClient real); fluxo coberto por test_fase04_postgres e ensaio_rollback.py
+# MinIO descartável: NÃO EXECUTADO (storage é dublê nos testes e nas provas)

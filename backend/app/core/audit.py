@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from jose import JWTError, jwt
+from app.core.security import JWTError, decode_token
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.core.client_ip import client_ip_from_scope
@@ -232,11 +232,7 @@ class AuditMiddleware:
         token = auth_header[7:]
 
         try:
-            payload = jwt.decode(
-                token,
-                settings.secret_key,
-                algorithms=[settings.algorithm],
-            )
+            payload = decode_token(token)
             if payload.get('type') != 'access':
                 return
         except JWTError:

@@ -1,30 +1,27 @@
 import logging
-import secrets
 import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from sqlalchemy import inspect, or_, text
-from sqlalchemy.exc import IntegrityError
 
 from app.api.v1.api import api_router
 from app.core.config import settings
 from app.core.limiter import limiter
-from app.core.security import get_password_hash
 from app.db.session import SessionLocal, engine
-from app.models import ailos_api_log, ailos_boleto, ailos_client_token, ailos_integration, ailos_lote, ailos_retorno_arquivo, audit_log, billing, billing_change_log, billing_charge_item, client, client_charge_item, closure_job, contract, document, integration_log, multiportal_outbox, nfse_certificado, nfse_lote, nfse_nota, password_reset_token, payable, plan, refresh_token, service_order, service_order_status_log, service_product, system_setting, tracker, tracker_history, uninstall_event, user, vehicle  # noqa: F401 — side-effect imports that register models with SQLAlchemy Base
+from app.models import ailos_api_log, ailos_boleto, ailos_client_token, ailos_integration, ailos_lote, ailos_retorno_arquivo, audit_log, billing, billing_adjustment, billing_change_log, billing_charge_item, client, client_charge_item, closure_job, cnab_remessa, contract, document, integration_log, multiportal_outbox, nfse_certificado, nfse_lote, nfse_nota, password_reset_token, payable, payable_change_log, plan, refresh_token, service_order, service_order_status_log, service_product, sgr_migracao, system_setting, tracker, tracker_history, uninstall_event, user, vehicle  # noqa: F401 — side-effect imports that register models with SQLAlchemy Base
 from app.core.audit import AuditMiddleware
 from app.core.body_limit import MaxBodySizeMiddleware
 from app.core.forwarded_proto import ForwardedProtoMiddleware
-from app.models.enums import UserRole
-from app.models.user import User
+from app.core.validation_errors import validation_exception_handler
 from app.services.storage import ensure_bucket
 
 # /docs, /redoc e /openapi.json só ficam expostos se ENABLE_DOCS=true (dev).
@@ -44,6 +41,8 @@ app.add_middleware(ForwardedProtoMiddleware)
 # ── Rate limiting ─────────────────────────────────────────────────────────────
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+# 422 sem ecoar senha/token recebidos (ver core/validation_errors.py)
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_middleware(SlowAPIMiddleware)
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
@@ -89,22 +88,27 @@ def _apply_database_migrations() -> None:
     cfg = Config(str(BACKEND_DIR / 'alembic.ini'))
     cfg.set_main_option('script_location', str(BACKEND_DIR / 'alembic'))
 
+    from app.db.legacy_schema import diagnosticar_schema_legado, tem_schema_legado
+
     with engine.connect() as conn:
         current_rev = MigrationContext.configure(conn).get_current_revision()
-        schema_already_exists = inspect(conn).has_table('users')
-        has_refresh_tokens = inspect(conn).has_table('refresh_tokens')
+        diagnostico = (
+            diagnosticar_schema_legado(conn)
+            if current_rev is None and tem_schema_legado(conn) else None
+        )
 
-    if current_rev is None and schema_already_exists:
-        # A baseline não continha refresh_tokens. Alguns ambientes legados
-        # podem tê-la recebido depois por create_all; nesse caso seu schema já
-        # corresponde à revisão seguinte. Em ambos os casos, o upgrade abaixo
-        # ainda executa todas as revisões realmente pendentes.
-        legacy_revision = 'e0905f77f744' if has_refresh_tokens else '96f61a589162'
-        command.stamp(cfg, legacy_revision)
+    if diagnostico is not None:
+        # Banco pré-Alembic: só carimba se o schema contém tudo o que a
+        # revisão legada cria e nada que migrations posteriores criam (DB-03).
+        # Antes bastava existir a tabela users — um banco parcialmente
+        # atualizado era dado como completo e quebrava só em runtime.
+        if diagnostico.revisao is None:
+            raise RuntimeError(diagnostico.relatorio())
+        command.stamp(cfg, diagnostico.revisao)
         logging.getLogger('uvicorn.error').warning(
-            'Alembic: banco pré-existente (sem alembic_version) carimbado como %s; '
-            'aplicando migrations posteriores.',
-            legacy_revision,
+            'Alembic: banco pré-existente (sem alembic_version) conferido com o manifesto '
+            'e carimbado como %s; aplicando migrations posteriores.',
+            diagnostico.revisao,
         )
 
     command.upgrade(cfg, 'head')
@@ -526,49 +530,15 @@ def ensure_schema_updates():
 
 
 def _seed_admin() -> None:
-    """
-    Cria o admin inicial apenas se ainda não existir (banco vazio).
+    """Provisiona o admin inicial SÓ em instalação nova (banco sem usuários),
+    com INITIAL_ADMIN_PASSWORD. Não reativa conta excluída e não escreve
+    senha em log — ver services/admin_bootstrap.py (SEC-03)."""
+    from app.db import session as db_session
+    from app.services.admin_bootstrap import seed_initial_admin
 
-    Sem senha pública: usa INITIAL_ADMIN_PASSWORD do .env ou gera uma aleatória,
-    logada UMA vez para troca no primeiro acesso. Tolerante a corrida entre
-    workers (IntegrityError no e-mail único).
-    """
-    db = SessionLocal()
+    db = db_session.SessionLocal()
     try:
-        email = settings.initial_admin_email
-        existing = db.query(User).filter(User.email == email).first()
-        if existing and not existing.is_deleted:
-            return
-        senha = settings.initial_admin_password or secrets.token_urlsafe(16)
-        if existing and existing.is_deleted:
-            # O e-mail é UNIQUE: se o admin inicial foi soft-deletado, o registro
-            # apagado continua ocupando o e-mail e um INSERT novo nunca passaria
-            # (cai no IntegrityError abaixo e o bootstrap trava pra sempre).
-            # Reativa em vez de tentar recriar.
-            existing.is_deleted = False
-            existing.active = True
-            existing.password_hash = get_password_hash(senha)
-            db.commit()
-            logging.getLogger('uvicorn.error').warning(
-                'ADMIN INICIAL estava soft-deletado — reativado: %s — senha gerada: %s — TROQUE no primeiro acesso.',
-                email, senha,
-            )
-            return
-        db.add(User(
-            name='Administrador',
-            email=email,
-            password_hash=get_password_hash(senha),
-            role=UserRole.ADMIN,
-            active=True,
-        ))
-        db.commit()
-        if not settings.initial_admin_password:
-            logging.getLogger('uvicorn.error').warning(
-                'ADMIN INICIAL criado: %s — senha gerada: %s — TROQUE no primeiro acesso.',
-                email, senha,
-            )
-    except IntegrityError:
-        db.rollback()  # outro worker criou primeiro
+        seed_initial_admin(db)
     finally:
         db.close()
 
@@ -694,10 +664,28 @@ def _ailos_baixa_automatica():
                     _alerta_admin('✅ Conciliação Ailos NORMALIZADA — baixa de boletos pagos voltou.', logger)
                     ja_alertado = False
                 falhas_seguidas = 0
-                if res.get('baixados'):
-                    logger.info(
-                        'Conciliação Ailos: %s baixado(s) de %s consultado(s).',
-                        res['baixados'], res['consultados'],
+                # Métricas de cada rodada (FIN-05): progresso da carteira,
+                # erros individuais e atraso da consulta mais antiga.
+                logger.info(
+                    'Conciliação Ailos: %s consultado(s), %s baixado(s), %s erro(s), %s desfecho(s) '
+                    'resolvido(s); carteira %s, nunca consultados %s, atraso máx. %sh, janela ~%sh.',
+                    res.get('consultados'), res.get('baixados'), res.get('erros'),
+                    res.get('desfechos_resolvidos'), res.get('carteira_monitorada'),
+                    res.get('nunca_consultados'), res.get('atraso_max_horas'),
+                    res.get('janela_estimada_horas'),
+                )
+                if res.get('pendencias_novas'):
+                    _alerta_admin(
+                        f'⚠ Conciliação Ailos: {res["pendencias_novas"]} pendência(s) nova(s) '
+                        '(pagamento divergente, título pago em cobrança cancelada/removida ou baixado '
+                        'com cobrança aberta). Veja Financeiro → Ailos → Pendências.',
+                        logger,
+                    )
+                if res.get('alerta_atraso'):
+                    logger.warning(
+                        'Conciliação Ailos atrasada: título sem consulta há %sh (limite %sh). '
+                        'Aumente AILOS_CONCILIACAO_ORCAMENTO ou verifique erros individuais.',
+                        res.get('atraso_max_horas'), settings.ailos_conciliacao_atraso_alerta_horas,
                     )
         except Exception as exc:  # noqa: BLE001 — conciliação nunca pode derrubar o worker
             falhas_seguidas += 1

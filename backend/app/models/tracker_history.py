@@ -13,8 +13,9 @@ class TrackerHistory(Base, TimestampMixin):
     action: Mapped[str] = mapped_column(String(40), index=True)
     previous_vehicle_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     new_vehicle_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    previous_client_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    new_client_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # index: migration a1c9e4f2b6d3 (linha do tempo do cliente).
+    previous_client_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    new_client_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     previous_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
     new_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
     event_date: Mapped[Date | None] = mapped_column(Date, nullable=True)

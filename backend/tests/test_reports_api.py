@@ -44,9 +44,12 @@ class TestRevenueReport:
     chaves em ingles), entao passavam a impressao de cobertura sem exercitar
     nada."""
 
-    def _billing(self, db, contrato, *, amount, due, status, paid=None):
+    def _billing(self, db, contrato, *, amount, due, status, paid=None, com_contrato=True):
+        # com_contrato=False: boleto único do fechamento, que não pertence a um
+        # contrato só. Duas mensalidades do MESMO contrato no mesmo mês o índice
+        # de competência recusa (canceladas inclusive).
         b = Billing(
-            contract_id=contrato.id,
+            contract_id=contrato.id if com_contrato else None,
             client_id=contrato.client_id,
             amount=Decimal(str(amount)),
             due_date=due,
@@ -74,7 +77,7 @@ class TestRevenueReport:
         """Regressao: canceladas somavam no total emitido. Como a consolidacao
         em boleto unico CANCELA as cobrancas originais, cada cliente com boleto
         unico era contado duas vezes — a receita aparecia inflada."""
-        self._billing(db, contrato, amount=100, due=date(2025, 3, 10), status=BillingStatus.PENDING)
+        self._billing(db, contrato, amount=100, due=date(2025, 3, 10), status=BillingStatus.PENDING, com_contrato=False)
         self._billing(db, contrato, amount=999, due=date(2025, 3, 15), status=BillingStatus.CANCELED)
 
         r = http.get(PREFIX + "/revenue", params={"year": 2025})
@@ -83,7 +86,7 @@ class TestRevenueReport:
         assert totais["total_aberto"] == pytest.approx(100.0)
 
     def test_cancelada_nao_distorce_taxa_de_recebimento(self, http, db, contrato):
-        self._billing(db, contrato, amount=100, due=date(2025, 3, 10), status=BillingStatus.PAID)
+        self._billing(db, contrato, amount=100, due=date(2025, 3, 10), status=BillingStatus.PAID, com_contrato=False)
         self._billing(db, contrato, amount=900, due=date(2025, 3, 11), status=BillingStatus.CANCELED)
 
         totais = http.get(PREFIX + "/revenue", params={"year": 2025}).json()["totais"]

@@ -1,0 +1,15 @@
+# SHA: db645310488aa710c0f4b7e0f059fc4414028cdd — backend/ copiado sem .env; PostgreSQL 16 descartável (rede docker --internal)
+Python 3.12.14
+alembic 1.13.2 sqlalchemy 2.0.35 psycopg 3.2.1
+
+$ python -m alembic upgrade head
+exit=0
+INFO  [alembic.runtime.migration] Running upgrade b3f8a1c9d2e7 -> d9e4f1a7b2c5, Fase 01: consumo único de refresh/reset e prazo do state Ailos
+INFO  [alembic.runtime.migration] Running upgrade d9e4f1a7b2c5 -> e5c2a9d71f04, Fase 02: competência canônica, substituição e integridade financeira
+
+$ python -m alembic check
+exit=0
+No new upgrade operations detected.
+
+$ python -m pytest tests/test_billings_concurrency_guards.py tests/test_database_concurrency_postgres.py tests/test_financial_decimal_precision.py tests/test_billing_closure_service.py -q
+======================= 113 passed, 8 warnings in 13.80s =======================

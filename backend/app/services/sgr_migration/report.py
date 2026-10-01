@@ -30,9 +30,10 @@ KNOWN_LIMITATIONS = [
     'real (a doc do fornecedor não traz exemplo de resposta do primeiro e mostra um exemplo errado '
     'no segundo). O domínio de situações é observado da amostra — valores fora dos 10 clientes '
     'lidos podem existir e aparecerão como "situação sem mapeamento conhecido".',
-    'O IMEI do rastreador exige cruzar /buscar_vinculo com /buscar_rastreador pela placa; o índice '
-    'é paginado até 15 páginas de 200. Numa base maior que ~3.000 rastreadores, os excedentes '
-    'ficariam sem IMEI e seriam sinalizados no relatório.',
+    'O IMEI do rastreador exige cruzar /buscar_vinculo com /buscar_rastreador pela placa. Desde a '
+    'Fase 04 toda coleção é paginada até provar o fim (página vazia depois da última) e o manifesto '
+    '`coletas` registra páginas/registros de cada uma; índice de rastreadores incompleto interrompe '
+    'a leitura em vez de deixar IMEI ausente.',
 ]
 
 

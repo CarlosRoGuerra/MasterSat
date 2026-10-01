@@ -282,6 +282,9 @@ class TestRegistrarParcelaEPendentesEndpoints:
         # os testes — independente de o que este teste está exercitando.
         monkeypatch.setattr(ailos_client, 'get_valid_client_token', lambda db: 'client-token')
         monkeypatch.setattr(ailos_client, 'get_valid_cooperado_token', lambda db: 'coop-token')
+        # A URL base vinha do .env de quem rodava a suíte; sem ela o request
+        # (mockado) nem é montado e a resposta é 400 "URL base não configurada".
+        monkeypatch.setattr(settings, 'ailos_gateway_base_url', 'https://gateway.ailos.invalid')
 
     def _boleto_response(self, billing_id, linha='LD-X'):
         return {

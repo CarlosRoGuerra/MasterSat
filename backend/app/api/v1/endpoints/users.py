@@ -7,11 +7,22 @@ from sqlalchemy.orm import Session
 from app.api.deps import require_roles
 from app.core.integrity import raise_integrity_conflict
 from app.db.session import get_db
+from app.models.refresh_token import RefreshToken
 from app.models.user import User
 from app.models.enums import UserRole
 from app.schemas.user import UserCreate, UserOut, UserUpdate
 from app.core.security import get_password_hash
 router = APIRouter()
+
+
+def _encerrar_sessoes(db: Session, user_id: int) -> None:
+    """Revoga todas as sessões (famílias de refresh) do usuário. Com o 'sid'
+    no access token (SEC-06), isto derruba também os access já emitidos —
+    sem depender da resolução de 1 s do corte por tokens_valid_from."""
+    db.query(RefreshToken).filter(
+        RefreshToken.user_id == user_id,
+        RefreshToken.revoked_at.is_(None),
+    ).update({'revoked_at': datetime.now(timezone.utc)}, synchronize_session=False)
 
 _USER_INTEGRITY_MESSAGES = {'uq_users_email_lower': 'E-mail já cadastrado'}
 _USER_SQLITE_SIGNATURES = {
@@ -41,6 +52,7 @@ def create_item(payload: UserCreate, db: Session = Depends(get_db), _: object = 
             setattr(existing, key, value)
         existing.is_deleted = False
         existing.tokens_valid_from = datetime.now(timezone.utc)
+        _encerrar_sessoes(db, existing.id)
         obj = existing
     else:
         obj = User(**data)
@@ -67,11 +79,14 @@ def update_item(item_id: int, payload: UserUpdate, db: Session = Depends(get_db)
     obj = db.get(User, item_id)
     if not obj or obj.is_deleted: raise HTTPException(status_code=404, detail='Registro não encontrado')
     data = payload.model_dump(exclude_unset=True)
+    if data.get('password') is None:
+        data.pop('password', None)  # null = manter a senha atual
     if 'password' in data:
         data['password_hash'] = get_password_hash(data.pop('password'))
         # Mesma intencao do /reset-password: a senha nova tem de expulsar quem
         # ja estava dentro com um token antigo.
         data['tokens_valid_from'] = datetime.now(timezone.utc)
+        _encerrar_sessoes(db, obj.id)
 
     for key, value in data.items(): setattr(obj, key, value)
     try:

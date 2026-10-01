@@ -1,0 +1,41 @@
+# python -m pytest tests -q (backend, imagem de teste = requirements.txt + requirements-test.txt, Python 3.12.14, PostgreSQL 16 descartável)
+# SHA: ddfe47af6ebca90ec4957250d8ee4604c926cc46
+FAILED tests/test_auth_api.py::TestRegisterClient::test_always_returns_403
+FAILED tests/test_billings_api.py::TestListBillings::test_operational_can_list
+FAILED tests/test_client_charge_items_api.py::TestListChargeItems::test_operational_can_list
+FAILED tests/test_client_charge_items_api.py::TestCreateChargeItem::test_create_with_auto_billing
+FAILED tests/test_client_charge_items_api.py::TestCreateChargeItem::test_create_installments
+FAILED tests/test_client_charge_items_api.py::TestUpdateChargeItem::test_update_nonexistent_returns_404
+FAILED tests/test_contracts_api.py::TestCreateContrato::test_generates_billings_by_default
+FAILED tests/test_contracts_api.py::TestCreateContrato::test_billing_cycles_out_of_range_422
+FAILED tests/test_contracts_api.py::TestGenerateBillings::test_generates_billings
+FAILED tests/test_contracts_api.py::TestGenerateBillings::test_default_12_months
+FAILED tests/test_plans_api.py::TestListPlans::test_filter_active_only
+FAILED tests/test_plans_api.py::TestListPlans::test_operational_can_list
+FAILED tests/test_plans_api.py::TestUpdatePlan::test_update_nonexistent_returns_404
+FAILED tests/test_reports_api.py::TestDelinquentsReport::test_returns_list
+FAILED tests/test_reports_api.py::TestDelinquentsReport::test_includes_delinquent_client
+FAILED tests/test_reports_api.py::TestDelinquentsReport::test_structure
+FAILED tests/test_reports_api.py::TestClientStatement::test_operational_can_access
+FAILED tests/test_reports_api.py::TestExecutiveSummary::test_contracts_by_plan_included
+FAILED tests/test_schemas_contract.py::TestContractCreateBillingCycles::test_default_cycles_is_12
+FAILED tests/test_schemas_contract.py::TestContractCreateBillingCycles::test_cycles_1_accepted
+FAILED tests/test_schemas_contract.py::TestContractCreateBillingCycles::test_cycles_60_accepted
+FAILED tests/test_schemas_contract.py::TestContractCreateBillingCycles::test_cycles_0_rejected
+FAILED tests/test_schemas_contract.py::TestContractCreateBillingCycles::test_cycles_61_rejected
+FAILED tests/test_schemas_contract.py::TestContractCreateBillingCycles::test_cycles_negative_rejected
+FAILED tests/test_schemas_contract.py::TestContractCreateDefaults::test_auto_generate_billings_default_true
+FAILED tests/test_schemas_tracker.py::TestTrackerLinkPayload::test_valid_payload
+FAILED tests/test_schemas_tracker.py::TestTrackerLinkPayload::test_billing_cycles_min
+FAILED tests/test_schemas_tracker.py::TestTrackerLinkPayload::test_billing_cycles_max
+FAILED tests/test_schemas_tracker.py::TestTrackerLinkPayload::test_billing_cycles_zero_rejected
+FAILED tests/test_schemas_tracker.py::TestTrackerLinkPayload::test_billing_cycles_above_max_rejected
+FAILED tests/test_schemas_tracker.py::TestTrackerLinkPayload::test_billing_modality_carne
+FAILED tests/test_schemas_tracker.py::TestTrackerLinkPayload::test_installation_fee_positivo
+FAILED tests/test_schemas_tracker.py::TestTrackerLinkPayload::test_installation_fee_negativo_rejeitado
+FAILED tests/test_service_products_api.py::TestListServiceProducts::test_filter_auto_uninstall
+FAILED tests/test_service_products_api.py::TestListServiceProducts::test_operational_can_list
+FAILED tests/test_service_products_api.py::TestUpdateServiceProduct::test_update_nonexistent_returns_404
+FAILED tests/test_trackers_api.py::TestLinkVeiculo::test_link_with_plan_generates_billings
+FAILED tests/test_trackers_api.py::TestLinkVeiculo::test_link_sem_prorata_gera_exato
+========== 38 failed, 1995 passed, 144 warnings in 100.26s (0:01:40) ===========

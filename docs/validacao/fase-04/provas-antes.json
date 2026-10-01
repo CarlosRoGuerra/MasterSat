@@ -1,0 +1,49 @@
+{
+  "SGR-01": {
+    "documento_origem": 80.0,
+    "soma_cobrancas_mastersat": 100.0,
+    "cobrancas": [
+      100.0
+    ]
+  },
+  "SGR-02": {
+    "origem_rodada_2": "BAIXADO",
+    "status_mastersat_rodada_2": "PENDING",
+    "payment_date": null
+  },
+  "SGR-03": {
+    "cobrancas": 1,
+    "documentos_apos_rodada_2": 0,
+    "tentativas_de_download": 1
+  },
+  "SGR-04": {
+    "contratos": 2,
+    "contratos_com_cliente_diferente_do_dono": 1
+  },
+  "SGR-05": {
+    "veiculos_na_origem": 201,
+    "veiculos_coletados": 200
+  },
+  "SGR-06": {
+    "urls_requisitadas": [
+      "https://boletos.exemplo/9302.pdf",
+      "https://boletos.exemplo/9301.pdf",
+      "https://interno.exemplo/latest/meta-data"
+    ],
+    "documentos_gravados": 2,
+    "endereco_interno_acessado": true
+  },
+  "SGR-07": {
+    "rodada_1": "RuntimeError",
+    "objetos_gravados": 2,
+    "chaves_distintas": 2,
+    "documentos": 1,
+    "objetos_orfaos": 1
+  },
+  "dry-run": {
+    "clientes": 0,
+    "cobrancas": 0,
+    "uploads": 0,
+    "requisicoes": 0
+  }
+}

@@ -1,0 +1,106 @@
+== Backup completo ==
+ok   - backup com banco, objetos e envio externo (saída 0)
+ok   - RESULT=OK
+ok   - SHA256SUMS confere
+ok   - manifest: formato custom
+ok   - manifest: commit da aplicação
+ok   - manifest: revisão Alembic
+ok   - manifest: 1000 cobranças no inventário
+ok   - manifest: impressão digital da chave Fernet
+ok   - dump é custom legível (PGDMP)
+ok   - objetos inventariados (4)
+ok   - destino externo tem RESULT
+ok   - destino externo tem objetos
+ok   - last_success atualizado
+ok   - segredos não vazam em backup local/externo
+ok   - alerta de sucesso enviado
+== Restore do formato atual ==
+ok   - verificar não toca em banco (saída 0)
+ok   - restaurar em banco novo e conferir inventário (saída 0)
+ok   - inventário idêntico reportado
+ok   - banco restaurado tem 1000 cobranças
+ok   - soma monetária idêntica
+ok   - banco em uso intacto
+== Destino protegido ==
+ok   - recusa restaurar sobre o banco em uso (saída 1)
+ok   - recusa destino que já existe (saída 1)
+ok   - banco em uso intacto
+== Formatos legados e SQL ==
+ok   - legado custom+gzip (*.sql.gz) restaura com pg_restore (saída 0)
+ok   - formato legado detectado como custom+gzip
+ok   - legado: 1000 cobranças
+ok   - SQL comprimido restaura com psql (saída 0)
+ok   - SQL comprimido: 1000 cobranças
+ok   - SQL puro restaura com psql (saída 0)
+ok   - forma antiga 'restore.sh <arquivo>' vai para banco novo (saída 0)
+ok   - forma antiga avisou
+ok   - banco em uso intacto
+== Arquivo inválido nunca cria nem altera banco ==
+ok   - gzip truncado reprovado (saída 2)
+ok   - nenhum banco criado
+ok   - custom truncado reprovado pela leitura integral (saída 2)
+ok   - nenhum banco criado
+ok   - dump truncado dentro de execução reprovado pelo checksum (saída 2)
+ok   - nenhum banco criado
+ok   - SQL truncado reprovado (saída 2)
+ok   - arquivo que não é dump reprovado (saída 2)
+ok   - hash inválido reprovado antes de qualquer operação (saída 2)
+ok   - mensagem cita checksum
+ok   - nenhum banco criado
+ok   - banco em uso intacto
+== Inventário divergente é detectado após restaurar ==
+ok   - restauração divergente do manifest reprovada (saída 3)
+ok   - banco divergente não recebe marca de validado
+== Permissões ==
+ok   - backup em diretório sem permissão falha (saída 2)
+ok   - mensagem de permissão
+ok   - restore de arquivo ilegível falha antes de criar banco (saída 2)
+ok   - nenhum banco criado
+== Objetos ==
+ok   - restaurar objetos em diretório novo e conferir hashes (saída 0)
+ok   - objeto restaurado idêntico
+ok   - recusa destino de objetos não vazio (saída 1)
+ok   - objeto ausente na cópia é detectado (saída 3)
+ok   - backup com objeto referenciado ausente na origem falha (saída 1)
+ok   - objects-missing.tsv lista o objeto
+ok   - RESULT=FALHA
+ok   - alerta de falha enviado
+ok   - last_success não avança
+== Destino externo (rclone) ==
+ok   - rclone com erro gera falha (saída 1)
+ok   - RESULT registra envio falho
+ok   - rclone que retorna 0 sem copiar é pego pela conferência (saída 1)
+ok   - mensagem de conferência
+ok   - sem destino externo configurado conta como falha (saída 1)
+ok   - sem destino externo com BACKUP_OFFSITE_REQUIRED=0 (saída 0)
+ok   - origem de objetos não configurada falha (saída 1)
+ok   - pg_dump sem banco falha de forma fatal (saída 2)
+== Restauração a partir do destino externo ==
+ok   - baixar execução do destino externo com objetos (saída 0)
+ok   - restaurar banco a partir da cópia baixada (saída 0)
+ok   - restaurar objetos a partir da cópia baixada (saída 0)
+== GPG ==
+ok   - GPG com destinatário inexistente falha (saída 1)
+ok   - dump aberto NÃO vai para o destino externo
+ok   - RESULT registra envio bloqueado
+ok   - backup cifrado com GPG (saída 0)
+ok   - artefato cifrado
+ok   - restaurar backup cifrado (saída 0)
+ok   - sem a chave privada GPG o restore reprova antes de criar banco (saída 2)
+ok   - nenhum banco criado
+== Retenção ==
+ok   - backup com retenção (saída 0)
+ok   - mantém as 2 execuções OK mais novas mesmo antigas
+ok   - remove execução OK além do mínimo
+ok   - remove execução com falha antiga
+== Troca controlada e reversão ==
+ok   - promover sem aprovação é recusado (saída 1)
+ok   - promover banco não validado é recusado (saída 1)
+ok   - promover com aprovação (saída 0)
+ok   - banco anterior preservado com os dados originais
+ok   - restaurado assumiu o nome em uso
+ok   - reverter troca (saída 0)
+ok   - banco original de volta ao nome em uso
+ok   - nenhum banco foi apagado na troca/reversão
+
+Resultado: 91 ok, 0 falha(s)

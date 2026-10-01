@@ -1,0 +1,12 @@
+build imagem backend	2
+build imagem backup	1
+subir servidores de origem	3
+schema (alembic upgrade head)	2
+semear dados sintéticos	3
+backup.sh (banco + objetos + envio externo)	3
+subir servidores novos (vazios)	3
+baixar do destino externo	2
+restaurar banco em nome novo + conferir inventário	1
+restaurar objetos no MinIO novo	3
+promover (troca controlada)	1
+verificar segredos, PFX, documentos e saldo	2
