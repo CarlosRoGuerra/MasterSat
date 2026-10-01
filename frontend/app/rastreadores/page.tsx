@@ -19,7 +19,7 @@ import { ClientAutocomplete } from '@/components/ui/client-autocomplete';
 import { BillingDayInput, erroDiaVencimento } from '@/components/ui/billing-day-input';
 import { useDebouncedValue, useEffectSkipFirst } from '@/lib/use-debounced-value';
 import { apiFetch, apiFetchList } from '@/lib/api';
-import { onlyDigits, formatCpfCnpj, pricePeriodSuffix } from '@/lib/format';
+import { onlyDigits, formatCpfCnpj, formatDate, pricePeriodSuffix } from '@/lib/format';
 import { useAuthGuard } from '@/lib/use-auth-guard';
 import { ROUTE_ROLES } from '@/lib/route-roles';
 import { useAssistantContextActions } from '@/lib/assistant-context';
@@ -839,8 +839,8 @@ function RastreadoresPageInner() {
                     <p className="mt-2 text-lg font-semibold text-slate-900 dark:text-white">{trackerContract.plan_name ?? 'Plano'}</p>
                     <div className="mt-3 grid gap-2 sm:grid-cols-2 text-sm text-slate-600 dark:text-slate-300">
                       {trackerContract.monthly_value != null && <div><span className="font-medium">Valor:</span> R$ {trackerContract.monthly_value.toFixed(2)}/mês</div>}
-                      {trackerContract.start_date && <div><span className="font-medium">Início:</span> {trackerContract.start_date}</div>}
-                      {trackerContract.next_due_date && <div><span className="font-medium">Próx. venc.:</span> {trackerContract.next_due_date}</div>}
+                      {trackerContract.start_date && <div><span className="font-medium">Início:</span> {formatDate(trackerContract.start_date)}</div>}
+                      {trackerContract.next_due_date && <div><span className="font-medium">Próx. venc.:</span> {formatDate(trackerContract.next_due_date)}</div>}
                     </div>
                   </div>
                 ) : (
