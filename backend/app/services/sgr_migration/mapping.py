@@ -33,6 +33,7 @@ from app.services.sgr_migration.normalize import (
     normalize_plate,
     only_digits,
     parse_br_date,
+    parse_centavos,
 )
 
 _VALID_UF = {
@@ -785,12 +786,14 @@ def map_boleto(
     issues: list[str] = []
 
     if item is not None:
-        amount = _to_decimal_br(ci_get(item, 'valor'))
+        valor_linha = ci_get(item, 'valor')
+        amount = _to_decimal_br(valor_linha)
         placa = normalize_plate(ci_get(item, 'placa') or '') or None
         periodo = ci_get(item, 'mes_referente') or ci_get(boleto, 'mes_referente')
         produto = ci_get(item, 'produto')
     else:
-        amount = _to_decimal_br(ci_get(boleto, 'valor'))
+        valor_linha = ci_get(boleto, 'valor')
+        amount = _to_decimal_br(valor_linha)
         placa = None
         periodo = ci_get(boleto, 'mes_referente')
         produto = ci_get(boleto, 'tipo_boleto')
@@ -825,9 +828,19 @@ def map_boleto(
     # responder 500 — não só o registro ruim.
     if not pago:
         pago = None
+    pago_centavos = parse_centavos(ci_get(boleto, 'valor_pagamento')) if pago else None
+
+    amount_cents = parse_centavos(valor_linha)
+    if valor_linha not in (None, '') and amount_cents is None:
+        issues.append(f"Boleto #{ci_get(boleto, 'cod_boleto')}: valor de linha malformado")
 
     return {
         'external_id': ci_get(boleto, 'cod_boleto'),
+        # Decisões monetárias do importador usam só estes (centavos, int).
+        # `amount`/`paid_amount` em float ficam por compatibilidade de leitura.
+        'amount_cents': amount_cents,
+        'paid_amount_cents': pago_centavos,
+        'document_total_cents': parse_centavos(ci_get(boleto, 'valor')),
         'client_external_id': ci_get(boleto, 'cod_cliente'),
         'amount': amount,
         'vehicle_plate': placa,

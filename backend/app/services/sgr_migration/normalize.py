@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 
 _ONLY_DIGITS = re.compile(r'\D')
 
@@ -104,6 +105,46 @@ def is_valid_plate(plate: str) -> bool:
             and any(c.isdigit() for c in plate)
         )
     return False
+
+
+_VALOR_BR = re.compile(r'-?\d{1,3}(\.\d{3})*(,\d{1,2})?|-?\d+(,\d{1,2})?')
+_VALOR_PONTO = re.compile(r'-?\d+(\.\d{1,2})?')
+
+
+def parse_centavos(value) -> int | None:
+    """Valor monetário do SGR → centavos (int), sem passar por float.
+
+    Aceita o formato da API ('1.234,56', '-41,65', '0,00'), número já
+    decimal ('49.99', 49.99, Decimal) e inteiro. Qualquer outra coisa —
+    texto, três casas decimais, separador ambíguo — devolve None: valor
+    malformado não pode ser arredondado em silêncio numa decisão financeira.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value * 100
+    if isinstance(value, (float, Decimal)):
+        try:
+            numero = Decimal(str(value))
+        except InvalidOperation:
+            return None
+    else:
+        texto = str(value).strip().replace(' ', '')
+        if not texto:
+            return None
+        if ',' in texto:
+            if not _VALOR_BR.fullmatch(texto):
+                return None
+            texto = texto.replace('.', '').replace(',', '.')
+        elif not _VALOR_PONTO.fullmatch(texto):
+            return None
+        numero = Decimal(texto)
+    if not numero.is_finite():
+        return None
+    centavos = numero * 100
+    if centavos != centavos.to_integral_value():
+        return None
+    return int(centavos)
 
 
 def normalize_email(value: str | None) -> str:
