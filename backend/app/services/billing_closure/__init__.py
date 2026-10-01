@@ -21,6 +21,7 @@ from app.services.billing_closure.charge_items import _pending_charge_items
 from app.services.billing_closure.recurring import (
     _billing_due_in_month,
     _first_cycle_charge_items,
+    _ja_teve_mensalidade_antes,
     _locked_contracts,
     _prorata_fields,
     _validate_contract_relationships,
@@ -120,17 +121,21 @@ def simulate_closure(
         already = _has_existing_billing(db, contract.id, period_label)
         plan_price = decimal_to_float(plan.price)
 
-        # First billing month: normally the start month, but shifts to the NEXT month
-        # when billing_day < start_date.day (that calendar day has already passed).
+        # Primeiro boleto: plano mensal é sempre no mês SEGUINTE ao da
+        # instalação, com o pró-rata dos dias usados no mês da instalação (o
+        # mês de uso é cobrado no mês seguinte). Plano com intervalo maior
+        # mantém a regra anterior: mês de início, ou o seguinte se o dia de
+        # vencimento já passou.
         _billing_day = contract.billing_day or 1
-        if _billing_day >= contract.start_date.day:
-            _first_billing_month = contract.start_date.replace(day=1)
-        else:
+        if interval == 1 or _billing_day < contract.start_date.day:
             _first_billing_month = add_months(contract.start_date.replace(day=1), 1)
+        else:
+            _first_billing_month = contract.start_date.replace(day=1)
 
         first_cycle = (
             reference_month.year == _first_billing_month.year
             and reference_month.month == _first_billing_month.month
+            and not _ja_teve_mensalidade_antes(db, contract.id, reference_month)
         )
         if first_cycle:
             is_prorata, billing_amount, prorated_days, days_in_month = _prorata_fields(

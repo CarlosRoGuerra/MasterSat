@@ -1028,7 +1028,9 @@ class TestItensPrimeiraCobranca:
             client_id=cliente.id,
             plan_id=plan.id,
             vehicle_id=vehicle_id,
-            start_date=date(2025, 5, 1),
+            # Instalação em abril: o primeiro boleto (mensal) é o de maio,
+            # o REF_MONTH destes testes.
+            start_date=date(2025, 4, 1),
             status='ativo',
             billing_day=15,
         )
@@ -1046,7 +1048,7 @@ class TestItensPrimeiraCobranca:
             unit_price=Decimal('150.00'),
             total_amount=Decimal('150.00'),
             installment_count=1,
-            start_date=date(2025, 5, 1),
+            start_date=date(2025, 4, 1),
             active=True,
             remove_after_payment=True,
             status='ativo',
@@ -1307,3 +1309,85 @@ class TestFechamentoAtomico:
         assert result['generated'] >= 1
         assert result['services_generated'] >= 1
         assert db.query(Billing).count() >= 1
+
+
+# ---------------------------------------------------------------------------
+# Primeiro boleto de plano mensal: sempre no mês seguinte ao da instalação
+# (regra confirmada pela empresa em 01/10/2026). Caso real: placas instaladas
+# em 02/09 com vencimento dia 10 apareciam no fechamento de outubro como
+# "mensalidade integral" — o pró-rata de setembro ficava preso num boleto de
+# 10/09 que nunca foi gerado.
+# ---------------------------------------------------------------------------
+
+class TestPrimeiroBoletoNoMesSeguinte:
+    SET, OUT, NOV = date(2026, 9, 1), date(2026, 10, 1), date(2026, 11, 1)
+
+    def _contrato(self, db, cliente, inicio, *, intervalo=1, billing_day=10):
+        plano = Plan(name=f'Mensal {inicio}-{intervalo}', price=Decimal('64.99'), active=True,
+                     billing_interval_months=intervalo)
+        db.add(plano)
+        db.flush()
+        contrato = Contract(client_id=cliente.id, plan_id=plano.id, start_date=inicio,
+                            status='ativo', billing_day=billing_day)
+        db.add(contrato)
+        db.commit()
+        return contrato
+
+    def _item(self, db, contrato, mes):
+        itens = [i for i in simulate_closure(db, mes)['items'] if i['contract_id'] == contrato.id]
+        return itens[0] if itens else None
+
+    def test_instalacao_antes_do_vencimento_cobra_pro_rata_no_mes_seguinte(self, db, cliente):
+        contrato = self._contrato(db, cliente, date(2026, 9, 2))
+        assert self._item(db, contrato, self.SET) is None  # nada no próprio mês
+        outubro = self._item(db, contrato, self.OUT)
+        assert outubro['due_date'] == date(2026, 10, 10)
+        assert (outubro['is_prorata'], outubro['prorated_days'], outubro['billing_amount']) == (True, 29, 62.82)
+        novembro = self._item(db, contrato, self.NOV)
+        assert (novembro['is_prorata'], novembro['billing_amount']) == (False, 64.99)
+
+    def test_instalacao_depois_do_vencimento_continua_igual(self, db, cliente):
+        contrato = self._contrato(db, cliente, date(2026, 9, 15))
+        assert self._item(db, contrato, self.SET) is None
+        outubro = self._item(db, contrato, self.OUT)
+        assert (outubro['prorated_days'], outubro['billing_amount']) == (16, 34.66)
+
+    def test_instalacao_no_dia_1_cobra_o_mes_cheio_no_mes_seguinte(self, db, cliente):
+        contrato = self._contrato(db, cliente, date(2026, 9, 1))
+        assert self._item(db, contrato, self.SET) is None
+        outubro = self._item(db, contrato, self.OUT)
+        assert (outubro['is_prorata'], outubro['billing_amount']) == (False, 64.99)
+
+    def test_taxa_de_instalacao_vem_junto_no_primeiro_boleto(self, db, cliente):
+        contrato = self._contrato(db, cliente, date(2026, 9, 2))
+        instalacao = ClientChargeItem(
+            client_id=cliente.id, contract_id=contrato.id, title='Instalação', quantity=1,
+            unit_price=Decimal('150.00'), total_amount=Decimal('150.00'), installment_count=1,
+            start_date=date(2026, 9, 2), active=True, remove_after_payment=True,
+        )
+        db.add(instalacao)
+        db.commit()
+
+        outubro = self._item(db, contrato, self.OUT)
+        assert [c['item_id'] for c in outubro['first_month_charges']] == [instalacao.id]
+        assert outubro['total_first_billing'] == pytest.approx(212.82)
+
+        execute_closure(db, self.OUT, contract_ids=[contrato.id], uninstall_event_ids=[], charge_item_ids=[])
+        [primeira] = db.scalars(select(Billing).where(Billing.contract_id == contrato.id)).all()
+        assert (primeira.billing_type, primeira.amount, primeira.due_date) == (
+            'primeira_mensalidade', Decimal('212.82'), date(2026, 10, 10))
+        assert 'pró-rata 29 dias' in primeira.title
+
+    def test_contrato_que_ja_teve_pro_rata_pela_regra_antiga_nao_paga_de_novo(self, db, cliente):
+        contrato = self._contrato(db, cliente, date(2026, 9, 2))
+        db.add(Billing(contract_id=contrato.id, client_id=cliente.id, amount=Decimal('62.82'),
+                       due_date=date(2026, 9, 10), status=BillingStatus.PAID, period_label='09/2026',
+                       billing_type='prorata'))
+        db.commit()
+        outubro = self._item(db, contrato, self.OUT)
+        assert (outubro['is_prorata'], outubro['billing_amount'], outubro['first_month_charges']) == (False, 64.99, [])
+
+    def test_plano_trimestral_mantem_a_regra_anterior(self, db, cliente):
+        contrato = self._contrato(db, cliente, date(2026, 9, 2), intervalo=3)
+        setembro = self._item(db, contrato, self.SET)
+        assert setembro is not None and setembro['due_date'] == date(2026, 9, 10)

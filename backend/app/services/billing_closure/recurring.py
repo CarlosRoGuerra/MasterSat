@@ -7,6 +7,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.billing import Billing
 from app.models.client import Client
 from app.models.client_charge_item import ClientChargeItem
 from app.models.contract import Contract
@@ -14,6 +15,7 @@ from app.models.plan import Plan
 from app.models.tracker import Tracker
 from app.models.vehicle import Vehicle
 from app.services.financial import (
+    RECURRING_BILLING_TYPES,
     _quantize_amount,
     charge_item_effective_billing_count,
     normalize_due_date,
@@ -34,9 +36,33 @@ def _billing_due_in_month(contract: Contract, plan: Plan, reference_month: date)
     # Never produce a due date that predates the contract start (billing_day < start day)
     if due_date < contract.start_date:
         return None
+    # Plano mensal: o mês da instalação é cobrado no mês SEGUINTE, qualquer que
+    # seja o dia (regra confirmada pela empresa em 01/10/2026). Antes, com
+    # instalação até o dia do vencimento, o sistema cobrava o pró-rata no
+    # próprio mês; com instalação depois dele, já cobrava no mês seguinte.
+    if interval == 1 and (due_date.year, due_date.month) == (
+        contract.start_date.year, contract.start_date.month,
+    ):
+        return None
     if due_date.year == reference_month.year and due_date.month == reference_month.month:
         return due_date
     return None
+
+
+def _ja_teve_mensalidade_antes(db: Session, contract_id: int, reference_month: date) -> bool:
+    """O contrato já teve mensalidade/pró-rata antes deste mês.
+
+    Contratos cujo primeiro boleto saiu pela regra antiga (pró-rata no mês
+    da instalação) não podem receber o pró-rata de novo no mês seguinte.
+    """
+    return db.scalar(
+        select(Billing.id).where(
+            Billing.contract_id == contract_id,
+            Billing.is_deleted.is_(False),
+            Billing.billing_type.in_(RECURRING_BILLING_TYPES),
+            Billing.due_date < reference_month.replace(day=1),
+        ).limit(1)
+    ) is not None
 
 
 def _prorata_fields(plan_price: float, start_date: date) -> tuple[bool, float, int, int]:
