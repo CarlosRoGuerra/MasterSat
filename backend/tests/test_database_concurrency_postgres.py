@@ -622,7 +622,9 @@ def test_contract_delete_wins_race_before_closure_mutates(postgres_api):
         contract = Contract(
             client_id=client.id,
             plan_id=plan.id,
-            start_date=date(2099, 4, 1),
+            # Início em março: o primeiro boleto de plano mensal é o do mês seguinte
+            # à instalação, e o fechamento deste teste é o de abril.
+            start_date=date(2099, 3, 1),
             status="ativo",
             billing_day=15,
         )
