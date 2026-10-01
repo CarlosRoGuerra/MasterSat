@@ -23,7 +23,7 @@ import { Eye, DollarSign, ClipboardList, Pencil, CreditCard, Zap, Building2, Ban
 import { ExportButton } from '@/components/ui/export-button';
 import { apiFetch, apiFetchAll, apiFetchList } from '@/lib/api';
 import { fetchAddressByCep } from '@/lib/cep';
-import { formatZipCode, onlyDigits, pricePeriodSuffix } from '@/lib/format';
+import { formatDate, formatZipCode, onlyDigits, pricePeriodSuffix } from '@/lib/format';
 import { useAuthGuard } from '@/lib/use-auth-guard';
 import { ROUTE_ROLES } from '@/lib/route-roles';
 import { VehicleOnboardingWizard } from '@/components/vehicle-onboarding-wizard';
@@ -1666,7 +1666,7 @@ function VeiculosPageInner() {
               {vehicleBillings.map((b) => (
                 <Tr key={b.id}>
                   <Td className="text-sm">{b.title ?? '—'}</Td>
-                  <Td className="text-sm">{b.due_date}</Td>
+                  <Td className="text-sm">{formatDate(b.due_date)}</Td>
                   <Td className="font-mono font-semibold">
                     {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(b.amount)}
                   </Td>

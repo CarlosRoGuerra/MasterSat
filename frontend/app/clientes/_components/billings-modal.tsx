@@ -9,6 +9,7 @@ import { Badge, statusLabel, statusVariant } from '@/components/ui/badge';
 import { EmptyState, TableSkeleton } from '@/components/ui/empty-state';
 import { Table, TableHead, Th, TableBody, Tr, Td } from '@/components/ui/table';
 import { ActionBtn } from './action-btn';
+import { formatDate } from '@/lib/format';
 import { valorComJuros } from './helpers';
 import type { BillingItem, CarneItem } from './types';
 
@@ -185,8 +186,8 @@ export function BillingsModal({
           {placaDa(b) && <span className="block font-mono text-2xs text-slate-500">{placaDa(b)}</span>}
         </Td>
         <Td className="text-xs">{b.created_at ? new Date(b.created_at).toLocaleDateString('pt-BR') : '—'}</Td>
-        <Td className="text-sm font-medium">{b.due_date}</Td>
-        <Td className="text-xs">{b.payment_date ?? '—'}</Td>
+        <Td className="text-sm font-medium">{formatDate(b.due_date)}</Td>
+        <Td className="text-xs">{formatDate(b.payment_date)}</Td>
         <Td className="font-mono font-semibold">{fmt(b.amount)}</Td>
         <Td className="font-mono font-semibold text-rose-600 dark:text-rose-400">
           {juros != null ? fmt(juros) : '—'}
@@ -264,8 +265,8 @@ export function BillingsModal({
             </span>
           </Td>
           <Td className="text-xs">{primeiro.created_at ? new Date(primeiro.created_at).toLocaleDateString('pt-BR') : '—'}</Td>
-          <Td className="text-sm font-medium">{primeiro.due_date}</Td>
-          <Td className="text-xs">{primeiro.payment_date ?? '—'}</Td>
+          <Td className="text-sm font-medium">{formatDate(primeiro.due_date)}</Td>
+          <Td className="text-xs">{formatDate(primeiro.payment_date)}</Td>
           <Td className="font-mono font-semibold">{fmt(itens.reduce((s, b) => s + b.amount, 0))}</Td>
           <Td className="font-mono font-semibold text-rose-600 dark:text-rose-400">
             {totalJuros != null ? fmt(totalJuros) : '—'}
