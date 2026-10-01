@@ -92,6 +92,8 @@ export type BillingItem = {
   vehicle_plate?: string | null;
   /** Há boleto registrado na Ailos? Sem isso não existe PDF para baixar. */
   boleto_ailos?: boolean;
+  /** Origem SGR: linhas com o mesmo cod_boleto são UM boleto consolidado lá. */
+  sgr_payload?: { cod_boleto?: string | null } | null;
 };
 
 export type CarneParcelaDetalhe = {

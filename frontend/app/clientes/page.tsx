@@ -241,7 +241,7 @@ function ClientesPageInner() {
     setBillingsLoading(true);
     try {
       const [data, cs] = await Promise.all([
-        apiFetch<BillingItem[]>(`/billings?client_id=${client.id}&limit=100`, {}, token!).catch(() => []),
+        apiFetch<BillingItem[]>(`/billings?client_id=${client.id}&limit=1000`, {}, token!).catch(() => []),
         apiFetch<CarneItem[]>(`/boletos/carne?client_id=${client.id}`, {}, token!).catch(() => []),
       ]);
       setClientBillings(sortByDueDateAsc(data));
@@ -279,7 +279,7 @@ function ClientesPageInner() {
   async function reloadClientBillings() {
     if (!token || !billingsModalClient) return;
     const data = await apiFetch<BillingItem[]>(
-      `/billings?client_id=${billingsModalClient.id}&limit=100`, {}, token
+      `/billings?client_id=${billingsModalClient.id}&limit=1000`, {}, token
     ).catch(() => []);
     setClientBillings(sortByDueDateAsc(data));
   }
