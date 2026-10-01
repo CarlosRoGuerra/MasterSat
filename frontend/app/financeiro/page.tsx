@@ -18,6 +18,7 @@ import { ErrorBanner } from '@/components/ui/error-banner';
 import { ClientAutocomplete } from '@/components/ui/client-autocomplete';
 import { CarneTrackingModal, useCarneTracking } from '@/components/carne-tracking-modal';
 import { API_URL, apiFetch, apiFetchList } from '@/lib/api';
+import { loadChargeLinks, type ChargeLinks } from '@/lib/financeiro-charge-links';
 import { entregarArquivo, nomeArquivoCliente } from '@/lib/arquivo';
 import { podeEmitirNfse, precisaConsultarNfse } from '@/lib/nfse';
 import { enviarBoletoEmail, enviarBoletoWhats } from '@/lib/boleto-mensagem';
@@ -873,28 +874,26 @@ export default function FinanceiroPage() {
   // A página carrega só as listas mais recentes (300 veículos/rastreadores, 100
   // contratos). Cliente cujos veículos ficaram fora delas aparecia "sem veículo"
   // no lançamento. Ao escolher o cliente, busca os DELE direto na API.
-  const [doCliente, setDoCliente] = useState<{ clientId: string; vehicles: VehicleOption[]; trackers: TrackerOption[]; contracts: Contract[] } | null>(null);
+  const [doCliente, setDoCliente] = useState<ChargeLinks<Contract> | null>(null);
+  const [loadingChargeLinks, setLoadingChargeLinks] = useState(false);
+  const [chargeLinksReload, setChargeLinksReload] = useState(0);
   useEffect(() => {
     const clientId = chargeItemForm.client_id;
-    if (!token || !clientId) { setDoCliente(null); return; }
+    if (!token || !clientId || !chargeModal) { setDoCliente(null); setLoadingChargeLinks(false); return; }
     let cancelado = false;
-    Promise.all([
-      apiFetchList<VehicleOption>(`/vehicles?client_id=${clientId}&limit=300`, {}, token),
-      apiFetchList<TrackerOption>(`/trackers?client_id=${clientId}&limit=300`, {}, token),
-      apiFetch<Contract[]>(`/contracts?client_id=${clientId}&limit=300`, {}, token),
-    ]).then(([v, t, c]) => { if (!cancelado) setDoCliente({ clientId, vehicles: v, trackers: t, contracts: c }); })
-      .catch(() => { if (!cancelado) setDoCliente(null); });
+    setDoCliente(null);
+    setLoadingChargeLinks(true);
+    loadChargeLinks<Contract>(clientId, token).then((links) => {
+      if (cancelado) return;
+      setDoCliente(links);
+      setLoadingChargeLinks(false);
+    });
     return () => { cancelado = true; };
-  }, [token, chargeItemForm.client_id]);
+  }, [token, chargeItemForm.client_id, chargeModal, chargeLinksReload]);
   const doClienteAtual = doCliente && doCliente.clientId === chargeItemForm.client_id ? doCliente : null;
-  const mesclar = <T extends { id: number }>(base: T[], extra: T[] | undefined) => {
-    if (!extra?.length) return base;
-    const ids = new Set(base.map(i => i.id));
-    return [...base, ...extra.filter(i => !ids.has(i.id))];
-  };
-  const visibleContracts = useMemo(() => chargeItemForm.client_id ? mesclar(contracts, doClienteAtual?.contracts).filter(c => c.client_id === Number(chargeItemForm.client_id)) : contracts, [contracts, doClienteAtual, chargeItemForm.client_id]);
-  const chargeVehicles = useMemo(() => chargeItemForm.client_id ? mesclar(vehicles, doClienteAtual?.vehicles).filter(v => v.client_id === Number(chargeItemForm.client_id)) : vehicles, [vehicles, doClienteAtual, chargeItemForm.client_id]);
-  const chargeTrackers = useMemo(() => mesclar(trackers, doClienteAtual?.trackers).filter(t => (!chargeItemForm.client_id || t.client_id === Number(chargeItemForm.client_id)) && (!chargeItemForm.vehicle_id || t.vehicle_id === Number(chargeItemForm.vehicle_id) || t.vehicle_id == null)), [trackers, doClienteAtual, chargeItemForm.client_id, chargeItemForm.vehicle_id]);
+  const visibleContracts = useMemo(() => chargeItemForm.client_id ? (doClienteAtual?.contracts ?? contracts).filter(c => c.client_id === Number(chargeItemForm.client_id)) : contracts, [contracts, doClienteAtual, chargeItemForm.client_id]);
+  const chargeVehicles = useMemo(() => chargeItemForm.client_id ? (doClienteAtual?.vehicles ?? vehicles).filter(v => v.client_id === Number(chargeItemForm.client_id)) : vehicles, [vehicles, doClienteAtual, chargeItemForm.client_id]);
+  const chargeTrackers = useMemo(() => (doClienteAtual?.trackers ?? trackers).filter(t => (!chargeItemForm.client_id || t.client_id === Number(chargeItemForm.client_id)) && (!chargeItemForm.vehicle_id || t.vehicle_id === Number(chargeItemForm.vehicle_id) || t.vehicle_id == null)), [trackers, doClienteAtual, chargeItemForm.client_id, chargeItemForm.vehicle_id]);
 
   // Revenue variation: compare last two months
   const monthlyVariation = useMemo(() => {
@@ -2585,9 +2584,16 @@ export default function FinanceiroPage() {
               placeholder="Selecione o cliente"
               required
             />
-            <select className={fieldClass} value={chargeItemForm.contract_id} onChange={e => { const sel = visibleContracts.find(c => c.id === Number(e.target.value)); setChargeItemForm(p => ({ ...p, contract_id: e.target.value, vehicle_id: sel?.vehicle_id ? String(sel.vehicle_id) : p.vehicle_id, tracker_id: sel?.tracker_id ? String(sel.tracker_id) : p.tracker_id })); }}><option value="">Sem contrato</option>{visibleContracts.map(c => <option key={c.id} value={c.id}>{c.client_name} • {c.plan_name || 'Contrato'}{c.vehicle_plate ? ` • ${c.vehicle_plate}` : ''}</option>)}</select>
-            <select className={fieldClass} value={chargeItemForm.vehicle_id} onChange={e => setChargeItemForm(p => ({ ...p, vehicle_id: e.target.value, tracker_id: '' }))}><option value="">Sem veículo</option>{chargeVehicles.map(v => <option key={v.id} value={v.id}>{v.plate}{v.model ? ` • ${v.model}` : ''}</option>)}</select>
-            <select className={fieldClass} value={chargeItemForm.tracker_id} onChange={e => setChargeItemForm(p => ({ ...p, tracker_id: e.target.value }))}><option value="">Sem rastreador</option>{chargeTrackers.map(t => <option key={t.id} value={t.id}>{t.imei}{t.model ? ` • ${t.model}` : ''}</option>)}</select>
+            <select className={fieldClass} aria-label="Contrato" disabled={loadingChargeLinks} value={chargeItemForm.contract_id} onChange={e => { const sel = visibleContracts.find(c => c.id === Number(e.target.value)); setChargeItemForm(p => ({ ...p, contract_id: e.target.value, vehicle_id: sel?.vehicle_id ? String(sel.vehicle_id) : p.vehicle_id, tracker_id: sel?.tracker_id ? String(sel.tracker_id) : p.tracker_id })); }}><option value="">Sem contrato</option>{visibleContracts.map(c => <option key={c.id} value={c.id}>{c.client_name} • {c.plan_name || 'Contrato'}{c.vehicle_plate ? ` • ${c.vehicle_plate}` : ''}</option>)}</select>
+            <select className={fieldClass} aria-label="Veículo" disabled={loadingChargeLinks} value={chargeItemForm.vehicle_id} onChange={e => setChargeItemForm(p => ({ ...p, vehicle_id: e.target.value, tracker_id: '' }))}><option value="">Sem veículo</option>{chargeVehicles.map(v => <option key={v.id} value={v.id}>{v.plate}{v.model ? ` • ${v.model}` : ''}</option>)}</select>
+            <select className={fieldClass} aria-label="Rastreador" disabled={loadingChargeLinks} value={chargeItemForm.tracker_id} onChange={e => setChargeItemForm(p => ({ ...p, tracker_id: e.target.value }))}><option value="">Sem rastreador</option>{chargeTrackers.map(t => <option key={t.id} value={t.id}>{t.imei}{t.model ? ` • ${t.model}` : ''}</option>)}</select>
+            {chargeItemForm.client_id && loadingChargeLinks && <p className="text-sm text-slate-500 md:col-span-2" role="status">Carregando veículos, contratos e rastreadores do cliente...</p>}
+            {doClienteAtual && doClienteAtual.errors.length > 0 && (
+              <div className="flex items-center justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 md:col-span-2" role="alert">
+                <span>Falha ao carregar {doClienteAtual.errors.join(', ')}. A lista disponível pode estar incompleta.</span>
+                <button type="button" className="shrink-0 font-semibold underline" onClick={() => setChargeLinksReload(value => value + 1)}>Tentar novamente</button>
+              </div>
+            )}
             <select className={fieldClass} value={chargeItemForm.service_product_id} onChange={e => { const sel = serviceProducts.find(sp => sp.id === Number(e.target.value)); setChargeItemForm(p => ({ ...p, service_product_id: e.target.value, title: sel?.name || p.title, unit_price: sel ? String(sel.default_price) : p.unit_price, remove_after_payment: sel?.remove_after_payment || false })); }}><option value="">Selecione um serviço/produto</option>{serviceProducts.filter(sp => sp.active).map(sp => <option key={sp.id} value={sp.id}>{sp.name}</option>)}</select>
             <input className={fieldClass} placeholder="Título da cobrança" value={chargeItemForm.title} onChange={e => setChargeItemForm(p => ({ ...p, title: e.target.value }))} required />
             <input className={fieldClass} placeholder="Quantidade" value={chargeItemForm.quantity} onChange={e => setChargeItemForm(p => ({ ...p, quantity: e.target.value.replace(/\D/g, '').slice(0, 3) }))} />
