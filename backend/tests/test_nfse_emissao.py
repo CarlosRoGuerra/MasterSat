@@ -200,11 +200,12 @@ def test_joinville_processing_nao_conclui_lote_e_consulta_por_rps(db, monkeypatc
     def consulta(service, soap, action, **kwargs):
         calls.append(action)
         assert 'IdentificacaoRps' in soap
+        assert 'ConsultarNfsePorRps' in soap and 'ConsultarNfseRpsEnvio' in soap
         return '<Envelope><return>&lt;Resposta/&gt;</return></Envelope>'
 
     monkeypatch.setattr(municipal, '_post', consulta)
     assert municipal.consultar(db, nota).status == 'desconhecido'
-    assert calls == ['ConsultarNfseRps']
+    assert calls == ['ConsultarNfsePorRps']
     nota.protocolo, nota.status = 'PROTOCOLO', 'processing'
     db.commit()
     lotes._fechar_lote(db, lote.id)

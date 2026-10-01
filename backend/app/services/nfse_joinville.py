@@ -504,8 +504,10 @@ def consultar(db: Session, nota: NfseNota) -> NfseNota:
             else:
                 if not nota.numero_rps or not nota.serie_rps:
                     raise NfseError('Identidade RPS ausente; reconciliação manual necessária.')
-                texto = _post('Consultas', _envelope_soap(_montar_consulta_rps(nota), 'ConsultarNfseRps'),
-                              'ConsultarNfseRps', ambiente=nota.ambiente)
+                # Método SOAP difere do nome da raiz ConsultarNfseRpsEnvio
+                # (manual Pública, seção 4.9.3).
+                texto = _post('Consultas', _envelope_soap(_montar_consulta_rps(nota), 'ConsultarNfsePorRps'),
+                              'ConsultarNfsePorRps', ambiente=nota.ambiente)
         root = _inner_root(texto)
         if root is None:
             raise NfseApiError('Resposta de consulta inválida; não reenviar.')
