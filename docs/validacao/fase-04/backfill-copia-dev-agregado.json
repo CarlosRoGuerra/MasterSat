@@ -1,0 +1,40 @@
+{
+  "fonte": "cópia (pg_dump/pg_restore) do banco LOCAL de desenvolvimento em 30/09/2026, restaurada em PostgreSQL 16 descartável (rede docker --internal); cópia e dump apagados após a análise. Não é produção.",
+  "comando": "python scripts/sgr_backfill.py --relatorio <arquivo>   (simulação: nada gravado)",
+  "sha": "árvore de trabalho com o mesmo importer.py/sgr_backfill.py commitados em 1ad34eb",
+  "duracao_segundos": 35,
+  "cobrancas_com_sgr_payload": 36501,
+  "documentos_sem_proveniencia": 13013,
+  "conciliados_automaticamente": 11404,
+  "bloqueados": {
+    "legado_com_desconto_descartado": 1079,
+    "soma_linhas_diverge": 435,
+    "legado_incompleto": 89,
+    "desconto_maior_que_obrigacoes": 6
+  },
+  "descontos_descartados_pela_importacao_antiga": {
+    "total_centavos": 3375816,
+    "por_status_local": {
+      "pago": {"documentos": 1007, "centavos": 3102436},
+      "aberto": {"documentos": 14, "centavos": 38308},
+      "cancelado": {"documentos": 58, "centavos": 235072}
+    }
+  },
+  "legado_incompleto": {
+    "causa": "linhas idênticas (placa, competência, valor) no mesmo documento colapsadas pelo dedup antigo — 89 de 89",
+    "centavos_nao_importados": 715892,
+    "por_status_local_centavos": {"pago": 709393, "aberto": 6499}
+  },
+  "soma_linhas_diverge": {
+    "arredondamento_ate_2_centavos": {"documentos": 73, "centavos_total_menos_soma": -22},
+    "desconto_nao_discriminado": {"documentos": 261, "centavos_total_menos_soma": -679499},
+    "acrescimo_nao_discriminado": {"documentos": 101, "centavos_total_menos_soma": 393085},
+    "situacao_origem": {"BAIXADO": 328, "REMOVIDO": 44, "APROVADO": 42, "CANCELADO": 5, "NEGOCIADO": 5, "NEGADO": 5, "AGUARDANDO": 3, "BAIXADO COM PENDÊNCIA": 3},
+    "diferencas_mais_comuns_centavos": [[-1000, 133], [-800, 44], [500, 32], [-1, 28], [1, 28], [-1998, 22], [-1800, 22]]
+  },
+  "vinculos_cruzados_existentes": {
+    "contratos_ativos": 0,
+    "rastreadores": 0,
+    "cobrancas_em_aberto_ou_pagas": {"total": 160, "veiculos": 7, "clientes_cobrados": 5, "importadas_do_sgr": 160, "pagas": 160, "com_contrato": 0, "pagador_interveniente": 0}
+  }
+}
