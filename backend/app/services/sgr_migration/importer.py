@@ -713,6 +713,15 @@ def _find_contract(db: Session, client_id: int, vehicle_id: int) -> Contract | N
     )
 
 
+def _completar_rastreador(db: Session, contrato: Contract, tracker_id: int | None) -> None:
+    """Rodada anterior criou o contrato quando o equipamento vinha sem IMEI;
+    agora que o rastreador existe, liga (senão a tela mostra "Sem plano").
+    Só preenche o vazio: contrato já ligado a outro rastreador não é trocado."""
+    if contrato.tracker_id is None and tracker_id is not None:
+        contrato.tracker_id = tracker_id
+        db.flush()
+
+
 def _import_contract(
     ctx: _Contexto, stats: ImportStats, contrato: dict, client: Client, vehicle: Vehicle,
     tracker_id: int | None, placa: str,
@@ -743,6 +752,8 @@ def _import_contract(
                           local_id=existente.id,
                           detalhe={'client_id_local': existente.client_id, 'vehicle_id_local': existente.vehicle_id,
                                    'client_id_origem': client.id, 'vehicle_id_origem': vehicle.id})
+            else:
+                _completar_rastreador(db, existente, tracker_id)
             _tocar(ctx, vinculo)
             stats.contracts_reused += 1
             return
@@ -751,6 +762,7 @@ def _import_contract(
     if existente is not None:
         if vinculo is None and codigo and _vinculo_local(db, 'contrato', existente.id) is None:
             _vincular(ctx, 'contrato', codigo, existente.id, 'adocao')
+        _completar_rastreador(db, existente, tracker_id)
         stats.contracts_reused += 1
         return
 
