@@ -203,3 +203,14 @@ Sempre rode `docker compose build --no-cache backend` quando houver mudança em 
 
 ## Deploy em produção e segurança
 Ver [docs/deploy-producao.md](docs/deploy-producao.md) — DNS/Cloudflare, `deploy.sh`, hardening da VPS (`scripts/harden-vps.sh`) e checklist de resposta a incidente.
+
+## API de cobranças para integração via WhatsApp
+
+O [manual de integração](docs/integracao-cobranca-whatsapp/manual-api-cobrancas.md)
+documenta autenticação por `X-API-Key`, consulta de cobranças, PDFs, links do
+cliente e critérios de envio. A [coleção Postman](docs/integracao-cobranca-whatsapp/mastersat-cobrancas.postman_collection.json)
+acompanha os exemplos, sem credenciais.
+
+Para gerar o PDF com a marca MasterSat e o pacote de entrega, execute
+`python scripts/gerar_manual_api_cobrancas.py` na raiz. Os arquivos são gravados
+em `output/`; as dependências estão descritas no cabeçalho do script.

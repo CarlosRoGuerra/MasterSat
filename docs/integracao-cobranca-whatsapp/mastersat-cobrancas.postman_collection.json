@@ -1,0 +1,118 @@
+{
+  "info": {
+    "name": "MasterSat | Cobranças para WhatsApp",
+    "description": "Coleção de consulta, sem envio de mensagens. Manual v1.0, 29/09/2026. Configure em ambiente privado: base_url (domínio HTTPS sem /api/v1), api_key, billing_id e boleto_link_cliente. Confirme o endereço com a MasterSat. Os arquivos distribuídos não contêm credenciais. Antes de enviar: revalide status, canal do pagador, telefone, registro e disponibilidade do link público. A lista não tem paginação; total é a quantidade retornada. Não confunda download autenticado com confirmação de elegibilidade.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      {
+        "key": "key",
+        "value": "X-API-Key",
+        "type": "string"
+      },
+      {
+        "key": "value",
+        "value": "{{api_key}}",
+        "type": "string"
+      },
+      {
+        "key": "in",
+        "value": "header",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "",
+      "type": "string",
+      "description": "Domínio HTTPS confirmado pela MasterSat, sem barra final e sem /api/v1."
+    },
+    {
+      "key": "api_key",
+      "value": "",
+      "type": "string",
+      "description": "Preencher somente no ambiente privado. Não exportar a chave."
+    },
+    {
+      "key": "billing_id",
+      "value": "",
+      "type": "string",
+      "description": "ID inteiro selecionado de uma cobrança de homologação."
+    },
+    {
+      "key": "boleto_link_cliente",
+      "value": "",
+      "type": "string",
+      "description": "Copiar o campo boleto_link_cliente retornado para a cobrança validada."
+    }
+  ],
+  "item": [
+    {
+      "name": "01 | Listar cobranças para WhatsApp",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/v1/integrations/cobrancas?forma_envio=whatsapp&limit=500",
+        "description": "Retorna {total,cobrancas}. Inclui pendentes/vencidas. Limite 1..2000, padrão 500. total == limit indica possível truncamento. Revalidar canal do pagador retornado, especialmente com interveniente."
+      },
+      "response": []
+    },
+    {
+      "name": "02 | Consultar detalhe antes de enviar",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/v1/integrations/cobrancas/{{billing_id}}",
+        "description": "Retorna o objeto diretamente, sem envelope. Pode retornar paga/cancelada: nesses casos, suspender o envio. Usar apenas o destinatário retornado no objeto cliente."
+      },
+      "response": []
+    },
+    {
+      "name": "03 | Baixar PDF autenticado",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/pdf"
+          }
+        ],
+        "url": "{{base_url}}/api/v1/integrations/cobrancas/{{billing_id}}/pdf",
+        "description": "Retorna bytes application/pdf. Usar Save Response para salvar. A rota pode gerar PDF sem registro bancário ou para título não aberto: só distribuir após revalidar o detalhe e a disponibilidade do link público."
+      },
+      "response": []
+    },
+    {
+      "name": "04 | Abrir link público do cliente",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/pdf"
+          }
+        ],
+        "url": "{{boleto_link_cliente}}",
+        "description": "Copiar a URL da API; não montar token. Esta requisição NÃO envia X-API-Key. Esperado: PDF. Token inválido, cancelamento ou ausência dos dados oficiais pode retornar 404. Um título pago pode continuar acessível; abrir o PDF não comprova dívida.",
+        "auth": {
+          "type": "noauth"
+        }
+      },
+      "response": []
+    }
+  ]
+}
