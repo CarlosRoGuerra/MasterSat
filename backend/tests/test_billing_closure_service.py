@@ -536,6 +536,84 @@ class TestClosureScopeAndAccumulation:
         assert [row['item_id'] for row in result['charge_items']] == [own_item.id]
         assert all(row['client_id'] == cliente.id for row in result['items'])
 
+    def test_individual_closure_includes_other_clients_contracts_paid_by_intervenient(
+        self, db, cliente, outro_cliente, plan,
+    ):
+        own = _make_active_contract(db, outro_cliente, plan)
+        delegated = [_make_active_contract(db, cliente, plan) for _ in range(3)]
+        excluded = _make_active_contract(db, cliente, plan)
+        for contract in delegated:
+            contract.interveniente_client_id = outro_cliente.id
+        db.commit()
+
+        preview = simulate_closure(db, REF_MONTH, filter_type='client', client_id=outro_cliente.id)
+        assert {row['contract_id'] for row in preview['items']} == {
+            own.id, *(contract.id for contract in delegated),
+        }
+        assert excluded.id not in {row['contract_id'] for row in preview['items']}
+        assert all(row['payer_client_id'] == outro_cliente.id for row in preview['items'])
+
+        result = execute_closure(db, REF_MONTH, filter_type='client', client_id=outro_cliente.id)
+        assert result['generated'] == 4
+        generated = db.scalars(select(Billing).where(Billing.id.in_(result['billing_ids']))).all()
+        assert {billing.contract_id for billing in generated} == {
+            own.id, *(contract.id for contract in delegated),
+        }
+        assert all(billing.payer_client_id == outro_cliente.id for billing in generated)
+
+    def test_individual_closure_scopes_fees_and_services_by_payer(
+        self, db, cliente, outro_cliente, plan, veiculo,
+    ):
+        contract = _make_active_contract(db, cliente, plan)
+        contract.interveniente_client_id = outro_cliente.id
+        event = UninstallEvent(
+            vehicle_id=veiculo.id, contract_id=contract.id, client_id=cliente.id,
+            payer_client_id=outro_cliente.id, uninstall_date=date(2025, 5, 10),
+            fee_amount=Decimal('50.00'), status='pending',
+        )
+        linked_item = ClientChargeItem(
+            client_id=cliente.id, contract_id=contract.id, title='Serviço delegado',
+            quantity=1, unit_price=Decimal('40.00'), total_amount=Decimal('40.00'),
+            installment_count=1, start_date=date(2025, 5, 1), active=True,
+        )
+        own_item = self._charge_item(db, cliente, 'Serviço do próprio cliente')
+        db.add_all([event, linked_item])
+        db.commit()
+
+        preview = simulate_closure(db, REF_MONTH, filter_type='client', client_id=outro_cliente.id)
+        assert [row['event_id'] for row in preview['uninstall_events']] == [event.id]
+        assert [row['item_id'] for row in preview['charge_items']] == [linked_item.id]
+        assert own_item.id not in {row['item_id'] for row in preview['charge_items']}
+
+        result = execute_closure(
+            db, REF_MONTH, filter_type='client', client_id=outro_cliente.id,
+            contract_ids=[], uninstall_event_ids=[event.id], charge_item_ids=[linked_item.id],
+        )
+        generated = db.scalars(select(Billing).where(
+            Billing.id.in_(result['uninstall_billing_ids'] + result['service_billing_ids'])
+        )).all()
+        assert len(generated) == 2
+        assert all(billing.payer_client_id == outro_cliente.id for billing in generated)
+
+    def test_individual_closure_includes_final_prorata_paid_by_intervenient(
+        self, db, cliente, outro_cliente, plan,
+    ):
+        contract = Contract(
+            client_id=cliente.id, interveniente_client_id=outro_cliente.id,
+            plan_id=plan.id, start_date=date(2026, 1, 1),
+            end_date=date(2026, 9, 10), uninstalled_at=date(2026, 9, 10),
+            status='cancelado', billing_day=10,
+        )
+        db.add(contract)
+        db.commit()
+
+        preview = simulate_closure(
+            db, date(2026, 10, 1), filter_type='client', client_id=outro_cliente.id,
+            activity_month=date(2026, 9, 1),
+        )
+        assert [row['contract_id'] for row in preview['items']] == [contract.id]
+        assert preview['items'][0]['is_final_prorata'] is True
+
     def test_exact_contract_ids_do_not_include_new_unreviewed_contract(
         self, db, cliente, plan,
     ):

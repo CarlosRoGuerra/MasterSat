@@ -4,6 +4,7 @@ from calendar import monthrange
 from datetime import date
 from decimal import Decimal
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.client import Client
@@ -38,9 +39,18 @@ def _pending_uninstall_events_for_month(
             UninstallEvent.uninstall_date < month_end,
         )
     )
-    return _apply_client_scope(
-        query, UninstallEvent.client_id, filter_type, client_id,
-    ).order_by(UninstallEvent.uninstall_date.asc(), UninstallEvent.id.asc()).all()
+    if filter_type == 'client' and client_id is not None:
+        # payer_client_id congela o pagador na retirada. Eventos legados sem
+        # snapshot seguem o interveniente do contrato, como no processamento.
+        query = _apply_client_scope(query, UninstallEvent.client_id, 'all', None)
+        query = query.outerjoin(Contract, Contract.id == UninstallEvent.contract_id).filter(
+            func.coalesce(
+                UninstallEvent.payer_client_id, Contract.interveniente_client_id, UninstallEvent.client_id,
+            ) == client_id
+        )
+    else:
+        query = _apply_client_scope(query, UninstallEvent.client_id, filter_type, client_id)
+    return query.order_by(UninstallEvent.uninstall_date.asc(), UninstallEvent.id.asc()).all()
 
 
 def uninstall_fee_for_event(db: Session, event: UninstallEvent) -> tuple[Decimal, str]:

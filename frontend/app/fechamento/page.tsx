@@ -32,6 +32,7 @@ type ClosureItem = {
   contract_id: number;
   client_id: number;
   client_name: string;
+  payer_name?: string;
   client_type: string;
   vehicle_plate: string | null;
   tracker_imei: string | null;
@@ -55,6 +56,7 @@ type UninstallEventItem = {
   event_id: number;
   client_id: number;
   client_name: string;
+  payer_name?: string;
   client_type: string;
   vehicle_plate: string | null;
   uninstall_date: string;
@@ -70,6 +72,7 @@ type ChargeItem = {
   item_id: number;
   client_id: number;
   client_name: string;
+  payer_name?: string;
   client_type: string;
   vehicle_plate: string | null;
   title: string;
@@ -520,13 +523,15 @@ export default function FechamentoPage() {
 
             {filterType === 'client' && (
               <div className="min-w-[240px]">
-                <p className="mb-1.5 text-xs font-semibold text-slate-500 dark:text-slate-400">Cliente</p>
+                <p className="mb-1.5 text-xs font-semibold text-slate-500 dark:text-slate-400">Responsável financeiro</p>
                 <ClientAutocomplete
                   clients={clients}
                   value={selectedClientId}
                   onChange={setSelectedClientId}
                   searchClients={searchClosureClients}
+                  placeholder="Buscar responsável financeiro"
                 />
+                <p className="mt-1 text-xs text-slate-500">Inclui contratos de outros clientes pagos por ele.</p>
               </div>
             )}
           </div>
@@ -679,6 +684,9 @@ export default function FechamentoPage() {
                           </Td>
                           <Td>
                             <p className="font-medium text-slate-900 dark:text-white">{item.client_name}</p>
+                            {item.payer_name && item.payer_name !== item.client_name && (
+                              <p className="text-2xs text-slate-500 dark:text-slate-400">Interveniente: {item.payer_name}</p>
+                            )}
                           </Td>
                           <Td>{typeBadge(item.client_type)}</Td>
                           <Td>
@@ -816,6 +824,9 @@ export default function FechamentoPage() {
                         <Tr key={item.event_id}>
                           <Td>
                             <p className="font-medium text-slate-900 dark:text-white">{item.client_name}</p>
+                            {item.payer_name && item.payer_name !== item.client_name && (
+                              <p className="text-2xs text-slate-500 dark:text-slate-400">Interveniente: {item.payer_name}</p>
+                            )}
                           </Td>
                           <Td>{typeBadge(item.client_type)}</Td>
                           <Td className="text-sm text-slate-700 dark:text-slate-300">{item.vehicle_plate ?? '—'}</Td>
@@ -887,6 +898,9 @@ export default function FechamentoPage() {
                         <Tr key={item.item_id}>
                           <Td>
                             <p className="font-medium text-slate-900 dark:text-white">{item.client_name}</p>
+                            {item.payer_name && item.payer_name !== item.client_name && (
+                              <p className="text-2xs text-slate-500 dark:text-slate-400">Interveniente: {item.payer_name}</p>
+                            )}
                           </Td>
                           <Td>{typeBadge(item.client_type)}</Td>
                           <Td className="text-sm text-slate-700 dark:text-slate-300">{item.vehicle_plate ?? '—'}</Td>
