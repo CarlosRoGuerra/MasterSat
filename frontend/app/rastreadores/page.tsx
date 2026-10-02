@@ -53,7 +53,7 @@ type Tracker = {
 };
 
 type ManufacturerOption = { code: string; description: string };
-type PlanOption = { id: number; name: string; price: number; billing_interval_months?: number };
+type PlanOption = { id: number; name: string; price: number; active?: boolean; billing_interval_months?: number };
 
 type LoteItem = {
   imei: string;
@@ -69,7 +69,7 @@ type LoteResultado = {
   itens: LoteItem[];
 };
 type TrackerHistory = { id: number; action: string; previous_vehicle_id?: number | null; new_vehicle_id?: number | null; previous_client_id?: number | null; new_client_id?: number | null; new_status?: string | null; event_date?: string | null; notes?: string | null; created_at?: string | null };
-type ContractInfo = { id: number; plan_name?: string | null; status: string; monthly_value?: number | null; start_date?: string | null; next_due_date?: string | null };
+type ContractInfo = { id: number; tracker_id?: number | null; vehicle_id?: number | null; plan_id: number; plan_name?: string | null; status: string; monthly_value?: number | null; start_date?: string | null; next_due_date?: string | null; open_billings?: number };
 
 /** Resposta de GET /integrations/multiportal/trackers/{id}/query-link — mesmo formato usado em app/integracao/page.tsx (FlowOut). */
 type TrackerLinkFlow = {
@@ -239,6 +239,7 @@ function RastreadoresTableContent({
 function RastreadoresPageInner() {
   const { token, user, loading: guardLoading, error: guardError } = useAuthGuard(ROUTE_ROLES['/rastreadores'], '/login/admin');
   const canEdit = !!user && user.role !== 'financeiro';
+  const canEditContract = user?.role === 'admin';
 
   const [trackers, setTrackers] = useState<Tracker[]>([]);
   const [clients, setClients] = useState<ClientOption[]>([]);
@@ -247,6 +248,9 @@ function RastreadoresPageInner() {
   const [plans, setPlans] = useState<PlanOption[]>([]);
   const [history, setHistory] = useState<TrackerHistory[]>([]);
   const [trackerContract, setTrackerContract] = useState<ContractInfo | null>(null);
+  const [contractPlanId, setContractPlanId] = useState('');
+  const [savingContractPlan, setSavingContractPlan] = useState(false);
+  const [contractPlanFeedback, setContractPlanFeedback] = useState('');
   const [vehicleTrackers, setVehicleTrackers] = useState<Tracker[]>([]);
   const [selectedTracker, setSelectedTracker] = useState<Tracker | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -338,7 +342,7 @@ function RastreadoresPageInner() {
     } else {
       setVehicleTrackers([]);
     }
-  }, [token, selectedTracker?.id]);
+  }, [token, selectedTracker?.id, modalOpen]);
 
   // Deep-link da Busca Global (Ctrl+K): "?focus=<id>" abre o rastreador
   // direto — busca pelo id (não pela lista carregada, que é limitada/
@@ -501,6 +505,9 @@ function RastreadoresPageInner() {
 
   function openEditModal(tracker: Tracker) {
     setSelectedTracker(tracker);
+    setTrackerContract(null);
+    setContractPlanId(tracker.active_plan_id ? String(tracker.active_plan_id) : '');
+    setContractPlanFeedback('');
     setModalError('');
     setForm({
       imei: tracker.imei || '',
@@ -532,6 +539,33 @@ function RastreadoresPageInner() {
     });
     setIsEditing(true);
     setModalOpen(true);
+  }
+
+  async function saveContractPlan() {
+    if (!token || !canEditContract || !selectedTracker || !trackerContract || !contractPlanId) return;
+    if (trackerContract.tracker_id !== selectedTracker.id || trackerContract.vehicle_id !== selectedTracker.vehicle_id) return;
+    setSavingContractPlan(true);
+    setModalError('');
+    setContractPlanFeedback('');
+    try {
+      const updatedContract = await apiFetch<ContractInfo>(`/contracts/${trackerContract.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ plan_id: Number(contractPlanId) }),
+      }, token);
+      const updatedTracker: Tracker = {
+        ...selectedTracker,
+        active_plan_id: updatedContract.plan_id,
+        active_plan_name: updatedContract.plan_name,
+      };
+      setTrackerContract(updatedContract);
+      setSelectedTracker(updatedTracker);
+      setTrackers((items) => items.map((item) => item.id === updatedTracker.id ? updatedTracker : item));
+      setContractPlanFeedback('Plano do contrato atualizado. Confira as cobranças já geradas no Financeiro.');
+    } catch (err) {
+      setModalError(parseError(err));
+    } finally {
+      setSavingContractPlan(false);
+    }
   }
 
   function findClientByDocument() {
@@ -1021,10 +1055,30 @@ function RastreadoresPageInner() {
             <div className="rounded-[24px] border border-brand-200 bg-brand-50/50 p-5 dark:border-cyan-900 dark:bg-cyan-950/30">
               <p className="text-sm font-semibold text-slate-900 dark:text-white">Plano contratado</p>
               {contratoAtivoNoVeiculo ? (
-                <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                  Este rastreador já tem contrato ativo neste veículo: <span className="font-semibold">{selectedTracker?.active_plan_name}</span>.
-                  Para mudar plano, início ou vencimento, use Financeiro → Planos e Contratos.
-                </p>
+                <div className="mt-2 space-y-3 text-sm text-slate-600 dark:text-slate-300">
+                  <p>Contrato ativo neste veículo: <span className="font-semibold">{selectedTracker?.active_plan_name}</span>.</p>
+                  {canEditContract ? (
+                    <>
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+                        <label className="min-w-0 flex-1">
+                          <span className="mb-1 block text-xs font-semibold">Alterar plano do contrato</span>
+                          <select className={fieldClass} value={contractPlanId} onChange={(e) => { setContractPlanId(e.target.value); setContractPlanFeedback(''); }}>
+                            {plans.filter((plan) => plan.active !== false || plan.id === selectedTracker?.active_plan_id).map((plan) => (
+                              <option key={plan.id} value={plan.id}>{plan.name} — R$ {Number(plan.price ?? 0).toFixed(2)}{pricePeriodSuffix(plan.billing_interval_months)}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <Button type="button" onClick={saveContractPlan} disabled={savingContractPlan || !trackerContract || trackerContract.tracker_id !== selectedTracker?.id || trackerContract.vehicle_id !== selectedTracker?.vehicle_id || !contractPlanId || Number(contractPlanId) === trackerContract.plan_id}>
+                          {savingContractPlan ? 'Salvando...' : 'Salvar plano'}
+                        </Button>
+                      </div>
+                      <p className="text-xs text-amber-700 dark:text-amber-300">
+                        A mudança vale para novas cobranças. {trackerContract?.open_billings ? `${trackerContract.open_billings} cobrança(s) em aberto mantêm o valor anterior; confira-as no Financeiro.` : 'Cobranças já geradas não são recalculadas.'}
+                      </p>
+                      {contractPlanFeedback && <p className="text-xs text-emerald-700 dark:text-emerald-300">{contractPlanFeedback}</p>}
+                    </>
+                  ) : <p>Peça a um administrador para alterar o plano deste contrato.</p>}
+                </div>
               ) : (
               <>
               <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
