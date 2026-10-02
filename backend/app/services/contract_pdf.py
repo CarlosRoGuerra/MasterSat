@@ -18,7 +18,10 @@ from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.platypus import (
+    Flowable,
     PageBreak,
     Paragraph,
     SimpleDocTemplate,
@@ -26,6 +29,108 @@ from reportlab.platypus import (
     Table,
     TableStyle,
 )
+
+
+class _EditableField(Flowable):
+    """Campo AcroForm posicionado pelo próprio layout da tabela."""
+
+    def __init__(self, name: str, value: str = '', tooltip: str = '', maxlen: int = 120):
+        super().__init__()
+        self.name = name
+        self.value = str(value or '')
+        self.tooltip = tooltip or name
+        self.maxlen = maxlen
+
+    def wrap(self, available_width, available_height):
+        self.width = available_width
+        self.height = 13
+        return self.width, self.height
+
+    def draw(self):
+        self.canv.acroForm.textfieldRelative(
+            name=self.name, tooltip=self.tooltip, value=self.value,
+            x=0, y=0, width=self.width, height=self.height,
+            fontName='Helvetica', fontSize=8, maxlen=self.maxlen,
+            textColor=colors.black, fillColor=colors.white,
+            borderWidth=0, forceBorder=False,
+        )
+
+
+class _InlineField(_EditableField):
+    def __init__(self, label: str, name: str, value: str = '', maxlen: int = 40):
+        super().__init__(name, value, label, maxlen)
+        self.label = label
+
+    def draw(self):
+        self.canv.setFont('Helvetica-Bold', 7)
+        self.canv.drawString(0, 3, self.label)
+        offset = stringWidth(self.label, 'Helvetica-Bold', 7) + 3
+        self.canv.acroForm.textfieldRelative(
+            name=self.name, tooltip=self.label, value=self.value,
+            x=offset, y=0, width=max(10, self.width - offset), height=self.height,
+            fontName='Helvetica', fontSize=8, maxlen=self.maxlen,
+            textColor=colors.black, fillColor=colors.white,
+            borderWidth=0, forceBorder=False,
+        )
+
+
+class _CheckOptions(Flowable):
+    def __init__(self, prefix: str, options: list[str], extra_name: str | None = None):
+        super().__init__()
+        self.prefix = prefix
+        self.options = options
+        self.extra_name = extra_name
+
+    def wrap(self, available_width, available_height):
+        self.width = available_width
+        self.height = 13
+        return self.width, self.height
+
+    def draw(self):
+        self.canv.setFont('Helvetica', 7)
+        x = 0
+        for index, label in enumerate(self.options):
+            self.canv.acroForm.checkboxRelative(
+                name=f'{self.prefix}_{index}', tooltip=label,
+                x=x, y=2, size=9, buttonStyle='check',
+                borderWidth=0.5, borderColor=colors.HexColor('#687385'),
+                fillColor=colors.white, textColor=colors.black,
+                fieldFlags='', forceBorder=True,
+            )
+            x += 12
+            self.canv.drawString(x, 3, label)
+            x += stringWidth(label, 'Helvetica', 7) + 10
+        if self.extra_name and self.width - x >= 35:
+            self.canv.acroForm.textfieldRelative(
+                name=self.extra_name, tooltip='Número de WhatsApp para receber boleto',
+                x=x, y=0, width=self.width - x, height=self.height,
+                fontName='Helvetica', fontSize=8, maxlen=30,
+                textColor=colors.black, fillColor=colors.white,
+                borderWidth=0.5, borderStyle='underlined',
+            )
+
+
+class _CompanySignature(Flowable):
+    """Imagem configurada da MasterSat, centralizada na coluna da contratada."""
+
+    def __init__(self, content: bytes):
+        super().__init__()
+        self.content = content
+
+    def wrap(self, available_width, available_height):
+        self.width = available_width
+        self.height = 70
+        return self.width, self.height
+
+    def draw(self):
+        image = ImageReader(io.BytesIO(self.content))
+        image_width, image_height = image.getSize()
+        scale = min((self.width - 8) / image_width, 70 / image_height)
+        draw_width, draw_height = image_width * scale, image_height * scale
+        self.canv.drawImage(
+            image, (self.width - draw_width) / 2, (self.height - draw_height) / 2,
+            width=draw_width, height=draw_height, mask='auto',
+        )
 
 # ── Dados FIXOS da contratada (modelo CONTRATO.pdf) ──────────────────────────
 CONTRATADA_RAZAO = 'MASTERSAT COMERCIO E SERVIÇOS DE RASTREAMENTO LTDA'
@@ -188,7 +293,7 @@ def _grade(linhas: list[list], st, larguras: list[float]) -> Table:
     return t
 
 
-def gerar_contrato_pdf(contract, client, plan=None, vehicle=None) -> bytes:
+def gerar_contrato_pdf(contract, client, plan=None, vehicle=None, signature_png: bytes | None = None) -> bytes:
     """Gera o PDF do contrato (TERMO DE ADESÃO + cláusulas) para um Contract."""
     st = _styles()
     buf = io.BytesIO()
@@ -203,8 +308,11 @@ def gerar_contrato_pdf(contract, client, plan=None, vehicle=None) -> bytes:
     def P(txt, style='valor'):
         return Paragraph(txt if txt not in (None, '') else '&nbsp;', st[style])
 
-    def L(label, valor=''):
-        return [Paragraph(label, st['label']), Paragraph(str(valor) if valor not in (None, '') else '', st['valor'])]
+    def F(name, value='', tooltip='', maxlen=120):
+        return _EditableField(name, value, tooltip, maxlen)
+
+    def L(label, name, value=''):
+        return [Paragraph(label, st['label']), F(name, value, label)]
 
     cli_nome = getattr(client, 'name', '') or ''
     cli_doc = getattr(client, 'cpf_cnpj', '') or ''
@@ -267,80 +375,80 @@ def gerar_contrato_pdf(contract, client, plan=None, vehicle=None) -> bytes:
     elems.append(Spacer(1, 4))
     elems.append(_barra_secao('2. DADOS DO CONTRATANTE', st, W))
     elems.append(_grade([
-        L('NOME / RAZÃO SOCIAL:', cli_nome),
-        L('CPF / CNPJ:', cli_doc),
+        L('NOME / RAZÃO SOCIAL:', 'cliente_nome', cli_nome),
+        L('CPF / CNPJ:', 'cliente_documento', cli_doc),
     ], st, [W * 0.22, W * 0.78]))
     # RG e data de nascimento dividem a mesma linha (compacta o termo)
     elems.append(_grade([
-        [Paragraph('RG / INSC. ESTADUAL:', st['label']), P(cli_rg),
-         Paragraph('DATA DE NASCIMENTO:', st['label']), P(cli_nasc)],
+        [Paragraph('RG / INSC. ESTADUAL:', st['label']), F('cliente_rg_ie', cli_rg),
+         Paragraph('DATA DE NASCIMENTO:', st['label']), F('cliente_nascimento', cli_nasc)],
     ], st, [W * 0.22, W * 0.38, W * 0.20, W * 0.20]))
     elems.append(_grade([
-        [Paragraph('LOGRADOURO:', st['label']), P(f'{cli_log} {cli_num}'.strip()),
-         Paragraph('BAIRRO:', st['label']), P(cli_bairro)],
+        [Paragraph('LOGRADOURO:', st['label']), F('cliente_logradouro', f'{cli_log} {cli_num}'.strip()),
+         Paragraph('BAIRRO:', st['label']), F('cliente_bairro', cli_bairro)],
     ], st, [W * 0.14, W * 0.46, W * 0.10, W * 0.30]))
     elems.append(_grade([
-        [Paragraph('CEP:', st['label']), P(cli_cep), Paragraph('CIDADE:', st['label']), P(cli_cidade),
-         Paragraph('UF:', st['label']), P(cli_uf)],
+        [Paragraph('CEP:', st['label']), F('cliente_cep', cli_cep), Paragraph('CIDADE:', st['label']), F('cliente_cidade', cli_cidade),
+         Paragraph('UF:', st['label']), F('cliente_uf', cli_uf, maxlen=2)],
     ], st, [W * 0.08, W * 0.22, W * 0.10, W * 0.40, W * 0.06, W * 0.14]))
     elems.append(_grade([
-        [Paragraph('TEL. FIXO:', st['label']), P(''), Paragraph('TEL. CELULAR:', st['label']), P(cli_tel),
-         Paragraph('TEL. COMERCIAL:', st['label']), P('')],
+        [Paragraph('TEL. FIXO:', st['label']), F('cliente_telefone_fixo'), Paragraph('TEL. CELULAR:', st['label']), F('cliente_celular', cli_tel),
+         Paragraph('TEL. COMERCIAL:', st['label']), F('cliente_telefone_comercial')],
     ], st, [W * 0.13, W * 0.20, W * 0.15, W * 0.18, W * 0.16, W * 0.18]))
-    elems.append(_grade([L('E-MAIL:', cli_email)], st, [W * 0.12, W * 0.88]))
+    elems.append(_grade([L('E-MAIL:', 'cliente_email', cli_email)], st, [W * 0.12, W * 0.88]))
 
     # 3. CONDIÇÕES DE PAGAMENTO DA ADESÃO/INSTALAÇÃO
     elems.append(Spacer(1, 4))
     elems.append(_barra_secao('3. CONDIÇÕES DE PAGAMENTO DA ADESÃO/INSTALAÇÃO', st, W))
     elems.append(_grade([[Paragraph('FORMA DE PAGAMENTO:', st['label']),
-                          Paragraph('[  ] DINHEIRO&nbsp;&nbsp;&nbsp;&nbsp;[  ] CARTÃO&nbsp;&nbsp;&nbsp;&nbsp;[  ] PIX', st['valor'])]],
+                          _CheckOptions('adesao_pagamento', ['DINHEIRO', 'CARTÃO', 'PIX'])]],
                         st, [W * 0.3, W * 0.7]))
 
     # 4. FORMA DE PAGAMENTO DO SERVIÇO DE RASTREAMENTO
     elems.append(Spacer(1, 4))
     elems.append(_barra_secao('4. FORMA DE PAGAMENTO DO SERVIÇO DE RASTREAMENTO', st, W))
-    elems.append(_grade([[Paragraph(
-        '[  ] CARNÊ&nbsp;&nbsp;&nbsp;[  ] CARTÃO DE CRÉDITO&nbsp;&nbsp;&nbsp;[  ] BOLETO VIA E-MAIL&nbsp;&nbsp;&nbsp;'
-        '[  ] BOLETO VIA WHATSAPP [ ______________________ ]', st['valor'])]], st, [W]))
+    elems.append(_grade([[_CheckOptions('servico_pagamento', [
+        'CARNÊ', 'CARTÃO DE CRÉDITO', 'BOLETO VIA E-MAIL', 'BOLETO VIA WHATSAPP',
+    ], extra_name='boleto_whatsapp_numero')]], st, [W]))
     # Data manual no MESMO campo do rótulo; prazo padrão 12 meses; renovação e
     # "sem fidelidade" como caixinhas para marcar à caneta (campo de meses saiu)
     elems.append(_grade([
-        [Paragraph(f'<b>INÍCIO VIGÊNCIA CONTRATO:</b> {inicio_vig}', st['valor']),
-         Paragraph(f'<b>PRAZO (MESES):</b> {prazo_vig}', st['valor']),
-         Paragraph('[  ] RENOVAÇÃO ANUAL AUTOMÁTICA', st['label']),
-         Paragraph('[  ] SEM FIDELIDADE', st['label'])],
+        [_InlineField('INÍCIO VIGÊNCIA:', 'inicio_vigencia', inicio_vig),
+         _InlineField('PRAZO (MESES):', 'prazo_meses', prazo_vig, 3),
+         _CheckOptions('renovacao', ['RENOVAÇÃO ANUAL AUTOMÁTICA']),
+         _CheckOptions('fidelidade', ['SEM FIDELIDADE'])],
     ], st, [W * 0.34, W * 0.15, W * 0.29, W * 0.22]))
     elems.append(_grade([
-        [Paragraph('DIA VENCIMENTO:', st['label']), P(str(getattr(contract, 'billing_day', '') or '')),
-         Paragraph('VALOR RASTREAMENTO MENSAL POR VEÍCULO:', st['label']), P(valor_mensal)],
+        [Paragraph('DIA VENCIMENTO:', st['label']), F('dia_vencimento', str(getattr(contract, 'billing_day', '') or ''), maxlen=2),
+         Paragraph('VALOR RASTREAMENTO MENSAL POR VEÍCULO:', st['label']), F('valor_mensal', valor_mensal)],
     ], st, [W * 0.16, W * 0.12, W * 0.42, W * 0.30]))
     elems.append(_grade([
-        [Paragraph('TAXA INSTALAÇÃO POR VEÍCULO:', st['label']), P(taxa_inst),
-         Paragraph('TAXA DESINSTALAÇÃO POR VEÍCULO:', st['label']), P(taxa_desinst)],
+        [Paragraph('TAXA INSTALAÇÃO POR VEÍCULO:', st['label']), F('taxa_instalacao', taxa_inst),
+         Paragraph('TAXA DESINSTALAÇÃO POR VEÍCULO:', st['label']), F('taxa_desinstalacao', taxa_desinst)],
     ], st, [W * 0.28, W * 0.20, W * 0.30, W * 0.22]))
 
     # 5. EMERGÊNCIA
     elems.append(Spacer(1, 4))
     elems.append(_barra_secao('5. EM CASO DE EMERGÊNCIA AVISAR - PESSOAS AUTORIZADAS', st, W))
     elems.append(_grade([
-        [Paragraph('CONTATO:', st['label']), P(e1n), Paragraph('CELULAR:', st['label']), P(e1c or e1t)],
-        [Paragraph('CONTATO:', st['label']), P(e2n), Paragraph('CELULAR:', st['label']), P(e2c or e2t)],
+        [Paragraph('CONTATO:', st['label']), F('emergencia_1_nome', e1n), Paragraph('CELULAR:', st['label']), F('emergencia_1_celular', e1c or e1t)],
+        [Paragraph('CONTATO:', st['label']), F('emergencia_2_nome', e2n), Paragraph('CELULAR:', st['label']), F('emergencia_2_celular', e2c or e2t)],
     ], st, [W * 0.10, W * 0.52, W * 0.10, W * 0.28]))
     # Credenciais de acesso à plataforma — DUAS linhas completas e idênticas
     # (código URL, usuário e senha), para anotar dois acessos à caneta.
     elems.append(_grade([
         [Paragraph('CÓDIGO URL:', st['label']), P(CODIGO_URL),
-         Paragraph('USUÁRIO:', st['label']), P(''),
-         Paragraph('SENHA:', st['label']), P('')],
+         Paragraph('USUÁRIO:', st['label']), F('acesso_1_usuario'),
+         Paragraph('SENHA:', st['label']), F('acesso_1_senha')],
         [Paragraph('CÓDIGO URL:', st['label']), P(CODIGO_URL),
-         Paragraph('USUÁRIO:', st['label']), P(''),
-         Paragraph('SENHA:', st['label']), P('')],
+         Paragraph('USUÁRIO:', st['label']), F('acesso_2_usuario'),
+         Paragraph('SENHA:', st['label']), F('acesso_2_senha')],
     ], st, [W * 0.12, W * 0.10, W * 0.10, W * 0.34, W * 0.08, W * 0.26]))
 
     # 6. PLACAS
     elems.append(Spacer(1, 4))
     elems.append(_barra_secao('6. PLACAS', st, W))
-    elems.append(_grade([[P(placa or '')]], st, [W]))
+    elems.append(_grade([[F('placas', placa or '')]], st, [W]))
 
     # Taxas fixas
     elems.append(Spacer(1, 4))
@@ -359,6 +467,7 @@ def gerar_contrato_pdf(contract, client, plan=None, vehicle=None) -> bytes:
     elems.append(Paragraph(_data_extenso(date.today()), st['valor']))
     elems.append(Spacer(1, 22))
     elems.append(Table([[Paragraph('_______________________________<br/>CONTRATANTE/COMODATÁRIO', st['assinatura']),
+                         _CompanySignature(signature_png) if signature_png else
                          Paragraph('_______________________________<br/>CONTRATADA/COMODANTE', st['assinatura'])]],
                        colWidths=[W / 2, W / 2]))
     # Observação em destaque no FINAL da 1ª página (pedido do cliente) — 1x só
@@ -384,6 +493,7 @@ def gerar_contrato_pdf(contract, client, plan=None, vehicle=None) -> bytes:
     elems.append(Spacer(1, 48))
     assinaturas = Table([
         [Paragraph('_______________________________', st['assinatura']),
+         _CompanySignature(signature_png) if signature_png else
          Paragraph('_______________________________', st['assinatura'])],
         [Paragraph(f'{cli_nome}<br/>CPF/CNPJ {cli_doc}', st['assinatura']),
          Paragraph(f'{CONTRATADA_RAZAO}<br/>CNPJ {CONTRATADA_CNPJ}', st['assinatura'])],

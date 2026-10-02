@@ -265,7 +265,8 @@ def generate_contract_pdf(
         emergency_contacts=[],
     )
     from app.services.contract_pdf import gerar_contrato_pdf
-    pdf = gerar_contrato_pdf(contrato, cliente_branco, plan, None)
+    from app.services.contract_signature import get_contract_signature
+    pdf = gerar_contrato_pdf(contrato, cliente_branco, plan, None, get_contract_signature(db))
     return Response(
         content=pdf,
         media_type='application/pdf',
@@ -392,7 +393,8 @@ def contract_pdf(item_id: int, db: Session = Depends(get_db), _: object = Depend
     plan = db.get(Plan, obj.plan_id)
     vehicle = db.get(Vehicle, obj.vehicle_id) if getattr(obj, 'vehicle_id', None) else None
     from app.services.contract_pdf import gerar_contrato_pdf
-    pdf = gerar_contrato_pdf(obj, client, plan, vehicle)
+    from app.services.contract_signature import get_contract_signature
+    pdf = gerar_contrato_pdf(obj, client, plan, vehicle, get_contract_signature(db))
     return Response(
         content=pdf,
         media_type='application/pdf',

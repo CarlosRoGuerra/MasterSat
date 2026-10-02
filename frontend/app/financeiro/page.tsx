@@ -976,8 +976,8 @@ export default function FinanceiroPage() {
     if (!token || !canEdit) return;
     setProcessing(true);
     try {
-      // Só gera o PDF em branco (plano, vigência e taxas). Não salva contrato
-      // nem preenche dados do cliente — quem preenche e assina é o cliente.
+      // Gera um PDF com campos preenchíveis. Não salva contrato nem preenche
+      // dados do cliente — o cliente completa os campos e assina sua parte.
       const payload = {
         plan_id: Number(contractForm.plan_id),
         start_date: contractForm.start_date || null,
@@ -1001,7 +1001,7 @@ export default function FinanceiroPage() {
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
       setContractForm(initialContractForm); setContractModal(false);
-      setFeedback('Contrato gerado — baixe o PDF e envie ao cliente para preencher e assinar.');
+      setFeedback('PDF editável gerado. O cliente pode preencher os campos e assinar sua parte.');
     } catch (err) { setModalError(parseError(err)); } finally { setProcessing(false); }
   }
 
@@ -2013,9 +2013,9 @@ export default function FinanceiroPage() {
               <div>
                 <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Contratos</p>
                 <p className="mt-1 max-w-xl text-sm text-slate-500 dark:text-slate-400">
-                  Gere o termo de adesão em branco com o <strong>plano</strong>, a <strong>vigência</strong> e as
-                  <strong> taxas</strong>. Nada é salvo: baixe o PDF, envie ao cliente para preencher os dados dele e
-                  assinar, e depois guarde o assinado em <strong>Clientes → contrato</strong>.
+                  Gere o termo de adesão com campos editáveis no PDF. O <strong>plano</strong>, a <strong>vigência</strong> e as
+                  <strong> taxas</strong> vêm preenchidos. A assinatura da MasterSat configurada no painel já aparece;
+                  o cliente preenche e assina sua parte. Depois, guarde o assinado em <strong>Clientes → contrato</strong>.
                 </p>
               </div>
               <Button variant="secondary" onClick={openCreateContract} className="shrink-0">
@@ -2412,7 +2412,7 @@ export default function FinanceiroPage() {
         </form>
       </Modal>
 
-      <Modal open={contractModal} onClose={() => { setContractModal(false); setEditingContractId(null); setContractForm(initialContractForm); setModalError(''); }} title="Gerar contrato" description="Modelo em branco para o cliente preencher e assinar. Escolha o plano e a vigência — nada é salvo e os dados do cliente saem em branco." size="lg">
+      <Modal open={contractModal} onClose={() => { setContractModal(false); setEditingContractId(null); setContractForm(initialContractForm); setModalError(''); }} title="Gerar contrato" description="PDF com campos editáveis para o cliente completar e assinar. Escolha plano e vigência; nada é salvo nesta etapa." size="lg">
         <form className="space-y-5" onSubmit={submitContract}>
           {modalError && <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{modalError}</p>}
           <div className="grid gap-4 md:grid-cols-2">
@@ -2451,7 +2451,7 @@ export default function FinanceiroPage() {
             </label>
 
             <div className="rounded-2xl border border-slate-200 px-4 py-3 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400 md:col-span-2">
-              Baixe o PDF e envie ao cliente para preencher os dados dele e assinar. Quando devolver, guarde o assinado em <strong>Clientes → botão de contrato → “Enviar contrato assinado”</strong> — é lá que ele fica listado e o cadastro marca “contrato armazenado”.
+              Baixe o PDF editável e envie ao cliente para preencher os dados e assinar. Configure antes a assinatura da MasterSat em <strong>Configurações → Assinatura da MasterSat</strong>. Quando o cliente devolver, guarde em <strong>Clientes → botão de contrato → “Enviar contrato assinado”</strong>.
             </div>
           </div>
           <div className="flex justify-end gap-3">

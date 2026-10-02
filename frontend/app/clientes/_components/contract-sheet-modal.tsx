@@ -55,7 +55,7 @@ export function ContractSheetModal({
     >
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-slate-500 dark:text-slate-400">
-          Gere o modelo em branco em <strong>Financeiro → Gerar contrato</strong>. Quando o cliente devolver assinado, anexe aqui.
+          Gere o PDF editável em <strong>Financeiro → Gerar contrato</strong>. Quando o cliente devolver assinado, anexe aqui.
         </p>
         {client && (
           client.contrato_armazenado

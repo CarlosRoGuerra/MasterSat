@@ -1,14 +1,14 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { MessageSquareText, Save, Send } from 'lucide-react';
+import { FileSignature, MessageSquareText, Save, Send, Trash2, Upload } from 'lucide-react';
 
 import { PageShell } from '@/components/page-shell';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { SectionHeader } from '@/components/ui/section-header';
 import { ErrorBanner } from '@/components/ui/error-banner';
-import { apiFetch } from '@/lib/api';
+import { API_URL, apiFetch } from '@/lib/api';
 import { useAuthGuard } from '@/lib/use-auth-guard';
 import { ROUTE_ROLES } from '@/lib/route-roles';
 
@@ -58,6 +58,21 @@ export default function ConfiguracoesPage() {
   const [emailPassword, setEmailPassword] = useState('');
   const [savingEmail, setSavingEmail] = useState(false);
   const [testingEmail, setTestingEmail] = useState(false);
+  const [signatureConfigured, setSignatureConfigured] = useState(false);
+  const [signaturePreview, setSignaturePreview] = useState('');
+  const [signatureFile, setSignatureFile] = useState<File | null>(null);
+  const [savingSignature, setSavingSignature] = useState(false);
+
+  async function loadSignature(authToken: string) {
+    const status = await apiFetch<{ configured: boolean }>('/settings/contract-signature', {}, authToken);
+    setSignatureConfigured(status.configured);
+    if (!status.configured) { setSignaturePreview(''); return; }
+    const response = await fetch(`${API_URL.replace(/\/+$/, '')}/settings/contract-signature/image`, {
+      headers: { Authorization: `Bearer ${localStorage.getItem('access_token') || authToken}` }, cache: 'no-store',
+    });
+    if (!response.ok) throw new Error('Não foi possível carregar a assinatura.');
+    setSignaturePreview(URL.createObjectURL(await response.blob()));
+  }
 
   useEffect(() => {
     if (!token) return;
@@ -66,7 +81,10 @@ export default function ConfiguracoesPage() {
       .catch((err) => setError(err instanceof Error ? err.message : 'Erro ao carregar'))
       .finally(() => setLoading(false));
     apiFetch<EmailConfig>('/settings/email', {}, token).then(setEmail).catch(() => { /* opcional */ });
+    loadSignature(token).catch((err) => setError(err instanceof Error ? err.message : 'Erro ao carregar assinatura'));
   }, [token]);
+
+  useEffect(() => () => { if (signaturePreview) URL.revokeObjectURL(signaturePreview); }, [signaturePreview]);
 
   const preview = useMemo(() => renderTemplate(form.msg_boleto, EXEMPLO), [form.msg_boleto]);
 
@@ -122,6 +140,33 @@ export default function ConfiguracoesPage() {
     } finally {
       setTestingEmail(false);
     }
+  }
+
+  async function saveSignature() {
+    if (!token || !signatureFile) return;
+    setSavingSignature(true); setFeedback(''); setError('');
+    try {
+      const data = new FormData();
+      data.append('file', signatureFile);
+      await apiFetch('/settings/contract-signature', { method: 'POST', body: data }, token);
+      await loadSignature(token);
+      setSignatureFile(null);
+      setFeedback('Assinatura salva. Os próximos contratos já sairão assinados pela MasterSat.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erro ao salvar a assinatura');
+    } finally { setSavingSignature(false); }
+  }
+
+  async function removeSignature() {
+    if (!token || !window.confirm('Remover a assinatura dos próximos contratos gerados?')) return;
+    setSavingSignature(true); setFeedback(''); setError('');
+    try {
+      await apiFetch('/settings/contract-signature', { method: 'DELETE' }, token);
+      setSignatureConfigured(false); setSignaturePreview(''); setSignatureFile(null);
+      setFeedback('Assinatura removida dos próximos contratos.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erro ao remover a assinatura');
+    } finally { setSavingSignature(false); }
   }
 
   return (
@@ -261,6 +306,30 @@ export default function ConfiguracoesPage() {
           <p className="mt-3 text-xs text-slate-500">
             A senha é guardada criptografada e nunca é exibida. O teste usa a configuração <strong>salva</strong> — salve antes de enviar o teste.
           </p>
+        </Card>
+
+        <Card>
+          <SectionHeader eyebrow="Contratos" title="Assinatura da MasterSat" />
+          <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">
+            Anexe uma imagem PNG ou JPG da assinatura autorizada. Ela aparecerá automaticamente nos próximos contratos, nos espaços da contratada. A assinatura do cliente continua em branco.
+          </p>
+          {signaturePreview ? (
+            <div className="mt-4 inline-flex max-w-full rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700">
+              <img src={signaturePreview} alt="Assinatura configurada da MasterSat" className="max-h-32 max-w-full object-contain" />
+            </div>
+          ) : (
+            <p className="mt-4 flex items-center gap-2 text-sm text-slate-500"><FileSignature className="h-4 w-4" /> {signatureConfigured ? 'Carregando assinatura…' : 'Nenhuma assinatura configurada.'}</p>
+          )}
+          <div className="mt-4 flex flex-wrap items-end gap-3">
+            <label className="min-w-0 flex-1 text-sm">
+              <span className="mb-1 block text-xs font-medium text-slate-500">Imagem da assinatura (até 2 MB)</span>
+              <input type="file" accept="image/png,image/jpeg" className={fieldClass} onChange={(event) => setSignatureFile(event.target.files?.[0] || null)} />
+            </label>
+            <Button onClick={saveSignature} disabled={!signatureFile || savingSignature} className="gap-2">
+              <Upload className="h-4 w-4" /> {savingSignature ? 'Salvando…' : signatureConfigured ? 'Substituir assinatura' : 'Salvar assinatura'}
+            </Button>
+            {signatureConfigured && <Button variant="secondary" onClick={removeSignature} disabled={savingSignature} className="gap-2"><Trash2 className="h-4 w-4" /> Remover</Button>}
+          </div>
         </Card>
         </div>
       )}
