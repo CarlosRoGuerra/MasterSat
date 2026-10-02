@@ -4,7 +4,7 @@ from collections import defaultdict
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.billing import Billing
@@ -15,7 +15,7 @@ from app.models.contract import Contract
 from app.models.enums import BillingStatus
 from app.models.vehicle import Vehicle
 from app.services.billing_closure.shared import _apply_client_scope
-from app.services.financial import InstallmentSplitError, split_amount_in_installments
+from app.services.financial import InstallmentSplitError, charge_item_payer_client_id, split_amount_in_installments
 
 
 def _effective_billing_counts_bulk(db: Session, item_ids: list[int]) -> dict[int, int]:
@@ -74,24 +74,35 @@ def _pending_charge_items(
             ClientChargeItem.start_date < month_end,
         )
     )
-    items = _apply_client_scope(
-        query, ClientChargeItem.client_id, filter_type, client_id,
-    ).order_by(ClientChargeItem.id.asc()).all()
+    if filter_type == 'client' and client_id is not None:
+        query = _apply_client_scope(query, ClientChargeItem.client_id, 'all', None)
+        query = query.outerjoin(Contract, Contract.id == ClientChargeItem.contract_id).filter(
+            func.coalesce(
+                Contract.interveniente_client_id, Contract.client_id, ClientChargeItem.client_id,
+            ) == client_id
+        )
+    else:
+        query = _apply_client_scope(query, ClientChargeItem.client_id, filter_type, client_id)
+    items = query.order_by(ClientChargeItem.id.asc()).all()
 
     candidate_items = [
         item for item in items if not (exclude_ids and item.id in exclude_ids)
     ]
     billing_counts = _effective_billing_counts_bulk(db, [item.id for item in candidate_items])
 
-    client_ids = {item.client_id for item in candidate_items}
     contract_ids = {item.contract_id for item in candidate_items if item.contract_id}
     vehicle_ids = {item.vehicle_id for item in candidate_items if item.vehicle_id}
-    client_map = {
-        c.id: c for c in db.scalars(select(Client).where(Client.id.in_(client_ids))).all()
-    } if client_ids else {}
     contract_map = {
         c.id: c for c in db.scalars(select(Contract).where(Contract.id.in_(contract_ids))).all()
     } if contract_ids else {}
+    client_ids = {item.client_id for item in candidate_items}
+    client_ids.update(
+        contract.interveniente_client_id or contract.client_id
+        for contract in contract_map.values()
+    )
+    client_map = {
+        c.id: c for c in db.scalars(select(Client).where(Client.id.in_(client_ids))).all()
+    } if client_ids else {}
     vehicle_map = {
         v.id: v for v in db.scalars(select(Vehicle).where(Vehicle.id.in_(vehicle_ids))).all()
     } if vehicle_ids else {}
@@ -113,6 +124,8 @@ def _pending_charge_items(
                 )
 
         client = client_map.get(item.client_id)
+        payer_id = charge_item_payer_client_id(db, item)
+        payer = client_map.get(payer_id)
         vehicle = vehicle_map.get(item.vehicle_id) if item.vehicle_id else None
         remaining = installments - billing_count
         # Mesma divisão que generate_item_billings vai gravar: a prévia não
@@ -131,6 +144,8 @@ def _pending_charge_items(
             'item_id': item.id,
             'client_id': item.client_id,
             'client_name': client.name if client else f'Cliente #{item.client_id}',
+            'payer_client_id': payer_id,
+            'payer_name': payer.name if payer else f'Responsável financeiro #{payer_id}',
             'client_type': client.type if client else 'pf',
             'vehicle_plate': vehicle.plate if vehicle else None,
             'title': item.title,

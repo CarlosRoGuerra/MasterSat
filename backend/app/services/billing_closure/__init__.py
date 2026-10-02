@@ -5,7 +5,7 @@ from calendar import monthrange
 from datetime import date, datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.core.timezone import hoje
@@ -89,6 +89,13 @@ def simulate_closure(
     # Cliente que responde pela cobrança (interveniente). Sem ele, o próprio
     # cliente do contrato é o responsável — é por ele que o relatório agrupa.
     Interveniente = aliased(Client)
+    individual_payer = (
+        or_(
+            Contract.interveniente_client_id == client_id,
+            and_(Contract.interveniente_client_id.is_(None), Contract.client_id == client_id),
+        )
+        if filter_type == 'client' and client_id else None
+    )
 
     query = db.query(Contract, Client, Plan, Vehicle, Tracker, Interveniente).join(
         Client, Client.id == Contract.client_id
@@ -113,7 +120,7 @@ def simulate_closure(
     elif filter_type == 'pj':
         query = query.filter(Client.type == 'pj')
     elif filter_type == 'client' and client_id:
-        query = query.filter(Client.id == client_id)
+        query = query.filter(individual_payer)
 
     items = []
     for contract, client, plan, vehicle, tracker, interveniente in query.all():
@@ -221,7 +228,7 @@ def simulate_closure(
     elif filter_type == 'pj':
         final_query = final_query.filter(Client.type == 'pj')
     elif filter_type == 'client' and client_id:
-        final_query = final_query.filter(Client.id == client_id)
+        final_query = final_query.filter(individual_payer)
 
     for contract, client, plan, vehicle, tracker, interveniente in final_query.all():
         _validate_contract_relationships(
