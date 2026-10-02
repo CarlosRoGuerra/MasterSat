@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, Suspense, useEffect, useMemo, useState } from 'react';
+import { FormEvent, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 import { Users, AlertTriangle, Building2, CheckCircle2, Plus, Trash2, Car, Coins, DollarSign, PawPrint, Pencil, Printer, Search } from 'lucide-react';
@@ -18,7 +18,7 @@ import { EmptyState, TableSkeleton } from '@/components/ui/empty-state';
 import { Table, TableHead, Th, TableBody, Tr, Td } from '@/components/ui/table';
 import { Pagination } from '@/components/ui/pagination';
 import { ExportButton } from '@/components/ui/export-button';
-import { apiFetch, API_URL } from '@/lib/api';
+import { apiFetch, apiFetchList, API_URL } from '@/lib/api';
 import { entregarArquivo, nomeArquivoCliente } from '@/lib/arquivo';
 import { enviarBoletoEmail, enviarBoletoWhats } from '@/lib/boleto-mensagem';
 import { fetchAddressByCep } from '@/lib/cep';
@@ -190,11 +190,19 @@ function ClientesPageInner() {
   const [billingChanges, setBillingChanges] = useState<BillingChange[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
 
-  // Modal "Veículos onde o cliente é interveniente financeiro"
+  // Contratos próprios e contratos de terceiros pagos por este cliente.
   const [intervModalOpen, setIntervModalOpen] = useState(false);
   const [intervModalClient, setIntervModalClient] = useState<Client | null>(null);
   const [intervContracts, setIntervContracts] = useState<IntervContract[]>([]);
+  const [intervOwnedContracts, setIntervOwnedContracts] = useState<IntervContract[]>([]);
   const [intervLoading, setIntervLoading] = useState(false);
+  const [intervError, setIntervError] = useState('');
+  const searchIntervenienteClients = useCallback(async (term: string) => {
+    if (!token) return [];
+    return apiFetchList<{ id: number; name: string; cpf_cnpj?: string; trade_name?: string | null }>(
+      `/clients?search=${encodeURIComponent(term)}&limit=50&sort=name&direction=asc`, {}, token,
+    );
+  }, [token]);
 
   // Modal "Ficha de adesão / contrato" (botão teal da impressora)
   const [contractSheetOpen, setContractSheetOpen] = useState(false);
@@ -528,14 +536,30 @@ function ClientesPageInner() {
     setIntervModalClient(client);
     setIntervModalOpen(true);
     setIntervLoading(true);
+    setIntervError('');
+    setIntervOwnedContracts([]);
+    setIntervContracts([]);
     try {
-      const data = await apiFetch<IntervContract[]>(
-        `/contracts?interveniente_client_id=${client.id}&limit=100`, {}, token!
-      ).catch(() => []);
-      setIntervContracts(data);
+      const [owned, responsible] = await Promise.all([
+        apiFetch<IntervContract[]>(`/contracts?client_id=${client.id}&limit=300`, {}, token!),
+        apiFetch<IntervContract[]>(`/contracts?interveniente_client_id=${client.id}&limit=300`, {}, token!),
+      ]);
+      setIntervOwnedContracts(owned);
+      setIntervContracts(responsible);
+    } catch (err) {
+      setIntervError(parseError(err));
     } finally {
       setIntervLoading(false);
     }
+  }
+
+  async function saveContractInterveniente(contractId: number, payerId: number | null) {
+    if (!token || !intervModalClient || !canFinance) return;
+    const updated = await apiFetch<IntervContract>(`/contracts/${contractId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ interveniente_client_id: payerId }),
+    }, token);
+    setIntervOwnedContracts(current => current.map(contract => contract.id === contractId ? updated : contract));
   }
 
   async function openNfseModal(client: Client) {
@@ -1137,8 +1161,8 @@ function ClientesPageInner() {
                             <ActionBtn color="purple" icon={Car} title="Veículos vinculados ao cliente" onClick={() => openVehiclesModal(client)} />
                             {canFinance && (
                               <>
-                                {/* 2. Amarelo — veículos onde é interveniente financeiro */}
-                                <ActionBtn color="yellow" icon={Coins} title="Veículos onde é interveniente financeiro" onClick={() => openIntervenienteModal(client)} />
+                                {/* 2. Amarelo — quem paga os contratos do cliente e contratos que ele paga */}
+                                <ActionBtn color="yellow" icon={Coins} title="Consultar ou alterar interveniente financeiro" onClick={() => openIntervenienteModal(client)} />
                                 {/* 3. Verde — central financeira / boletos */}
                                 <ActionBtn color="green" icon={DollarSign} title="Central financeira / boletos do cliente" onClick={() => openBillingsModal(client)} />
                                 {/* 4. Branco (patinha) — notas fiscais do cliente */}
@@ -1245,10 +1269,15 @@ function ClientesPageInner() {
 
       <IntervenienteModal
         open={intervModalOpen}
+        clientId={intervModalClient?.id}
         clientName={intervModalClient?.name}
         loading={intervLoading}
-        contracts={intervContracts}
-        onClose={() => { setIntervModalOpen(false); setIntervModalClient(null); setIntervContracts([]); }}
+        error={intervError}
+        ownedContracts={intervOwnedContracts}
+        responsibleContracts={intervContracts}
+        searchClients={searchIntervenienteClients}
+        onSave={saveContractInterveniente}
+        onClose={() => { setIntervModalOpen(false); setIntervModalClient(null); setIntervContracts([]); setIntervOwnedContracts([]); }}
       />
 
       <NfseModal

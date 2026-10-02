@@ -119,7 +119,17 @@ export type CarneItem = {
   parcelas_detalhe: CarneParcelaDetalhe[];
 };
 
-export type IntervContract = { id: number; client_name?: string | null; vehicle_plate?: string | null; plan_name?: string | null; status: string; monthly_value?: number | null };
+export type IntervContract = {
+  id: number;
+  client_id: number;
+  client_name?: string | null;
+  interveniente_client_id?: number | null;
+  interveniente_name?: string | null;
+  vehicle_plate?: string | null;
+  plan_name?: string | null;
+  status: string;
+  monthly_value?: number | null;
+};
 
 export type BillingChange = {
   id: number;
