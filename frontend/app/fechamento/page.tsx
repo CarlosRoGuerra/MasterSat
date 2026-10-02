@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   CalendarCheck, RefreshCw, Download, CheckCircle2, AlertTriangle,
   FileText, DollarSign, ChevronRight, Loader2, Wrench, ClipboardList, Package, Trash2, FileSpreadsheet,
@@ -198,6 +198,18 @@ export default function FechamentoPage() {
   const [filterType, setFilterType] = useState<FilterType>('all');
   const [selectedClientId, setSelectedClientId] = useState('');
   const [clients, setClients] = useState<ClientOption[]>([]);
+  const searchClosureClients = useCallback(async (term: string) => {
+    if (!token) return [];
+    const results = await apiFetchList<ClientOption>(
+      `/clients?search=${encodeURIComponent(term)}&limit=50&sort=name&direction=asc`, {}, token,
+    );
+    setClients(current => {
+      const known = new Set(current.map(client => client.id));
+      const missing = results.filter(client => !known.has(client.id));
+      return missing.length ? [...current, ...missing] : current;
+    });
+    return results;
+  }, [token]);
 
   // Step 2
   const [simulation, setSimulation] = useState<Simulation | null>(null);
@@ -214,7 +226,10 @@ export default function FechamentoPage() {
   useEffect(() => {
     if (!token) return;
     apiFetchList<ClientOption>('/clients?limit=300', {}, token)
-      .then(setClients)
+      .then(initial => setClients(current => {
+        const known = new Set(initial.map(client => client.id));
+        return [...initial, ...current.filter(client => !known.has(client.id))];
+      }))
       .catch(() => null);
   }, [token]);
 
@@ -448,6 +463,7 @@ export default function FechamentoPage() {
                   clients={clients}
                   value={selectedClientId}
                   onChange={setSelectedClientId}
+                  searchClients={searchClosureClients}
                 />
               </div>
             )}
