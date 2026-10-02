@@ -134,6 +134,8 @@ def _pending_charge_items(
             'client_type': client.type if client else 'pf',
             'vehicle_plate': vehicle.plate if vehicle else None,
             'title': item.title,
+            'quantity': item.quantity,
+            'unit_price': float(item.unit_price),
             'installment_count': installments,
             'generated_count': billing_count,
             'remaining_installments': remaining,

@@ -3,11 +3,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   CalendarCheck, RefreshCw, Download, CheckCircle2, AlertTriangle,
-  FileText, DollarSign, ChevronRight, Loader2, Wrench, ClipboardList, Package, Trash2, FileSpreadsheet,
+  FileText, DollarSign, ChevronRight, Loader2, Wrench, ClipboardList, Package, Trash2, FileSpreadsheet, Pencil,
 } from 'lucide-react';
 
 import { PageShell } from '@/components/page-shell';
 import { Card } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Modal } from '@/components/ui/modal';
 import { Button } from '@/components/ui/button';
 import { Table, TableHead, Th, TableBody, Tr, Td } from '@/components/ui/table';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -71,6 +73,8 @@ type ChargeItem = {
   client_type: string;
   vehicle_plate: string | null;
   title: string;
+  quantity: number;
+  unit_price: number;
   installment_count: number;
   generated_count: number;
   remaining_installments: number;
@@ -223,6 +227,12 @@ export default function FechamentoPage() {
 
   const [error, setError] = useState('');
 
+  // Edição de serviço/cobrança avulsa
+  const [editingItem, setEditingItem] = useState<ChargeItem | null>(null);
+  const [editForm, setEditForm] = useState({ title: '', quantity: '1', unit_price: '', installment_count: '1', start_date: '' });
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState('');
+
   useEffect(() => {
     if (!token) return;
     apiFetchList<ClientOption>('/clients?limit=300', {}, token)
@@ -259,6 +269,57 @@ export default function FechamentoPage() {
         return new Set([...prev].filter(id => stillPending.has(id)));
       });
     } catch { /* silent */ }
+  }
+
+  function openEditItem(item: ChargeItem) {
+    setEditingItem(item);
+    setEditError('');
+    setEditForm({
+      title: item.title,
+      quantity: String(item.quantity),
+      unit_price: String(item.unit_price).replace('.', ','),
+      installment_count: String(item.installment_count),
+      start_date: item.start_date.slice(0, 10),
+    });
+  }
+
+  const editUnitPrice = Number(editForm.unit_price.replace(',', '.'));
+  const editTotal = (Number(editForm.quantity) || 0) * (Number.isFinite(editUnitPrice) ? editUnitPrice : 0);
+  const editParcelas = Number(editForm.installment_count) || 0;
+
+  async function saveEditItem() {
+    if (!token || !editingItem) return;
+    setEditSaving(true);
+    setEditError('');
+    try {
+      await apiFetch(`/client-charge-items/${editingItem.item_id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          title: editForm.title.trim(),
+          quantity: Number(editForm.quantity),
+          unit_price: editUnitPrice,
+          installment_count: Number(editForm.installment_count),
+          start_date: editForm.start_date,
+        }),
+      }, token);
+      setEditingItem(null);
+      await refreshSimulation();
+    } catch (e) {
+      setEditError(e instanceof Error ? e.message : 'Erro ao salvar o lançamento.');
+    } finally {
+      setEditSaving(false);
+    }
+  }
+
+  async function deleteChargeItem(item: ChargeItem) {
+    if (!token) return;
+    if (!window.confirm(`Excluir o lançamento "${item.title}"? Ele deixa de ser cobrado.`)) return;
+    try {
+      await apiFetch(`/client-charge-items/${item.item_id}`, { method: 'DELETE' }, token);
+      await refreshSimulation();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Erro ao excluir o lançamento.');
+    }
   }
 
   async function runSimulation() {
@@ -817,6 +878,7 @@ export default function FechamentoPage() {
                       <Th>Parcelas pendentes</Th>
                       <Th>Valor/parcela</Th>
                       <Th>Total restante</Th>
+                      <Th><span className="sr-only">Ações</span></Th>
                     </TableHead>
                     <TableBody>
                       {pagSvc.slice.map((item) => (
@@ -842,6 +904,30 @@ export default function FechamentoPage() {
                           </Td>
                           <Td className="whitespace-nowrap text-sm font-semibold text-slate-900 dark:text-white">
                             {fmt(item.total_remaining)}
+                          </Td>
+                          <Td>
+                            {item.generated_count === 0 && (
+                              <span className="inline-flex gap-1.5">
+                                <button
+                                  type="button"
+                                  title="Editar valor, parcelas e vencimento"
+                                  aria-label={`Editar ${item.title}`}
+                                  onClick={() => openEditItem(item)}
+                                  className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
+                                >
+                                  <Pencil className="h-3.5 w-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  title="Excluir lançamento"
+                                  aria-label={`Excluir ${item.title}`}
+                                  onClick={() => deleteChargeItem(item)}
+                                  className="flex h-7 w-7 items-center justify-center rounded-lg border border-rose-200 bg-rose-50 text-rose-500 hover:bg-rose-100 dark:border-rose-900/40 dark:bg-rose-950/30 dark:text-rose-400 dark:hover:bg-rose-950/50"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              </span>
+                            )}
                           </Td>
                         </Tr>
                       ))}
@@ -958,6 +1044,56 @@ export default function FechamentoPage() {
           </div>
         </Card>
       )}
+
+      <Modal
+        open={editingItem !== null}
+        onClose={() => setEditingItem(null)}
+        title="Editar lançamento"
+        description={editingItem ? `${editingItem.client_name}${editingItem.vehicle_plate ? ` • ${editingItem.vehicle_plate}` : ''}` : undefined}
+        size="lg"
+      >
+        <form
+          className="space-y-4"
+          onSubmit={(e) => { e.preventDefault(); void saveEditItem(); }}
+        >
+          {editError && (
+            <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{editError}</p>
+          )}
+          <div className="grid gap-4 md:grid-cols-2">
+            <label className="text-sm md:col-span-2">
+              <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Título</span>
+              <Input value={editForm.title} onChange={(e) => setEditForm((p) => ({ ...p, title: e.target.value }))} required />
+            </label>
+            <label className="text-sm">
+              <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Quantidade</span>
+              <Input inputMode="numeric" value={editForm.quantity} onChange={(e) => setEditForm((p) => ({ ...p, quantity: e.target.value.replace(/\D/g, '').slice(0, 3) }))} required />
+            </label>
+            <label className="text-sm">
+              <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Valor unitário (R$)</span>
+              <Input inputMode="decimal" value={editForm.unit_price} onChange={(e) => setEditForm((p) => ({ ...p, unit_price: e.target.value }))} required />
+            </label>
+            <label className="text-sm">
+              <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Quantidade de parcelas</span>
+              <Input inputMode="numeric" value={editForm.installment_count} onChange={(e) => setEditForm((p) => ({ ...p, installment_count: e.target.value.replace(/\D/g, '').slice(0, 2) }))} required />
+            </label>
+            <label className="text-sm">
+              <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Início da cobrança</span>
+              <Input type="date" value={editForm.start_date} onChange={(e) => setEditForm((p) => ({ ...p, start_date: e.target.value }))} required />
+            </label>
+          </div>
+          <p className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-600 dark:bg-slate-800/50 dark:text-slate-300">
+            Total: <strong>{fmt(editTotal)}</strong>
+            {editParcelas > 0 && <> em <strong>{editParcelas}</strong> parcela{editParcelas > 1 ? 's' : ''} de cerca de <strong>{fmt(editTotal / editParcelas)}</strong></>}
+            <span className="mt-1 block text-xs text-slate-500">
+              O valor unitário é o total do serviço; as parcelas dividem (quantidade × valor unitário). Para 3 parcelas de R$ 96,19, informe quantidade 1, valor unitário 288,57 e 3 parcelas.
+            </span>
+          </p>
+          <div className="flex justify-end gap-3">
+            <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200" onClick={() => setEditingItem(null)}>Cancelar</button>
+            <Button type="submit" disabled={editSaving}>{editSaving ? 'Salvando…' : 'Salvar alterações'}</Button>
+          </div>
+        </form>
+      </Modal>
     </PageShell>
   );
 }
