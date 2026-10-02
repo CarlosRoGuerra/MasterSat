@@ -53,6 +53,7 @@ export type ClientOption = Pick<
   ClientFull,
   | 'id'
   | 'name'
+  | 'trade_name'
   | 'cpf_cnpj'
   | 'billing_day'
   | 'zip_code'

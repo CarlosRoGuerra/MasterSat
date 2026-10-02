@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { TrendingUp, AlertTriangle, FileText, CheckCircle2, Clock, MoreHorizontal, ChevronDown, ChevronRight, Lock, PenSquare, ListChecks, Banknote, Layers, Mail, PieChart, Barcode, Wallet, Coins, FilePlus, Tags, BookText, Eye } from 'lucide-react';
 
 import { PageShell } from '@/components/page-shell';
@@ -544,6 +544,19 @@ export default function FinanceiroPage() {
 
   const [plans, setPlans] = useState<Plan[]>([]);
   const [clients, setClients] = useState<ClientOption[]>([]);
+  const searchFinanceClients = useCallback(async (term: string) => {
+    if (!token) return [];
+    const results = await apiFetchList<ClientOption>(
+      `/clients?search=${encodeURIComponent(term)}&limit=50&sort=name&direction=asc`, {}, token,
+    );
+    // Keep a selected result available after the search field is cleared.
+    setClients(current => {
+      const known = new Set(current.map(client => client.id));
+      const missing = results.filter(client => !known.has(client.id));
+      return missing.length ? [...current, ...missing] : current;
+    });
+    return results;
+  }, [token]);
   const [vehicles, setVehicles] = useState<VehicleOption[]>([]);
   const [trackers, setTrackers] = useState<TrackerOption[]>([]);
   const [contracts, setContracts] = useState<Contract[]>([]);
@@ -2453,7 +2466,7 @@ export default function FinanceiroPage() {
         <div className="space-y-4">
           <div>
             <p className="mb-1 text-xs font-medium text-slate-500 dark:text-slate-400">Cliente</p>
-            <ClientAutocomplete clients={clients} value={carneClientId} onChange={carregarBoletosCarne} placeholder="Busque o cliente pelo nome ou CPF/CNPJ" />
+            <ClientAutocomplete clients={clients} value={carneClientId} onChange={carregarBoletosCarne} searchClients={searchFinanceClients} placeholder="Busque o cliente pelo nome ou CPF/CNPJ" />
           </div>
 
           {carneClientId && carnesGerados.length > 0 && (
@@ -2576,6 +2589,7 @@ export default function FinanceiroPage() {
             <ClientAutocomplete
               clients={clients}
               value={chargeItemForm.client_id}
+              searchClients={searchFinanceClients}
               onChange={(id) => setChargeItemForm(p => ({ ...p, client_id: id, contract_id: '', vehicle_id: '', tracker_id: '' }))}
               placeholder="Selecione o cliente"
               required
@@ -2677,6 +2691,7 @@ export default function FinanceiroPage() {
               <ClientAutocomplete
                 clients={clients}
                 value={newBillingForm.client_id}
+                searchClients={searchFinanceClients}
                 onChange={(id) => setNewBillingForm(p => ({ ...p, client_id: id }))}
                 placeholder="Buscar cliente por nome ou CPF/CNPJ…"
                 required
@@ -2776,6 +2791,7 @@ export default function FinanceiroPage() {
           <ClientAutocomplete
             clients={clients}
             value={envioClientId}
+            searchClients={searchFinanceClients}
             onChange={selecionarClienteEnvio}
             placeholder="Buscar cliente por nome ou CPF/CNPJ…"
           />

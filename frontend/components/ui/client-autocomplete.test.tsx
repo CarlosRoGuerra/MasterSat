@@ -60,4 +60,21 @@ describe('ClientAutocomplete', () => {
     await user.click(screen.getByLabelText('Remover seleção'));
     expect(onChange).toHaveBeenCalledWith('');
   });
+
+  it('busca no servidor cliente fora da lista inicial pelo nome fantasia', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const searchClients = vi.fn().mockResolvedValue([
+      { id: 301, name: 'TRANSPORTADORA BRASIL LTDA', trade_name: 'ABR EXPRESS', cpf_cnpj: '12345678000190' },
+    ]);
+    render(
+      <ClientAutocomplete clients={clients} value="" onChange={onChange} searchClients={searchClients} />,
+    );
+
+    await user.type(screen.getByPlaceholderText(/Buscar por nome/), 'ABR');
+    const option = await screen.findByRole('button', { name: /ABR EXPRESS/ });
+    expect(searchClients).toHaveBeenCalledWith('ABR');
+    await user.click(option);
+    expect(onChange).toHaveBeenCalledWith('301');
+  });
 });

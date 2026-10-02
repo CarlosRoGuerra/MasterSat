@@ -8,12 +8,14 @@ type ClientOption = {
   id: number;
   name: string;
   cpf_cnpj?: string;
+  trade_name?: string | null;
 };
 
 export function ClientAutocomplete({
   clients,
   value,
   onChange,
+  searchClients,
   placeholder = 'Buscar por nome ou CPF/CNPJ…',
   required,
   disabled,
@@ -21,6 +23,7 @@ export function ClientAutocomplete({
   clients: ClientOption[];
   value: number | string;
   onChange: (id: string) => void;
+  searchClients?: (query: string) => Promise<ClientOption[]>;
   placeholder?: string;
   required?: boolean;
   disabled?: boolean;
@@ -28,15 +31,46 @@ export function ClientAutocomplete({
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
   const [focused, setFocused] = useState(false);
+  const [remoteResults, setRemoteResults] = useState<ClientOption[]>([]);
+  const [remoteQuery, setRemoteQuery] = useState('');
+  const [searching, setSearching] = useState(false);
+  const [searchFailed, setSearchFailed] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const selected = clients.find((c) => String(c.id) === String(value));
+  const selected = clients.find((c) => String(c.id) === String(value))
+    ?? remoteResults.find((c) => String(c.id) === String(value));
 
   // When value changes externally (e.g. form reset), sync query
   useEffect(() => {
     if (!value) setQuery('');
   }, [value]);
+
+  useEffect(() => {
+    const term = query.trim();
+    if (!searchClients || !open || !focused || term.length < 2) {
+      setSearching(false);
+      setSearchFailed(false);
+      return;
+    }
+    let cancelled = false;
+    setSearching(true);
+    setSearchFailed(false);
+    const timer = window.setTimeout(async () => {
+      try {
+        const results = await searchClients(term);
+        if (!cancelled) {
+          setRemoteResults(results);
+          setRemoteQuery(term);
+        }
+      } catch {
+        if (!cancelled) setSearchFailed(true);
+      } finally {
+        if (!cancelled) setSearching(false);
+      }
+    }, 250);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [query, open, focused, searchClients]);
 
   // Close on outside click
   useEffect(() => {
@@ -50,12 +84,17 @@ export function ClientAutocomplete({
     return () => document.removeEventListener('mousedown', onClickOutside);
   }, []);
 
+  const source = searchClients && query.trim().length >= 2
+    && remoteQuery === query.trim() && !searching && !searchFailed
+    ? remoteResults
+    : clients;
   const filtered = query.trim()
-    ? clients.filter((c) => {
+    ? source.filter((c) => {
         const q = query.trim().toLowerCase();
         const qDigits = q.replace(/\D/g, '');
         return (
           c.name.toLowerCase().includes(q) ||
+          (c.trade_name ?? '').toLowerCase().includes(q) ||
           // "".includes("") é sempre true — sem o length>0, buscar um texto
           // sem nenhum dígito (ex.: "zzz") batia com QUALQUER cliente aqui.
           (qDigits.length > 0 && (c.cpf_cnpj ?? '').replace(/\D/g, '').includes(qDigits))
@@ -85,6 +124,9 @@ export function ClientAutocomplete({
         <div className="flex items-center gap-2 rounded-xl border border-brand-300 bg-brand-50 px-3.5 py-2.5 dark:border-brand-700 dark:bg-brand-950/30">
           <span className="flex-1 text-sm font-medium text-brand-800 dark:text-brand-200">
             {selected.name}
+            {selected.trade_name && selected.trade_name !== selected.name && (
+              <span className="block text-xs font-normal text-brand-600 dark:text-brand-300">{selected.trade_name}</span>
+            )}
           </span>
           <span className="text-xs text-brand-500 dark:text-brand-400">
             {formatDoc(selected.cpf_cnpj)}
@@ -137,9 +179,11 @@ export function ClientAutocomplete({
       {/* Dropdown */}
       {showDropdown && (
         <div className="absolute z-50 mt-1 max-h-60 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-elevated dark:border-slate-700 dark:bg-slate-900">
-          {filtered.length === 0 ? (
+          {filtered.length === 0 && searching ? (
+            <div className="px-4 py-3 text-sm text-slate-500 dark:text-slate-400">Buscando clientes...</div>
+          ) : filtered.length === 0 ? (
             <div className="px-4 py-3 text-sm text-slate-500 dark:text-slate-400">
-              Nenhum cliente encontrado para &quot;{query}&quot;
+              {searchFailed ? 'Não foi possível buscar clientes. Tente novamente.' : <>Nenhum cliente encontrado para &quot;{query}&quot;</>}
             </div>
           ) : (
             filtered.slice(0, 20).map((client) => (
@@ -151,6 +195,11 @@ export function ClientAutocomplete({
               >
                 <span className="font-medium text-slate-900 dark:text-white">
                   {highlight(client.name, query)}
+                  {client.trade_name && client.trade_name !== client.name && (
+                    <span className="block text-xs font-normal text-slate-500 dark:text-slate-400">
+                      {highlight(client.trade_name, query)}
+                    </span>
+                  )}
                 </span>
                 <span className="shrink-0 text-xs text-slate-500">
                   {formatDoc(client.cpf_cnpj)}
