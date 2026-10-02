@@ -314,20 +314,35 @@ def financial_summary(db: Session = Depends(get_db), _: object = Depends(require
     # precisa ser refeita a cada leitura do resumo (ver base_query em cima).
     active_plans = db.query(func.count(Plan.id)).filter(Plan.is_deleted == False, Plan.active == True).scalar() or 0
     active_contracts = db.query(func.count(Contract.id)).filter(Contract.is_deleted == False, Contract.status == 'ativo').scalar() or 0
-    pending_billings = db.query(func.count(Billing.id)).filter(Billing.is_deleted == False, Billing.status == BillingStatus.PENDING).scalar() or 0
-    overdue_billings = db.query(func.count(Billing.id)).filter(Billing.is_deleted == False, Billing.status == BillingStatus.OVERDUE).scalar() or 0
-    pending_amount = decimal_to_float(db.query(func.coalesce(func.sum(Billing.amount), 0)).filter(Billing.is_deleted == False, Billing.status == BillingStatus.PENDING).scalar())
-    overdue_amount = decimal_to_float(db.query(func.coalesce(func.sum(Billing.amount), 0)).filter(Billing.is_deleted == False, Billing.status == BillingStatus.OVERDUE).scalar())
     now = date.today()
-    paid_this_month = decimal_to_float(db.query(func.coalesce(func.sum(func.coalesce(Billing.paid_amount, Billing.amount)), 0)).filter(Billing.is_deleted == False, Billing.status == BillingStatus.PAID, func.extract('month', Billing.payment_date) == now.month, func.extract('year', Billing.payment_date) == now.year).scalar())
+    month_start = now.replace(day=1)
+    next_month = date(now.year + 1, 1, 1) if now.month == 12 else date(now.year, now.month + 1, 1)
+    pending = Billing.status == BillingStatus.PENDING
+    overdue = Billing.status == BillingStatus.OVERDUE
+    paid_this_month_filter = and_(
+        Billing.status == BillingStatus.PAID,
+        Billing.payment_date >= month_start,
+        Billing.payment_date < next_month,
+    )
+    pending_billings, overdue_billings, pending_amount, overdue_amount, paid_this_month = (
+        db.query(
+            func.count(case((pending, Billing.id))),
+            func.count(case((overdue, Billing.id))),
+            func.coalesce(func.sum(case((pending, Billing.amount), else_=0)), 0),
+            func.coalesce(func.sum(case((overdue, Billing.amount), else_=0)), 0),
+            func.coalesce(func.sum(case((paid_this_month_filter, func.coalesce(Billing.paid_amount, Billing.amount)), else_=0)), 0),
+        )
+        .filter(Billing.is_deleted.is_(False))
+        .one()
+    )
     return FinancialSummary(
         active_plans=active_plans,
         active_contracts=active_contracts,
         pending_billings=pending_billings,
         overdue_billings=overdue_billings,
-        pending_amount=round(pending_amount, 2),
-        overdue_amount=round(overdue_amount, 2),
-        paid_this_month=round(paid_this_month, 2),
+        pending_amount=round(decimal_to_float(pending_amount), 2),
+        overdue_amount=round(decimal_to_float(overdue_amount), 2),
+        paid_this_month=round(decimal_to_float(paid_this_month), 2),
     )
 
 
@@ -348,21 +363,41 @@ def revenue_report(period: str = Query(default='monthly', pattern='^(monthly|qua
     contavam a dívida duas vezes) e o emitido de cobrança paga ia para o mês
     do pagamento, misturando as bases no mesmo campo.
     """
-    rows = db.query(Billing).filter(
-        Billing.is_deleted == False,  # noqa: E712
-        Billing.status != BillingStatus.CANCELED,
-    ).all()
+    # Agrega no banco: carregar cada Billing completo para somar em Python
+    # transferia e instanciava toda a carteira a cada abertura do Financeiro.
+    due_year = func.extract('year', Billing.due_date)
+    due_month = func.extract('month', Billing.due_date)
+    received = func.coalesce(Billing.paid_amount, Billing.amount)
+    due_rows = (
+        db.query(
+            due_year, due_month,
+            func.sum(Billing.amount),
+            func.sum(case((Billing.status == BillingStatus.PAID, received), else_=0)),
+            func.sum(case((Billing.status.in_((BillingStatus.PENDING, BillingStatus.OVERDUE)), Billing.amount), else_=0)),
+        )
+        .filter(Billing.is_deleted.is_(False), Billing.status != BillingStatus.CANCELED)
+        .group_by(due_year, due_month)
+        .all()
+    )
+    cash_date = func.coalesce(Billing.payment_date, Billing.due_date)
+    cash_year = func.extract('year', cash_date)
+    cash_month = func.extract('month', cash_date)
+    cash_rows = (
+        db.query(cash_year, cash_month, func.sum(received))
+        .filter(Billing.is_deleted.is_(False), Billing.status == BillingStatus.PAID)
+        .group_by(cash_year, cash_month)
+        .all()
+    )
     campos = ('total_received', 'total_billed', 'total_outstanding', 'total_received_by_due')
     buckets: dict[str, dict[str, Decimal]] = defaultdict(lambda: {k: Decimal('0.00') for k in campos})
-    for row in rows:
-        vencimento = period_bucket(row.due_date, period)
-        buckets[vencimento]['total_billed'] += Decimal(str(row.amount))
-        if row.status == BillingStatus.PAID:
-            recebido = Decimal(str(row.paid_amount if row.paid_amount is not None else row.amount))
-            buckets[vencimento]['total_received_by_due'] += recebido
-            buckets[period_bucket(row.payment_date or row.due_date, period)]['total_received'] += recebido
-        elif row.status in (BillingStatus.PENDING, BillingStatus.OVERDUE):
-            buckets[vencimento]['total_outstanding'] += Decimal(str(row.amount))
+    for year, month, billed, received_by_due, outstanding in due_rows:
+        label = period_bucket(date(int(year), int(month), 1), period)
+        buckets[label]['total_billed'] += Decimal(str(billed))
+        buckets[label]['total_received_by_due'] += Decimal(str(received_by_due))
+        buckets[label]['total_outstanding'] += Decimal(str(outstanding))
+    for year, month, received_cash in cash_rows:
+        label = period_bucket(date(int(year), int(month), 1), period)
+        buckets[label]['total_received'] += Decimal(str(received_cash))
     return [
         RevenueReportItem(label=label, **{k: decimal_to_float(v) for k, v in totals.items()})
         for label, totals in sorted(buckets.items(), key=lambda kv: _bucket_sort_key(kv[0]))

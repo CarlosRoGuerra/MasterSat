@@ -21,6 +21,7 @@ import pytest
 
 from app.models.billing import Billing
 from app.models.enums import BillingStatus
+from tests.fase03_apoio import cobranca
 
 PREFIX = "/api/v1/billings"
 
@@ -119,6 +120,25 @@ class TestBillingSummary:
         r = http.get(PREFIX + "/summary")
         assert r.status_code == 200
         assert r.json()["overdue_billings"] >= 1
+
+    def test_summary_soma_status_e_caixa_do_mes_sem_removidas(self, http, db, contrato):
+        now = date.today()
+        cobranca(db, contrato, amount=Decimal('10.00'))
+        cobranca(db, contrato, amount=Decimal('20.00'), status=BillingStatus.OVERDUE)
+        cobranca(db, contrato, amount=Decimal('30.00'), status=BillingStatus.PAID, payment_date=now)
+        cobranca(db, contrato, amount=Decimal('40.00'), paid_amount=Decimal('42.00'),
+                 status=BillingStatus.PAID, payment_date=now)
+        cobranca(db, contrato, amount=Decimal('50.00'), status=BillingStatus.PAID,
+                 payment_date=date(now.year - 1, now.month, 1))
+        cobranca(db, contrato, amount=Decimal('60.00'), status=BillingStatus.CANCELED)
+        cobranca(db, contrato, amount=Decimal('70.00'), is_deleted=True)
+
+        data = http.get(PREFIX + "/summary").json()
+        assert data['pending_billings'] == 1
+        assert data['overdue_billings'] == 1
+        assert data['pending_amount'] == 10.0
+        assert data['overdue_amount'] == 20.0
+        assert data['paid_this_month'] == 72.0
 
     def test_operational_cannot_see_summary(self, http_op):
         r = http_op.get(PREFIX + "/summary")

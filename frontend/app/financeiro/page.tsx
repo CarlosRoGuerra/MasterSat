@@ -42,7 +42,6 @@ type Payable = { id: number; description: string; supplier?: string | null; cate
 type Plan = { id: number; name: string; price: number; description?: string | null; active: boolean; billing_interval_months: BillingInterval; default_installation_fee?: number | null; default_uninstall_fee?: number | null; default_billing_day?: number | null; default_duration_months?: number | null; active_contracts: number };
 type ServiceProduct = { id: number; name: string; category: string; default_price: number; description?: string | null; active: boolean; allow_installments: boolean; remove_after_payment: boolean; auto_add_on_uninstall: boolean };
 type Contract = { id: number; client_id: number; plan_id: number; vehicle_id?: number | null; tracker_id?: number | null; start_date: string; end_date?: string | null; status: string; billing_day?: number | null; payment_method?: string | null; notes?: string | null; installation_fee?: number | null; uninstall_fee?: number | null; signed?: boolean | null; signed_at?: string | null; client_name?: string | null; plan_name?: string | null; vehicle_plate?: string | null; tracker_identifier?: string | null; monthly_value?: number | null; open_billings: number; next_due_date?: string | null };
-type ChargeItem = { id: number; client_id: number; contract_id?: number | null; vehicle_id?: number | null; tracker_id?: number | null; service_product_id?: number | null; title: string; description?: string | null; quantity: number; unit_price: number; total_amount: number; installment_count: number; start_date: string; active: boolean; remove_after_payment: boolean; completed_at?: string | null; status: string; client_name?: string | null; vehicle_plate?: string | null; tracker_identifier?: string | null; service_product_name?: string | null; open_installments: number };
 // Dados do boleto como o SGR devolvia. A cobrança migrada não tem boleto
 // bancário para baixar: o SGR deixa de servir o documento depois de baixado,
 // então estes campos são o registro que sobra dele.
@@ -549,7 +548,6 @@ export default function FinanceiroPage() {
   const [trackers, setTrackers] = useState<TrackerOption[]>([]);
   const [contracts, setContracts] = useState<Contract[]>([]);
   const [serviceProducts, setServiceProducts] = useState<ServiceProduct[]>([]);
-  const [chargeItems, setChargeItems] = useState<ChargeItem[]>([]);
   const [billings, setBillings] = useState<Billing[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [revenue, setRevenue] = useState<RevenueItem[]>([]);
@@ -742,14 +740,13 @@ export default function FinanceiroPage() {
       if (billingSearch) query.set('search', billingSearch);
       if (billingStatusFilter) query.set('status', billingStatusFilter);
       query.set('limit', '300');
-      const [plansRes, clientsRes, vehiclesRes, trackersRes, contractsRes, productsRes, chargeItemsRes, billingsRes, summaryRes, revenueRes, delinquentRes] = await Promise.all([
+      const [plansRes, clientsRes, vehiclesRes, trackersRes, contractsRes, productsRes, billingsRes, summaryRes, revenueRes, delinquentRes] = await Promise.all([
         apiFetch<Plan[]>('/plans', {}, currentToken),
         apiFetchList<ClientOption>('/clients?limit=300', {}, currentToken),
         apiFetchList<VehicleOption>('/vehicles?limit=300', {}, currentToken),
         apiFetchList<TrackerOption>('/trackers?limit=300', {}, currentToken),
         apiFetch<Contract[]>('/contracts', {}, currentToken),
         apiFetch<ServiceProduct[]>('/service-products', {}, currentToken),
-        apiFetch<ChargeItem[]>('/client-charge-items', {}, currentToken),
         apiFetch<Billing[]>(`/billings?${query.toString()}`, {}, currentToken),
         apiFetch<Summary>('/billings/summary', {}, currentToken),
         apiFetch<RevenueItem[]>('/billings/reports/revenue?period=monthly', {}, currentToken),
@@ -761,7 +758,6 @@ export default function FinanceiroPage() {
       setTrackers(trackersRes);
       setContracts(contractsRes);
       setServiceProducts(productsRes);
-      setChargeItems(chargeItemsRes);
       setBillings(billingsRes);
       setSummary(summaryRes);
       setRevenue(revenueRes);
@@ -774,7 +770,7 @@ export default function FinanceiroPage() {
     }
   }
 
-  /** Recarrega só a lista de cobranças. O loadData busca 11 endpoints — usar
+  /** Recarrega só a lista de cobranças. O loadData busca 10 endpoints — usar
    *  ele na busca dinâmica recarregaria planos, clientes, gráficos e KPIs a
    *  cada tecla. */
   async function loadBillingsOnly(currentToken: string) {

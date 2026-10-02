@@ -101,6 +101,22 @@ class TestBasesDasMetricas:
         labels = [i['label'] for i in http.get(f'{B}/reports/revenue?period=monthly').json()]
         assert labels.index('12/2030') < labels.index('01/2031')
 
+    def test_serie_trimestral_e_anual_preserva_caixa_e_vencimento(self, http, db, contrato):
+        _paga(db, contrato, due_date=date(2030, 12, 10), payment_date=date(2031, 1, 2))
+        cobranca(db, contrato, amount=Decimal('50.00'), due_date=date(2031, 2, 10))
+        cobranca(db, contrato, status=BillingStatus.CANCELED, due_date=date(2031, 2, 12))
+
+        trimestral = {item['label']: item for item in http.get(f'{B}/reports/revenue?period=quarterly').json()}
+        anual = {item['label']: item for item in http.get(f'{B}/reports/revenue?period=annual').json()}
+        assert trimestral['2030 • T4']['total_billed'] == 100.0
+        assert trimestral['2030 • T4']['total_received_by_due'] == 100.0
+        assert trimestral['2031 • T1']['total_billed'] == 50.0
+        assert trimestral['2031 • T1']['total_outstanding'] == 50.0
+        assert trimestral['2031 • T1']['total_received'] == 100.0
+        assert anual['2030']['total_billed'] == 100.0
+        assert anual['2031']['total_billed'] == 50.0
+        assert anual['2031']['total_received'] == 100.0
+
     def test_base_competencia(self, http, db, contrato):
         # Mensalidade de competência 07/2031 que vence em 08/2031.
         cobranca(db, contrato, billing_type='recorrente', period_label='07/2031', due_date=date(2031, 8, 5))
