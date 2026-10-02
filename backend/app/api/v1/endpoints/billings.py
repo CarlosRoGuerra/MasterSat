@@ -434,8 +434,11 @@ def billing_changes(item_id: int, db: Session = Depends(get_db), _: object = Dep
 
 
 @router.get('/exports/csv')
-def export_csv(search: str | None = None, status: str | None = None, client_id: int | None = None, contract_id: int | None = None, due_from: date | None = None, due_to: date | None = None, db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
-    rows = apply_filters(base_query(db), search, status, client_id, contract_id, due_from, due_to).order_by(Billing.due_date.desc()).all()
+def export_csv(search: str | None = None, status: str | None = None, client_id: int | None = None, contract_id: int | None = None, due_from: date | None = None, due_to: date | None = None, include_substituted: bool = False, db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
+    query = apply_filters(base_query(db), search, status, client_id, contract_id, due_from, due_to)
+    if not include_substituted:
+        query = query.filter(Billing.substituted_by_id.is_(None))
+    rows = query.order_by(Billing.due_date.desc()).all()
     buffer = StringIO()
     writer = csv.writer(buffer)
     writer.writerow(['ID', 'Cliente atendido', 'Responsável financeiro', 'Veículo', 'Rastreador', 'Título', 'Tipo', 'Valor', 'Vencimento', 'Status', 'Recebido em', 'Recibo'])
@@ -447,8 +450,11 @@ def export_csv(search: str | None = None, status: str | None = None, client_id: 
 
 
 @router.get('/exports/xlsx')
-def export_xlsx(search: str | None = None, status: str | None = None, client_id: int | None = None, contract_id: int | None = None, due_from: date | None = None, due_to: date | None = None, db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
-    rows = apply_filters(base_query(db), search, status, client_id, contract_id, due_from, due_to).order_by(Billing.due_date.desc()).all()
+def export_xlsx(search: str | None = None, status: str | None = None, client_id: int | None = None, contract_id: int | None = None, due_from: date | None = None, due_to: date | None = None, include_substituted: bool = False, db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
+    query = apply_filters(base_query(db), search, status, client_id, contract_id, due_from, due_to)
+    if not include_substituted:
+        query = query.filter(Billing.substituted_by_id.is_(None))
+    rows = query.order_by(Billing.due_date.desc()).all()
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = 'Financeiro'
@@ -549,8 +555,12 @@ def download_receipt(item_id: int, db: Session = Depends(get_db), _: object = De
 
 
 @router.get('/', response_model=list[BillingOut])
-def list_items(search: str | None = None, status: str | None = None, client_id: int | None = None, contract_id: int | None = None, vehicle_id: int | None = None, due_from: date | None = None, due_to: date | None = None, limit: int = Query(default=200, ge=1, le=1000), db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
-    query = apply_filters(base_query(db), search, status, client_id, contract_id, due_from, due_to, vehicle_id).order_by(Billing.due_date.desc(), Billing.id.desc())
+def list_items(search: str | None = None, status: str | None = None, client_id: int | None = None, contract_id: int | None = None, vehicle_id: int | None = None, due_from: date | None = None, due_to: date | None = None, include_substituted: bool = False, limit: int = Query(default=200, ge=1, le=1000), db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
+    query = apply_filters(base_query(db), search, status, client_id, contract_id, due_from, due_to, vehicle_id)
+    if not include_substituted:
+        # Componentes de um fechamento não são boletos independentes.
+        query = query.filter(Billing.substituted_by_id.is_(None))
+    query = query.order_by(Billing.due_date.desc(), Billing.id.desc())
     return [serialize_billing(row) for row in query.limit(limit).all()]
 
 

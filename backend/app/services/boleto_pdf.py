@@ -518,6 +518,13 @@ def _draw_barcode(c, codigo: str, x: float, y_top: float, height_mm: float = 15.
     from reportlab.graphics.barcode.common import I2of5
     h = _mm(height_mm)
 
+    if len(codigo) != 44 or not codigo.isdigit():
+        c.setFont('Helvetica-Bold', 7)
+        c.setFillColorRGB(0.7, 0.1, 0.1)
+        c.drawString(x, y_top - h + _mm(3), 'CODIGO DE BARRAS INDISPONIVEL')
+        c.setFillColorRGB(0, 0, 0)
+        return False
+
     # Garante que o barcode não caia fora da página
     if y_top - h < _mm(8):
         c.showPage(); y_top = _ft(10)

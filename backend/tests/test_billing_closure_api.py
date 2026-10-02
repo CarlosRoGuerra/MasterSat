@@ -88,6 +88,17 @@ def test_september_service_closure_is_due_in_october(
     assert len(billings) == 3
     assert {billing.due_date for billing in billings} == {date(2026, 10, 15)}
 
+    visible = http.get('/api/v1/billings/', params={'client_id': cliente.id})
+    assert visible.status_code == 200, visible.text
+    visible_ids = {entry['id'] for entry in visible.json()}
+    assert set(result.json()['payment_billing_ids']) <= visible_ids
+    assert not {billing.id for billing in billings if billing.substituted_by_id} & visible_ids
+    audit = http.get('/api/v1/billings/', params={
+        'client_id': cliente.id, 'include_substituted': True,
+    })
+    assert audit.status_code == 200, audit.text
+    assert {billing.id for billing in billings} <= {entry['id'] for entry in audit.json()}
+
     again = http.get(PREFIX + '/simulate', params=params)
     assert again.json()['to_generate'] == 0
     assert again.json()['uninstall_events'] == []

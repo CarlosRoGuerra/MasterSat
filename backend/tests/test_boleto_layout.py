@@ -9,6 +9,7 @@ Duas decisões do cliente:
 from __future__ import annotations
 
 import io
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
@@ -51,6 +52,16 @@ def test_boleto_unico_detalha_todos_os_itens_sem_cortar_o_total():
     assert 'ABC0029' in detalhe
     assert detalhe.count('MENSALIDADE PLACA') == 30
     assert 'TOTAL: R$ 300,00' in detalhe
+
+
+def test_previa_sem_registro_nao_desenha_codigo_de_barras():
+    from pypdf import PdfReader
+
+    dados = replace(_dados(), codigo_barras='', linha_digitavel='SIMULACAO - NAO PAGAVEL')
+    pdf = boleto_pdf.gerar_boleto_pdf(dados)
+    texto = PdfReader(io.BytesIO(pdf)).pages[0].extract_text()
+    assert 'CODIGO DE BARRAS INDISPONIVEL' in texto
+    assert 'SIMULACAO - NAO PAGAVEL' in texto
 
 
 def test_detalhamento_abre_servico_embutido_e_taxas_agrupadas(db, cliente, veiculo):
