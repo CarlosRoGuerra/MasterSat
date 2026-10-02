@@ -10,15 +10,35 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import event
+
+from app.api.v1.endpoints.dashboard import dashboard
 from app.models.billing import Billing
-from app.models.enums import BillingStatus
+from app.models.enums import BillingStatus, UserRole
 
 PREFIX = "/api/v1/dashboard"
 
 
 class TestDashboard:
+    def test_dashboard_uses_bounded_number_of_queries(self, db):
+        selects = []
+
+        def count_selects(_conn, _cursor, statement, _parameters, _context, _executemany):
+            if statement.lstrip().upper().startswith('SELECT'):
+                selects.append(statement)
+
+        event.listen(db.bind, 'before_cursor_execute', count_selects)
+        try:
+            result = dashboard(db=db, current_user=SimpleNamespace(role=UserRole.ADMIN))
+        finally:
+            event.remove(db.bind, 'before_cursor_execute', count_selects)
+
+        assert result['clients']['total'] == 0
+        assert len(selects) == 8
+
     def test_returns_200(self, http):
         r = http.get(PREFIX + "/")
         assert r.status_code == 200

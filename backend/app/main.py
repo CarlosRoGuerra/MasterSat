@@ -21,6 +21,7 @@ from app.models import ailos_api_log, ailos_boleto, ailos_client_token, ailos_in
 from app.core.audit import AuditMiddleware
 from app.core.body_limit import MaxBodySizeMiddleware
 from app.core.forwarded_proto import ForwardedProtoMiddleware
+from app.core.request_timing import RequestTimingMiddleware
 from app.core.validation_errors import validation_exception_handler
 from app.services.storage import ensure_bucket
 
@@ -63,6 +64,7 @@ app.add_middleware(MaxBodySizeMiddleware, max_bytes=settings.max_upload_bytes)
 
 # ── Auditoria ─────────────────────────────────────────────────────────────────
 app.add_middleware(AuditMiddleware)
+app.add_middleware(RequestTimingMiddleware)
 
 app.include_router(api_router, prefix=settings.api_v1_prefix)
 

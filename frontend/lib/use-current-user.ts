@@ -15,7 +15,7 @@ import type { AuthUser } from './domain-types';
 export function useCurrentUser() {
   const token = getAccessToken();
   return useQuery({
-    queryKey: ['auth', 'me'],
+    queryKey: ['auth', 'me', token],
     queryFn: () => apiFetch<AuthUser>('/auth/me', {}, token),
     enabled: !!token,
     staleTime: 60_000,
