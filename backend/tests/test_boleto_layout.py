@@ -46,12 +46,35 @@ def test_boleto_unico_detalha_todos_os_itens_sem_cortar_o_total():
     itens = [(f'MENSALIDADE PLACA ABC{i:04d}', 10.0) for i in range(30)]
     pdf = boleto_pdf.gerar_boleto_pdf(_dados(valor=Decimal('300.00'), itens=itens))
     pages = PdfReader(io.BytesIO(pdf)).pages
-    assert len(pages) >= 2
-    detalhe = ''.join(page.extract_text() or '' for page in pages[1:])
-    assert 'ABC0000' in detalhe
-    assert 'ABC0029' in detalhe
-    assert detalhe.count('MENSALIDADE PLACA') == 30
-    assert 'TOTAL: R$ 300,00' in detalhe
+    assert len(pages) == 1
+    texto = pages[0].extract_text()
+    assert 'ABC0000 - MENSALIDADE - R$ 10,00' in texto
+    assert 'ABC0029 - MENSALIDADE - R$ 10,00' in texto
+    assert texto.count('MENSALIDADE - R$ 10,00') == 30
+
+
+def test_boleto_com_56_mensalidades_e_pix_cabe_em_uma_pagina():
+    from pypdf import PdfReader
+
+    itens = [(f'MENSALIDADE PLACA ABC{i:04d}', 64.99) for i in range(56)]
+    dados = replace(_dados(valor=Decimal('3639.44'), itens=itens), pix_emv='PIX DE TESTE')
+    pages = PdfReader(io.BytesIO(boleto_pdf.gerar_boleto_pdf(dados))).pages
+    assert len(pages) == 1
+    texto = pages[0].extract_text()
+    assert 'ABC0000 - MENSALIDADE - R$ 64,99' in texto
+    assert 'ABC0055 - MENSALIDADE - R$ 64,99' in texto
+    assert texto.count('MENSALIDADE - R$ 64,99') == 56
+
+
+def test_descricao_longa_continua_no_anexo_sem_perder_o_item():
+    from pypdf import PdfReader
+
+    descricao = 'PLACA ABC1D23 - SERVIÇO DE INSTALAÇÃO COM DESLOCAMENTO TÉCNICO'
+    pdf = boleto_pdf.gerar_boleto_pdf(_dados(itens=[(descricao, 99.90)]))
+    pages = PdfReader(io.BytesIO(pdf)).pages
+    assert len(pages) == 2
+    assert 'ABC1D23 - INSTALAÇÃO - R$ 99,90' in pages[0].extract_text()
+    assert descricao in pages[1].extract_text()
 
 
 def test_previa_sem_registro_nao_desenha_codigo_de_barras():
@@ -192,9 +215,9 @@ def test_boleto_tem_recibo_do_pagador_sem_quitacao(monkeypatch):
 def test_boleto_mostra_os_itens_cobrados(monkeypatch):
     """O boleto tem de listar os itens/placas cobrados na fatura do topo."""
     visto: dict = {}
-    original = boleto_pdf._draw_itens_recibo
+    original = boleto_pdf._draw_grade_itens_boleto
     monkeypatch.setattr(
-        boleto_pdf, '_draw_itens_recibo',
+        boleto_pdf, '_draw_grade_itens_boleto',
         lambda c, itens, y: (visto.update(itens=itens), original(c, itens, y))[1],
     )
     dados = _dados(itens=[('ABC1D23 - MENSALIDADE', Decimal('99.90'))],

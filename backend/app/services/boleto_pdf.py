@@ -456,7 +456,9 @@ def _draw_bloco_cobranca(c, d: DadosBoleto, y_top: float, *, titulo: str,
 # FICHA DE COMPENSAÇÃO
 # ─────────────────────────────────────────────────────────────────────────────
 def _draw_ficha(c, d: DadosBoleto, y_top: float) -> float:
-    H_HDR = _mm(14); H_R = _mm(12); H_FIN = _mm(8.5); H_PAG = _mm(14)
+    # Densidade da ficha do modelo SGR: deixa espaço para muitas placas no
+    # recibo do pagador sem empurrar o código de barras para outra página.
+    H_HDR = _mm(12); H_R = _mm(9.5); H_FIN = _mm(7); H_PAG = _mm(13)
     y = y_top
 
     _draw_header(c, y, True, d.linha_digitavel, H_HDR); y -= H_HDR
@@ -527,7 +529,7 @@ def _draw_ficha(c, d: DadosBoleto, y_top: float) -> float:
     c.drawRightString(RM - _mm(1), y - H_PAG + _mm(3), "FICHA DE COMPENSAÇÃO")
     y -= H_PAG
 
-    H_BENEF = _mm(9); _box(c, LM, y, CW, H_BENEF)
+    H_BENEF = _mm(7); _box(c, LM, y, CW, H_BENEF)
     c.setFont("Helvetica", 7); c.setFillColorRGB(0, 0, 0)
     c.drawString(LM + _mm(1), y - H_BENEF + _mm(2.5), d.cedente_nome)
     c.setFont("Helvetica", 6); c.setFillColorRGB(0.5, 0.5, 0.5)
@@ -824,6 +826,71 @@ _PIX_TEXTO = [
     "celular para a imagem ao lado.",
 ]
 
+_MAX_ITENS_PAGINA = 57
+
+
+def _item_grade_boleto(descricao: str, valor: float, largura: float, fonte: float) -> tuple[str, bool]:
+    """Uma linha no formato placa - serviço - valor do boleto de referência."""
+    import re
+
+    texto = ' '.join(str(descricao or '').split())
+    valor_txt = f'R$ {_fv(valor)}'
+    placa = re.search(r'PLACA[:\s\u00a0]+([A-Z0-9]+)', texto, re.IGNORECASE)
+    if placa is None:
+        placa = re.search(r'^([A-Z]{3}[0-9][A-Z0-9]{3})\b', texto, re.IGNORECASE)
+    texto_upper = texto.upper()
+    if 'PRÓ-RATA' in texto_upper or 'PRO-RATA' in texto_upper:
+        dias = re.search(r'PR[ÓO]-RATA\s+(\d+)\s+DIAS', texto_upper)
+        tipo = f'PRÓ-RATA {dias.group(1)} DIAS' if dias else 'PRÓ-RATA'
+        abreviado = True
+    elif 'MENSALIDADE' in texto_upper:
+        tipo = 'MENSALIDADE'
+        abreviado = False
+    elif 'DESINSTALAÇÃO' in texto_upper:
+        tipo = 'DESINSTALAÇÃO'
+        abreviado = True
+    elif 'INSTALAÇÃO' in texto_upper:
+        tipo = 'INSTALAÇÃO'
+        abreviado = True
+    else:
+        tipo = texto.split(' · ', 1)[0]
+        abreviado = False
+    if placa:
+        tipo = f'{placa.group(1).upper()} - {tipo}'
+    label = f'{tipo} - {valor_txt}'
+    if stringWidth(label, 'Helvetica', fonte) <= largura:
+        return label, abreviado
+    # O valor e a placa nunca somem da linha; o descritivo integral segue
+    # no anexo caso precise encurtar algum serviço.
+    prefixo = f'{placa.group(1).upper()} - ' if placa else ''
+    disponivel = largura - stringWidth(f'{prefixo} - {valor_txt}', 'Helvetica', fonte)
+    while tipo and stringWidth(tipo.removeprefix(prefixo), 'Helvetica', fonte) > disponivel:
+        tipo = tipo[:-1]
+    return f'{prefixo}{tipo.removeprefix(prefixo).rstrip()} - {valor_txt}', True
+
+
+def _draw_grade_itens_boleto(c, itens: list[tuple[str, float]], y_top: float) -> tuple[float, bool]:
+    """Até 57 itens em até três colunas, como no boleto SGR anexado."""
+    colunas = 3 if len(itens) > 38 else 2 if len(itens) > 19 else 1
+    largura = CW / colunas
+    linhas = (min(len(itens), _MAX_ITENS_PAGINA) + colunas - 1) // colunas
+    passo = _mm(3.25 if colunas == 3 else 3.7 if colunas == 2 else 4.2)
+    fonte = 5.8 if colunas == 3 else 6.5 if colunas == 2 else 7
+    anexo = len(itens) > _MAX_ITENS_PAGINA
+    c.setFillColorRGB(0, 0, 0)
+    for indice, (descricao, valor) in enumerate(itens[:_MAX_ITENS_PAGINA]):
+        linha, coluna = divmod(indice, colunas)
+        label, encurtou = _item_grade_boleto(descricao, valor, largura - _mm(2), fonte)
+        anexo = anexo or encurtou
+        c.setFont('Helvetica', fonte)
+        c.drawString(LM + coluna * largura + _mm(0.3), y_top - linha * passo - _mm(2.7), label)
+    if len(itens) > _MAX_ITENS_PAGINA:
+        c.setFont('Helvetica-Bold', 7)
+        c.drawRightString(RM, y_top - linhas * passo - _mm(2),
+                          f'MAIS {len(itens) - _MAX_ITENS_PAGINA} ITENS - VER ANEXO')
+        return y_top - (linhas + 1) * passo, True
+    return y_top - linhas * passo, anexo
+
 
 def _referente(d: DadosBoleto) -> str:
     """Linha "Referente a:" — vem das instruções, senão do primeiro item."""
@@ -853,12 +920,12 @@ def _draw_itens_recibo(c, itens: list[tuple[str, float]], y_top: float) -> float
     return y
 
 
-def _draw_recibo_pagador(c, d: DadosBoleto, y_top: float) -> float:
+def _draw_recibo_pagador(c, d: DadosBoleto, y_top: float) -> tuple[float, bool]:
     y = y_top
 
     # ── Cabeçalho: logo + empresa (esq) · "Recibo do pagador" (dir) ──────────
-    _draw_mastersat(c, LM, y, h_mm=11.0, max_w_mm=40.0)
-    ex = LM + _mm(44)
+    _draw_mastersat(c, LM, y, h_mm=10.0, max_w_mm=37.0)
+    ex = LM + _mm(40)
     c.setFillColorRGB(0, 0, 0); c.setFont("Helvetica-Bold", 8)
     c.drawString(ex, y - _mm(3.2), "MASTERSAT")
     c.setFont("Helvetica", 7)
@@ -866,11 +933,10 @@ def _draw_recibo_pagador(c, d: DadosBoleto, y_top: float) -> float:
     for ln in _ENDERECO_RECIBO:
         c.drawString(ex, ty, ln); ty -= _mm(3.1)
     c.drawString(ex, ty, f"CNPJ: {_fmt_cnpj(d.cedente_cnpj)}")
-    # Nunca "Recibo" na emissão: recibo/quitação só sai depois do boleto pago
-    # (regra da reunião). Aqui é a fatura/demonstrativo do que está sendo cobrado.
+    # "Recibo do pagador" é a via do boleto; não representa quitação.
     c.setFont("Helvetica-Oblique", 7); c.setFillColorRGB(0.4, 0.4, 0.4)
-    c.drawRightString(RM, y - _mm(2.5), "Demonstrativo de Serviços")
-    _hline(c, LM, y - _mm(15.5), RM, lw=0.4)
+    c.drawRightString(RM, y - _mm(2.5), "Recibo do pagador")
+    _hline(c, LM, y - _mm(15.5), RM, lw=0.4, dash=(2, 2))
     y -= _mm(18)
 
     # ── Pix (só quando habilitado na conta): QR + instruções ─────────────────
@@ -888,11 +954,12 @@ def _draw_recibo_pagador(c, d: DadosBoleto, y_top: float) -> float:
     # ── Referente a ──────────────────────────────────────────────────────────
     c.setFillColorRGB(0, 0, 0); c.setFont("Helvetica", 8)
     c.drawString(LM, y - _mm(3.5), _referente(d)[:120])
-    y -= _mm(7)
+    y -= _mm(19)
 
     # ── Itens cobrados ───────────────────────────────────────────────────────
     itens = d.itens or [("SERVIÇO DE RASTREAMENTO", float(d.valor))]
-    y = _draw_itens_recibo(c, _itens_resumidos(itens), y) - _mm(2)
+    y, precisa_anexo = _draw_grade_itens_boleto(c, itens, y)
+    y -= _mm(2)
 
     # ── Faixa-recibo: nº doc · nosso número · datas · agência · carteira · valor
     H = _mm(9)
@@ -920,7 +987,7 @@ def _draw_recibo_pagador(c, d: DadosBoleto, y_top: float) -> float:
           f"{d.cedente_nome} - {_fmt_cnpj(d.cedente_cnpj)}"[:56], vsize=7)
     _cell(c, LM + cPag + cBenef, y, cNota, H, "Nº nota fiscal", "")
     y -= H
-    return y
+    return y, precisa_anexo
 
 
 def _draw_detalhamento_boleto(
@@ -970,7 +1037,7 @@ def gerar_boleto_pdf(dados: DadosBoleto) -> bytes:
     c.setTitle(f"Boleto MASTERSAT - {dados.billing_id}")
 
     # 1. Recibo do pagador / fatura no topo (QR Pix, itens, faixa-recibo).
-    y = _draw_recibo_pagador(c, dados, _ft(10))
+    y, precisa_anexo = _draw_recibo_pagador(c, dados, _ft(10))
 
     # 2. Corte entre o recibo e a ficha de compensação.
     y -= _mm(2)
@@ -982,7 +1049,7 @@ def gerar_boleto_pdf(dados: DadosBoleto) -> bytes:
     y = _draw_ficha(c, dados, y - _mm(6))
     _draw_barcode(c, dados.codigo_barras, LM, y - _mm(3), height_mm=13)
 
-    if dados.itens and len(dados.itens) > 1:
+    if precisa_anexo:
         _draw_detalhamento_boleto(c, dados)
 
     c.save()
