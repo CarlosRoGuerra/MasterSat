@@ -79,6 +79,7 @@ type ChargeItem = {
   generated_count: number;
   remaining_installments: number;
   per_installment_amount: number;
+  amount_to_generate: number;
   total_remaining: number;
   start_date: string;
 };
@@ -877,6 +878,7 @@ export default function FechamentoPage() {
                       <Th>Serviço / título</Th>
                       <Th>Parcelas pendentes</Th>
                       <Th>Valor/parcela</Th>
+                      <Th>A gerar agora</Th>
                       <Th>Total restante</Th>
                       <Th><span className="sr-only">Ações</span></Th>
                     </TableHead>
@@ -903,6 +905,9 @@ export default function FechamentoPage() {
                             {fmt(item.per_installment_amount)}
                           </Td>
                           <Td className="whitespace-nowrap text-sm font-semibold text-slate-900 dark:text-white">
+                            {fmt(item.amount_to_generate)}
+                          </Td>
+                          <Td className="whitespace-nowrap text-sm tabular-nums text-slate-500 dark:text-slate-400">
                             {fmt(item.total_remaining)}
                           </Td>
                           <Td>

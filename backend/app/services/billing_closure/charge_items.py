@@ -4,7 +4,7 @@ from collections import defaultdict
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models.billing import Billing
@@ -49,17 +49,45 @@ def _effective_billing_counts_bulk(db: Session, item_ids: list[int]) -> dict[int
     return {item_id: len(ids) for item_id, ids in billing_ids_by_item.items()}
 
 
+def _items_with_installment_due_in_month(
+    db: Session, item_ids: list[int], reference: date,
+) -> set[int]:
+    """Itens que já têm parcela efetiva vencendo no mês de ``reference``."""
+    if not item_ids:
+        return set()
+    start = reference.replace(day=1)
+    end = date(start.year + 1, 1, 1) if start.month == 12 else date(start.year, start.month + 1, 1)
+    rows = db.query(Billing.item_id).filter(
+        Billing.item_id.in_(item_ids),
+        Billing.is_deleted.is_(False),
+        Billing.due_date >= start,
+        Billing.due_date < end,
+        or_(
+            Billing.status != BillingStatus.CANCELED,
+            Billing.substituted_by_id.is_not(None),
+        ),
+    ).distinct().all()
+    return {row[0] for row in rows}
+
+
 def _pending_charge_items(
     db: Session,
     reference_month: date,
     exclude_ids: set[int] | None = None,
     filter_type: str = 'all',
     client_id: int | None = None,
+    billing_month: date | None = None,
 ) -> list[dict]:
     """
     Retorna ClientChargeItems ativos cujos billings ainda não foram totalmente gerados
     e cujo start_date é anterior ao final do mês de referência.
     exclude_ids: item_ids já embutidos em cobranças combinadas de primeiro mês.
+
+    Serviço parcelado gera UMA parcela por fechamento: ``amount_to_generate`` é o
+    que este fechamento cria (a parcela do mês); ``total_remaining`` é o saldo
+    de todas as parcelas que ainda faltam. ``billing_month`` é o mês de
+    vencimento do fechamento (padrão: o próprio ``reference_month``) — se o
+    item já tem parcela vencendo nele, ele não aparece de novo.
     """
     if reference_month.month == 12:
         month_end = date(reference_month.year + 1, 1, 1)
@@ -82,6 +110,9 @@ def _pending_charge_items(
         item for item in items if not (exclude_ids and item.id in exclude_ids)
     ]
     billing_counts = _effective_billing_counts_bulk(db, [item.id for item in candidate_items])
+    already_in_month = _items_with_installment_due_in_month(
+        db, [item.id for item in candidate_items], billing_month or reference_month,
+    )
 
     client_ids = {item.client_id for item in candidate_items}
     contract_ids = {item.contract_id for item in candidate_items if item.contract_id}
@@ -102,6 +133,8 @@ def _pending_charge_items(
 
         installments = max(int(item.installment_count or 1), 1)
         if billing_count >= installments:
+            continue
+        if installments > 1 and item.id in already_in_month:
             continue
 
         if item.contract_id:
@@ -125,6 +158,8 @@ def _pending_charge_items(
             ) from exc
         per_installment = parcelas[0]
         restantes = parcelas[billing_count:]
+        # Uma parcela por fechamento; item de parcela única gera o valor todo.
+        a_gerar = restantes[0] if installments > 1 else sum(restantes, Decimal('0.00'))
 
         result.append({
             'type': 'servico',
@@ -140,6 +175,7 @@ def _pending_charge_items(
             'generated_count': billing_count,
             'remaining_installments': remaining,
             'per_installment_amount': float(per_installment),
+            'amount_to_generate': float(a_gerar),
             'total_remaining': float(sum(restantes, Decimal('0.00'))),
             'start_date': item.start_date,
         })

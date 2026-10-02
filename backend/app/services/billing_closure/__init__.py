@@ -339,6 +339,7 @@ def simulate_closure(
     charge_items = _pending_charge_items(
         db, activity_month, exclude_ids=embedded_ids,
         filter_type=filter_type, client_id=client_id,
+        billing_month=reference_month,
     )
 
     to_generate = [i for i in items if not i['already_generated']]
@@ -346,7 +347,7 @@ def simulate_closure(
     # total_amount inclui os serviços embutidos na primeira cobrança
     total_amount = sum(i['total_first_billing'] for i in to_generate)
     total_uninstall = sum(i['fee_amount'] for i in uninstall_items if not i['deferred'])
-    total_services = sum(i['total_remaining'] for i in charge_items)
+    total_services = sum(i['amount_to_generate'] for i in charge_items)
 
     return {
         'reference_month': reference_month.strftime('%m/%Y'),
@@ -737,7 +738,8 @@ def execute_closure(
         item_obj = db.get(ClientChargeItem, charge_item_dict['item_id'])
         if item_obj:
             try:
-                if activity_month != reference_month:
+                parcelado = int(item_obj.installment_count or 1) > 1
+                if activity_month != reference_month or parcelado:
                     charge_contract = db.get(Contract, item_obj.contract_id) if item_obj.contract_id else None
                     charge_client = db.get(Client, item_obj.client_id)
                     billing_day = (
@@ -746,8 +748,11 @@ def execute_closure(
                         or min(item_obj.start_date.day, 28)
                     )
                     first_due_date = normalize_due_date(reference_month, 0, billing_day, 1)
+                    # Serviço parcelado: só a parcela do mês, as outras saem
+                    # nos fechamentos seguintes (uma por mês).
                     new_billings = generate_item_billings(
                         db, item_obj, commit=False, first_due_date=first_due_date,
+                        only_next=parcelado,
                     )
                 else:
                     new_billings = generate_item_billings(db, item_obj, commit=False)

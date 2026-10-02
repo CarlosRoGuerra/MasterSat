@@ -448,10 +448,14 @@ class TestParcelamento:
                                 installment_count=6, start_date=date(2025, 5, 10))
         db.add(item)
         db.commit()
+        parcelas = split_amount_in_installments(Decimal('100'), 6)
         previa = simulate_closure(db, date(2025, 5, 1))['charge_items'][0]
         assert previa['total_remaining'] == pytest.approx(100.00)  # antes: 16,67 × 6 = 100,02
+        # Uma parcela por fechamento: a prévia promete só a do mês.
+        assert previa['amount_to_generate'] == pytest.approx(float(parcelas[0]))
         resultado = execute_closure(db, date(2025, 5, 1))
-        assert resultado['total_services_amount'] == pytest.approx(100.00)
+        assert resultado['total_services_amount'] == pytest.approx(float(parcelas[0]))
+        assert resultado['services_generated'] == 1
 
 
 # ---------------------------------------------------------------------------

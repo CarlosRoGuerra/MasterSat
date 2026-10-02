@@ -533,11 +533,47 @@ def _occupied_item_installments(db: Session, item_id: int) -> set[int]:
     ).all())
 
 
+def _item_has_installment_due_in_month(db: Session, item_id: int, reference: date) -> bool:
+    """O item já tem parcela efetiva vencendo no mês de ``reference``."""
+    start = reference.replace(day=1)
+    end = add_months(start, 1)
+    return db.scalar(
+        select(Billing.id).where(
+            Billing.item_id == item_id,
+            Billing.is_deleted.is_(False),
+            Billing.due_date >= start,
+            Billing.due_date < end,
+            or_(
+                Billing.status != BillingStatus.CANCELED,
+                Billing.substituted_by_id.is_not(None),
+            ),
+        ).limit(1)
+    ) is not None
+
+
+def _item_has_installments_left(db: Session, item: ClientChargeItem) -> bool:
+    """Ainda há parcela do item sem cobrança (nem substituída por negociação)."""
+    installments = max(int(item.installment_count or 1), 1)
+    if installments <= 1:
+        return False
+    return (
+        len(_occupied_item_installments(db, item.id)) < installments
+        and charge_item_effective_billing_count(db, item.id) < installments
+    )
+
+
 def generate_item_billings(
     db: Session, item: ClientChargeItem, force: bool = False, *,
     commit: bool = True, first_due_date: date | None = None,
+    only_next: bool = False,
 ) -> list[Billing]:
     """Gera as parcelas de um item de cobrança.
+
+    ``only_next=True`` (fechamento mensal) gera só a PRÓXIMA parcela em aberto,
+    com vencimento em ``first_due_date``; as demais saem nos fechamentos
+    seguintes, uma por mês. O item continua na fila até a última parcela ser
+    gerada. Se o mês já recebeu uma parcela deste item, não gera outra (rodar o
+    mesmo fechamento duas vezes não pode adiantar parcelas).
 
     ``commit=False`` para uso dentro de uma transação maior (o fechamento
     mensal): quem orquestra é que decide quando confirmar, senão um erro
@@ -571,7 +607,12 @@ def generate_item_billings(
     first_open_index = next(
         (index for index in range(installments) if index + 1 not in occupied), 0,
     )
+    if only_next and first_due_date and not force:
+        if _item_has_installment_due_in_month(db, item.id, first_due_date):
+            return []
     for index in range(installments):
+        if only_next and index != first_open_index:
+            continue
         due_base = first_due_date or item.start_date
         billing_day = due_base.day if first_due_date else min(item.start_date.day, 28)
         cycle = index - first_open_index if first_due_date else index
@@ -630,9 +671,15 @@ def generate_item_billings(
         created.append(billing)
 
     # Emitir não significa receber. O item sai da fila de geração, mas só vira
-    # ``concluido`` quando todas as cobranças efetivas forem pagas.
-    item.active = False
-    item.status = 'faturado'
+    # ``concluido`` quando todas as cobranças efetivas forem pagas. Com
+    # ``only_next`` ele só sai da fila quando não resta parcela a gerar.
+    db.flush()
+    if only_next and _item_has_installments_left(db, item):
+        item.active = True
+        item.status = 'ativo'
+    else:
+        item.active = False
+        item.status = 'faturado'
     item.completed_at = None
 
     if commit:
@@ -788,7 +835,13 @@ def refresh_charge_item_state(
         .limit(1)
     ) is not None
 
-    if abertas:
+    if billings and not embedded and _item_has_installments_left(db, item):
+        # Parcelas ainda por gerar (uma por fechamento): nem a emissão nem o
+        # pagamento das já geradas encerram o item.
+        item.active = True
+        item.status = 'ativo'
+        item.completed_at = None
+    elif abertas:
         item.active = False
         item.status = 'faturado'
         item.completed_at = None
