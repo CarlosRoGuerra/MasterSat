@@ -1,10 +1,11 @@
 from datetime import date, timedelta
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_roles
+from app.core.dashboard_cache import get_dashboard, put_dashboard
 from app.core.permissions import Capability, has_capability, roles_with
 from app.db.session import get_db
 from app.models.billing import Billing
@@ -20,102 +21,57 @@ router = APIRouter()
 
 @router.get('/')
 def dashboard(
+    response: Response,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(*roles_with(Capability.REGISTRY_READ))),
 ):
+    role = current_user.role.value if hasattr(current_user.role, 'value') else str(current_user.role)
+    cached = get_dashboard(role)
+    if cached is not None:
+        response.headers['X-Dashboard-Cache'] = 'HIT'
+        return cached
+    response.headers['X-Dashboard-Cache'] = 'MISS'
     today = date.today()
     first_of_month = today.replace(day=1)
-    first_of_prev = date(today.year if today.month > 1 else today.year - 1,
-                         today.month - 1 if today.month > 1 else 12, 1)
-
-    # Perfil sem FINANCIAL_READ (operacional): 'finance' volta null e
-    # 'upcoming_billings' vazio — as chaves continuam no payload, só sem
-    # valores/títulos. Mesmo corte de /billings e /reports (SEC-01).
+    first_of_prev = date(
+        today.year if today.month > 1 else today.year - 1,
+        today.month - 1 if today.month > 1 else 12,
+        1,
+    )
     ver_financeiro = has_capability(current_user.role, Capability.FINANCIAL_READ)
 
-    # ── Finance deltas (current vs previous calendar month) ──────────────
-    def _received(date_from: date, date_to: date) -> float:
-        # Caixa: pago no mês. Cobrança paga legada sem paid_amount conta o
-        # valor do título (antes contava zero).
-        return float(db.scalar(
-            select(func.coalesce(func.sum(func.coalesce(Billing.paid_amount, Billing.amount)), 0))
-            .where(
-                Billing.status == BillingStatus.PAID,
-                Billing.is_deleted.is_(False),
-                Billing.payment_date >= date_from,
-                Billing.payment_date < date_to,
-            )
-        ) or 0)
-
-    def _finance() -> dict:
-        received_this = _received(first_of_month, today + timedelta(days=1))
-        received_prev = _received(first_of_prev, first_of_month)
-        delta_received = round(received_this - received_prev, 2)
-        delta_pct = round((delta_received / received_prev * 100) if received_prev else 0, 1)
-        return {
-            'pending_count':    db.scalar(select(func.count()).select_from(Billing).where(Billing.status == BillingStatus.PENDING, Billing.is_deleted.is_(False))) or 0,
-            'overdue_count':    db.scalar(select(func.count()).select_from(Billing).where(Billing.status == BillingStatus.OVERDUE, Billing.is_deleted.is_(False))) or 0,
-            'received_month':   received_this,
-            'received_prev_month': received_prev,
-            'delta_received':   delta_received,
-            'delta_pct':        delta_pct,
-        }
-
-    # ── New clients this month vs previous ───────────────────────────────
-    def _new_clients(date_from: date, date_to: date) -> int:
-        return db.scalar(
-            select(func.count()).select_from(Client)
-            .where(Client.is_deleted.is_(False),
-                   Client.created_at >= date_from,
-                   Client.created_at < date_to)
-        ) or 0
-
-    new_this = _new_clients(first_of_month, today + timedelta(days=1))
-    new_prev = _new_clients(first_of_prev, first_of_month)
-
-    # ── Próximos vencimentos × vencidas (PROD-02) ───────────────────────
-    # Antes era uma lista só (vencimento <= hoje+7, mais antigo primeiro,
-    # 5 itens): cinco atrasos antigos escondiam tudo que vence na semana.
-    def _billings(*condicoes, ordem, limite: int = 5):
-        if not ver_financeiro:
-            return []
-        return db.execute(
-            select(Billing.id, Billing.due_date, Billing.amount, Client.name.label('client_name'))
-            .join(
-                Client,
-                Client.id == func.coalesce(Billing.payer_client_id, Billing.client_id),
-            )
-            .where(Billing.is_deleted.is_(False), Client.is_deleted.is_(False), *condicoes)
-            .order_by(ordem, Billing.id.asc())
-            .limit(limite)
-        ).all()
-
-    upcoming_rows = _billings(
-        Billing.status.in_([BillingStatus.PENDING, BillingStatus.OVERDUE]),
-        Billing.due_date >= today,
-        Billing.due_date <= today + timedelta(days=7),
-        ordem=Billing.due_date.asc(),
-    )
-    overdue_rows = _billings(
-        Billing.status.in_([BillingStatus.PENDING, BillingStatus.OVERDUE]),
-        Billing.due_date < today,
-        ordem=Billing.due_date.asc(),
-    )
-
-    def _clientes(status: ClientStatus) -> int:
-        return db.scalar(select(func.count()).select_from(Client).where(
-            Client.status == status, Client.is_deleted.is_(False),
-        )) or 0
-
-    clientes = {
-        'active': _clientes(ClientStatus.ACTIVE),
-        'inactive': _clientes(ClientStatus.INACTIVE),
-        'delinquent': _clientes(ClientStatus.DELINQUENT),
-        'suspended': _clientes(ClientStatus.SUSPENDED),
+    # Six client metrics in one table scan; retain the original status-only
+    # denominator, which excludes any future/unknown enum value.
+    active, inactive, delinquent, suspended, new_this, new_prev = db.execute(
+        select(
+            func.count().filter(Client.status == ClientStatus.ACTIVE),
+            func.count().filter(Client.status == ClientStatus.INACTIVE),
+            func.count().filter(Client.status == ClientStatus.DELINQUENT),
+            func.count().filter(Client.status == ClientStatus.SUSPENDED),
+            func.count().filter(
+                Client.created_at >= first_of_month,
+                Client.created_at < today + timedelta(days=1),
+            ),
+            func.count().filter(
+                Client.created_at >= first_of_prev,
+                Client.created_at < first_of_month,
+            ),
+        ).where(Client.is_deleted.is_(False))
+    ).one()
+    clients = {
+        'active': active,
+        'inactive': inactive,
+        'delinquent': delinquent,
+        'suspended': suspended,
+        'total': active + inactive + delinquent + suspended,
+        'new_this_month': new_this,
+        'new_prev_month': new_prev,
     }
-    vehicles_total = db.scalar(select(func.count()).select_from(Vehicle).where(Vehicle.is_deleted.is_(False))) or 0
-    # Veículos DISTINTOS com rastreador instalado vinculado — não a contagem
-    # de rastreadores (dois rastreadores no mesmo veículo contavam dois).
+
+    vehicles_total = db.scalar(
+        select(func.count()).select_from(Vehicle).where(Vehicle.is_deleted.is_(False))
+    ) or 0
+    # Count distinct linked vehicles, not trackers: one vehicle may have two.
     vehicles_with_tracker = db.scalar(
         select(func.count(func.distinct(Tracker.vehicle_id)))
         .join(Vehicle, Vehicle.id == Tracker.vehicle_id)
@@ -126,45 +82,105 @@ def dashboard(
         )
     ) or 0
 
-    def _serialize_billing_rows(rows):
+    installed, stock, maintenance = db.execute(
+        select(
+            func.count().filter(Tracker.status == TrackerStatus.INSTALLED),
+            func.count().filter(Tracker.status == TrackerStatus.STOCK),
+            func.count().filter(Tracker.status == TrackerStatus.MAINTENANCE),
+        ).where(Tracker.is_deleted.is_(False))
+    ).one()
+    open_orders, in_progress, completed = db.execute(
+        select(
+            func.count().filter(ServiceOrder.status == OrderStatus.OPEN),
+            func.count().filter(ServiceOrder.status == OrderStatus.IN_PROGRESS),
+            func.count().filter(ServiceOrder.status == OrderStatus.COMPLETED),
+        ).where(ServiceOrder.is_deleted.is_(False))
+    ).one()
+
+    finance = None
+    upcoming_rows = []
+    overdue_rows = []
+    if ver_financeiro:
+        # Preserve cash basis and the legacy paid_amount fallback.
+        received_amount = func.coalesce(Billing.paid_amount, Billing.amount)
+        pending, overdue, current, previous = db.execute(
+            select(
+                func.count().filter(Billing.status == BillingStatus.PENDING),
+                func.count().filter(Billing.status == BillingStatus.OVERDUE),
+                func.coalesce(func.sum(received_amount).filter(
+                    Billing.status == BillingStatus.PAID,
+                    Billing.payment_date >= first_of_month,
+                    Billing.payment_date < today + timedelta(days=1),
+                ), 0),
+                func.coalesce(func.sum(received_amount).filter(
+                    Billing.status == BillingStatus.PAID,
+                    Billing.payment_date >= first_of_prev,
+                    Billing.payment_date < first_of_month,
+                ), 0),
+            ).where(Billing.is_deleted.is_(False))
+        ).one()
+        received_this = float(current)
+        received_prev = float(previous)
+        delta_received = round(received_this - received_prev, 2)
+        finance = {
+            'pending_count': pending,
+            'overdue_count': overdue,
+            'received_month': received_this,
+            'received_prev_month': received_prev,
+            'delta_received': delta_received,
+            'delta_pct': round((delta_received / received_prev * 100) if received_prev else 0, 1),
+        }
+
+        def billings(*conditions, order):
+            return db.execute(
+                select(Billing.id, Billing.due_date, Billing.amount, Client.name.label('client_name'))
+                .join(Client, Client.id == func.coalesce(Billing.payer_client_id, Billing.client_id))
+                .where(Billing.is_deleted.is_(False), Client.is_deleted.is_(False), *conditions)
+                .order_by(order, Billing.id.asc())
+                .limit(5)
+            ).all()
+
+        upcoming_rows = billings(
+            Billing.status.in_([BillingStatus.PENDING, BillingStatus.OVERDUE]),
+            Billing.due_date >= today,
+            Billing.due_date <= today + timedelta(days=7),
+            order=Billing.due_date.asc(),
+        )
+        overdue_rows = billings(
+            Billing.status.in_([BillingStatus.PENDING, BillingStatus.OVERDUE]),
+            Billing.due_date < today,
+            order=Billing.due_date.asc(),
+        )
+
+    def serialize_billing_rows(rows):
         return [
             {
-                'id': r.id,
-                'client_name': r.client_name,
-                'amount': float(r.amount),
-                'due_date': r.due_date.isoformat(),
-                'days_until': (r.due_date - today).days,
+                'id': row.id,
+                'client_name': row.client_name,
+                'amount': float(row.amount),
+                'due_date': row.due_date.isoformat(),
+                'days_until': (row.due_date - today).days,
             }
-            for r in rows
+            for row in rows
         ]
 
-    return {
-        'clients': {
-            **clientes,
-            # Denominador explícito: todos os estados, inclusive suspensos.
-            'total': sum(clientes.values()),
-            'new_this_month': new_this,
-            'new_prev_month': new_prev,
-        },
+    payload = {
+        'clients': clients,
         'vehicles': {
             'total': vehicles_total,
             'with_tracker': vehicles_with_tracker,
             'without_tracker': max(vehicles_total - vehicles_with_tracker, 0),
         },
-        'trackers': {
-            'installed':   db.scalar(select(func.count()).select_from(Tracker).where(Tracker.status == TrackerStatus.INSTALLED,  Tracker.is_deleted.is_(False))) or 0,
-            'stock':       db.scalar(select(func.count()).select_from(Tracker).where(Tracker.status == TrackerStatus.STOCK,       Tracker.is_deleted.is_(False))) or 0,
-            'maintenance': db.scalar(select(func.count()).select_from(Tracker).where(Tracker.status == TrackerStatus.MAINTENANCE, Tracker.is_deleted.is_(False))) or 0,
-        },
+        'trackers': {'installed': installed, 'stock': stock, 'maintenance': maintenance},
         'service_orders': {
-            'open':       db.scalar(select(func.count()).select_from(ServiceOrder).where(ServiceOrder.status == OrderStatus.OPEN,        ServiceOrder.is_deleted.is_(False))) or 0,
-            'in_progress':db.scalar(select(func.count()).select_from(ServiceOrder).where(ServiceOrder.status == OrderStatus.IN_PROGRESS, ServiceOrder.is_deleted.is_(False))) or 0,
-            'completed':  db.scalar(select(func.count()).select_from(ServiceOrder).where(ServiceOrder.status == OrderStatus.COMPLETED,   ServiceOrder.is_deleted.is_(False))) or 0,
+            'open': open_orders,
+            'in_progress': in_progress,
+            'completed': completed,
         },
-        'finance': _finance() if ver_financeiro else None,
-        # Vencem de hoje a hoje+7, mais próximos primeiro (máx. 5).
-        'upcoming_billings': _serialize_billing_rows(upcoming_rows),
-        # Já vencidas em aberto, mais antigas primeiro (máx. 5).
-        'overdue_billings': _serialize_billing_rows(overdue_rows),
+        'finance': finance,
+        'upcoming_billings': serialize_billing_rows(upcoming_rows),
+        'overdue_billings': serialize_billing_rows(overdue_rows),
         'reference_date': today.isoformat(),
     }
+    put_dashboard(role, payload)
+    return payload

@@ -14,6 +14,7 @@ export type ContactItem = { name: string; phone: string; email: string; role: st
 
 export type Client = {
   id: number;
+  vehicle_count?: number;
   name: string;
   cpf_cnpj: string;
   type: ClientType;

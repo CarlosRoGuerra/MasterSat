@@ -24,7 +24,7 @@ from app.models.billing import Billing
 from app.models.client import Client
 from app.models.contract import Contract
 from app.models.document import Document
-from app.models.enums import DocumentReviewStatus, UserRole
+from app.models.enums import ClientStatus, DocumentReviewStatus, UserRole
 from app.models.plan import Plan
 from app.models.service_order import ServiceOrder
 from app.models.user import User
@@ -153,8 +153,10 @@ def list_items(
     status: str | None = None,
     cpf_cnpj: str | None = None,
     type: str | None = Query(default=None),
-    skip: int = 0,
-    limit: int = Query(default=100, le=300),
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=300),
+    sort: str = Query(default='id', pattern='^(id|name|trade_name|cpf_cnpj|status)$'),
+    direction: str = Query(default='desc', pattern='^(asc|desc)$'),
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*VIEW_ROLES)),
 ):
@@ -180,11 +182,58 @@ def list_items(
         filtro = filtro.where(Client.type == type)
 
     total = db.scalar(select(func.count()).select_from(filtro.subquery())) or 0
-    stmt = filtro.order_by(Client.id.desc()).offset(skip).limit(limit)
+    sort_column = {
+        'id': Client.id,
+        'name': Client.name,
+        'trade_name': Client.trade_name,
+        'cpf_cnpj': Client.cpf_cnpj,
+        'status': Client.status,
+    }[sort]
+    ordering = sort_column.asc() if direction == 'asc' else sort_column.desc()
+    stmt = filtro.order_by(ordering, Client.id.asc()).offset(skip).limit(limit)
     clientes = list(db.scalars(stmt).all())
     com_contrato = _clientes_com_contrato(db, [c.id for c in clientes])
-    items = [_marcar_contrato(c, com_contrato) for c in clientes]
+    counts = dict(db.execute(
+        select(Vehicle.client_id, func.count())
+        .where(Vehicle.is_deleted.is_(False), Vehicle.client_id.in_([c.id for c in clientes]))
+        .group_by(Vehicle.client_id)
+    ).all()) if clientes else {}
+    items = []
+    for client in clientes:
+        client.vehicle_count = counts.get(client.id, 0)
+        items.append(_marcar_contrato(client, com_contrato))
     return {'items': items, 'total': total}
+
+
+@router.get('/summary')
+def client_summary(
+    search: str | None = None,
+    status: str | None = None,
+    type: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*VIEW_ROLES)),
+):
+    """Filtered counters for the client page, independent of pagination."""
+    filtro = select(Client.id, Client.status, Client.type).where(Client.is_deleted.is_(False))
+    if search:
+        term = f'%{search.strip()}%'
+        filtro = filtro.where(or_(
+            Client.name.ilike(term), Client.trade_name.ilike(term),
+            Client.cpf_cnpj.ilike(term), Client.email.ilike(term),
+            Client.phone.ilike(term), Client.city.ilike(term),
+        ))
+    if status:
+        filtro = filtro.where(Client.status == status)
+    if type:
+        filtro = filtro.where(Client.type == type)
+    filtered = filtro.subquery()
+    total, active, delinquent, company = db.execute(select(
+        func.count(),
+        func.count().filter(filtered.c.status == ClientStatus.ACTIVE),
+        func.count().filter(filtered.c.status == ClientStatus.DELINQUENT),
+        func.count().filter(filtered.c.type == 'pj'),
+    )).one()
+    return {'total': total, 'active': active, 'delinquent': delinquent, 'company': company}
 
 
 @router.post('/', response_model=ClientOut)

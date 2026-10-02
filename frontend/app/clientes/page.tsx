@@ -16,7 +16,7 @@ import { useDebouncedValue } from '@/lib/use-debounced-value';
 import { Badge, statusVariant, statusLabel } from '@/components/ui/badge';
 import { EmptyState, TableSkeleton } from '@/components/ui/empty-state';
 import { Table, TableHead, Th, TableBody, Tr, Td } from '@/components/ui/table';
-import { usePagination, Pagination } from '@/components/ui/pagination';
+import { Pagination } from '@/components/ui/pagination';
 import { ExportButton } from '@/components/ui/export-button';
 import { apiFetch, API_URL } from '@/lib/api';
 import { entregarArquivo, nomeArquivoCliente } from '@/lib/arquivo';
@@ -32,7 +32,6 @@ import type {
   Client,
   ClientDocument,
   ContactItem,
-  VehicleSummary,
   BillingItem,
   CarneItem,
   IntervContract,
@@ -68,13 +67,13 @@ import { ContractSheetModal } from './_components/contract-sheet-modal';
 import {
   clientsKeys,
   useClientVehiclesDetailedQuery,
+  useClientVehiclesSummaryQuery,
+  useClientSummaryQuery,
   useClientsQuery,
-  useVehicleSummariesQuery,
-  vehicleSummariesKeys,
 } from './_components/queries';
 
 function ClientesPageInner() {
-  const { token, user, loading: guardLoading, error: guardError } = useAuthGuard(ROUTE_ROLES['/clientes'], '/login/admin');
+  const { token, user, error: guardError } = useAuthGuard(ROUTE_ROLES['/clientes'], '/login/admin');
   const canEdit = !!user && user.role !== 'financeiro';
   // Ações financeiras (boletos, interveniente, NFS-e, ficha) usam endpoints
   // restritos a admin/financeiro — esconder do operacional evita 403 no clique
@@ -103,56 +102,56 @@ function ClientesPageInner() {
   // Ordenação + paginação da tabela (padrão do sistema de referência)
   const [clientSort, setClientSort] = useState<ClientSort>({ field: 'name', dir: 'asc' });
   const [pageSize, setPageSize] = useState(10);
+  const [page, setPage] = useState(1);
 
   function toggleClientSort(field: ClientSortField) {
+    setPage(1);
     setClientSort((prev) =>
       prev.field === field ? { field, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { field, dir: 'asc' },
     );
   }
 
   const queryClient = useQueryClient();
-  // loadClients recarregava clientes + veículos juntos (1 Promise.all); mantém
-  // o mesmo par aqui para quem invalida após criar/editar/excluir cliente.
   function invalidateClients() {
-    return Promise.all([
-      queryClient.invalidateQueries({ queryKey: clientsKeys.all }),
-      queryClient.invalidateQueries({ queryKey: vehicleSummariesKeys.all }),
-    ]);
+    return queryClient.invalidateQueries({ queryKey: clientsKeys.all });
   }
 
   // Busca/filtros dinâmicos: a query recarrega sozinha quando a chave muda —
   // debounce só na busca, para não disparar 1 requisição por tecla digitada.
   const searchDebounced = useDebouncedValue(search);
-  const clientsQuery = useClientsQuery(token, { search: searchDebounced, status: statusFilter, type: typeFilter });
-  const vehicleSummariesQuery = useVehicleSummariesQuery(token);
-  const clients = useMemo(() => clientsQuery.data ?? [], [clientsQuery.data]);
-  const vehicleSummaries = useMemo(() => vehicleSummariesQuery.data ?? [], [vehicleSummariesQuery.data]);
-  const loading = clientsQuery.isFetching || vehicleSummariesQuery.isFetching;
+  const filters = { search: searchDebounced, status: statusFilter, type: typeFilter };
+  const clientsQuery = useClientsQuery(token, {
+    ...filters, page, pageSize, sort: clientSort.field, direction: clientSort.dir,
+  });
+  const summaryQuery = useClientSummaryQuery(token, filters);
+  const clients = useMemo(() => clientsQuery.data?.items ?? [], [clientsQuery.data]);
+  const loading = clientsQuery.isPending && !clientsQuery.data;
   const listError = clientsQuery.isError ? parseError(clientsQuery.error) : '';
 
   // Mantém o cliente aberto no drawer sincronizado após um refetch da lista
   // (ex.: outra aba editou o mesmo cliente) — mesma lógica que loadClients
   // fazia manualmente antes de virar useQuery.
   useEffect(() => {
-    if (selectedClient && clientsQuery.data) {
-      const refreshed = clientsQuery.data.find((item) => item.id === selectedClient.id) || null;
-      setSelectedClient(refreshed);
+    if (selectedClient && clientsQuery.data?.items) {
+      const refreshed = clientsQuery.data.items.find((item) => item.id === selectedClient.id);
+      if (refreshed) setSelectedClient(refreshed);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clientsQuery.data]);
 
-  const sortedClients = useMemo(() => {
-    const { field, dir } = clientSort;
-    const factor = dir === 'asc' ? 1 : -1;
-    return [...clients].sort((a, b) => {
-      if (field === 'id') return (a.id - b.id) * factor;
-      const av = String((a as unknown as Record<string, unknown>)[field] ?? '').toLowerCase();
-      const bv = String((b as unknown as Record<string, unknown>)[field] ?? '').toLowerCase();
-      return av.localeCompare(bv, 'pt-BR') * factor;
-    });
-  }, [clients, clientSort]);
-
-  const pg = usePagination(sortedClients, pageSize);
+  const total = clientsQuery.data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const pg = {
+    page, setPage, totalPages, total, pageSize, slice: clients,
+    start: total === 0 ? 0 : (page - 1) * pageSize + 1,
+    end: Math.min(page * pageSize, total),
+  };
+  useEffect(() => {
+    if (!clientsQuery.isPlaceholderData && page > totalPages) setPage(totalPages);
+  }, [clientsQuery.isPlaceholderData, page, totalPages]);
+  const detailVehiclesQuery = useClientVehiclesSummaryQuery(
+    token, detailsOpen ? selectedClient?.id ?? null : null,
+  );
 
   // Modal "Veículos vinculados ao cliente"
   const [vehiclesModalOpen, setVehiclesModalOpen] = useState(false);
@@ -683,13 +682,14 @@ function ClientesPageInner() {
     }
   }
 
+  const selectedClientId = selectedClient?.id;
   useEffect(() => {
-    if (!token || !selectedClient) {
+    if (!token || !selectedClientId) {
       setClientDocuments([]);
       return;
     }
-    loadClientDocuments(token, selectedClient.id);
-  }, [token, selectedClient?.id]);
+    loadClientDocuments(token, selectedClientId);
+  }, [token, selectedClientId]);
 
   // Deep-link da Busca Global (Ctrl+K): "?focus=<id>" abre o cliente direto
   // — busca o registro pelo id (não pela lista carregada, que é paginada e
@@ -753,18 +753,7 @@ function ClientesPageInner() {
       : [],
   );
 
-  const stats = useMemo(() => ({
-    total: clients.length,
-    active: clients.filter((item) => item.status === 'ativo').length,
-    delinquent: clients.filter((item) => item.status === 'inadimplente').length,
-    company: clients.filter((item) => item.type === 'pj').length,
-  }), [clients]);
-
-  const vehiclesByClient = useMemo(() => vehicleSummaries.reduce<Record<number, VehicleSummary[]>>((acc, vehicle) => {
-    if (!acc[vehicle.client_id]) acc[vehicle.client_id] = [];
-    acc[vehicle.client_id].push(vehicle);
-    return acc;
-  }, {}), [vehicleSummaries]);
+  const stats = summaryQuery.data ?? { total: 0, active: 0, delinquent: 0, company: 0 };
 
   function resetForm() {
     setForm(initialForm);
@@ -1045,7 +1034,7 @@ function ClientesPageInner() {
           <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2">
             <Select
               value={String(pageSize)}
-              onChange={(e) => { setPageSize(Number(e.target.value)); pg.setPage(1); }}
+              onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
               className="w-[72px] shrink-0"
               aria-label="Resultados por página"
             >
@@ -1057,7 +1046,7 @@ function ClientesPageInner() {
 
             <Select
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
+              onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
               className="w-44 shrink-0"
               aria-label="Filtrar por status"
             >
@@ -1069,7 +1058,7 @@ function ClientesPageInner() {
             </Select>
             <Select
               value={typeFilter}
-              onChange={(e) => setTypeFilter(e.target.value)}
+              onChange={(e) => { setTypeFilter(e.target.value); setPage(1); }}
               className="w-40 shrink-0"
               aria-label="Filtrar por tipo"
             >
@@ -1081,7 +1070,7 @@ function ClientesPageInner() {
               type="button"
               variant="secondary"
               className="shrink-0"
-              onClick={() => { clientsQuery.refetch(); vehicleSummariesQuery.refetch(); }}
+              onClick={() => { clientsQuery.refetch(); summaryQuery.refetch(); }}
               disabled={loading}
             >
               {loading ? 'Atualizando…' : 'Atualizar'}
@@ -1092,7 +1081,7 @@ function ClientesPageInner() {
               <Input
                 placeholder="Pesquisar por nome, CPF/CNPJ ou e-mail"
                 value={search}
-                onChange={(e) => { setSearch(e.target.value); pg.setPage(1); }}
+                onChange={(e) => { setSearch(e.target.value); setPage(1); }}
                 className="w-full pl-9"
               />
             </div>
@@ -1122,13 +1111,12 @@ function ClientesPageInner() {
                 </TableHead>
                 <TableBody>
                   {pg.slice.map((client) => {
-                    const vehicles = vehiclesByClient[client.id] || [];
                     return (
                       <Tr key={client.id}>
                         <Td className="text-sm text-slate-500">{client.id}</Td>
                         <Td>
                           <p className="font-medium text-slate-900 dark:text-white">{client.name}</p>
-                          <p className="text-xs text-slate-500">{client.type === 'pj' ? 'Pessoa Jurídica' : 'Pessoa Física'} · {vehicles.length} veículo(s)</p>
+                          <p className="text-xs text-slate-500">{client.type === 'pj' ? 'Pessoa Jurídica' : 'Pessoa Física'} · {client.vehicle_count ?? 0} veículo(s)</p>
                         </Td>
                         <Td className="text-sm">{client.trade_name || '—'}</Td>
                         <Td>
@@ -1202,7 +1190,8 @@ function ClientesPageInner() {
       <ClientDetailModal
         open={detailsOpen}
         client={selectedClient}
-        vehicles={selectedClient ? vehiclesByClient[selectedClient.id] || [] : []}
+        vehicles={detailVehiclesQuery.data ?? []}
+        vehiclesLoading={detailVehiclesQuery.isLoading}
         tab={detailsTab}
         onTabChange={setDetailsTab}
         onClose={() => { setDetailsOpen(false); setSelectedClient(null); }}

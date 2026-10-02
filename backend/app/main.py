@@ -19,6 +19,8 @@ from app.core.limiter import limiter
 from app.db.session import SessionLocal, engine
 from app.models import ailos_api_log, ailos_boleto, ailos_client_token, ailos_integration, ailos_lote, ailos_retorno_arquivo, audit_log, billing, billing_adjustment, billing_change_log, billing_charge_item, client, client_charge_item, closure_job, cnab_remessa, contract, document, integration_log, multiportal_outbox, nfse_certificado, nfse_lote, nfse_nota, password_reset_token, payable, payable_change_log, plan, refresh_token, service_order, service_order_status_log, service_product, sgr_migracao, system_setting, tracker, tracker_history, uninstall_event, user, vehicle  # noqa: F401 — side-effect imports that register models with SQLAlchemy Base
 from app.core.audit import AuditMiddleware
+from app.core.audit_queue import run_audit_worker
+from app.core.request_timing import RequestTimingMiddleware
 from app.core.body_limit import MaxBodySizeMiddleware
 from app.core.forwarded_proto import ForwardedProtoMiddleware
 from app.core.validation_errors import validation_exception_handler
@@ -56,6 +58,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=['*'],
     allow_headers=['*'],
+    expose_headers=['X-Request-ID', 'Server-Timing', 'X-Dashboard-Cache'],
 )
 
 # ── Limite de tamanho de requisição (anti-DoS por upload gigante) ─────────────
@@ -63,6 +66,10 @@ app.add_middleware(MaxBodySizeMiddleware, max_bytes=settings.max_upload_bytes)
 
 # ── Auditoria ─────────────────────────────────────────────────────────────────
 app.add_middleware(AuditMiddleware)
+app.add_middleware(RequestTimingMiddleware)
+
+_audit_stop = threading.Event()
+_audit_thread: threading.Thread | None = None
 
 app.include_router(api_router, prefix=settings.api_v1_prefix)
 
@@ -920,6 +927,18 @@ def on_startup():
 
     ensure_bucket()
 
+    # In production, only backend-worker starts scheduled jobs. The API still
+    # performs schema setup and serves HTTP, but does not host job threads.
+    if not settings.run_background_jobs:
+        return
+
+    global _audit_thread
+    _audit_stop.clear()
+    _audit_thread = threading.Thread(
+        target=run_audit_worker, args=(_audit_stop,), name='audit-batch-worker', daemon=True,
+    )
+    _audit_thread.start()
+
     # Reclassifica cobranças pendente<->vencida (BE-05). Sempre ligado,
     # independente de qualquer integração — é regra de negócio pura sobre a
     # tabela de cobranças, sem dependência externa.
@@ -958,6 +977,13 @@ def on_startup():
             startup_db.close()
     except Exception:  # noqa: BLE001 — verificação nunca pode derrubar o boot
         logging.getLogger('uvicorn.error').exception('Falha ao verificar inadimplência no boot.')
+
+
+@app.on_event('shutdown')
+def on_shutdown():
+    _audit_stop.set()
+    if _audit_thread is not None:
+        _audit_thread.join(timeout=5)
 
 
 @app.get('/')

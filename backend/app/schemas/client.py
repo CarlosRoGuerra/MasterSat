@@ -215,6 +215,7 @@ class ClientUpdate(BaseModel):
 
 class ClientOut(ClientBase):
     id: int
+    vehicle_count: int = 0
     # Existe um documento de contrato assinado guardado para este cliente?
     # A empresa colhe a assinatura no papel e anexa o scan (categoria 'contrato');
     # a lista e o detalhe mostram isso para saber quem ainda falta.

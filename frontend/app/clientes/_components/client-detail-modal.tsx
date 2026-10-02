@@ -17,6 +17,7 @@ export function ClientDetailModal({
   open,
   client,
   vehicles,
+  vehiclesLoading,
   tab,
   onTabChange,
   onClose,
@@ -39,6 +40,7 @@ export function ClientDetailModal({
   open: boolean;
   client: Client | null;
   vehicles: VehicleSummary[];
+  vehiclesLoading?: boolean;
   tab: DetailsTab;
   onTabChange: (tab: DetailsTab) => void;
   onClose: () => void;
@@ -84,7 +86,9 @@ export function ClientDetailModal({
             ))}
           </div>
 
-          {tab === 'cadastro' && <ClientCadastroTab client={client} vehicles={vehicles} />}
+          {tab === 'cadastro' && (vehiclesLoading
+            ? <p className="text-sm text-slate-500">Carregando veículos…</p>
+            : <ClientCadastroTab client={client} vehicles={vehicles} />)}
 
           {tab === 'historico' && client && (
             <ClientHistoricoTab
