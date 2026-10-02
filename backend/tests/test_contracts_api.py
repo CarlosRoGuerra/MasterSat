@@ -271,6 +271,23 @@ class TestGetContrato:
 # ---------------------------------------------------------------------------
 
 class TestUpdateContrato:
+    def test_update_interveniente_por_contrato(self, http_fin, http, db, contrato, cliente, outro_cliente):
+        r = http_fin.put(f"{PREFIX}/{contrato.id}", json={"interveniente_client_id": outro_cliente.id})
+        assert r.status_code == 200
+        assert r.json()["interveniente_client_id"] == outro_cliente.id
+        assert r.json()["interveniente_name"] == outro_cliente.name
+        listed = http.get(PREFIX + "/", params={"client_id": cliente.id, "vehicle_id": contrato.vehicle_id})
+        assert listed.status_code == 200
+        assert listed.json()[0]["interveniente_name"] == outro_cliente.name
+
+        cleared = http.put(f"{PREFIX}/{contrato.id}", json={"interveniente_client_id": None})
+        assert cleared.status_code == 200
+        assert cleared.json()["interveniente_client_id"] is None
+
+    def test_invalid_interveniente_rejected(self, http, contrato):
+        r = http.put(f"{PREFIX}/{contrato.id}", json={"interveniente_client_id": 999999})
+        assert r.status_code == 404
+
     def test_update_status(self, http, contrato):
         r = http.put(f"{PREFIX}/{contrato.id}", json={"status": "cancelado"})
         assert r.status_code == 200

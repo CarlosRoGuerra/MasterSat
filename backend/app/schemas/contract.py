@@ -53,6 +53,7 @@ class ContractUpdate(BaseModel):
 class ContractOut(ContractBase):
     id: int
     client_name: str | None = None
+    interveniente_name: str | None = None
     vehicle_id: int | None = None
     tracker_id: int | None = None
     vehicle_plate: str | None = None

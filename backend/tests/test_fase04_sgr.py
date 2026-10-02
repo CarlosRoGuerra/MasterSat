@@ -115,6 +115,26 @@ def cobrancas(db):
     return db.query(Billing).filter(Billing.is_deleted.is_(False)).order_by(Billing.id).all()
 
 
+def test_reimportacao_completa_interveniente_sem_sobrescrever_ajuste_local(db):
+    dono = no(veiculos=[veiculo('10', 'ABC1234', '355488020902005', 'r1')])
+    dono.vehicles[0].trackers[0].contract['interveniente_cpf'] = CPF_B
+    pagador = no('2', CPF_B, 'PAGADOR', veiculos=[])
+
+    importar(db, dono)
+    contrato = db.query(Contract).one()
+    assert contrato.interveniente_client_id is None
+
+    importar(db, pagador, dono)
+    db.refresh(contrato)
+    assert contrato.interveniente_client_id == db.query(Client).filter_by(cpf_cnpj=CPF_B).one().id
+
+    contrato.interveniente_client_id = db.query(Client).filter_by(cpf_cnpj=CPF_A).one().id
+    db.commit()
+    importar(db, pagador, dono)
+    db.refresh(contrato)
+    assert contrato.interveniente_client_id == db.query(Client).filter_by(cpf_cnpj=CPF_A).one().id
+
+
 def conflitos_abertos(db, tipo=None):
     q = db.query(SgrConflito).filter(SgrConflito.status == 'aberto')
     if tipo:

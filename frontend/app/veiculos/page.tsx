@@ -31,7 +31,7 @@ import { useAssistantContextActions } from '@/lib/assistant-context';
 import type { ClientOption, TrackerOption, VehicleStatus } from '@/lib/domain-types';
 
 type ServiceProductOption = { id: number; name: string; default_price: number; auto_add_on_uninstall?: boolean };
-type ContractOption = { id: number; client_id: number; plan_name?: string | null; status: string };
+type ContractOption = { id: number; client_id: number; plan_name?: string | null; status: string; interveniente_client_id?: number | null; interveniente_name?: string | null };
 type PlanOption = { id: number; name: string; price: number; billing_interval_months?: number };
 
 type Vehicle = {
@@ -596,10 +596,18 @@ function LinkTrackerForm({
 function VeiculosPageInner() {
   const { token, user, loading: guardLoading, error: guardError } = useAuthGuard(ROUTE_ROLES['/veiculos'], '/login/admin');
   const canEdit = !!user && user.role !== 'financeiro';
+  const canEditInterveniente = !!user && (user.role === 'admin' || user.role === 'financeiro');
 
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [contracts, setContracts] = useState<ContractOption[]>([]);
+  const [vehicleContracts, setVehicleContracts] = useState<ContractOption[]>([]);
+  const [contractsLoading, setContractsLoading] = useState(false);
+  const [contractsError, setContractsError] = useState('');
+  const [editingIntervenienteId, setEditingIntervenienteId] = useState<number | null>(null);
+  const [intervenienteClientId, setIntervenienteClientId] = useState('');
+  const [savingInterveniente, setSavingInterveniente] = useState(false);
+  const [intervenienteFeedback, setIntervenienteFeedback] = useState('');
   const [serviceProducts, setServiceProducts] = useState<ServiceProductOption[]>([]);
   const [selectedVehicle, setSelectedVehicle] = useState<Vehicle | null>(null);
   const [vehicleDocuments, setVehicleDocuments] = useState<VehicleDocument[]>([]);
@@ -689,17 +697,51 @@ function VeiculosPageInner() {
     setSelectedVehicle(vehicle);
     setDetailsTab('dados');
     setDetailsOpen(true);
+    setVehicleContracts([]);
+    setContractsError('');
+    setIntervenienteFeedback('');
+    setEditingIntervenienteId(null);
     if (token) {
+      setContractsLoading(true);
       const [trackers, plansData] = await Promise.all([
         apiFetchList<TrackerOption>(`/trackers?vehicle_id=${vehicle.id}&limit=20`, {}, token).catch(() => []),
         apiFetch<PlanOption[]>('/plans', {}, token).catch(() => []),
         loadDocuments(token, vehicle.id),
+        apiFetch<ContractOption[]>(`/contracts?vehicle_id=${vehicle.id}&limit=300`, {}, token)
+          .then(setVehicleContracts)
+          .catch((err) => setContractsError(parseError(err)))
+          .finally(() => setContractsLoading(false)),
       ]);
       setLinkedTrackers(trackers);
       setPlans(plansData);
       return trackers;
     }
     return [];
+  }
+
+  async function saveInterveniente(contractId: number) {
+    if (!token || !selectedVehicle || !canEditInterveniente) return;
+    const contract = vehicleContracts.find((item) => item.id === contractId);
+    if (!contract) return;
+    setContractsError('');
+    setIntervenienteFeedback('');
+    setSavingInterveniente(true);
+    try {
+      const updated = await apiFetch<ContractOption>(`/contracts/${contractId}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          interveniente_client_id: intervenienteClientId && Number(intervenienteClientId) !== contract.client_id
+            ? Number(intervenienteClientId) : null,
+        }),
+      }, token);
+      setVehicleContracts((previous) => previous.map((item) => item.id === contractId ? updated : item));
+      setEditingIntervenienteId(null);
+      setIntervenienteFeedback(`Interveniente da placa ${selectedVehicle.plate} atualizado.`);
+    } catch (err) {
+      setContractsError(parseError(err));
+    } finally {
+      setSavingInterveniente(false);
+    }
   }
 
   // Deep-link da Busca Global (Ctrl+K): "?focus=<id>" abre o veículo direto
@@ -1380,23 +1422,69 @@ function VeiculosPageInner() {
 
             {/* Aba Dados */}
             {detailsTab === 'dados' && (
-              <div className="grid gap-3 sm:grid-cols-2">
-                {[
-                  ['Cliente', clients.find((c) => c.id === selectedVehicle.client_id)?.name ?? '—'],
-                  ['Contrato', selectedVehicle.contract_number ?? '—'],
-                  ['Chassi', selectedVehicle.chassis ?? '—'],
-                  ['Renavam', selectedVehicle.renavam ?? '—'],
-                  ['Marca / Modelo', [selectedVehicle.brand, selectedVehicle.model].filter(Boolean).join(' ') || '—'],
-                  ['Ano', `${selectedVehicle.manufacture_year ?? '—'} / ${selectedVehicle.model_year ?? '—'}`],
-                  ['Cor', selectedVehicle.color ?? '—'],
-                  ['Combustível', selectedVehicle.fuel_type ?? '—'],
-                  ['Endereço', [selectedVehicle.address_line, selectedVehicle.address_number, selectedVehicle.city, selectedVehicle.state].filter(Boolean).join(', ') || '—'],
-                ].map(([label, value]) => (
-                  <div key={label} className="rounded-xl border border-slate-100 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/50">
-                    <p className="text-2xs font-semibold uppercase tracking-widest text-slate-500">{label}</p>
-                    <p className="mt-1 text-sm text-slate-800 dark:text-slate-200">{value}</p>
+              <div className="space-y-4">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {[
+                    ['Cliente', clients.find((c) => c.id === selectedVehicle.client_id)?.name ?? '—'],
+                    ['Contrato', selectedVehicle.contract_number ?? '—'],
+                    ['Chassi', selectedVehicle.chassis ?? '—'],
+                    ['Renavam', selectedVehicle.renavam ?? '—'],
+                    ['Marca / Modelo', [selectedVehicle.brand, selectedVehicle.model].filter(Boolean).join(' ') || '—'],
+                    ['Ano', `${selectedVehicle.manufacture_year ?? '—'} / ${selectedVehicle.model_year ?? '—'}`],
+                    ['Cor', selectedVehicle.color ?? '—'],
+                    ['Combustível', selectedVehicle.fuel_type ?? '—'],
+                    ['Endereço', [selectedVehicle.address_line, selectedVehicle.address_number, selectedVehicle.city, selectedVehicle.state].filter(Boolean).join(', ') || '—'],
+                  ].map(([label, value]) => (
+                    <div key={label} className="rounded-xl border border-slate-100 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/50">
+                      <p className="text-2xs font-semibold uppercase tracking-widest text-slate-500">{label}</p>
+                      <p className="mt-1 text-sm text-slate-800 dark:text-slate-200">{value}</p>
+                    </div>
+                  ))}
+                </div>
+                <div className="rounded-xl border border-slate-200 p-4 dark:border-slate-700">
+                  <p className="text-sm font-semibold text-slate-900 dark:text-white">Interveniente financeiro</p>
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Responsável pelas novas cobranças deste contrato. Títulos já gerados mantêm o pagador original.</p>
+                  {contractsLoading && <p className="mt-3 text-sm text-slate-500">Carregando contratos...</p>}
+                  {!contractsLoading && vehicleContracts.length === 0 && !contractsError && <p className="mt-3 text-sm text-slate-500">Nenhum contrato encontrado para esta placa.</p>}
+                  {contractsError && <p role="alert" className="mt-3 text-sm text-rose-700 dark:text-rose-400">{contractsError}</p>}
+                  {intervenienteFeedback && <p role="status" className="mt-3 text-sm text-emerald-700 dark:text-emerald-400">{intervenienteFeedback}</p>}
+                  <div className="mt-3 space-y-3">
+                    {vehicleContracts.map((contract) => (
+                      <div key={contract.id} className="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <p className="text-sm font-medium text-slate-900 dark:text-white">{contract.plan_name || `Contrato #${contract.id}`} · {contract.status}</p>
+                            <p className="text-xs text-slate-500 dark:text-slate-400">Interveniente: {contract.interveniente_name || 'O próprio cliente'}</p>
+                          </div>
+                          {canEditInterveniente && editingIntervenienteId !== contract.id && (
+                            <Button variant="secondary" onClick={() => {
+                              setEditingIntervenienteId(contract.id);
+                              setIntervenienteClientId(String(contract.interveniente_client_id || ''));
+                              setContractsError('');
+                              setIntervenienteFeedback('');
+                            }}>Alterar interveniente</Button>
+                          )}
+                        </div>
+                        {canEditInterveniente && editingIntervenienteId === contract.id && (
+                          <div className="mt-3 space-y-3">
+                            <ClientAutocomplete
+                              clients={clients.filter((client) => client.id !== contract.client_id)}
+                              value={intervenienteClientId}
+                              onChange={setIntervenienteClientId}
+                              placeholder="Buscar interveniente por nome ou CPF/CNPJ"
+                              disabled={savingInterveniente}
+                            />
+                            <p className="text-xs text-slate-500 dark:text-slate-400">Deixe vazio para que o próprio cliente seja responsável pela cobrança.</p>
+                            <div className="flex gap-2">
+                              <Button onClick={() => saveInterveniente(contract.id)} disabled={savingInterveniente}>{savingInterveniente ? 'Salvando...' : 'Salvar interveniente'}</Button>
+                              <Button variant="secondary" onClick={() => setEditingIntervenienteId(null)} disabled={savingInterveniente}>Cancelar</Button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
                   </div>
-                ))}
+                </div>
               </div>
             )}
 

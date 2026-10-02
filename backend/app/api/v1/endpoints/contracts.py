@@ -39,6 +39,10 @@ def serialize_contract(
     vehicle_id = getattr(contract, 'vehicle_id', None)
     tracker_id = getattr(contract, 'tracker_id', None)
     client = client_map.get(contract.client_id) if client_map is not None else db.get(Client, contract.client_id)
+    interveniente_id = getattr(contract, 'interveniente_client_id', None)
+    interveniente = None
+    if interveniente_id:
+        interveniente = client_map.get(interveniente_id) if client_map is not None else db.get(Client, interveniente_id)
     plan = plan_map.get(contract.plan_id) if plan_map is not None else db.get(Plan, contract.plan_id)
     if vehicle_id:
         vehicle = vehicle_map.get(vehicle_id) if vehicle_map is not None else db.get(Vehicle, vehicle_id)
@@ -91,6 +95,7 @@ def serialize_contract(
         signed=bool(getattr(contract, 'signed', False)),
         signed_at=getattr(contract, 'signed_at', None),
         client_name=client.name if (client and not client.is_deleted) else None,
+        interveniente_name=interveniente.name if (interveniente and not interveniente.is_deleted) else None,
         plan_name=plan.name if (plan and not plan.is_deleted) else None,
         vehicle_plate=vehicle.plate if (vehicle and not vehicle.is_deleted) else None,
         tracker_identifier=(tracker.imei if (tracker and not tracker.is_deleted) else None),
@@ -115,6 +120,15 @@ def validate_links(db: Session, client_id: int, vehicle_id: int | None, tracker_
             raise HTTPException(status_code=400, detail='O rastreador selecionado não pertence ao cliente informado.')
         if vehicle_id and tracker.vehicle_id and tracker.vehicle_id != vehicle_id:
             raise HTTPException(status_code=400, detail='O rastreador selecionado está vinculado a outro veículo.')
+
+
+def validate_interveniente(db: Session, client_id: int, interveniente_id: int | None) -> int | None:
+    if interveniente_id is None or interveniente_id == client_id:
+        return None
+    interveniente = db.get(Client, interveniente_id)
+    if not interveniente or interveniente.is_deleted:
+        raise HTTPException(status_code=404, detail='Interveniente não encontrado')
+    return interveniente_id
 
 
 @router.get('/', response_model=list[ContractOut])
@@ -162,7 +176,7 @@ def list_items(
         )
     items = query.order_by(Contract.created_at.desc()).limit(limit).all()
 
-    client_ids = {c.client_id for c in items if c.client_id}
+    client_ids = {client_id for c in items for client_id in (c.client_id, c.interveniente_client_id) if client_id}
     plan_ids = {c.plan_id for c in items if c.plan_id}
     vehicle_ids = {c.vehicle_id for c in items if getattr(c, 'vehicle_id', None)}
     tracker_ids = {c.tracker_id for c in items if getattr(c, 'tracker_id', None)}
@@ -210,6 +224,7 @@ def create_item(payload: ContractCreate, db: Session = Depends(get_db), _: objec
         raise HTTPException(status_code=404, detail='Plano não encontrado ou inativo')
     validate_links(db, payload.client_id, payload.vehicle_id, payload.tracker_id)
     data = payload.model_dump()
+    data['interveniente_client_id'] = validate_interveniente(db, payload.client_id, payload.interveniente_client_id)
     if not data.get('billing_day'):
         data['billing_day'] = payload.start_date.day if payload.start_date.day <= 28 else 28
     obj = Contract(**data)
@@ -287,7 +302,7 @@ def get_item(item_id: int, db: Session = Depends(get_db), _: object = Depends(re
 
 @router.put('/{item_id}', response_model=ContractOut)
 def update_item(item_id: int, payload: ContractUpdate, db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
-    obj = db.get(Contract, item_id)
+    obj = db.scalar(select(Contract).where(Contract.id == item_id).with_for_update())
     if not obj or obj.is_deleted:
         raise HTTPException(status_code=404, detail='Contrato não encontrado')
     data = payload.model_dump(exclude_unset=True)
@@ -300,6 +315,10 @@ def update_item(item_id: int, payload: ContractUpdate, db: Session = Depends(get
         plan = db.get(Plan, data['plan_id'])
         if not plan or plan.is_deleted or not plan.active:
             raise HTTPException(status_code=404, detail='Plano não encontrado ou inativo')
+    if 'interveniente_client_id' in data or 'client_id' in data:
+        data['interveniente_client_id'] = validate_interveniente(
+            db, client_id, data.get('interveniente_client_id', obj.interveniente_client_id)
+        )
     validate_links(db, client_id, data.get('vehicle_id', getattr(obj, 'vehicle_id', None)), data.get('tracker_id', getattr(obj, 'tracker_id', None)))
     # Marcar como assinado sem informar a data carimba hoje; desmarcar limpa a
     # data, senão fica um contrato "não assinado" com data de assinatura.

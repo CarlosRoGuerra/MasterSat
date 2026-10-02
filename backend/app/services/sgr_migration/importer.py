@@ -722,6 +722,14 @@ def _completar_rastreador(db: Session, contrato: Contract, tracker_id: int | Non
         db.flush()
 
 
+def _completar_interveniente(db: Session, contrato: Contract, interveniente_id: int | None) -> None:
+    # O pagador pode ser importado depois do dono do veículo. Uma segunda
+    # rodada preenche o vínculo vazio sem sobrescrever ajustes feitos na tela.
+    if contrato.interveniente_client_id is None and interveniente_id is not None:
+        contrato.interveniente_client_id = interveniente_id
+        db.flush()
+
+
 def _import_contract(
     ctx: _Contexto, stats: ImportStats, contrato: dict, client: Client, vehicle: Vehicle,
     tracker_id: int | None, placa: str,
@@ -742,6 +750,13 @@ def _import_contract(
         stats.skip(f'contrato do veículo {placa}: sem data de início (obrigatória no MasterSat)')
         return
 
+    interveniente_id = None
+    cpf_interveniente = contrato.get('interveniente_cpf')
+    if cpf_interveniente:
+        outro = _find_client(db, cpf_interveniente)
+        if outro and outro.id != client.id:
+            interveniente_id = outro.id
+
     codigo = contrato.get('external_id')
     vinculo = _vinculo(db, 'contrato', codigo)
     if vinculo is not None:
@@ -754,6 +769,7 @@ def _import_contract(
                                    'client_id_origem': client.id, 'vehicle_id_origem': vehicle.id})
             else:
                 _completar_rastreador(db, existente, tracker_id)
+                _completar_interveniente(db, existente, interveniente_id)
             _tocar(ctx, vinculo)
             stats.contracts_reused += 1
             return
@@ -763,17 +779,9 @@ def _import_contract(
         if vinculo is None and codigo and _vinculo_local(db, 'contrato', existente.id) is None:
             _vincular(ctx, 'contrato', codigo, existente.id, 'adocao')
         _completar_rastreador(db, existente, tracker_id)
+        _completar_interveniente(db, existente, interveniente_id)
         stats.contracts_reused += 1
         return
-
-    interveniente_id = None
-    cpf_interveniente = contrato.get('interveniente_cpf')
-    if cpf_interveniente:
-        outro = _find_client(db, cpf_interveniente)
-        # Interveniente igual ao próprio cliente é o caso normal no SGR e no
-        # MasterSat significa "sem interveniente" (a coluna fica nula).
-        if outro and outro.id != client.id:
-            interveniente_id = outro.id
 
     novo = Contract(
         client_id=client.id,
