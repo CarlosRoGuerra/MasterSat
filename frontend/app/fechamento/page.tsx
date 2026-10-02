@@ -110,6 +110,7 @@ type GenerateResult = {
   reference_month_label: string;
   billing_month?: string;
   generated: number;
+  payment_titles_generated: number;
   total_amount: number;
   uninstall_fees_generated: number;
   uninstall_events_processed: number;
@@ -560,6 +561,9 @@ export default function FechamentoPage() {
               Serviços de {simulation.reference_month} · vencimentos em {simulation.billing_month}
             </p>
           )}
+          <p className="mb-4 text-sm text-slate-600 dark:text-slate-300">
+            Para clientes com boleto único, o fechamento reúne mensalidades, pró-rata, taxas e serviços em um título por responsável financeiro. Quando há datas diferentes, usa o vencimento mais tardio. O PDF do boleto traz todos os itens discriminados em anexo.
+          </p>
           {/* KPIs */}
           <section className="mb-5 grid gap-5 sm:grid-cols-2 lg:grid-cols-5">
             <MetricCard
@@ -1026,15 +1030,15 @@ export default function FechamentoPage() {
 
               <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
                 <MetricCard
-                  label="Mensalidades geradas"
-                  value={generateResult.generated}
-                  sub="cobranças recorrentes + pró-ratas"
+                  label="Títulos para emitir"
+                  value={generateResult.payment_titles_generated}
+                  sub="um por responsável com boleto único"
                   icon={<ClipboardList className="h-5 w-5" />}
                 />
                 <MetricCard
                   label="Eventos de desinstalação"
                   value={generateResult.uninstall_events_processed}
-                  sub={`${generateResult.uninstall_fees_generated} cobrança(s) · ${generateResult.uninstall_fees_deferred} aguardando acumulação`}
+                  sub={`${generateResult.uninstall_fees_generated} taxa(s) incluída(s) · ${generateResult.uninstall_fees_deferred} aguardando acumulação`}
                   icon={<Wrench className="h-5 w-5" />}
                 />
                 <MetricCard
@@ -1050,6 +1054,7 @@ export default function FechamentoPage() {
                   icon={<DollarSign className="h-5 w-5" />}
                 />
               </div>
+              <p className="text-sm text-slate-600 dark:text-slate-300">Os títulos foram criados no Financeiro. A emissão na Ailos é feita separadamente.</p>
             </div>
           )}
 

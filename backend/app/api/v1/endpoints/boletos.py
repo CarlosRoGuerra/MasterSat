@@ -14,6 +14,7 @@ import re
 import smtplib
 import unicodedata
 from datetime import date
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response, StreamingResponse
@@ -32,14 +33,18 @@ from app.db.session import get_db
 from app.models.ailos_boleto import AilosBoleto
 from app.models.ailos_lote import AilosLote
 from app.models.billing import Billing
+from app.models.billing_charge_item import BillingChargeItem
 from app.models.client import Client
+from app.models.client_charge_item import ClientChargeItem
 from app.models.cnab_remessa import CnabRemessa
 from app.models.enums import BillingStatus, UserRole
 from app.models.vehicle import Vehicle
+from app.models.uninstall_event import UninstallEvent
 from app.services import ailos_boletos, cnab_remessa
 from app.services.ailos_boletos import aplicar_dados_oficiais_ailos
 from app.services.boleto_ailos import gerar_dados_boleto, DadosBoleto
 from app.services.boleto_pdf import gerar_boleto_pdf, gerar_carne_pdf
+from app.services.billing_closure.uninstall_fees import uninstall_fee_for_event
 
 router = APIRouter()
 
@@ -338,18 +343,78 @@ def _placa_do_billing(b: Billing, db: Session) -> str:
     return ""
 
 
+def _itens_detalhados(b: Billing, db: Session, visited: set[int] | None = None) -> list[tuple[str, float]]:
+    """Expande mensalidades combinadas e taxas agrupadas sem perder o total."""
+    visited = set(visited or ())
+    if b.id in visited:
+        return [(descricao_servico(b, _placa_do_billing(b, db) or None), float(b.amount))]
+    visited.add(b.id)
+    children = list(db.scalars(
+        select(Billing).where(
+            Billing.substituted_by_id == b.id,
+            Billing.is_deleted.is_(False),
+        ).order_by(Billing.id)
+    ).all())
+    if children:
+        return [item for child in children for item in _itens_detalhados(child, db, visited)]
+
+    plate = _placa_do_billing(b, db) or None
+    if b.billing_type == 'primeira_mensalidade':
+        links = list(db.scalars(
+            select(BillingChargeItem).where(BillingChargeItem.billing_id == b.id)
+            .order_by(BillingChargeItem.id)
+        ).all())
+        service_amount = sum((Decimal(str(link.amount)) for link in links), Decimal('0.00'))
+        monthly_amount = Decimal(str(b.amount)) - service_amount
+        if links and monthly_amount >= 0:
+            monthly_label = 'MENSALIDADE PRÓ-RATA' if 'pró-rata' in (b.title or '').lower() else 'MENSALIDADE'
+            items = [(f'{monthly_label} - REF. {b.period_label}' + (f' - PLACA {plate}' if plate else ''), float(monthly_amount))]
+            for link in links:
+                service = db.get(ClientChargeItem, link.item_id)
+                description = service.title if service and not service.is_deleted else f'Serviço #{link.item_id}'
+                items.append((description + (f' - PLACA {plate}' if plate else ''), float(link.amount)))
+            return items
+
+    if b.billing_type == 'taxa_desinstalacao':
+        events = list(db.scalars(
+            select(UninstallEvent).where(UninstallEvent.billing_id == b.id)
+            .order_by(UninstallEvent.id)
+        ).all())
+        if events:
+            event_items = []
+            for event in events:
+                amount, title = uninstall_fee_for_event(db, event)
+                vehicle = db.get(Vehicle, event.vehicle_id)
+                event_plate = vehicle.plate if vehicle and not vehicle.is_deleted else None
+                description = f'{title} - {event.uninstall_date.strftime("%d/%m/%Y")}'.upper()
+                if event_plate:
+                    description += f' - PLACA {event_plate}'
+                event_items.append((description, float(amount)))
+            if sum(Decimal(str(value)) for _, value in event_items) == Decimal(str(b.amount)):
+                return event_items
+
+    return [(descricao_servico(b, plate), float(b.amount))]
+
+
 def dados_boleto(b: Billing, c: Client, db: Session, ailos_boleto: AilosBoleto) -> DadosBoleto:
     """
     Monta o DadosBoleto de uma cobrança, com os dados oficiais da Ailos
     aplicados. Compartilhado pelo boleto avulso e por cada parcela do carnê.
     """
     item = _billing_to_boleto_item(b, c)
+    components = list(db.scalars(
+        select(Billing).where(
+            Billing.substituted_by_id == b.id,
+            Billing.is_deleted.is_(False),
+        ).order_by(Billing.id)
+    ).all())
     placa = _placa_do_billing(b, db) or None
     servico = descricao_servico(b, placa)
     # Na linha "Referente a" a placa fica em instrução própria, na linha de
     # baixo — não misturada ao resto do texto (item["itens"] mantém o
     # descritivo completo, com placa, para a tabela do boleto).
     servico_sem_placa = descricao_servico(b, None)
+    itens = _itens_detalhados(b, db)
     dados = gerar_dados_boleto(
         billing_id=b.id,
         valor=b.amount,
@@ -362,9 +427,10 @@ def dados_boleto(b: Billing, c: Client, db: Session, ailos_boleto: AilosBoleto) 
         sacado_cep=c.zip_code or "",
         sacado_uf=c.state or "",
         sacado_ie=c.rg_ie or "",
-        itens=[(servico, float(b.amount))],
+        itens=itens,
         instrucoes=[
-            f"Referente a: {servico_sem_placa}.",
+            (f"Referente a: fechamento {b.period_label} com {len(itens)} itens."
+             if components else f"Referente a: {servico_sem_placa}."),
             *([f"Placa: {placa}"] if placa else []),
             "Não receber após o vencimento.",
             "Após vencimento entrar em contato: whats (47)98877-9273",

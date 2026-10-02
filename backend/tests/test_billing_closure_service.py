@@ -381,15 +381,84 @@ class TestBoletoUnico:
         segunda = execute_closure(db, REF_MONTH)
         assert segunda['generated'] == 0  # idempotente: canceladas ainda marcam o período
 
-    def test_cliente_sem_opcao_explicita_mantem_individuais(self, db, cliente, plan):
-        # boleto_format vazio (cliente nunca editado) → comportamento antigo
+    def test_cliente_legado_sem_formato_recebe_boleto_unico(self, db, cliente, plan):
+        _make_active_contract(db, cliente, plan)
+        _make_active_contract(db, cliente, plan)
+        db.commit()
+
+        result = execute_closure(db, REF_MONTH)
+        assert result['consolidated_unico'] == 1
+        assert result['payment_titles_generated'] == 1
+        assert result['generated'] == 1
+
+    def test_formato_individual_preserva_titulos_separados(self, db, cliente, plan):
+        cliente.boleto_format = 'individual'
         _make_active_contract(db, cliente, plan)
         _make_active_contract(db, cliente, plan)
         db.commit()
 
         result = execute_closure(db, REF_MONTH)
         assert result['consolidated_unico'] == 0
-        assert result['generated'] == 2
+        assert result['payment_titles_generated'] == 2
+
+    def test_boleto_unico_inclui_mensalidade_prorata_taxa_e_servico(
+        self, db, cliente, plan, veiculo,
+    ):
+        from pypdf import PdfReader
+
+        from app.api.v1.endpoints.boletos import dados_boleto
+        from app.services.boleto_pdf import gerar_boleto_pdf
+
+        monthly = _make_active_contract(db, cliente, plan, billing_day=15)
+        final = Contract(
+            client_id=cliente.id, plan_id=plan.id, vehicle_id=veiculo.id,
+            start_date=date(2026, 1, 1), end_date=date(2026, 9, 10),
+            uninstalled_at=date(2026, 9, 10), status='cancelado', billing_day=10,
+        )
+        db.add(final)
+        db.flush()
+        event = UninstallEvent(
+            vehicle_id=veiculo.id, client_id=cliente.id, contract_id=final.id,
+            uninstall_date=date(2026, 9, 10), fee_amount=Decimal('160.00'), status='pending',
+        )
+        service = ClientChargeItem(
+            client_id=cliente.id, title='Troca de equipamento', quantity=1,
+            unit_price=Decimal('40.00'), total_amount=Decimal('40.00'),
+            installment_count=1, start_date=date(2026, 9, 1), active=True,
+        )
+        db.add_all([event, service])
+        db.commit()
+
+        result = execute_closure(
+            db, date(2026, 10, 1), activity_month=date(2026, 9, 1),
+        )
+        assert result['payment_titles_generated'] == 1
+        assert len(result['payment_billing_ids']) == 1
+        unico = db.get(Billing, result['payment_billing_ids'][0])
+        components = db.scalars(select(Billing).where(Billing.substituted_by_id == unico.id)).all()
+        assert len(components) == 4
+        assert {b.billing_type for b in components} == {
+            'recorrente', 'prorata', 'taxa_desinstalacao', 'item',
+        }
+        assert float(unico.amount) == pytest.approx(sum(float(b.amount) for b in components))
+        assert unico.due_date == date(2026, 10, 15)
+        assert unico.payer_client_id == cliente.id
+        assert result['grand_total'] == pytest.approx(float(unico.amount))
+        assert db.get(UninstallEvent, event.id).billing_id in {b.id for b in components}
+        assert db.get(ClientChargeItem, service.id).status == 'faturado'
+        dados = dados_boleto(unico, cliente, db, None)
+        assert len(dados.itens) == 4
+        assert sum(valor for _, valor in dados.itens) == pytest.approx(float(unico.amount))
+        assert any('PRÓ-RATA' in descricao for descricao, _ in dados.itens)
+        assert any('DESINSTALAÇÃO' in descricao for descricao, _ in dados.itens)
+        assert any('TROCA DE EQUIPAMENTO' in descricao for descricao, _ in dados.itens)
+        pdf = PdfReader(BytesIO(gerar_boleto_pdf(dados)))
+        assert len(pdf.pages) == 2
+        detalhe = pdf.pages[1].extract_text().upper()
+        assert 'DETALHAMENTO DO BOLETO' in detalhe
+        assert 'PRÓ-RATA' in detalhe
+        assert 'DESINSTALAÇÃO' in detalhe
+        assert 'TROCA DE EQUIPAMENTO' in detalhe
 
 
 class TestExecuteClosure:
@@ -554,12 +623,14 @@ class TestClosureScopeAndAccumulation:
         assert all(row['payer_client_id'] == outro_cliente.id for row in preview['items'])
 
         result = execute_closure(db, REF_MONTH, filter_type='client', client_id=outro_cliente.id)
-        assert result['generated'] == 4
-        generated = db.scalars(select(Billing).where(Billing.id.in_(result['billing_ids']))).all()
-        assert {billing.contract_id for billing in generated} == {
+        assert result['payment_titles_generated'] == 1
+        unico = db.get(Billing, result['payment_billing_ids'][0])
+        components = db.scalars(select(Billing).where(Billing.substituted_by_id == unico.id)).all()
+        assert {billing.contract_id for billing in components} == {
             own.id, *(contract.id for contract in delegated),
         }
-        assert all(billing.payer_client_id == outro_cliente.id for billing in generated)
+        assert unico.payer_client_id == outro_cliente.id
+        assert all(billing.payer_client_id == outro_cliente.id for billing in components)
 
     def test_individual_closure_scopes_fees_and_services_by_payer(
         self, db, cliente, outro_cliente, plan, veiculo,

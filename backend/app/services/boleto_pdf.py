@@ -76,6 +76,14 @@ def _fd(d: date | None) -> str:
 def _fv(v) -> str:
     return f"{float(v or 0):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
+
+def _itens_resumidos(itens: list[tuple[str, float]]) -> list[tuple[str, float]]:
+    """A parte pagável cabe na primeira página; o detalhe completo vai anexo."""
+    if len(itens) <= 3:
+        return itens
+    return [*itens[:2], (f"MAIS {len(itens) - 2} ITENS - VER DETALHAMENTO ANEXO",
+                         sum(float(valor) for _, valor in itens[2:]))]
+
 def _wrap(texto: str, font: str, size: float, max_width: float) -> list[str]:
     """Quebra o texto em linhas que cabem em max_width — evita que
     instruções longas invadam a área do QR Code do Pix, sem cortar o
@@ -383,7 +391,7 @@ def _draw_bloco_cobranca(c, d: DadosBoleto, y_top: float, *, titulo: str,
 
     itens = d.itens or [(f"SERVIÇO DE RASTREAMENTO — COBRANÇA #{d.billing_id}", float(d.valor))]
     c.setFillColorRGB(0, 0, 0)
-    for desc, val in itens[:3]:  # até 3 itens (mantém o boleto em 1 página)
+    for desc, val in _itens_resumidos(itens):
         for bx, bw in ((LM, cQ), (LM + cQ, cDESC), (LM + cQ + cDESC, cVU), (LM + cQ + cDESC + cVU, cVT)):
             _box(c, bx, y, bw, H_TR, lw=0.3)
         base = y - H_TR + _mm(2)
@@ -394,7 +402,7 @@ def _draw_bloco_cobranca(c, d: DadosBoleto, y_top: float, *, titulo: str,
         c.drawRightString(LM + cQ + cDESC + cVU + cVT - _mm(1.5), base, f"R$ {_fv(val)}")
         y -= H_TR
 
-    total = sum(float(v) for _, v in itens[:3])
+    total = float(d.valor)
     c.setFont("Helvetica-Bold", 8)
     c.drawRightString(LM + cQ + cDESC + cVU - _mm(1.5), y - H_TR + _mm(2), rotulo_total)
     _box(c, LM + cQ + cDESC + cVU, y, cVT, H_TR, lw=0.3)
@@ -792,22 +800,20 @@ def _referente(d: DadosBoleto) -> str:
 
 
 def _draw_itens_recibo(c, itens: list[tuple[str, float]], y_top: float) -> float:
-    """Itens cobrados, em até 3 colunas (placa/descrição - valor), como no modelo."""
-    n_col = 3
-    col_w = CW / n_col
-    row_h = _mm(3.8)
-    c.setFillColorRGB(0, 0, 0); c.setFont("Helvetica", 6.3)
+    """Resumo legível na primeira página; a discriminação completa vai anexa."""
+    row_h = _mm(4.5)
+    c.setFillColorRGB(0, 0, 0)
     y = y_top
-    linhas = (len(itens) + n_col - 1) // n_col
-    for r in range(linhas):
-        yy = y - _mm(2.9)
-        for col in range(n_col):
-            idx = r * n_col + col
-            if idx >= len(itens):
-                break
-            desc, val = itens[idx]
-            texto = f"{str(desc)[:36]} - R$ {_fv(val)}"
-            c.drawString(LM + col * col_w + _mm(0.5), yy, texto[:54])
+    for description, value in itens:
+        label = str(description)
+        while label and stringWidth(label, 'Helvetica', 7) > CW - _mm(36):
+            label = label[:-1]
+        if label != description:
+            label = label.rstrip() + '...'
+        c.setFont('Helvetica', 7)
+        c.drawString(LM + _mm(0.5), y - _mm(3), label)
+        c.setFont('Helvetica-Bold', 7)
+        c.drawRightString(RM - _mm(0.5), y - _mm(3), f'R$ {_fv(value)}')
         y -= row_h
     return y
 
@@ -851,7 +857,7 @@ def _draw_recibo_pagador(c, d: DadosBoleto, y_top: float) -> float:
 
     # ── Itens cobrados ───────────────────────────────────────────────────────
     itens = d.itens or [("SERVIÇO DE RASTREAMENTO", float(d.valor))]
-    y = _draw_itens_recibo(c, itens, y) - _mm(2)
+    y = _draw_itens_recibo(c, _itens_resumidos(itens), y) - _mm(2)
 
     # ── Faixa-recibo: nº doc · nosso número · datas · agência · carteira · valor
     H = _mm(9)
@@ -882,6 +888,45 @@ def _draw_recibo_pagador(c, d: DadosBoleto, y_top: float) -> float:
     return y
 
 
+def _draw_detalhamento_boleto(c, dados: DadosBoleto) -> None:
+    """Anexo do mesmo boleto, com todos os componentes e seus valores."""
+    itens = dados.itens or []
+    c.showPage()
+
+    def cabecalho() -> float:
+        y = _ft(17)
+        c.setFont('Helvetica-Bold', 13)
+        c.drawString(LM, y, 'DETALHAMENTO DO BOLETO')
+        y -= _mm(8)
+        c.setFont('Helvetica', 8)
+        c.drawString(LM, y, f'Documento #{dados.billing_id} - Vencimento {_fd(dados.data_vencimento)}')
+        c.drawRightString(RM, y, f'Valor: R$ {_fv(dados.valor)}')
+        y -= _mm(5)
+        _hline(c, LM, y, RM, lw=0.5)
+        return y - _mm(7)
+
+    y = cabecalho()
+    description_width = CW - _mm(46)
+    for index, (description, value) in enumerate(itens, start=1):
+        lines = _wrap(str(description), 'Helvetica', 8, description_width)
+        row_height = max(_mm(7), _mm(4) * len(lines) + _mm(3))
+        if y - row_height < _mm(24):
+            c.showPage()
+            y = cabecalho()
+        c.setFont('Helvetica', 8)
+        for line_number, line in enumerate(lines):
+            c.drawString(LM, y - _mm(3) - _mm(4) * line_number, line)
+        c.setFont('Helvetica-Bold', 8)
+        c.drawRightString(RM, y - _mm(3), f'R$ {_fv(value)}')
+        y -= row_height
+        _hline(c, LM, y, RM, lw=0.2)
+    if y < _mm(27):
+        c.showPage()
+        y = cabecalho()
+    c.setFont('Helvetica-Bold', 10)
+    c.drawRightString(RM, y - _mm(7), f'TOTAL: R$ {_fv(dados.valor)}')
+
+
 def gerar_boleto_pdf(dados: DadosBoleto) -> bytes:
     buf = io.BytesIO()
     c = pdfcanvas.Canvas(buf, pagesize=A4)
@@ -899,6 +944,9 @@ def gerar_boleto_pdf(dados: DadosBoleto) -> bytes:
     # 3. Ficha de compensação full-width (Ailos 085-0) + código de barras.
     y = _draw_ficha(c, dados, y - _mm(6))
     _draw_barcode(c, dados.codigo_barras, LM, y - _mm(3), height_mm=13)
+
+    if dados.itens and len(dados.itens) > 1:
+        _draw_detalhamento_boleto(c, dados)
 
     c.save()
     buf.seek(0)

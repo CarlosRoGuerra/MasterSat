@@ -51,6 +51,7 @@ from app.services.financial import (
     plan_title,
     period_label_for_date,
     refresh_overdue_statuses,
+    transfer_charge_items_to_billing,
 )
 
 MIN_BILLING_AMOUNT = Decimal('5.00')
@@ -590,61 +591,6 @@ def execute_closure(
             db.flush()
             created_ids.append(billing.id)
 
-    # ── Boleto único por cliente (boleto_format='unico' no cadastro) ────────
-    # Junta as MENSALIDADES normais recém-criadas do mesmo cliente em UMA
-    # cobrança só (1 boleto = 1 tarifa bancária/mês, como o campo do cadastro
-    # promete). Pró-rata e 1ª cobrança ficam de fora (semântica própria).
-    # As individuais são canceladas com vínculo estrutural (substituted_by_id)
-    # — e continuam ocupando o mês: é a original que diz "contrato X, mês Y já
-    # foi cobrado", porque o boleto único não tem contrato. Cancelar/excluir o
-    # boleto único exige reverter a substituição (reabre as individuais).
-    consolidated_ids: list[int] = []
-    _por_pagador: dict[int, list[Billing]] = defaultdict(list)
-    for bid in created_ids:
-        b = db.get(Billing, bid)
-        if b and b.billing_type == 'recorrente':
-            _por_pagador[b.payer_client_id or b.client_id].append(b)
-
-    for payer_id, grupo in _por_pagador.items():
-        if len(grupo) < 2:
-            continue
-        cliente = db.get(Client, payer_id)
-        # Só consolida com a opção EXPLÍCITA no cadastro (campo vazio = individual)
-        if not cliente or cliente.boleto_format != 'unico':
-            continue
-
-        total = sum(Decimal(str(b.amount)) for b in grupo)
-        venc = max(b.due_date for b in grupo)
-        period = grupo[0].period_label
-
-        def _placa(b: Billing) -> str:
-            v = db.get(Vehicle, b.vehicle_id) if b.vehicle_id else None
-            return v.plate if v and not v.is_deleted else (b.title or f'#{b.id}')
-
-        detalhes = ' | '.join(f'{_placa(b)}: R$ {float(b.amount):.2f}' for b in grupo)
-        owner_ids = {billing.client_id for billing in grupo}
-        unico = Billing(
-            # Se há vários clientes atendidos pelo mesmo interveniente, o título
-            # consolidado não pertence exclusivamente a nenhum deles.
-            client_id=(next(iter(owner_ids)) if len(owner_ids) == 1 else payer_id),
-            payer_client_id=payer_id,
-            billing_type='recorrente',
-            title=f'Mensalidades — {len(grupo)} veículos (boleto único)',
-            amount=total,
-            due_date=venc,
-            status=BillingStatus.PENDING if venc >= hoje() else BillingStatus.OVERDUE,
-            period_label=period,
-            payment_method=grupo[0].payment_method,
-            notes=f'Boleto único ({period}): {detalhes}',
-        )
-        db.add(unico)
-        db.flush()
-        mark_billings_substituted(grupo, unico, f'Consolidada no boleto único #{unico.id}.')
-        for b in grupo:
-            created_ids.remove(b.id)
-        created_ids.append(unico.id)
-        consolidated_ids.append(unico.id)
-
     # Processa SOMENTE os eventos que pertenciam à simulação e foram enviados
     # pelo cliente da API. Isso fecha o TOCTOU em que uma taxa criada depois da
     # prévia entrava silenciosamente no fechamento.
@@ -771,27 +717,84 @@ def execute_closure(
                 service_billing_ids.append(b.id)
             services_generated += len(new_billings)
 
+    # O fechamento cria componentes separados para conservar contrato, placa,
+    # competência, parcela e taxa. O pagador recebe apenas um título efetivo:
+    # as componentes ficam canceladas e apontam para o substituto. Somente a
+    # opção explícita "individual" no cadastro impede essa consolidação.
+    monthly_source_ids = set(created_ids)
+    source_monthly_amount = sum(Decimal(str(db.get(Billing, bid).amount)) for bid in created_ids)
+    source_uninstall_amount = sum(Decimal(str(db.get(Billing, bid).amount)) for bid in uninstall_billing_ids)
+    source_service_amount = sum(Decimal(str(db.get(Billing, bid).amount)) for bid in service_billing_ids)
+    payment_billing_ids = created_ids + uninstall_billing_ids + service_billing_ids
+    consolidated_ids: list[int] = []
+    by_payer: dict[int, list[Billing]] = defaultdict(list)
+    for billing_id in payment_billing_ids:
+        billing = db.get(Billing, billing_id)
+        by_payer[billing.payer_client_id or billing.client_id].append(billing)
+
+    for payer_id, components in by_payer.items():
+        if len(components) < 2:
+            continue
+        payer = db.get(Client, payer_id)
+        if not payer or payer.boleto_format == 'individual':
+            continue
+
+        total = sum((Decimal(str(b.amount)) for b in components), Decimal('0.00'))
+        due_date = max(b.due_date for b in components)
+        owners = {b.client_id for b in components}
+        period = reference_month.strftime('%m/%Y')
+        details = []
+        for component in components:
+            vehicle = db.get(Vehicle, component.vehicle_id) if component.vehicle_id else None
+            plate = vehicle.plate if vehicle and not vehicle.is_deleted else None
+            details.append(
+                f'{plate + " - " if plate else ""}{component.title or component.billing_type}: '
+                f'R$ {Decimal(str(component.amount)):.2f}'
+            )
+        unico = Billing(
+            client_id=next(iter(owners)) if len(owners) == 1 else payer_id,
+            payer_client_id=payer_id,
+            billing_type='avulsa',
+            title=f'Fechamento {period} - boleto único',
+            amount=total,
+            due_date=due_date,
+            status=BillingStatus.PENDING if due_date >= hoje() else BillingStatus.OVERDUE,
+            period_label=period,
+            payment_method=components[0].payment_method,
+            notes=f'Itens do boleto único ({period}): ' + ' | '.join(details),
+        )
+        db.add(unico)
+        db.flush()
+        transfer_charge_items_to_billing(db, components, unico)
+        mark_billings_substituted(components, unico, f'Consolidada no boleto único #{unico.id}.')
+        for component in components:
+            payment_billing_ids.remove(component.id)
+            if component.id in monthly_source_ids:
+                created_ids.remove(component.id)
+                monthly_source_ids.remove(component.id)
+        payment_billing_ids.append(unico.id)
+        if any(component.billing_type in ('recorrente', 'prorata', 'primeira_mensalidade') for component in components):
+            created_ids.append(unico.id)
+        consolidated_ids.append(unico.id)
+
     # Único commit do fechamento: até aqui nada foi confirmado, então uma falha
     # em qualquer etapa acima desfaz o fechamento inteiro em vez de deixar
     # metade das cobranças gravadas.
     db.commit()
     refresh_overdue_statuses(db)
 
-    # Mensalidades: soma o valor real criado (combined ou normal)
-    total_mensalidades = round(
-        sum(float(db.get(Billing, bid).amount) for bid in created_ids), 2
-    )
-    total_uninstall_amount = round(
-        sum(float(db.get(Billing, bid).amount) for bid in uninstall_billing_ids), 2
-    )
-    total_services_amount = round(
-        sum(float(db.get(Billing, bid).amount) for bid in service_billing_ids), 2
-    )
+    # Totais por categoria vêm das componentes, antes da consolidação. O título
+    # único contém a soma delas e não deve inflar o total do fechamento.
+    total_mensalidades = round(float(source_monthly_amount), 2)
+    total_uninstall_amount = round(float(source_uninstall_amount), 2)
+    total_services_amount = round(float(source_service_amount), 2)
 
     return {
         'reference_month': simulation['reference_month'],
         'generated': len(created_ids),
         'billing_ids': created_ids,
+        'payment_billing_ids': payment_billing_ids,
+        'payment_titles_generated': len(payment_billing_ids),
         'consolidated_unico': len(consolidated_ids),
         'total_amount': total_mensalidades,
         'uninstall_fees_generated': len(uninstall_billing_ids),

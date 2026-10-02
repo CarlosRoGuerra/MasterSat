@@ -39,6 +39,73 @@ def _dados(**kw):
     return gerar_dados_boleto(**base)
 
 
+def test_boleto_unico_detalha_todos_os_itens_sem_cortar_o_total():
+    from pypdf import PdfReader
+
+    itens = [(f'MENSALIDADE PLACA ABC{i:04d}', 10.0) for i in range(30)]
+    pdf = boleto_pdf.gerar_boleto_pdf(_dados(valor=Decimal('300.00'), itens=itens))
+    pages = PdfReader(io.BytesIO(pdf)).pages
+    assert len(pages) >= 2
+    detalhe = ''.join(page.extract_text() or '' for page in pages[1:])
+    assert 'ABC0000' in detalhe
+    assert 'ABC0029' in detalhe
+    assert detalhe.count('MENSALIDADE PLACA') == 30
+    assert 'TOTAL: R$ 300,00' in detalhe
+
+
+def test_detalhamento_abre_servico_embutido_e_taxas_agrupadas(db, cliente, veiculo):
+    from app.api.v1.endpoints.boletos import dados_boleto
+    from app.models.billing import Billing
+    from app.models.billing_charge_item import BillingChargeItem
+    from app.models.client_charge_item import ClientChargeItem
+    from app.models.enums import BillingStatus
+    from app.models.uninstall_event import UninstallEvent
+
+    service = ClientChargeItem(
+        client_id=cliente.id, title='Instalação extra', quantity=1,
+        unit_price=Decimal('20.00'), total_amount=Decimal('20.00'),
+        installment_count=1, start_date=date(2026, 9, 1), active=False,
+    )
+    db.add(service)
+    db.flush()
+    monthly = Billing(
+        client_id=cliente.id, billing_type='primeira_mensalidade',
+        title='1ª cobrança pró-rata', amount=Decimal('120.00'),
+        due_date=date(2026, 10, 15), period_label='10/2026',
+        status=BillingStatus.CANCELED,
+    )
+    fee = Billing(
+        client_id=cliente.id, billing_type='taxa_desinstalacao',
+        title='Taxas agrupadas', amount=Decimal('30.00'),
+        due_date=date(2026, 10, 10), period_label='10/2026',
+        status=BillingStatus.CANCELED,
+    )
+    unico = Billing(
+        client_id=cliente.id, payer_client_id=cliente.id, billing_type='avulsa',
+        title='Boleto único', amount=Decimal('150.00'),
+        due_date=date(2026, 10, 15), period_label='10/2026',
+        status=BillingStatus.PENDING,
+    )
+    db.add_all([monthly, fee, unico])
+    db.flush()
+    monthly.substituted_by_id = fee.substituted_by_id = unico.id
+    db.add(BillingChargeItem(billing_id=monthly.id, item_id=service.id, amount=Decimal('20.00')))
+    for amount in (Decimal('10.00'), Decimal('20.00')):
+        db.add(UninstallEvent(
+            vehicle_id=veiculo.id, client_id=cliente.id,
+            uninstall_date=date(2026, 9, 10), fee_amount=amount,
+            status='processed', billing_id=fee.id,
+        ))
+    db.commit()
+
+    items = dados_boleto(unico, cliente, db, None).itens
+    assert len(items) == 4
+    assert sum(value for _, value in items) == pytest.approx(150.00)
+    assert any('MENSALIDADE PRÓ-RATA' in name for name, _ in items)
+    assert any('Instalação extra' in name for name, _ in items)
+    assert sum('desinstalação' in name.lower() for name, _ in items) == 2
+
+
 # ---------------------------------------------------------------------------
 # Descritivo do serviço
 # ---------------------------------------------------------------------------
