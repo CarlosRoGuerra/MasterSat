@@ -77,6 +77,83 @@ def _make_pending_event(db, client, vehicle, fee_amount: Decimal = Decimal("120.
     return e
 
 
+def test_uninstall_final_monthly_prorata_and_fee_in_next_closure(db, cliente, plan, veiculo):
+    """September 1-10 is billed in October, alongside the uninstall fee."""
+    plan.price = Decimal('74.99')
+    contract = Contract(
+        client_id=cliente.id, plan_id=plan.id, vehicle_id=veiculo.id,
+        start_date=date(2026, 1, 1), end_date=date(2026, 9, 10),
+        uninstalled_at=date(2026, 9, 10), status='cancelado', billing_day=10,
+    )
+    db.add(contract)
+    db.flush()
+    event = UninstallEvent(
+        vehicle_id=veiculo.id, contract_id=contract.id, client_id=cliente.id,
+        uninstall_date=date(2026, 9, 10), fee_amount=Decimal('160.00'), status='pending',
+    )
+    db.add(event)
+    db.commit()
+
+    october = date(2026, 10, 1)
+    simulation = simulate_closure(db, october)
+    item = next(i for i in simulation['items'] if i['contract_id'] == contract.id)
+    assert item['is_final_prorata'] is True
+    assert item['prorated_days'] == 10
+    assert item['days_in_month'] == 30
+    assert item['billing_amount'] == 25.00
+    assert item['due_date'] == date(2026, 10, 10)
+    assert simulation['total_uninstall_fees'] == 160.00
+    assert simulation['grand_total'] == 185.00
+
+    execute_closure(db, october, contract_ids=[contract.id], uninstall_event_ids=[event.id])
+    monthly = db.scalar(select(Billing).where(
+        Billing.contract_id == contract.id, Billing.billing_type == 'prorata',
+    ))
+    assert monthly is not None
+    assert monthly.amount == Decimal('25.00')
+    assert monthly.period_label == '10/2026'
+    assert db.get(UninstallEvent, event.id).billing_id is not None
+    assert simulate_closure(db, october)['to_generate'] == 0
+    assert execute_closure(db, october, contract_ids=[contract.id])['generated'] == 0
+
+
+def test_uninstall_prorata_without_fee_uses_only_days_under_contract(db, cliente, plan):
+    contract = Contract(
+        client_id=cliente.id, plan_id=plan.id,
+        start_date=date(2026, 9, 5), end_date=date(2026, 9, 10),
+        uninstalled_at=date(2026, 9, 10), status='cancelado', billing_day=10,
+    )
+    db.add(contract)
+    db.commit()
+
+    simulation = simulate_closure(db, date(2026, 10, 1))
+    item = next(i for i in simulation['items'] if i['contract_id'] == contract.id)
+    assert item['prorated_days'] == 6
+    assert item['billing_amount'] == 19.98
+    assert simulation['uninstall_events'] == []
+
+
+def test_existing_october_monthly_prevents_duplicate_final_charge(db, cliente, plan):
+    contract = Contract(
+        client_id=cliente.id, plan_id=plan.id,
+        start_date=date(2026, 1, 1), end_date=date(2026, 9, 10),
+        uninstalled_at=date(2026, 9, 10), status='cancelado', billing_day=10,
+    )
+    db.add(contract)
+    db.flush()
+    db.add(Billing(
+        contract_id=contract.id, client_id=cliente.id, amount=plan.price,
+        due_date=date(2026, 10, 10), status=BillingStatus.PENDING,
+        billing_type='recorrente', period_label='10/2026',
+    ))
+    db.commit()
+
+    simulation = simulate_closure(db, date(2026, 10, 1))
+    item = next(i for i in simulation['items'] if i['contract_id'] == contract.id)
+    assert item['already_generated'] is True
+    assert simulation['to_generate'] == 0
+
+
 # ---------------------------------------------------------------------------
 # simulate_closure
 # ---------------------------------------------------------------------------

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from calendar import monthrange
 from datetime import date, datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, aliased
@@ -46,6 +47,7 @@ from app.services.financial import (
     generate_item_billings,
     lock_charge_items_for_update,
     mark_billings_substituted,
+    normalize_due_date,
     plan_title,
     period_label_for_date,
     refresh_overdue_statuses,
@@ -192,6 +194,88 @@ def simulate_closure(
             'tracker_install_date': (tracker.install_date if tracker else None),
         })
 
+    # A retirada cancela o contrato imediatamente, mas os dias usados no mês
+    # da retirada ainda são cobrados no fechamento do mês seguinte.
+    previous_month = add_months(reference_month.replace(day=1), -1)
+    final_query = db.query(Contract, Client, Plan, Vehicle, Tracker, Interveniente).join(
+        Client, Client.id == Contract.client_id
+    ).join(
+        Plan, Plan.id == Contract.plan_id
+    ).outerjoin(
+        Vehicle, Vehicle.id == Contract.vehicle_id
+    ).outerjoin(
+        Tracker, Tracker.id == Contract.tracker_id
+    ).outerjoin(
+        Interveniente, Interveniente.id == Contract.interveniente_client_id
+    ).filter(
+        Contract.is_deleted.is_(False),
+        Contract.status == 'cancelado',
+        Contract.uninstalled_at >= previous_month,
+        Contract.uninstalled_at < reference_month.replace(day=1),
+        Plan.billing_interval_months == 1,
+    )
+    if filter_type == 'pf':
+        final_query = final_query.filter(Client.type == 'pf')
+    elif filter_type == 'pj':
+        final_query = final_query.filter(Client.type == 'pj')
+    elif filter_type == 'client' and client_id:
+        final_query = final_query.filter(Client.id == client_id)
+
+    for contract, client, plan, vehicle, tracker, interveniente in final_query.all():
+        _validate_contract_relationships(
+            contract, client, plan, vehicle, tracker, interveniente,
+        )
+        uninstall_date = contract.uninstalled_at
+        if uninstall_date < contract.start_date:
+            continue
+        month_start = uninstall_date.replace(day=1)
+        used_from = max(contract.start_date, month_start)
+        days_in_month = monthrange(uninstall_date.year, uninstall_date.month)[1]
+        prorated_days = (uninstall_date - used_from).days + 1
+        billing_amount = float(
+            (Decimal(str(plan.price)) * Decimal(prorated_days) / Decimal(days_in_month)).quantize(
+                Decimal('0.01'), rounding=ROUND_HALF_UP,
+            )
+        )
+        due_date = normalize_due_date(reference_month.replace(day=1), 0, contract.billing_day, 1)
+        period_label = period_label_for_date(due_date, 1)
+        plan_price = decimal_to_float(plan.price)
+        items.append({
+            'type': 'recorrente',
+            'contract_id': contract.id,
+            'client_id': client.id,
+            'client_name': client.name,
+            'payer_client_id': contract_payer_client_id(db, contract),
+            'payer_name': (
+                interveniente.name if interveniente and not interveniente.is_deleted else client.name
+            ),
+            'client_type': client.type,
+            'vehicle_plate': vehicle.plate if vehicle else None,
+            'tracker_imei': tracker.imei if tracker else None,
+            'plan_name': plan.name,
+            'plan_price': plan_price,
+            'billing_amount': billing_amount,
+            'is_prorata': True,
+            'is_final_prorata': True,
+            'uninstall_date': uninstall_date,
+            'prorated_days': prorated_days,
+            'days_in_month': days_in_month,
+            'first_month_charges': [],
+            'total_first_billing': billing_amount,
+            'period_label': period_label,
+            'due_date': due_date,
+            'already_generated': _has_existing_billing(db, contract.id, period_label),
+            'billing_day': contract.billing_day,
+            'interveniente_nome': (interveniente.name if interveniente else client.name),
+            'vehicle_id': vehicle.id if vehicle else None,
+            'vehicle_type': vehicle.type if vehicle else None,
+            'vehicle_created_at': (
+                vehicle.created_at.date() if vehicle and getattr(vehicle, 'created_at', None) else None
+            ),
+            'contract_start_date': contract.start_date,
+            'tracker_install_date': (tracker.install_date if tracker else None),
+        })
+
     # Exclui dos serviços avulsos os itens já embutidos em cobranças de primeiro mês
     embedded_ids: set[int] = {
         c['item_id']
@@ -327,6 +411,9 @@ def execute_closure(
         ]
 
     recurring_contract_ids = {item['contract_id'] for item in to_generate}
+    final_items_by_contract = {
+        item['contract_id']: item for item in to_generate if item.get('is_final_prorata')
+    }
     selected_charge_ids = {item['item_id'] for item in selected_charge_items}
     charge_contract_ids = set(db.scalars(
         select(ClientChargeItem.contract_id).where(
@@ -344,12 +431,21 @@ def execute_closure(
                 f'Contrato #{contract_id} foi removido durante o fechamento. '
                 'Refaça a simulação.'
             )
-        if contract_id in recurring_contract_ids and locked_contract.status != 'ativo':
+        final_item = final_items_by_contract.get(contract_id)
+        if final_item and (
+            locked_contract.status != 'cancelado'
+            or locked_contract.uninstalled_at != final_item['uninstall_date']
+            or _has_existing_billing(db, contract_id, final_item['period_label'])
+        ):
+            raise ValueError(
+                f'Contrato #{contract_id} mudou durante o fechamento. Refaça a simulação.'
+            )
+        if contract_id in recurring_contract_ids and not final_item and locked_contract.status != 'ativo':
             raise ValueError(
                 f'Contrato #{contract_id} deixou de estar ativo durante o fechamento. '
                 'Refaça a simulação.'
             )
-        if locked_contract.status == 'ativo':
+        if contract_id in recurring_contract_ids:
             _validate_locked_contract_for_closure(db, locked_contract)
 
     # Serviços que a simulação decidiu embutir na 1ª mensalidade: outro
@@ -450,6 +546,9 @@ def execute_closure(
                     f'Pró-rata: {item["prorated_days"]} de {item["days_in_month"]} dias'
                     f' — {item["period_label"]}'
                 )
+                if item.get('is_final_prorata'):
+                    title = f'{plan_title(plan)} — pró-rata final {item["prorated_days"]} dias'
+                    notes += f' | Desinstalado em {item["uninstall_date"].strftime("%d/%m/%Y")}'
                 billing_type = 'prorata'
             else:
                 title = plan_title(plan)

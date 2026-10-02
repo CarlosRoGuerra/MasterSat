@@ -20,6 +20,7 @@ class Contract(Base, TimestampMixin, SoftDeleteMixin):
     tracker_id: Mapped[int | None] = mapped_column(ForeignKey('trackers.id'), nullable=True, index=True)
     start_date: Mapped[date] = mapped_column(Date)
     end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    uninstalled_at: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(30), default='ativo')
     billing_day: Mapped[int | None] = mapped_column(Integer, nullable=True)
     payment_method: Mapped[str | None] = mapped_column(String(40), nullable=True)

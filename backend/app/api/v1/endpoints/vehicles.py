@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from calendar import monthrange as _monthrange
 from datetime import date, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
@@ -389,9 +389,20 @@ def uninstall_vehicle(
     for contract in contracts:
         plan = db.get(Plan, contract.plan_id)
         if plan and plan.active:
-            cycle_start, cycle_end = current_cycle_bounds(contract, plan, uninstall_date)
-            source_amount = prorated_amount(plan.price, cycle_start, cycle_end, uninstall_date)
-            period_label = period_label_for_date(cycle_start, getattr(plan, 'billing_interval_months', 1) or 1)
+            interval = getattr(plan, 'billing_interval_months', 1) or 1
+            if interval == 1:
+                month_start = uninstall_date.replace(day=1)
+                used_from = max(contract.start_date, month_start)
+                days_used = (uninstall_date - used_from).days + 1
+                days_in_month = _monthrange(uninstall_date.year, uninstall_date.month)[1]
+                source_amount = (
+                    Decimal(str(plan.price)) * Decimal(days_used) / Decimal(days_in_month)
+                ).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                period_label = period_label_for_date(add_months(month_start, 1), 1)
+            else:
+                cycle_start, cycle_end = current_cycle_bounds(contract, plan, uninstall_date)
+                source_amount = prorated_amount(plan.price, cycle_start, cycle_end, uninstall_date)
+                period_label = period_label_for_date(cycle_start, interval)
             # Se já existe cobrança gerada pelo fechamento para o período, ajusta o valor proporcionalmente.
             # Caso ainda não exista (fechamento não rodou), não cria nada — o fechamento calculará o pró-rata.
             current_billing = db.scalar(select(Billing).where(
@@ -498,6 +509,7 @@ def uninstall_vehicle(
     for contract in contracts:
         contract.status = 'cancelado'
         contract.end_date = uninstall_date
+        contract.uninstalled_at = uninstall_date
         transfer_note = f'Desinstalado em {uninstall_date.strftime("%d/%m/%Y")}'
         contract.notes = f'{contract.notes}\n{transfer_note}'.strip() if contract.notes else transfer_note
 

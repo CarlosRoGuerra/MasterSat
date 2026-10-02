@@ -282,9 +282,9 @@ class TestRegravacaoForcada:
 
 class TestDesinstalacaoNaoMudaValorDeTitulo:
     def _mensalidade_do_ciclo(self, db, contrato, plan) -> Billing:
-        from app.services.financial import current_cycle_bounds, period_label_for_date
+        from app.services.financial import add_months, period_label_for_date
 
-        inicio, _ = current_cycle_bounds(contrato, plan, date.today())
+        inicio = add_months(date.today().replace(day=1), 1)
         mensalidade = Billing(
             contract_id=contrato.id, client_id=contrato.client_id, amount=Decimal('99.90'),
             due_date=date.today(), status=BillingStatus.PENDING, billing_type='recorrente',

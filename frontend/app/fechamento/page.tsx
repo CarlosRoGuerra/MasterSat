@@ -37,6 +37,7 @@ type ClosureItem = {
   plan_price: number;
   billing_amount: number;
   is_prorata: boolean;
+  is_final_prorata?: boolean;
   prorated_days: number;
   days_in_month: number;
   first_month_charges: FirstMonthCharge[];
@@ -635,7 +636,7 @@ export default function FechamentoPage() {
                             ) : item.is_prorata ? (
                               <span className="inline-flex flex-col">
                                 <span className="inline-flex items-center rounded-md bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700 dark:bg-amber-950/40 dark:text-amber-400">
-                                  Pró-rata {item.prorated_days}/{item.days_in_month} dias
+                                  {item.is_final_prorata ? 'Pró-rata final' : 'Pró-rata'} {item.prorated_days}/{item.days_in_month} dias
                                 </span>
                                 <span className="mt-0.5 text-3xs text-slate-500 line-through">
                                   {fmt(item.plan_price)}

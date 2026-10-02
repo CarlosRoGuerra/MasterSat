@@ -352,6 +352,34 @@ class TestUninstallVehicle:
         db.refresh(contrato)
         assert contrato.status == "cancelado"
         assert contrato.end_date == date(2025, 5, 15)
+        assert contrato.uninstalled_at == date(2025, 5, 15)
+
+    def test_uninstall_adjusts_next_month_and_preserves_previous_month(
+        self, http, db, veiculo, rastreador_instalado, contrato,
+    ):
+        from app.models.billing import Billing
+        from app.models.enums import BillingStatus
+
+        previous = Billing(
+            contract_id=contrato.id, client_id=contrato.client_id,
+            amount=Decimal('99.90'), due_date=date(2025, 5, 15),
+            status=BillingStatus.PENDING, billing_type='recorrente', period_label='05/2025',
+        )
+        final = Billing(
+            contract_id=contrato.id, client_id=contrato.client_id,
+            amount=Decimal('99.90'), due_date=date(2025, 6, 15),
+            status=BillingStatus.PENDING, billing_type='recorrente', period_label='06/2025',
+        )
+        db.add_all([previous, final])
+        db.commit()
+
+        response = self._uninstall(http, veiculo.id)
+
+        assert response.status_code == 200, response.text
+        db.refresh(previous)
+        db.refresh(final)
+        assert previous.amount == Decimal('99.90')
+        assert final.amount == Decimal('48.34')  # 15/31 of R$ 99.90
 
     def test_uninstall_without_fee_no_event(self, http, db, veiculo, rastreador_instalado, contrato):
         """Sem taxa nem produto, não deve criar UninstallEvent."""
