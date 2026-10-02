@@ -10747,9 +10747,11 @@ export interface operations {
     };
     simulate_api_v1_billing_closure_simulate_get: {
         parameters: {
-            query: {
-                /** @description Mês de referência no formato YYYY-MM */
-                reference_month: string;
+            query?: {
+                /** @description Mês de vencimento legado no formato YYYY-MM */
+                reference_month?: string | null;
+                /** @description Mês do serviço no formato YYYY-MM; vencimento no mês seguinte */
+                service_month?: string | null;
                 filter_type?: string;
                 client_id?: number | null;
             };
@@ -10781,9 +10783,11 @@ export interface operations {
     };
     simulate_pdf_api_v1_billing_closure_simulate_pdf_get: {
         parameters: {
-            query: {
-                /** @description Mês de referência no formato YYYY-MM */
-                reference_month: string;
+            query?: {
+                /** @description Mês de vencimento legado no formato YYYY-MM */
+                reference_month?: string | null;
+                /** @description Mês do serviço no formato YYYY-MM; vencimento no mês seguinte */
+                service_month?: string | null;
                 filter_type?: string;
                 client_id?: number | null;
             };
@@ -10815,9 +10819,11 @@ export interface operations {
     };
     simulate_xlsx_api_v1_billing_closure_simulate_xlsx_get: {
         parameters: {
-            query: {
-                /** @description Mês de referência no formato YYYY-MM */
-                reference_month: string;
+            query?: {
+                /** @description Mês de vencimento legado no formato YYYY-MM */
+                reference_month?: string | null;
+                /** @description Mês do serviço no formato YYYY-MM; vencimento no mês seguinte */
+                service_month?: string | null;
                 filter_type?: string;
                 client_id?: number | null;
             };
@@ -10849,9 +10855,11 @@ export interface operations {
     };
     generate_api_v1_billing_closure_generate_post: {
         parameters: {
-            query: {
-                /** @description Mês de referência no formato YYYY-MM */
-                reference_month: string;
+            query?: {
+                /** @description Mês de vencimento legado no formato YYYY-MM */
+                reference_month?: string | null;
+                /** @description Mês do serviço no formato YYYY-MM; vencimento no mês seguinte */
+                service_month?: string | null;
                 filter_type?: string;
                 client_id?: number | null;
                 /** @description Seleção exata de contratos recorrentes */

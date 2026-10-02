@@ -13,6 +13,7 @@ from app.services.billing_closure import (
     generate_closure_xlsx,
     simulate_closure,
 )
+from app.services.financial import add_months
 
 router = APIRouter()
 
@@ -28,40 +29,65 @@ def _parse_reference_month(reference_month: str):
         raise HTTPException(status_code=422, detail='Formato de mês inválido. Use YYYY-MM (ex: 2026-06).')
 
 
+def _resolve_months(reference_month: str | None, service_month: str | None):
+    if bool(reference_month) == bool(service_month):
+        raise HTTPException(
+            status_code=422,
+            detail='Informe apenas reference_month ou service_month no formato YYYY-MM.',
+        )
+    if service_month:
+        activity_month = _parse_reference_month(service_month)
+        return add_months(activity_month, 1), activity_month
+    return _parse_reference_month(reference_month), None
+
+
+def _simulate_for_month(db, billing_month, activity_month, filter_type, client_id):
+    options = {'activity_month': activity_month} if activity_month else {}
+    simulation = simulate_closure(db, billing_month, filter_type, client_id, **options)
+    if activity_month:
+        simulation['billing_month'] = simulation['reference_month']
+        simulation['reference_month'] = activity_month.strftime('%m/%Y')
+        for item in simulation['items']:
+            item['service_period_label'] = simulation['reference_month']
+    return simulation
+
+
 @router.get('/simulate')
 def simulate(
-    reference_month: str = Query(..., description='Mês de referência no formato YYYY-MM'),
+    reference_month: str | None = Query(default=None, description='Mês de vencimento legado no formato YYYY-MM'),
+    service_month: str | None = Query(default=None, description='Mês do serviço no formato YYYY-MM; vencimento no mês seguinte'),
     filter_type: str = Query(default='all', pattern='^(all|pf|pj|client)$'),
     client_id: int | None = None,
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*ALLOWED_ROLES)),
 ):
-    ref = _parse_reference_month(reference_month)
+    ref, activity_month = _resolve_months(reference_month, service_month)
     if filter_type == 'client' and not client_id:
         raise HTTPException(status_code=422, detail='client_id obrigatório quando filter_type=client.')
     try:
-        return simulate_closure(db, ref, filter_type, client_id)
+        return _simulate_for_month(db, ref, activity_month, filter_type, client_id)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get('/simulate/pdf')
 def simulate_pdf(
-    reference_month: str = Query(..., description='Mês de referência no formato YYYY-MM'),
+    reference_month: str | None = Query(default=None, description='Mês de vencimento legado no formato YYYY-MM'),
+    service_month: str | None = Query(default=None, description='Mês do serviço no formato YYYY-MM; vencimento no mês seguinte'),
     filter_type: str = Query(default='all', pattern='^(all|pf|pj|client)$'),
     client_id: int | None = None,
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*ALLOWED_ROLES)),
 ):
-    ref = _parse_reference_month(reference_month)
+    ref, activity_month = _resolve_months(reference_month, service_month)
     if filter_type == 'client' and not client_id:
         raise HTTPException(status_code=422, detail='client_id obrigatório quando filter_type=client.')
     try:
-        simulation = simulate_closure(db, ref, filter_type, client_id)
+        simulation = _simulate_for_month(db, ref, activity_month, filter_type, client_id)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     pdf_buffer = generate_closure_pdf(simulation)
-    filename = f'fechamento-{reference_month}.pdf'
+    filename = f'fechamento-{service_month or reference_month}.pdf'
     return StreamingResponse(
         pdf_buffer,
         media_type='application/pdf',
@@ -71,21 +97,22 @@ def simulate_pdf(
 
 @router.get('/simulate/xlsx')
 def simulate_xlsx(
-    reference_month: str = Query(..., description='Mês de referência no formato YYYY-MM'),
+    reference_month: str | None = Query(default=None, description='Mês de vencimento legado no formato YYYY-MM'),
+    service_month: str | None = Query(default=None, description='Mês do serviço no formato YYYY-MM; vencimento no mês seguinte'),
     filter_type: str = Query(default='all', pattern='^(all|pf|pj|client)$'),
     client_id: int | None = None,
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*ALLOWED_ROLES)),
 ):
-    ref = _parse_reference_month(reference_month)
+    ref, activity_month = _resolve_months(reference_month, service_month)
     if filter_type == 'client' and not client_id:
         raise HTTPException(status_code=422, detail='client_id obrigatório quando filter_type=client.')
     try:
-        simulation = simulate_closure(db, ref, filter_type, client_id)
+        simulation = _simulate_for_month(db, ref, activity_month, filter_type, client_id)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     xlsx_buffer = generate_closure_xlsx(simulation)
-    filename = f'fechamento-{reference_month}.xlsx'
+    filename = f'fechamento-{service_month or reference_month}.xlsx'
     return StreamingResponse(
         xlsx_buffer,
         media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -95,7 +122,8 @@ def simulate_xlsx(
 
 @router.post('/generate')
 def generate(
-    reference_month: str = Query(..., description='Mês de referência no formato YYYY-MM'),
+    reference_month: str | None = Query(default=None, description='Mês de vencimento legado no formato YYYY-MM'),
+    service_month: str | None = Query(default=None, description='Mês do serviço no formato YYYY-MM; vencimento no mês seguinte'),
     filter_type: str = Query(default='all', pattern='^(all|pf|pj|client)$'),
     client_id: int | None = None,
     contract_ids: list[int] | None = Query(default=None, description='Seleção exata de contratos recorrentes'),
@@ -108,16 +136,18 @@ def generate(
     Executa o fechamento de faturamento de forma síncrona.
     Retorna o resultado completo ao final do processamento.
     """
-    ref = _parse_reference_month(reference_month)
+    ref, activity_month = _resolve_months(reference_month, service_month)
     if filter_type == 'client' and not client_id:
         raise HTTPException(status_code=422, detail='client_id obrigatório quando filter_type=client.')
 
     try:
+        options = {'activity_month': activity_month} if activity_month else {}
         result = execute_closure(
             db, ref, filter_type, client_id,
             contract_ids=contract_ids,
             uninstall_event_ids=uninstall_event_ids,
             charge_item_ids=charge_item_ids,
+            **options,
         )
     except ValueError as exc:
         db.rollback()
@@ -131,6 +161,7 @@ def generate(
     return {
         'status': 'completed',
         **result,
-        'reference_month': reference_month,
-        'reference_month_label': result.get('reference_month'),
+        'reference_month': service_month or reference_month,
+        'reference_month_label': activity_month.strftime('%m/%Y') if activity_month else result.get('reference_month'),
+        'billing_month': result.get('reference_month'),
     }

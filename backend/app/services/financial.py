@@ -534,7 +534,8 @@ def _occupied_item_installments(db: Session, item_id: int) -> set[int]:
 
 
 def generate_item_billings(
-    db: Session, item: ClientChargeItem, force: bool = False, *, commit: bool = True,
+    db: Session, item: ClientChargeItem, force: bool = False, *,
+    commit: bool = True, first_due_date: date | None = None,
 ) -> list[Billing]:
     """Gera as parcelas de um item de cobrança.
 
@@ -567,8 +568,14 @@ def generate_item_billings(
         # negociação: parcelas por item_id não enxergam esses vínculos.
         occupied = set(range(1, installments + 1))
 
+    first_open_index = next(
+        (index for index in range(installments) if index + 1 not in occupied), 0,
+    )
     for index in range(installments):
-        due_date = normalize_due_date(item.start_date, index, item.start_date.day if item.start_date.day <= 28 else 28, 1)
+        due_base = first_due_date or item.start_date
+        billing_day = due_base.day if first_due_date else min(item.start_date.day, 28)
+        cycle = index - first_open_index if first_due_date else index
+        due_date = normalize_due_date(due_base, cycle, billing_day, 1)
         amount = amounts[index]
         title = item.title if installments == 1 else f'{item.title} • parcela {index + 1}/{installments}'
         # force regrava a parcela em aberto com os dados atuais do item; sem

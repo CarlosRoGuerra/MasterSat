@@ -81,6 +81,7 @@ type ChargeItem = {
 
 type Simulation = {
   reference_month: string;
+  billing_month?: string;
   total_contracts: number;
   to_generate: number;
   already_generated: number;
@@ -99,6 +100,7 @@ type GenerateResult = {
   reference_month: string;
   /** Mesmo mês em formato de exibição (MM/YYYY). */
   reference_month_label: string;
+  billing_month?: string;
   generated: number;
   total_amount: number;
   uninstall_fees_generated: number;
@@ -114,9 +116,10 @@ type WizardStep = 1 | 2 | 3;
 type GenerateError = { message: string };
 
 /* ── Helpers ───────────────────────────────────────────────────────────── */
-function currentYearMonth() {
+function previousYearMonth() {
   const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const previous = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  return `${previous.getFullYear()}-${String(previous.getMonth() + 1).padStart(2, '0')}`;
 }
 function fmt(v: number) {
   return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -191,7 +194,7 @@ export default function FechamentoPage() {
   const [step, setStep] = useState<WizardStep>(1);
 
   // Step 1
-  const [referenceMonth, setReferenceMonth] = useState(currentYearMonth);
+  const [referenceMonth, setReferenceMonth] = useState(previousYearMonth);
   const [filterType, setFilterType] = useState<FilterType>('all');
   const [selectedClientId, setSelectedClientId] = useState('');
   const [clients, setClients] = useState<ClientOption[]>([]);
@@ -231,7 +234,7 @@ export default function FechamentoPage() {
   async function refreshSimulation() {
     if (!token || !referenceMonth) return;
     try {
-      const params = new URLSearchParams({ reference_month: referenceMonth, filter_type: filterType });
+      const params = new URLSearchParams({ service_month: referenceMonth, filter_type: filterType });
       if (filterType === 'client' && selectedClientId) params.set('client_id', selectedClientId);
       const data = await apiFetch<Simulation>(`/billing-closure/simulate?${params}`, {}, token);
       setSimulation(data);
@@ -249,7 +252,7 @@ export default function FechamentoPage() {
     setError('');
     setSimulation(null);
     try {
-      const params = new URLSearchParams({ reference_month: referenceMonth, filter_type: filterType });
+      const params = new URLSearchParams({ service_month: referenceMonth, filter_type: filterType });
       if (filterType === 'client' && selectedClientId) params.set('client_id', selectedClientId);
       const data = await apiFetch<Simulation>(`/billing-closure/simulate?${params}`, {}, token);
       setSimulation(data);
@@ -265,7 +268,7 @@ export default function FechamentoPage() {
 
   async function downloadPdf() {
     if (!token) return;
-    const params = new URLSearchParams({ reference_month: referenceMonth, filter_type: filterType });
+    const params = new URLSearchParams({ service_month: referenceMonth, filter_type: filterType });
     if (filterType === 'client' && selectedClientId) params.set('client_id', selectedClientId);
     try {
       const resp = await fetch(`${API_URL}/billing-closure/simulate/pdf?${params}`, {
@@ -286,7 +289,7 @@ export default function FechamentoPage() {
 
   async function downloadXlsx() {
     if (!token) return;
-    const params = new URLSearchParams({ reference_month: referenceMonth, filter_type: filterType });
+    const params = new URLSearchParams({ service_month: referenceMonth, filter_type: filterType });
     if (filterType === 'client' && selectedClientId) params.set('client_id', selectedClientId);
     try {
       const resp = await fetch(`${API_URL}/billing-closure/simulate/xlsx?${params}`, {
@@ -312,7 +315,7 @@ export default function FechamentoPage() {
     setGenerateResult(null);
     setStep(3);
     try {
-      const params = new URLSearchParams({ reference_month: referenceMonth, filter_type: filterType });
+      const params = new URLSearchParams({ service_month: referenceMonth, filter_type: filterType });
       if (filterType === 'client' && selectedClientId) params.set('client_id', selectedClientId);
       // Manda SEMPRE a seleção exata das mensalidades, mesmo quando todas estão
       // marcadas. Ausência de contract_ids significa "estado atual do banco";
@@ -408,13 +411,14 @@ export default function FechamentoPage() {
           </h2>
           <div className="flex flex-wrap items-end gap-5">
             <div>
-              <p className="mb-1.5 text-xs font-semibold text-slate-500 dark:text-slate-400">Mês de referência</p>
+              <p className="mb-1.5 text-xs font-semibold text-slate-500 dark:text-slate-400">Mês do serviço</p>
               <input
                 type="month"
                 className={fieldClass}
                 value={referenceMonth}
                 onChange={(e) => setReferenceMonth(e.target.value)}
               />
+              <p className="mt-1 text-xs text-slate-500">Vencimento no mês seguinte ao selecionado.</p>
             </div>
 
             <div>
@@ -468,6 +472,11 @@ export default function FechamentoPage() {
       ════════════════════════════════════════ */}
       {step === 2 && simulation && (
         <>
+          {simulation.billing_month && (
+            <p className="mb-4 text-sm font-medium text-slate-700 dark:text-slate-200">
+              Serviços de {simulation.reference_month} · vencimentos em {simulation.billing_month}
+            </p>
+          )}
           {/* KPIs */}
           <section className="mb-5 grid gap-5 sm:grid-cols-2 lg:grid-cols-5">
             <MetricCard

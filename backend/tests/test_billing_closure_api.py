@@ -18,12 +18,158 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+from io import BytesIO
 
 import pytest
+from openpyxl import load_workbook
+from sqlalchemy import select
+
+from app.models.billing import Billing
+from app.models.client_charge_item import ClientChargeItem
+from app.models.contract import Contract
+from app.models.enums import BillingStatus
 from app.models.uninstall_event import UninstallEvent
 
 PREFIX = "/api/v1/billing-closure"
 REF_MONTH = "2025-05"
+
+
+def test_september_service_closure_is_due_in_october(
+    http, db, cliente, veiculo, contrato,
+):
+    event = UninstallEvent(
+        vehicle_id=veiculo.id, contract_id=contrato.id, client_id=cliente.id,
+        uninstall_date=date(2026, 9, 10), fee_amount=Decimal('160.00'), status='pending',
+    )
+    future_event = UninstallEvent(
+        vehicle_id=veiculo.id, client_id=cliente.id,
+        uninstall_date=date(2026, 10, 10), fee_amount=Decimal('50.00'), status='pending',
+    )
+    charge = ClientChargeItem(
+        client_id=cliente.id, contract_id=contrato.id, title='Serviço de setembro',
+        quantity=1, unit_price=Decimal('30.00'), total_amount=Decimal('30.00'),
+        installment_count=1, start_date=date(2026, 9, 20), active=True,
+    )
+    db.add_all([event, future_event, charge])
+    db.commit()
+
+    params = {'service_month': '2026-09'}
+    preview = http.get(PREFIX + '/simulate', params=params)
+    assert preview.status_code == 200, preview.text
+    data = preview.json()
+    assert data['reference_month'] == '09/2026'
+    assert data['billing_month'] == '10/2026'
+    monthly = next(item for item in data['items'] if item['contract_id'] == contrato.id)
+    assert monthly['due_date'] == '2026-10-15'
+    assert monthly['service_period_label'] == '09/2026'
+    assert [item['event_id'] for item in data['uninstall_events']] == [event.id]
+    assert [item['item_id'] for item in data['charge_items']] == [charge.id]
+
+    export = http.get(PREFIX + '/simulate/xlsx', params=params)
+    assert export.status_code == 200, export.text
+    sheet = load_workbook(BytesIO(export.content), read_only=True)['Contratos']
+    assert sheet.cell(2, 12).value.date() == date(2026, 10, 15)
+    assert sheet.cell(2, 13).value == '09/2026'
+
+    result = http.post(PREFIX + '/generate', params={
+        **params, 'contract_ids': contrato.id,
+        'uninstall_event_ids': event.id, 'charge_item_ids': charge.id,
+    })
+    assert result.status_code == 200, result.text
+    assert result.json()['reference_month'] == '2026-09'
+    assert result.json()['billing_month'] == '10/2026'
+    billings = db.scalars(select(Billing).where(
+        Billing.id.in_(
+            result.json()['billing_ids']
+            + result.json()['uninstall_billing_ids']
+            + result.json()['service_billing_ids']
+        )
+    )).all()
+    assert len(billings) == 3
+    assert {billing.due_date for billing in billings} == {date(2026, 10, 15)}
+
+    again = http.get(PREFIX + '/simulate', params=params)
+    assert again.json()['to_generate'] == 0
+    assert again.json()['uninstall_events'] == []
+    assert again.json()['charge_items'] == []
+
+
+def test_service_month_includes_first_and_final_prorata_in_next_month(
+    http, db, cliente, plan,
+):
+    installed = Contract(
+        client_id=cliente.id, plan_id=plan.id, start_date=date(2026, 9, 11),
+        status='ativo', billing_day=10,
+    )
+    uninstalled = Contract(
+        client_id=cliente.id, plan_id=plan.id, start_date=date(2026, 1, 1),
+        end_date=date(2026, 9, 10), uninstalled_at=date(2026, 9, 10),
+        status='cancelado', billing_day=10,
+    )
+    db.add_all([installed, uninstalled])
+    db.commit()
+
+    response = http.get(PREFIX + '/simulate', params={'service_month': '2026-09'})
+    assert response.status_code == 200, response.text
+    rows = {item['contract_id']: item for item in response.json()['items']}
+    assert rows[installed.id]['due_date'] == '2026-10-10'
+    assert rows[installed.id]['prorated_days'] == 20
+    assert rows[uninstalled.id]['due_date'] == '2026-10-10'
+    assert rows[uninstalled.id]['prorated_days'] == 10
+
+
+def test_december_service_month_is_due_in_january(http, db, cliente, plan):
+    contract = Contract(
+        client_id=cliente.id, plan_id=plan.id, start_date=date(2026, 1, 1),
+        status='ativo', billing_day=15,
+    )
+    db.add(contract)
+    db.commit()
+
+    response = http.get(PREFIX + '/simulate', params={'service_month': '2026-12'})
+    assert response.status_code == 200, response.text
+    assert response.json()['billing_month'] == '01/2027'
+    assert response.json()['items'][0]['due_date'] == '2027-01-15'
+
+
+def test_service_month_keeps_contract_ending_in_service_month(http, db, cliente, plan):
+    contract = Contract(
+        client_id=cliente.id, plan_id=plan.id, start_date=date(2026, 1, 1),
+        end_date=date(2026, 9, 30), status='ativo', billing_day=15,
+    )
+    db.add(contract)
+    db.commit()
+
+    response = http.get(PREFIX + '/simulate', params={'service_month': '2026-09'})
+    assert response.status_code == 200, response.text
+    assert response.json()['items'][0]['due_date'] == '2026-10-15'
+
+
+def test_remaining_service_installment_starts_in_next_month(http, db, cliente, contrato):
+    charge = ClientChargeItem(
+        client_id=cliente.id, contract_id=contrato.id, title='Serviço parcelado',
+        quantity=1, unit_price=Decimal('60.00'), total_amount=Decimal('60.00'),
+        installment_count=2, start_date=date(2026, 9, 20), active=True,
+    )
+    db.add(charge)
+    db.flush()
+    db.add(Billing(
+        client_id=cliente.id, contract_id=contrato.id, item_id=charge.id,
+        title='Serviço parcelado 1/2', billing_type='item', amount=Decimal('30.00'),
+        due_date=date(2026, 9, 20), period_label='09/2026',
+        installment_number=1, installment_total=2, status=BillingStatus.PAID,
+    ))
+    db.commit()
+
+    result = http.post(PREFIX + '/generate', params={
+        'service_month': '2026-09', 'contract_ids': -1,
+        'uninstall_event_ids': -1, 'charge_item_ids': charge.id,
+    })
+    assert result.status_code == 200, result.text
+    assert result.json()['services_generated'] == 1
+    generated = db.get(Billing, result.json()['service_billing_ids'][0])
+    assert generated.installment_number == 2
+    assert generated.due_date == date(2026, 10, 15)
 
 
 # ---------------------------------------------------------------------------

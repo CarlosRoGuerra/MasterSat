@@ -471,7 +471,7 @@ def generate_closure_xlsx(simulation: dict) -> BytesIO:
             produtos,
             float(it.get('total_first_billing') or 0),
             it.get('due_date'),
-            it.get('period_label') or '',
+            it.get('service_period_label') or it.get('period_label') or '',
             'Sim' if it.get('already_generated') else 'Não',
         ]
         for ci, val in enumerate(valores, 1):

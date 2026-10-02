@@ -75,7 +75,9 @@ def uninstall_fee_for_event(db: Session, event: UninstallEvent) -> tuple[Decimal
     return fee_amount, (product.name if product else 'Taxa de desinstalação')
 
 
-def _due_date_for_uninstall_event(event: UninstallEvent, db: Session) -> date:
+def _due_date_for_uninstall_event(
+    event: UninstallEvent, db: Session, billing_month: date | None = None,
+) -> date:
     contract = db.get(Contract, event.contract_id) if event.contract_id else None
     client = db.get(Client, event.client_id)
     billing_day = (
@@ -83,6 +85,11 @@ def _due_date_for_uninstall_event(event: UninstallEvent, db: Session) -> date:
         or (client.billing_day if client and client.billing_day else None)
         or 1
     )
+    if billing_month is not None:
+        return date(
+            billing_month.year, billing_month.month,
+            min(billing_day, monthrange(billing_month.year, billing_month.month)[1]),
+        )
     dim = monthrange(event.uninstall_date.year, event.uninstall_date.month)[1]
     fee_billing_day = min(billing_day, dim)
     due = date(event.uninstall_date.year, event.uninstall_date.month, fee_billing_day)

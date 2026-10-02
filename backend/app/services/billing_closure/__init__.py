@@ -77,12 +77,14 @@ def simulate_closure(
     client_id: int | None = None,
     *,
     commit: bool = True,
+    activity_month: date | None = None,
 ) -> dict:
     # commit=False quando chamada de dentro de execute_closure: o refresh abaixo
     # comitava e, com isso, encerrava a transação que segura o lock da
     # competência — na prática o lock morria aqui, antes de qualquer cobrança
     # ser criada.
     refresh_overdue_statuses(db, commit=commit)
+    activity_month = activity_month or reference_month
 
     # Cliente que responde pela cobrança (interveniente). Sem ele, o próprio
     # cliente do contrato é o responsável — é por ele que o relatório agrupa.
@@ -103,7 +105,7 @@ def simulate_closure(
         Contract.status == 'ativo',
         # Contrato com vigência já encerrada antes do mês de referência não entra
         # no fechamento — senão sairia boleto/NFS-e de um contrato que acabou.
-        or_(Contract.end_date.is_(None), Contract.end_date >= reference_month),
+        or_(Contract.end_date.is_(None), Contract.end_date >= activity_month),
     )
 
     if filter_type == 'pf':
@@ -286,7 +288,7 @@ def simulate_closure(
     # Eventos de desinstalação vencidos até esta competência. Valores pequenos
     # são acumulados por cliente; nunca mais viram perda terminal em ``skipped``.
     uninstall_events = _pending_uninstall_events_for_month(
-        db, reference_month, filter_type, client_id,
+        db, activity_month, filter_type, client_id,
     )
     uninstall_amounts = {
         event.id: uninstall_fee_for_event(db, event)[0]
@@ -335,7 +337,7 @@ def simulate_closure(
 
     # Serviços / cobranças avulsas pendentes (exclui os embutidos)
     charge_items = _pending_charge_items(
-        db, reference_month, exclude_ids=embedded_ids,
+        db, activity_month, exclude_ids=embedded_ids,
         filter_type=filter_type, client_id=client_id,
     )
 
@@ -369,13 +371,19 @@ def execute_closure(
     contract_ids: list[int] | None = None,
     uninstall_event_ids: list[int] | None = None,
     charge_item_ids: list[int] | None = None,
+    *,
+    activity_month: date | None = None,
 ) -> dict:
     # Trava a competência ANTES de simular: simulação + geração ficam atômicas em
     # relação a outro fechamento do mesmo mês, fechando a corrida de duplicação.
     # O lock é de TRANSAÇÃO (pg_advisory_xact_lock), então nada daqui até o
     # commit final pode comitar — daí o commit=False propagado abaixo.
     _lock_competencia(db, reference_month)
-    simulation = simulate_closure(db, reference_month, filter_type, client_id, commit=False)
+    activity_month = activity_month or reference_month
+    simulation = simulate_closure(
+        db, reference_month, filter_type, client_id,
+        commit=False, activity_month=activity_month,
+    )
     # Ao receber qualquer lista de seleção, opera em modo snapshot/fail-closed:
     # categorias omitidas significam seleção vazia, não "processar tudo". Sem
     # lista alguma preservamos o comando administrativo de fechamento integral.
@@ -638,7 +646,7 @@ def execute_closure(
     allowed_event_ids = {item['event_id'] for item in selected_uninstall_items}
     uninstall_events = [
         event for event in _pending_uninstall_events_for_month(
-            db, reference_month, filter_type, client_id,
+            db, activity_month, filter_type, client_id,
         )
         if event.id in allowed_event_ids
     ]
@@ -663,7 +671,12 @@ def execute_closure(
             deferred_events += len(events)
             continue
 
-        due_date = max(_due_date_for_uninstall_event(event, db) for event in events)
+        due_date = max(
+            _due_date_for_uninstall_event(
+                event, db, reference_month if activity_month != reference_month else None,
+            )
+            for event in events
+        )
         # Só associa a cobrança agregada a um contrato quando TODOS os eventos
         # pertencem explicitamente ao mesmo contrato. Misturar evento sem
         # contrato com evento contratado e escolher o único ID conhecido
@@ -724,7 +737,20 @@ def execute_closure(
         item_obj = db.get(ClientChargeItem, charge_item_dict['item_id'])
         if item_obj:
             try:
-                new_billings = generate_item_billings(db, item_obj, commit=False)
+                if activity_month != reference_month:
+                    charge_contract = db.get(Contract, item_obj.contract_id) if item_obj.contract_id else None
+                    charge_client = db.get(Client, item_obj.client_id)
+                    billing_day = (
+                        (charge_contract.billing_day if charge_contract else None)
+                        or (charge_client.billing_day if charge_client else None)
+                        or min(item_obj.start_date.day, 28)
+                    )
+                    first_due_date = normalize_due_date(reference_month, 0, billing_day, 1)
+                    new_billings = generate_item_billings(
+                        db, item_obj, commit=False, first_due_date=first_due_date,
+                    )
+                else:
+                    new_billings = generate_item_billings(db, item_obj, commit=False)
             except InstallmentSplitError as exc:
                 raise ValueError(f'Lançamento #{item_obj.id}: {exc}') from exc
             if not new_billings:
