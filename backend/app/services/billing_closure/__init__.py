@@ -356,6 +356,14 @@ def simulate_closure(
     total_amount = sum(i['total_first_billing'] for i in to_generate)
     total_uninstall = sum(i['fee_amount'] for i in uninstall_items if not i['deferred'])
     total_services = sum(i['amount_to_generate'] for i in charge_items)
+    payer_ids = {
+        entry['payer_client_id']
+        for entry in (*items, *uninstall_items, *charge_items)
+    }
+    payer_formats = {
+        payer.id: payer.boleto_format or 'unico'
+        for payer in db.scalars(select(Client).where(Client.id.in_(payer_ids))).all()
+    } if payer_ids else {}
 
     return {
         'reference_month': reference_month.strftime('%m/%Y'),
@@ -369,6 +377,7 @@ def simulate_closure(
         'charge_items': charge_items,
         'total_services': round(total_services, 2),
         'grand_total': round(total_amount + total_uninstall + total_services, 2),
+        'payer_boleto_formats': payer_formats,
     }
 
 

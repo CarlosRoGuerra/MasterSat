@@ -386,6 +386,8 @@ class TestBoletoUnico:
         _make_active_contract(db, cliente, plan)
         db.commit()
 
+        preview = simulate_closure(db, REF_MONTH)
+        assert preview['payer_boleto_formats'][cliente.id] == 'unico'
         result = execute_closure(db, REF_MONTH)
         assert result['consolidated_unico'] == 1
         assert result['payment_titles_generated'] == 1
@@ -397,6 +399,8 @@ class TestBoletoUnico:
         _make_active_contract(db, cliente, plan)
         db.commit()
 
+        preview = simulate_closure(db, REF_MONTH)
+        assert preview['payer_boleto_formats'][cliente.id] == 'individual'
         result = execute_closure(db, REF_MONTH)
         assert result['consolidated_unico'] == 0
         assert result['payment_titles_generated'] == 2

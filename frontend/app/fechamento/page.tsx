@@ -32,6 +32,7 @@ type ClosureItem = {
   contract_id: number;
   client_id: number;
   client_name: string;
+  payer_client_id: number;
   payer_name?: string;
   client_type: string;
   vehicle_plate: string | null;
@@ -56,6 +57,7 @@ type UninstallEventItem = {
   event_id: number;
   client_id: number;
   client_name: string;
+  payer_client_id: number;
   payer_name?: string;
   client_type: string;
   vehicle_plate: string | null;
@@ -72,6 +74,7 @@ type ChargeItem = {
   item_id: number;
   client_id: number;
   client_name: string;
+  payer_client_id: number;
   payer_name?: string;
   client_type: string;
   vehicle_plate: string | null;
@@ -100,6 +103,7 @@ type Simulation = {
   charge_items: ChargeItem[];
   total_services: number;
   grand_total: number;
+  payer_boleto_formats: Record<number, string>;
 };
 
 type GenerateResult = {
@@ -458,15 +462,40 @@ export default function FechamentoPage() {
       desinstalacoes.filter((e) => !e.deferred).length > 0 ||
       chargeItems.length > 0);
 
+  // A prévia agrupa os itens selecionados com a mesma regra do fechamento.
+  const titleGroups = new Map<string, { payerName: string; amountCents: number; itemCount: number }>();
+  function addPreviewItem(payerId: number, payerName: string, amount: number, individualKey: string) {
+    const individual = simulation?.payer_boleto_formats?.[payerId] === 'individual';
+    const key = individual ? `${payerId}:${individualKey}` : String(payerId);
+    const group = titleGroups.get(key) ?? { payerName, amountCents: 0, itemCount: 0 };
+    group.amountCents += Math.round(amount * 100);
+    group.itemCount += 1;
+    titleGroups.set(key, group);
+  }
+  for (const item of pendingRec) {
+    if (selectedContractIds.has(item.contract_id)) {
+      addPreviewItem(item.payer_client_id, item.payer_name || item.client_name,
+        item.total_first_billing, `contrato:${item.contract_id}`);
+    }
+  }
+  for (const event of desinstalacoes) {
+    if (!event.deferred) {
+      addPreviewItem(event.payer_client_id, event.payer_name || event.client_name,
+        event.fee_amount, 'taxa');
+    }
+  }
+  for (const item of chargeItems) {
+    addPreviewItem(item.payer_client_id, item.payer_name || item.client_name,
+      item.amount_to_generate, `servico:${item.item_id}`);
+  }
+  const previewTitles = [...titleGroups.values()].sort((a, b) =>
+    a.payerName.localeCompare(b.payerName, 'pt-BR'));
+
   /* ── Confirm button label ── */
   function confirmLabel() {
-    if (!simulation) return 'Nada a gerar';
-    const parts: string[] = [];
-    if (selectedContractIds.size > 0) parts.push(`${selectedContractIds.size} mensalidade(s)`);
-    const taxas = desinstalacoes.filter((e) => !e.deferred).length;
-    if (taxas > 0) parts.push(`${taxas} taxa(s)`);
-    if (chargeItems.length > 0) parts.push(`${chargeItems.length} serviço(s)`);
-    return parts.length ? `Confirmar e gerar: ${parts.join(' + ')}` : 'Nada a gerar';
+    return previewTitles.length
+      ? `Confirmar e gerar: ${previewTitles.length} título(s)`
+      : 'Nada a gerar';
   }
 
   return (
@@ -573,7 +602,7 @@ export default function FechamentoPage() {
               icon={<FileText className="h-5 w-5" />}
             />
             <MetricCard
-              label="Mensalidades a gerar"
+              label="Mensalidades a incluir"
               value={
                 <span className={simulation.to_generate > 0 ? 'text-amber-600 dark:text-amber-400' : ''}>
                   {simulation.to_generate}
@@ -615,12 +644,33 @@ export default function FechamentoPage() {
             />
           </section>
 
+          <Card className="mb-5">
+            <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+              <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+                Títulos previstos ({previewTitles.length})
+              </h3>
+              <span className="text-xs text-slate-500">Um título por responsável com boleto único; os itens aparecem detalhados no PDF.</span>
+            </div>
+            {previewTitles.length > 0 ? (
+              <div className="max-h-64 divide-y divide-slate-100 overflow-y-auto dark:divide-slate-800">
+                {previewTitles.map((group, index) => (
+                  <div key={`${group.payerName}-${index}`} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
+                    <span className="font-medium text-slate-700 dark:text-slate-200">
+                      {group.payerName} <span className="font-normal text-slate-500">· {group.itemCount} lançamento(s)</span>
+                    </span>
+                    <span className="font-semibold text-slate-900 dark:text-white">{fmt(group.amountCents / 100)}</span>
+                  </div>
+                ))}
+              </div>
+            ) : <p className="text-sm text-slate-500">Nenhum lançamento selecionado.</p>}
+          </Card>
+
           {/* Mensalidades */}
           <Card className="mb-5">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
               <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-700 dark:text-slate-200">
                 <ClipboardList className="h-4 w-4 text-brand-500" />
-                Mensalidades recorrentes ({recorrentes.length})
+                Itens de mensalidade ({recorrentes.length})
               </h3>
               <div className="flex items-center gap-4">
                 <label className="flex cursor-pointer select-none items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
