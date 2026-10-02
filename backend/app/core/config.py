@@ -55,6 +55,11 @@ class Settings(BaseSettings):
     # workers uvicorn. Sem isto cada worker mantém seu próprio contador em
     # memória e o limite efetivo vira (limite x workers).
     redis_url: str = 'redis://redis:6379/0'
+    # Dedicated durable Redis stream for audit events. Separate from rate
+    # limiting so appendfsync=always does not slow every limiter operation.
+    audit_redis_url: str = 'redis://redis-audit:6379/0'
+    audit_queue_enabled: bool = True
+    run_background_jobs: bool = True
     # Teto de tamanho de requisição/upload (bytes). Protege contra upload gigante
     # que estouraria a memória (o arquivo é lido inteiro para o MinIO). 25 MB.
     max_upload_bytes: int = 25 * 1024 * 1024

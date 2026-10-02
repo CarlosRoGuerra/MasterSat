@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { Shield, RefreshCw, AlertTriangle, Users, Activity } from 'lucide-react';
 
 import { PageShell } from '@/components/page-shell';
@@ -8,11 +9,12 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Table, TableHead, Th, TableBody, Tr, Td } from '@/components/ui/table';
 import { EmptyState, TableSkeleton } from '@/components/ui/empty-state';
-import { usePagination, Pagination } from '@/components/ui/pagination';
+import { Pagination } from '@/components/ui/pagination';
 import { MetricCard } from '@/components/ui/metric-card';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { apiFetch } from '@/lib/api';
 import { useAuthGuard } from '@/lib/use-auth-guard';
+import { useDebouncedValue } from '@/lib/use-debounced-value';
 import { ROUTE_ROLES } from '@/lib/route-roles';
 
 type AuditLog = {
@@ -28,6 +30,15 @@ type AuditLog = {
   ip_address?: string | null;
   description?: string | null;
   created_at?: string | null;
+};
+
+type AuditPage = {
+  items: AuditLog[];
+  total: number;
+  today_count: number;
+  error_count: number;
+  unique_users: number;
+  entity_types: string[];
 };
 
 /* ── Translations ─────────────────────────────────────────────────────────── */
@@ -106,66 +117,48 @@ const fieldClass = 'rounded-xl border border-slate-200 bg-white px-3 py-2 text-s
 /* ── Page ─────────────────────────────────────────────────────────────────── */
 
 export default function AuditoriaPage() {
-  const { token, loading: guardLoading, error: guardError } = useAuthGuard(ROUTE_ROLES['/auditoria'], '/login/admin');
+  const { token, user, loading: guardLoading, error: guardError } = useAuthGuard(ROUTE_ROLES['/auditoria'], '/login/admin');
 
-  const [logs, setLogs] = useState<AuditLog[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
   const [search, setSearch] = useState('');
   const [methodFilter, setMethodFilter] = useState('');
   const [entityFilter, setEntityFilter] = useState('');
   const [roleFilter, setRoleFilter] = useState('');
-
-  async function loadLogs(t: string) {
-    setLoading(true);
-    setError('');
-    try {
-      const params = new URLSearchParams({ limit: '500' });
+  const [page, setPage] = useState(1);
+  const searchDebounced = useDebouncedValue(search);
+  const auditQuery = useQuery({
+    queryKey: ['auditLogs', user?.id, page, searchDebounced, methodFilter, entityFilter, roleFilter],
+    queryFn: () => {
+      const params = new URLSearchParams({ skip: String((page - 1) * 50), limit: '50' });
+      if (searchDebounced.trim()) params.set('search', searchDebounced.trim());
       if (methodFilter) params.set('method', methodFilter);
       if (entityFilter) params.set('entity_type', entityFilter);
       if (roleFilter) params.set('user_role', roleFilter);
-      const data = await apiFetch<AuditLog[]>(`/audit-logs?${params}`, {}, t);
-      setLogs(data);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Erro ao carregar registros.');
-    } finally {
-      setLoading(false);
-    }
-  }
-
+      return apiFetch<AuditPage>(`/audit-logs/paged?${params}`, {}, token!);
+    },
+    placeholderData: keepPreviousData,
+    enabled: !!token && !!user,
+  });
+  const logs = auditQuery.data?.items ?? [];
+  const total = auditQuery.data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / 50));
+  const pag = {
+    page, setPage, totalPages, total, slice: logs,
+    start: total === 0 ? 0 : (page - 1) * 50 + 1,
+    end: Math.min(page * 50, total),
+  };
   useEffect(() => {
-    if (token) loadLogs(token);
-  }, [token]);
-
-  const filtered = useMemo(() => {
-    if (!search.trim()) return logs;
-    const q = search.trim().toLowerCase();
-    return logs.filter(
-      (l) =>
-        l.description?.toLowerCase().includes(q) ||
-        l.user_name?.toLowerCase().includes(q) ||
-        l.path?.toLowerCase().includes(q) ||
-        l.entity_type?.toLowerCase().includes(q),
-    );
-  }, [logs, search]);
-
-  const entityTypes = useMemo(
-    () => [...new Set(logs.map((l) => l.entity_type).filter(Boolean))].sort(),
-    [logs],
-  );
-
-  const stats = useMemo(() => {
-    const todayStr = new Date().toDateString();
-    return {
-      todayCount: logs.filter((l) => l.created_at && new Date(l.created_at).toDateString() === todayStr).length,
-      errorCount: logs.filter((l) => l.status_code && l.status_code >= 400).length,
-      uniqueUsers: new Set(logs.map((l) => l.user_id).filter(Boolean)).size,
-    };
-  }, [logs]);
-
-  const pag = usePagination(filtered, 50);
-
-  useEffect(() => { pag.reset(); }, [filtered.length]);
+    if (!auditQuery.isPlaceholderData && page > totalPages) setPage(totalPages);
+  }, [auditQuery.isPlaceholderData, page, totalPages]);
+  const entityTypes = auditQuery.data?.entity_types ?? [];
+  const stats = {
+    todayCount: auditQuery.data?.today_count ?? 0,
+    errorCount: auditQuery.data?.error_count ?? 0,
+    uniqueUsers: auditQuery.data?.unique_users ?? 0,
+  };
+  const loading = auditQuery.isPending && !auditQuery.data;
+  const error = auditQuery.isError
+    ? (auditQuery.error instanceof Error ? auditQuery.error.message : 'Erro ao carregar registros.')
+    : '';
 
   return (
     <PageShell
@@ -179,12 +172,12 @@ export default function AuditoriaPage() {
       )}
 
       {/* ── KPIs ──────────────────────────────────────────────────────────── */}
-      {logs.length > 0 && (
+      {total > 0 && (
         <section className="mb-6 grid gap-5 sm:grid-cols-3">
           <MetricCard
             label="Ações hoje"
             value={stats.todayCount}
-            sub={`${logs.length} registros carregados`}
+            sub={`${total} registros encontrados`}
             icon={<Activity className="h-5 w-5" />}
           />
           <MetricCard
@@ -211,13 +204,13 @@ export default function AuditoriaPage() {
               className={`${fieldClass} w-full`}
               placeholder="Usuário, ação, rota…"
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => { setSearch(e.target.value); setPage(1); }}
             />
           </div>
 
           <div>
             <p className="mb-1.5 text-xs font-semibold text-slate-500 dark:text-slate-400">Tipo de operação</p>
-            <select className={fieldClass} value={methodFilter} onChange={(e) => setMethodFilter(e.target.value)}>
+            <select className={fieldClass} value={methodFilter} onChange={(e) => { setMethodFilter(e.target.value); setPage(1); }}>
               <option value="">Todas</option>
               <option value="GET">Consultas</option>
               <option value="POST">Criações</option>
@@ -228,7 +221,7 @@ export default function AuditoriaPage() {
 
           <div>
             <p className="mb-1.5 text-xs font-semibold text-slate-500 dark:text-slate-400">Recurso</p>
-            <select className={fieldClass} value={entityFilter} onChange={(e) => setEntityFilter(e.target.value)}>
+            <select className={fieldClass} value={entityFilter} onChange={(e) => { setEntityFilter(e.target.value); setPage(1); }}>
               <option value="">Todos</option>
               {entityTypes.map((e) => (
                 <option key={e} value={e!}>{friendlyEntity(e)}</option>
@@ -238,7 +231,7 @@ export default function AuditoriaPage() {
 
           <div>
             <p className="mb-1.5 text-xs font-semibold text-slate-500 dark:text-slate-400">Perfil</p>
-            <select className={fieldClass} value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)}>
+            <select className={fieldClass} value={roleFilter} onChange={(e) => { setRoleFilter(e.target.value); setPage(1); }}>
               <option value="">Todos</option>
               <option value="admin">Administrador</option>
               <option value="operacional">Operacional</option>
@@ -249,11 +242,11 @@ export default function AuditoriaPage() {
 
           <Button
             variant="secondary"
-            onClick={() => token && loadLogs(token)}
-            disabled={loading || guardLoading}
+            onClick={() => auditQuery.refetch()}
+            disabled={auditQuery.isFetching || guardLoading}
             className="gap-2 shrink-0"
           >
-            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`h-4 w-4 ${auditQuery.isFetching ? 'animate-spin' : ''}`} />
             Atualizar
           </Button>
         </div>
@@ -264,7 +257,7 @@ export default function AuditoriaPage() {
             <TableSkeleton rows={10} cols={5} />
           ) : error ? (
             <EmptyState icon={AlertTriangle} tone="warning" title="Não foi possível carregar a auditoria" description="Veja o erro acima e tente novamente." />
-          ) : filtered.length === 0 ? (
+          ) : logs.length === 0 ? (
             <EmptyState
               icon={Shield}
               title="Nenhum registro encontrado"
@@ -356,7 +349,7 @@ export default function AuditoriaPage() {
           )}
         </div>
 
-        {filtered.length > 0 && (
+        {total > 0 && (
           <Pagination
             page={pag.page}
             totalPages={pag.totalPages}

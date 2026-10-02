@@ -27,6 +27,12 @@ services:
     # toda requisição — sem auto-restart, uma queda do container derrubava o
     # rate limiting da aplicação inteira até alguém perceber e subir na mão.
 
+  redis-audit:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "always", "--maxmemory-policy", "noeviction"]
+    volumes: ["audit_redis_data:/data"]
+
   minio:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
@@ -47,6 +53,7 @@ services:
     depends_on:
       db: { condition: service_healthy }
       redis: { condition: service_started }
+      redis-audit: { condition: service_started }
       minio: { condition: service_started }
     volumes:
       - "./backend:/app"
@@ -135,6 +142,7 @@ services:
     profiles: ["backup"]
 
 volumes:
+  audit_redis_data:
   postgres_data:
   minio_data:
   backup_data:

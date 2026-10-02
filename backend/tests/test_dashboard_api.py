@@ -13,6 +13,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
+from fastapi import Response
 from sqlalchemy import event
 
 from app.api.v1.endpoints.dashboard import dashboard
@@ -32,7 +33,7 @@ class TestDashboard:
 
         event.listen(db.bind, 'before_cursor_execute', count_selects)
         try:
-            result = dashboard(db=db, current_user=SimpleNamespace(role=UserRole.ADMIN))
+            result = dashboard(response=Response(), db=db, current_user=SimpleNamespace(role=UserRole.ADMIN))
         finally:
             event.remove(db.bind, 'before_cursor_execute', count_selects)
 

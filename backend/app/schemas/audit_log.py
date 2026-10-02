@@ -17,3 +17,12 @@ class AuditLogOut(BaseModel):
     created_at: datetime | None = None
 
     model_config = {'from_attributes': True}
+
+
+class AuditLogPage(BaseModel):
+    items: list[AuditLogOut]
+    total: int
+    today_count: int
+    error_count: int
+    unique_users: int
+    entity_types: list[str]

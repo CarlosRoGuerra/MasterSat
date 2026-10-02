@@ -9,19 +9,23 @@ Esta implementação:
   - Usa o protocolo ASGI diretamente (nenhuma dependência de BaseHTTPMiddleware)
   - Captura o status_code do próprio cabeçalho da resposta
   - Registra o log APÓS a resposta ser enviada ao cliente
-  - Usa asyncio.create_task + asyncio.to_thread para não bloquear o event loop
-  - Nunca interrompe a resposta principal; erros de auditoria vão apenas ao log
+  - Usa asyncio.to_thread para não bloquear o event loop
+  - Enfileira em Redis persistente; falha na fila aciona fallback no banco
+  - Nunca interrompe a resposta principal; falha dupla gera log crítico
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timezone
+from uuid import uuid4
 
 from app.core.security import JWTError, decode_token
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.core.client_ip import client_ip_from_scope
 from app.core.config import settings
+from app.core.dashboard_cache import invalidate_dashboard
 
 logger = logging.getLogger(__name__)
 
@@ -132,9 +136,32 @@ def _write_log(
     """
     Função síncrona executada em thread pool (via asyncio.to_thread).
 
-    Se name/role não estiverem no token (tokens antigos), busca no banco
-    antes de persistir o log — tudo em uma única sessão.
+    Enfileira o evento e retorna. Se a fila falhar, grava diretamente no banco.
+    Tokens antigos sem name/role são enriquecidos no worker ou no fallback.
     """
+    event_id = str(uuid4())
+    created_at = datetime.now(timezone.utc)
+    if settings.audit_queue_enabled and not settings.database_url.startswith('sqlite'):
+        try:
+            from app.core.audit_queue import enqueue_event
+            enqueue_event({
+                'event_id': event_id,
+                'created_at': created_at.isoformat(),
+                'user_id': user_id,
+                'user_name': user_name,
+                'user_role': user_role,
+                'method': method,
+                'path': path,
+                'entity_type': entity_type,
+                'entity_id': entity_id,
+                'status_code': status_code,
+                'ip_address': ip_address,
+                'description': description,
+            })
+            return
+        except Exception:
+            logger.exception('Audit queue unavailable; falling back to direct database write')
+
     from app.db.session import SessionLocal
     from app.models.audit_log import AuditLog
     from app.models.user import User
@@ -155,6 +182,8 @@ def _write_log(
             _user_name, _user_role = user_name, user_role
 
         db.add(AuditLog(
+            event_id=event_id,
+            created_at=created_at,
             user_id=user_id,
             user_name=_user_name,
             user_role=_user_role,
@@ -168,7 +197,7 @@ def _write_log(
         ))
         db.commit()
     except Exception:
-        logger.exception('Erro ao gravar log de auditoria no banco')
+        logger.critical('Audit database fallback failed; event_id=%s', event_id, exc_info=True)
         try:
             db.rollback()
         except Exception:  # noqa: BLE001 — já estamos no tratamento de erro; não há mais para onde escalar
@@ -188,7 +217,7 @@ class AuditMiddleware:
     Fluxo:
     1. Extrai Authorization dos headers ANTES de chamar o app
     2. Captura o status_code do message 'http.response.start'
-    3. Após a resposta ser enviada, agenda asyncio.create_task com o log
+    3. Após a resposta ser enviada, enfileira o log via asyncio.to_thread
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -220,6 +249,14 @@ class AuditMiddleware:
 
         # Executa a aplicação
         await self.app(scope, receive, send_capture)
+
+        # Mutations via the API invalidate aggregate snapshots for every role.
+        # Scheduler changes are covered by the short (20s) TTL.
+        if method in {'POST', 'PUT', 'PATCH', 'DELETE'} and status_code < 400 and path.startswith((
+            '/api/v1/clients', '/api/v1/vehicles', '/api/v1/trackers',
+            '/api/v1/service-orders', '/api/v1/billings',
+        )):
+            await asyncio.to_thread(invalidate_dashboard)
 
         # ── A partir daqui a resposta já foi enviada ao cliente ──
 
