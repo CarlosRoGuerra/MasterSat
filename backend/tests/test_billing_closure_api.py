@@ -105,6 +105,61 @@ def test_september_service_closure_is_due_in_october(
     assert again.json()['charge_items'] == []
 
 
+def test_recibo_e_nfse_do_boleto_unico_discriminam_servicos_de_setembro(
+    http, db, cliente, plan, veiculo, monkeypatch,
+):
+    from pypdf import PdfReader
+
+    from app.services.billing_closure import execute_closure
+    from app.services import nfse_provider
+
+    contracts = [Contract(
+        client_id=cliente.id, plan_id=plan.id, vehicle_id=veiculo.id,
+        start_date=date(2026, 1, 1), status='ativo', billing_day=15,
+    ) for _ in range(4)]
+    db.add_all(contracts)
+    db.commit()
+
+    result = execute_closure(db, date(2026, 10, 1), activity_month=date(2026, 9, 1))
+    assert result['payment_titles_generated'] == 1
+    parent = db.get(Billing, result['payment_billing_ids'][0])
+    assert parent.period_label == '09/2026'
+    assert parent.title.startswith('Fechamento 09/2026')
+    assert parent.due_date == date(2026, 10, 15)
+
+    description = nfse_provider.descricao_fechamento(db, parent)
+    assert 'competência 09/2026' in description
+    assert description.count('PLACA:') == 4
+    assert description.count('R$ 99,90') == 4
+    captured = {}
+    class Provider:
+        @staticmethod
+        def emitir_nfse(*args, **kwargs):
+            captured.update(kwargs)
+            return 'simulada'
+    monkeypatch.setattr(nfse_provider, 'modulo', lambda: Provider)
+    assert nfse_provider.emitir_nfse(db, parent, cliente) == 'simulada'
+    assert captured['discriminacao'] == description
+    assert captured['competencia'] is None  # data oficial fica a da emissão
+
+    parent.status = BillingStatus.PAID
+    parent.payment_date = date(2026, 10, 15)
+    parent.paid_amount = parent.amount
+    db.commit()
+    response = http.get(f'/api/v1/billings/{parent.id}/receipt')
+    assert response.status_code == 200, response.text
+    pages = PdfReader(BytesIO(response.content)).pages
+    assert len(pages) == 2
+    first = pages[0].extract_text()
+    detail = pages[1].extract_text()
+    assert 'MAIS 2 ITENS' in first
+    assert 'PLACA' in first
+    assert 'REF. 09/2026' in first
+    assert 'FECHAMENTO 09/2026 - BOLETO' not in first
+    assert 'DETALHAMENTO DO RECIBO' in detail
+    assert detail.count('REF. 09/2026') == 4
+
+
 def test_service_month_includes_first_and_final_prorata_in_next_month(
     http, db, cliente, plan,
 ):

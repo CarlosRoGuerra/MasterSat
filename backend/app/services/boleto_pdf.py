@@ -84,6 +84,31 @@ def _itens_resumidos(itens: list[tuple[str, float]]) -> list[tuple[str, float]]:
     return [*itens[:2], (f"MAIS {len(itens) - 2} ITENS - VER DETALHAMENTO ANEXO",
                          sum(float(valor) for _, valor in itens[2:]))]
 
+
+def _rotulo_item_tabela(descricao: str, largura: float) -> str:
+    """Mantém placa e período visíveis na linha curta do recibo."""
+    import re
+
+    texto = str(descricao or '').upper()
+    if stringWidth(texto, 'Helvetica', 7.5) <= largura:
+        return texto
+    placa = re.search(r'PLACA[:\s\u00a0]+([A-Z0-9]+)', texto)
+    periodo = re.search(r'REF\.\s*(\d{2}/\d{4})', texto)
+    if placa:
+        tipo = texto.split(' · ', 1)[0]
+        if 'PRÓ-RATA' in tipo:
+            tipo = 'MENSALIDADE PRÓ-RATA'
+        elif 'MENSALIDADE' in tipo:
+            tipo = 'MENSALIDADE'
+        elif 'DESINSTALAÇÃO' in tipo:
+            tipo = 'TAXA DE DESINSTALAÇÃO'
+        texto = f'{tipo} - PLACA {placa.group(1)}'
+        if periodo:
+            texto += f' - REF. {periodo.group(1)}'
+    while texto and stringWidth(texto, 'Helvetica', 7.5) > largura:
+        texto = texto[:-1]
+    return texto.rstrip()
+
 def _wrap(texto: str, font: str, size: float, max_width: float) -> list[str]:
     """Quebra o texto em linhas que cabem em max_width — evita que
     instruções longas invadam a área do QR Code do Pix, sem cortar o
@@ -397,7 +422,8 @@ def _draw_bloco_cobranca(c, d: DadosBoleto, y_top: float, *, titulo: str,
         base = y - H_TR + _mm(2)
         c.setFont("Helvetica", 7.5)
         c.drawCentredString(LM + cQ / 2, base, "1")
-        c.drawString(LM + cQ + _mm(1.5), base, str(desc or "")[:80].upper())
+        c.drawString(LM + cQ + _mm(1.5), base,
+                     _rotulo_item_tabela(str(desc or ''), cDESC - _mm(3)))
         c.drawRightString(LM + cQ + cDESC + cVU - _mm(1.5), base, f"R$ {_fv(val)}")
         c.drawRightString(LM + cQ + cDESC + cVU + cVT - _mm(1.5), base, f"R$ {_fv(val)}")
         y -= H_TR
@@ -605,6 +631,8 @@ def gerar_recibo_pdf(dados: DadosBoleto) -> bytes:
     c = pdfcanvas.Canvas(buf, pagesize=A4)
     c.setTitle(f"Recibo MASTERSAT - {dados.billing_id}")
     _draw_recibo(c, dados, _ft(12))
+    if dados.itens and len(dados.itens) > 3:
+        _draw_detalhamento_boleto(c, dados, titulo='DETALHAMENTO DO RECIBO')
     c.showPage()
     c.save()
     return buf.getvalue()
@@ -895,15 +923,17 @@ def _draw_recibo_pagador(c, d: DadosBoleto, y_top: float) -> float:
     return y
 
 
-def _draw_detalhamento_boleto(c, dados: DadosBoleto) -> None:
-    """Anexo do mesmo boleto, com todos os componentes e seus valores."""
+def _draw_detalhamento_boleto(
+    c, dados: DadosBoleto, *, titulo: str = 'DETALHAMENTO DO BOLETO',
+) -> None:
+    """Anexo do documento, com todos os componentes e seus valores."""
     itens = dados.itens or []
     c.showPage()
 
     def cabecalho() -> float:
         y = _ft(17)
         c.setFont('Helvetica-Bold', 13)
-        c.drawString(LM, y, 'DETALHAMENTO DO BOLETO')
+        c.drawString(LM, y, titulo)
         y -= _mm(8)
         c.setFont('Helvetica', 8)
         c.drawString(LM, y, f'Documento #{dados.billing_id} - Vencimento {_fd(dados.data_vencimento)}')

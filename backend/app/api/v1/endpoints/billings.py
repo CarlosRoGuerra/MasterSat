@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
-from sqlalchemy import and_, case, func, or_
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
@@ -487,7 +487,7 @@ def _billings_do_mesmo_recibo(db: Session, billing: Billing) -> list[Billing]:
     return rows or [billing]
 
 
-def _receipt_pdf(billings: list[Billing], client: Client | None) -> BytesIO:
+def _receipt_pdf(billings: list[Billing], client: Client | None, db: Session) -> BytesIO:
     """
     Recibo no layout aprovado pelo cliente (logo, CNPJ, dados da empresa, box
     do pagador, tabela de itens e assinatura) — o mesmo que sai no topo do
@@ -498,15 +498,28 @@ def _receipt_pdf(billings: list[Billing], client: Client | None) -> BytesIO:
     """
     from decimal import Decimal
 
+    from app.api.v1.endpoints.boletos import _itens_detalhados
     from app.services.boleto_ailos import DadosBoleto
     from app.services.boleto_pdf import gerar_recibo_pdf
 
     primeira = billings[0]
-    itens = [
-        (b.title or b.notes or 'Cobrança', decimal_to_float(b.paid_amount or b.amount))
-        for b in billings
-    ]
-    valor = Decimal(str(sum(item[1] for item in itens)))
+    itens: list[tuple[str, float]] = []
+    valor = Decimal('0.00')
+    for billing in billings:
+        paid = Decimal(str(billing.paid_amount or billing.amount))
+        valor += paid
+        has_components = db.scalar(select(Billing.id).where(
+            Billing.substituted_by_id == billing.id,
+            Billing.is_deleted.is_(False),
+        ).limit(1)) is not None
+        if has_components:
+            details = _itens_detalhados(billing, db)
+            itens.extend(details)
+            difference = paid - sum((Decimal(str(amount)) for _, amount in details), Decimal('0.00'))
+            if difference:
+                itens.append(('AJUSTE DO VALOR PAGO', float(difference)))
+        else:
+            itens.append((billing.title or billing.notes or 'Cobrança', float(paid)))
     endereco = ' '.join(filter(None, [
         (client.address_line if client else None),
         (client.address_number if client else None),
@@ -549,7 +562,7 @@ def download_receipt(item_id: int, db: Session = Depends(get_db), _: object = De
         db, billing, db.get(Client, billing.client_id), permitir_removido=True,
     )
     grupo = _billings_do_mesmo_recibo(db, billing)
-    buffer = _receipt_pdf(grupo, client)
+    buffer = _receipt_pdf(grupo, client, db)
     filename = f'recibo-{billing.receipt_number or item_id}.pdf'
     return StreamingResponse(buffer, media_type='application/pdf', headers={'Content-Disposition': f'inline; filename={filename}'})
 

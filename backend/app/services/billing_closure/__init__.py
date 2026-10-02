@@ -751,7 +751,10 @@ def execute_closure(
         total = sum((Decimal(str(b.amount)) for b in components), Decimal('0.00'))
         due_date = max(b.due_date for b in components)
         owners = {b.client_id for b in components}
-        period = reference_month.strftime('%m/%Y')
+        # Competência do título único é a do serviço; o vencimento continua
+        # no mês seguinte. As componentes conservam a competência técnica que
+        # protege cada contrato contra cobrança duplicada.
+        period = activity_month.strftime('%m/%Y')
         details = []
         for component in components:
             vehicle = db.get(Vehicle, component.vehicle_id) if component.vehicle_id else None
@@ -770,7 +773,7 @@ def execute_closure(
             status=BillingStatus.PENDING if due_date >= hoje() else BillingStatus.OVERDUE,
             period_label=period,
             payment_method=components[0].payment_method,
-            notes=f'Itens do boleto único ({period}): ' + ' | '.join(details),
+            notes=f'Período de serviço: {period} | Itens do boleto único ({period}): ' + ' | '.join(details),
         )
         db.add(unico)
         db.flush()

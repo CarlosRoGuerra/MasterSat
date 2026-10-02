@@ -89,7 +89,9 @@ _TIPO_SERVICO = {
 }
 
 
-def descricao_servico(b: Billing, placa: str | None = None) -> str:
+def descricao_servico(
+    b: Billing, placa: str | None = None, period_label: str | None = None,
+) -> str:
     """
     Descreve o que está sendo cobrado, para o boleto.
 
@@ -112,8 +114,8 @@ def descricao_servico(b: Billing, placa: str | None = None) -> str:
     # O título só entra quando acrescenta algo (ex.: "Instalação 2º veículo").
     if titulo and titulo.upper() not in base.upper():
         partes.append(titulo.upper())
-    if b.period_label:
-        partes.append(f'REF. {b.period_label}')
+    if period_label or b.period_label:
+        partes.append(f'REF. {period_label or b.period_label}')
     if b.installment_total and b.installment_total > 1:
         partes.append(f'PARCELA {b.installment_number or 1}/{b.installment_total}')
     if placa:
@@ -343,11 +345,29 @@ def _placa_do_billing(b: Billing, db: Session) -> str:
     return ""
 
 
-def _itens_detalhados(b: Billing, db: Session, visited: set[int] | None = None) -> list[tuple[str, float]]:
+def _periodo_servico_fechamento(b: Billing) -> str | None:
+    """Competência comercial do fechamento, inclusive dos títulos antigos."""
+    if not (b.title or '').startswith('Fechamento '):
+        return None
+    marker = re.search(r'Período de serviço: (\d{2}/\d{4})', b.notes or '')
+    if marker:
+        return marker.group(1)
+    if b.period_label == b.due_date.strftime('%m/%Y') and (b.notes or '').startswith('Itens do boleto único'):
+        # Fechamentos criados antes da correção gravavam o mês do vencimento.
+        previous = date(b.due_date.year, b.due_date.month, 1)
+        previous = date(previous.year - 1, 12, 1) if previous.month == 1 else date(previous.year, previous.month - 1, 1)
+        return previous.strftime('%m/%Y')
+    return b.period_label
+
+
+def _itens_detalhados(
+    b: Billing, db: Session, visited: set[int] | None = None,
+    service_period_label: str | None = None,
+) -> list[tuple[str, float]]:
     """Expande mensalidades combinadas e taxas agrupadas sem perder o total."""
     visited = set(visited or ())
     if b.id in visited:
-        return [(descricao_servico(b, _placa_do_billing(b, db) or None), float(b.amount))]
+        return [(descricao_servico(b, _placa_do_billing(b, db) or None, service_period_label), float(b.amount))]
     visited.add(b.id)
     children = list(db.scalars(
         select(Billing).where(
@@ -356,7 +376,8 @@ def _itens_detalhados(b: Billing, db: Session, visited: set[int] | None = None) 
         ).order_by(Billing.id)
     ).all())
     if children:
-        return [item for child in children for item in _itens_detalhados(child, db, visited)]
+        service_period_label = service_period_label or _periodo_servico_fechamento(b)
+        return [item for child in children for item in _itens_detalhados(child, db, visited, service_period_label)]
 
     plate = _placa_do_billing(b, db) or None
     if b.billing_type == 'primeira_mensalidade':
@@ -368,7 +389,7 @@ def _itens_detalhados(b: Billing, db: Session, visited: set[int] | None = None) 
         monthly_amount = Decimal(str(b.amount)) - service_amount
         if links and monthly_amount >= 0:
             monthly_label = 'MENSALIDADE PRÓ-RATA' if 'pró-rata' in (b.title or '').lower() else 'MENSALIDADE'
-            items = [(f'{monthly_label} - REF. {b.period_label}' + (f' - PLACA {plate}' if plate else ''), float(monthly_amount))]
+            items = [(f'{monthly_label} - REF. {service_period_label or b.period_label}' + (f' - PLACA {plate}' if plate else ''), float(monthly_amount))]
             for link in links:
                 service = db.get(ClientChargeItem, link.item_id)
                 description = service.title if service and not service.is_deleted else f'Serviço #{link.item_id}'
@@ -393,7 +414,7 @@ def _itens_detalhados(b: Billing, db: Session, visited: set[int] | None = None) 
             if sum(Decimal(str(value)) for _, value in event_items) == Decimal(str(b.amount)):
                 return event_items
 
-    return [(descricao_servico(b, plate), float(b.amount))]
+    return [(descricao_servico(b, plate, service_period_label), float(b.amount))]
 
 
 def dados_boleto(b: Billing, c: Client, db: Session, ailos_boleto: AilosBoleto) -> DadosBoleto:
@@ -415,6 +436,7 @@ def dados_boleto(b: Billing, c: Client, db: Session, ailos_boleto: AilosBoleto) 
     # descritivo completo, com placa, para a tabela do boleto).
     servico_sem_placa = descricao_servico(b, None)
     itens = _itens_detalhados(b, db)
+    service_period_label = _periodo_servico_fechamento(b) or b.period_label
     dados = gerar_dados_boleto(
         billing_id=b.id,
         valor=b.amount,
@@ -429,7 +451,7 @@ def dados_boleto(b: Billing, c: Client, db: Session, ailos_boleto: AilosBoleto) 
         sacado_ie=c.rg_ie or "",
         itens=itens,
         instrucoes=[
-            (f"Referente a: fechamento {b.period_label} com {len(itens)} itens."
+            (f"Referente a: fechamento {service_period_label} com {len(itens)} itens."
              if components else f"Referente a: {servico_sem_placa}."),
             *([f"Placa: {placa}"] if placa else []),
             "Não receber após o vencimento.",
