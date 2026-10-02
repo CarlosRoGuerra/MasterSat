@@ -1333,6 +1333,7 @@ function ClientesPageInner() {
         onSendWhats={sendBoletoWhats}
         onBaixarPdf={baixarBoletoPdf}
         onBaixarComprovante={baixarComprovante}
+        onLoadComponents={(billingId) => apiFetch<BillingItem[]>(`/billings/${billingId}/components`, {}, token!)}
       />
 
       {/* ══ Modal: Unificar boletos em um único (negociação) ═══════════════ */}

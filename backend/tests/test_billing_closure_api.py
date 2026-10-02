@@ -123,9 +123,15 @@ def test_recibo_e_nfse_do_boleto_unico_discriminam_servicos_de_setembro(
     result = execute_closure(db, date(2026, 10, 1), activity_month=date(2026, 9, 1))
     assert result['payment_titles_generated'] == 1
     parent = db.get(Billing, result['payment_billing_ids'][0])
+    assert parent.billing_type == 'boleto_unico'
     assert parent.period_label == '09/2026'
     assert parent.title.startswith('Fechamento 09/2026')
     assert parent.due_date == date(2026, 10, 15)
+    components = http.get(f'/api/v1/billings/{parent.id}/components')
+    assert components.status_code == 200, components.text
+    assert len(components.json()) == 4
+    assert sum((Decimal(str(item['amount'])) for item in components.json()), Decimal('0.00')) == parent.amount
+    assert {item['substituted_by_id'] for item in components.json()} == {parent.id}
 
     description = nfse_provider.descricao_fechamento(db, parent)
     assert 'competência 09/2026' in description

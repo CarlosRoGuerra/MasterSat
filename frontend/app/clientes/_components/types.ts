@@ -91,6 +91,7 @@ export type BillingItem = {
   payment_date?: string | null;
   created_at?: string | null;
   vehicle_plate?: string | null;
+  substituted_by_id?: number | null;
   /** Há boleto registrado na Ailos? Sem isso não existe PDF para baixar. */
   boleto_ailos?: boolean;
   /** Origem SGR: linhas com o mesmo cod_boleto são UM boleto consolidado lá. */

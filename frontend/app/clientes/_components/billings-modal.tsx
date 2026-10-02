@@ -41,7 +41,11 @@ function agruparPorBoletoSgr(billings: BillingItem[]): Linha[] {
 
 function tipoLabel(billingType: string) {
   if (billingType === 'prorata') return 'Pró-rata';
-  if (billingType === 'recorrente') return 'Mensalidade';
+  if (billingType === 'recorrente' || billingType === 'primeira_mensalidade') return 'Mensalidade';
+  if (billingType === 'taxa_desinstalacao') return 'Taxa de desinstalação';
+  if (billingType === 'taxa_instalacao') return 'Taxa de instalação';
+  if (billingType === 'boleto_unico') return 'Boleto MasterSat';
+  if (billingType === 'item') return 'Serviço';
   return billingType.replace(/_/g, ' ');
 }
 
@@ -50,6 +54,8 @@ const emAberto = (b: BillingItem) => b.status === 'pendente' || b.status === 've
 // Veículo fora do escopo da migração não vira cadastro, mas a placa segue no
 // título que o importador grava: 'Boleto SGR 17678 - ABC1234'.
 const placaDa = (b: BillingItem) => b.vehicle_plate ?? b.title?.match(/^Boleto SGR \S+ - (\S+)$/)?.[1] ?? null;
+const boletoMasterSat = (b: BillingItem) => b.billing_type === 'boleto_unico'
+  || (b.billing_type === 'avulsa' && /^Fechamento \d{2}\/\d{4} - boleto único$/i.test(b.title ?? ''));
 
 type Filtros = {
   situacao: string;
@@ -116,6 +122,7 @@ export function BillingsModal({
   onSendWhats,
   onBaixarPdf,
   onBaixarComprovante,
+  onLoadComponents,
 }: {
   open: boolean;
   clientName?: string;
@@ -140,11 +147,23 @@ export function BillingsModal({
   onSendWhats: (b: BillingItem) => void;
   onBaixarPdf: (b: BillingItem) => void;
   onBaixarComprovante: (b: BillingItem) => void;
+  onLoadComponents: (billingId: number) => Promise<BillingItem[]>;
 }) {
   const fmt = (v: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v);
   const [boletosAbertos, setBoletosAbertos] = useState<Set<string>>(new Set());
+  const [mastersAbertos, setMastersAbertos] = useState<Set<number>>(new Set());
+  const [componentes, setComponentes] = useState<Record<number, BillingItem[]>>({});
+  const [componentesCarregando, setComponentesCarregando] = useState<Set<number>>(new Set());
+  const [componentesErro, setComponentesErro] = useState<Set<number>>(new Set());
   const [filtros, setFiltros] = useState<Filtros>(FILTROS_VAZIOS);
-  useEffect(() => { setFiltros(FILTROS_VAZIOS); setBoletosAbertos(new Set()); }, [clientName]);
+  useEffect(() => {
+    setFiltros(FILTROS_VAZIOS);
+    setBoletosAbertos(new Set());
+    setMastersAbertos(new Set());
+    setComponentes({});
+    setComponentesCarregando(new Set());
+    setComponentesErro(new Set());
+  }, [clientName]);
   const filtrando = Object.values(filtros).some(Boolean);
   // Parcela mais recente no topo (vencimento desc; empate pelo id mais novo).
   const visiveis = aplicarFiltros(billings, filtros)
@@ -163,9 +182,30 @@ export function BillingsModal({
     });
   }
 
+  async function toggleMaster(id: number) {
+    if (mastersAbertos.has(id)) {
+      setMastersAbertos((prev) => new Set([...prev].filter((item) => item !== id)));
+      return;
+    }
+    setMastersAbertos((prev) => new Set(prev).add(id));
+    if (componentes[id] || componentesCarregando.has(id)) return;
+    setComponentesCarregando((prev) => new Set(prev).add(id));
+    try {
+      const itens = await onLoadComponents(id);
+      setComponentes((prev) => ({ ...prev, [id]: itens }));
+      setComponentesErro((prev) => new Set([...prev].filter((item) => item !== id)));
+    } catch {
+      setComponentesErro((prev) => new Set(prev).add(id));
+    } finally {
+      setComponentesCarregando((prev) => new Set([...prev].filter((item) => item !== id)));
+    }
+  }
+
   function linhaCobranca(b: BillingItem, dentroDeBoleto = false) {
     const isAberto = emAberto(b);
     const juros = valorComJuros(b);
+    const master = boletoMasterSat(b) && !dentroDeBoleto;
+    const expandido = mastersAbertos.has(b.id);
     return (
       <Tr key={b.id} className={dentroDeBoleto ? 'bg-slate-50/70 dark:bg-slate-900/40' : undefined}>
         <Td>
@@ -180,9 +220,19 @@ export function BillingsModal({
             />
           ) : null}
         </Td>
-        <Td className={`text-xs text-slate-500 ${dentroDeBoleto ? 'pl-8' : ''}`}>{b.id}</Td>
+        <Td className={`text-xs text-slate-500 ${dentroDeBoleto ? 'pl-8' : ''}`}>
+          {master ? (
+            <button type="button" className="flex items-center gap-1 hover:underline" onClick={() => void toggleMaster(b.id)} aria-label={`${expandido ? 'Ocultar' : 'Ver'} itens do boleto ${b.id}`}>
+              {expandido ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+              {b.id}
+            </button>
+          ) : b.id}
+        </Td>
         <Td className="text-xs">
-          <span className="capitalize">{tipoLabel(b.billing_type)}</span>
+          <span className={master ? 'font-semibold' : 'capitalize'}>{master ? 'Boleto MasterSat' : tipoLabel(b.billing_type)}</span>
+          {master && componentes[b.id] && <span className="block text-2xs text-slate-500">
+            {componentes[b.id].length} itens · {new Set(componentes[b.id].map(placaDa).filter(Boolean)).size} placa(s)
+          </span>}
           {placaDa(b) && <span className="block font-mono text-2xs text-slate-500">{placaDa(b)}</span>}
         </Td>
         <Td className="text-xs">{b.created_at ? new Date(b.created_at).toLocaleDateString('pt-BR') : '—'}</Td>
@@ -200,6 +250,7 @@ export function BillingsModal({
         <Td><Badge variant={statusVariant(b.status)}>{statusLabel(b.status)}</Badge></Td>
         <Td>
           <div className="flex justify-end gap-1">
+            {master && <button type="button" className="mr-1 text-2xs text-slate-500 hover:underline" onClick={() => void toggleMaster(b.id)}>{expandido ? 'Ocultar itens' : 'Ver itens'}</button>}
             <ActionBtn color="purple" icon={Wrench} title="Alterar boleto" onClick={() => onEditBilling(b)} />
             <ActionBtn color="purple" icon={Flag} title="Histórico de operações" onClick={() => onBillingHistory(b)} />
             {isAberto && (
@@ -218,6 +269,43 @@ export function BillingsModal({
           </div>
         </Td>
       </Tr>
+    );
+  }
+
+  function linhaComponente(b: BillingItem, parent: BillingItem) {
+    return (
+      <Tr key={`componente-${b.id}`} className="bg-slate-50/70 dark:bg-slate-900/40">
+        <Td />
+        <Td className="pl-8 text-xs text-slate-500">{b.id}</Td>
+        <Td className="text-xs">
+          <span>{tipoLabel(b.billing_type)}</span>
+          {placaDa(b) && <span className="block font-mono text-2xs text-slate-500">{placaDa(b)}</span>}
+          {b.title && <span className="block text-2xs text-slate-500">{b.title}</span>}
+        </Td>
+        <Td className="text-xs">{b.created_at ? new Date(b.created_at).toLocaleDateString('pt-BR') : '—'}</Td>
+        <Td className="text-sm font-medium">{formatDate(parent.due_date)}</Td>
+        <Td className="text-xs">{formatDate(parent.payment_date)}</Td>
+        <Td className="font-mono font-semibold">{fmt(b.amount)}</Td>
+        <Td className="text-xs text-slate-500">—</Td>
+        <Td className="text-xs text-slate-500">—</Td>
+        <Td className="text-xs text-center">{b.installment_number ? `${b.installment_number}/${b.installment_total}` : '1/1'}</Td>
+        <Td className="text-xs">{parent.period_label ?? '—'}</Td>
+        <Td><Badge variant="info">Incluído no boleto</Badge></Td>
+        <Td />
+      </Tr>
+    );
+  }
+
+  function linhaBoletoMaster(b: BillingItem) {
+    const aberto = mastersAbertos.has(b.id);
+    const itens = componentes[b.id];
+    return (
+      <Fragment key={`master-${b.id}`}>
+        {linhaCobranca(b)}
+        {aberto && itens?.map((item) => linhaComponente(item, b))}
+        {aberto && componentesCarregando.has(b.id) && <Tr><Td colSpan={13} className="pl-8 text-xs text-slate-500">Carregando itens do boleto…</Td></Tr>}
+        {aberto && componentesErro.has(b.id) && <Tr><Td colSpan={13} className="pl-8 text-xs text-rose-600">Não foi possível carregar os itens. Feche e abra novamente para tentar.</Td></Tr>}
+      </Fragment>
     );
   }
 
@@ -519,7 +607,7 @@ export function BillingsModal({
             <Th className="w-44" />
           </TableHead>
           <TableBody>
-            {linhas.map((l) => (l.tipo === 'sgr' ? linhaBoletoSgr(l.cod, l.itens) : linhaCobranca(l.billing)))}
+            {linhas.map((l) => (l.tipo === 'sgr' ? linhaBoletoSgr(l.cod, l.itens) : boletoMasterSat(l.billing) ? linhaBoletoMaster(l.billing) : linhaCobranca(l.billing)))}
           </TableBody>
         </Table>
       )}

@@ -567,6 +567,23 @@ def download_receipt(item_id: int, db: Session = Depends(get_db), _: object = De
     return StreamingResponse(buffer, media_type='application/pdf', headers={'Content-Disposition': f'inline; filename={filename}'})
 
 
+@router.get('/{item_id}/components', response_model=list[BillingOut])
+def billing_components(
+    item_id: int,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL)),
+):
+    """Itens de um boleto único, inclusive contratos de outro cliente pagos pelo interveniente."""
+    parent = db.get(Billing, item_id)
+    if parent is None or parent.is_deleted:
+        raise HTTPException(status_code=404, detail='Boleto não encontrado')
+    rows = (base_query(db)
+            .filter(Billing.substituted_by_id == item_id)
+            .order_by(Billing.id)
+            .all())
+    return [serialize_billing(row) for row in rows]
+
+
 @router.get('/', response_model=list[BillingOut])
 def list_items(search: str | None = None, status: str | None = None, client_id: int | None = None, contract_id: int | None = None, vehicle_id: int | None = None, due_from: date | None = None, due_to: date | None = None, include_substituted: bool = False, limit: int = Query(default=200, ge=1, le=1000), db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
     query = apply_filters(base_query(db), search, status, client_id, contract_id, due_from, due_to, vehicle_id)

@@ -9,7 +9,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.core.timezone import hoje
-from app.models.billing import Billing
+from app.models.billing import Billing, CONSOLIDATED_BILLING_TYPE
 from app.models.client import Client
 from app.models.client_charge_item import ClientChargeItem
 from app.models.contract import Contract
@@ -766,7 +766,7 @@ def execute_closure(
         unico = Billing(
             client_id=next(iter(owners)) if len(owners) == 1 else payer_id,
             payer_client_id=payer_id,
-            billing_type='avulsa',
+            billing_type=CONSOLIDATED_BILLING_TYPE,
             title=f'Fechamento {period} - boleto único',
             amount=total,
             due_date=due_date,

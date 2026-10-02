@@ -21,6 +21,9 @@ RECURRING_BILLING_TYPES = ('recorrente', 'prorata', 'primeira_mensalidade', 'car
 # Todos os tipos que o sistema grava hoje (fechamento, carnê, serviços,
 # negociação, importação SGR). A criação manual pela API só aceita estes.
 BILLING_TYPES = RECURRING_BILLING_TYPES + ('taxa_instalacao', 'taxa_desinstalacao', 'avulsa', 'item')
+# Tipo interno do título que reúne mensalidades, taxas e serviços de um fechamento.
+# Fica fora de BILLING_TYPES para não ser criado como cobrança manual.
+CONSOLIDATED_BILLING_TYPE = 'boleto_unico'
 _TIPOS_SQL = ', '.join(f"'{tipo}'" for tipo in RECURRING_BILLING_TYPES)
 
 

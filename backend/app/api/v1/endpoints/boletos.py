@@ -86,6 +86,7 @@ _TIPO_SERVICO = {
     'manutencao': 'MANUTENÇÃO DE EQUIPAMENTO DE RASTREAMENTO',
     'adesao': 'TAXA DE ADESÃO',
     'avulsa': 'SERVIÇO AVULSO',
+    'boleto_unico': 'BOLETO ÚNICO',
 }
 
 
