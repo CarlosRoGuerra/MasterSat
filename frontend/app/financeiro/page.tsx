@@ -353,6 +353,14 @@ function GroupedContractsTable({
 }
 
 /* ── BillingTableSection ────────────────────────────────────────────── */
+function aplicarMesVencimento(query: URLSearchParams, mes: string) {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(mes)) return;
+  const [ano, numeroMes] = mes.split('-').map(Number);
+  const ultimoDia = new Date(Date.UTC(ano, numeroMes, 0)).getUTCDate();
+  query.set('due_from', `${mes}-01`);
+  query.set('due_to', `${mes}-${String(ultimoDia).padStart(2, '0')}`);
+}
+
 function BillingTableSection({
   billings,
   loading,
@@ -360,9 +368,11 @@ function BillingTableSection({
   billingView,
   billingSearch,
   billingStatusFilter,
+  billingDueMonth,
   onViewToggle,
   onSearchChange,
   onStatusFilterChange,
+  onDueMonthChange,
   onRefresh,
   onSelect,
   selectedId,
@@ -389,9 +399,11 @@ function BillingTableSection({
   billingView: 'alert' | 'all';
   billingSearch: string;
   billingStatusFilter: string;
+  billingDueMonth: string;
   onViewToggle: () => void;
   onSearchChange: (v: string) => void;
   onStatusFilterChange: (v: string) => void;
+  onDueMonthChange: (v: string) => void;
   onRefresh: () => void;
   onSelect: (b: Billing) => void;
   selectedId?: number;
@@ -454,6 +466,12 @@ function BillingTableSection({
             <option value="vencida">Vencida</option>
             <option value="cancelada">Cancelada</option>
           </select>
+          <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+            Vencimento (mês/ano)
+            <input type="month" className={fc} style={{ width: 165 }} value={billingDueMonth}
+                   onChange={e => onDueMonthChange(e.target.value)} />
+          </label>
+          {billingDueMonth && <Button variant="secondary" onClick={() => onDueMonthChange('')} className="text-xs px-3 py-1.5">Limpar mês</Button>}
         </div>
       )}
       {/* Barra de ações em lote */}
@@ -610,6 +628,7 @@ export default function FinanceiroPage() {
   const [adjustForm, setAdjustForm] = useState<AdjustFormState>(initialAdjustForm);
   const [billingSearch, setBillingSearch] = useState('');
   const [billingStatusFilter, setBillingStatusFilter] = useState('');
+  const [billingDueMonth, setBillingDueMonth] = useState('');
   const [billingView, setBillingView] = useState<'alert' | 'all'>('alert');
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
@@ -785,7 +804,8 @@ export default function FinanceiroPage() {
       const query = new URLSearchParams();
       if (billingSearch) query.set('search', billingSearch);
       if (billingStatusFilter) query.set('status', billingStatusFilter);
-      query.set('limit', '300');
+      aplicarMesVencimento(query, billingDueMonth);
+      query.set('limit', billingDueMonth ? '1000' : '300');
       const [plansRes, clientsRes, vehiclesRes, trackersRes, contractsRes, productsRes, billingsRes, summaryRes, revenueRes, delinquentRes] = await Promise.all([
         apiFetch<Plan[]>('/plans', {}, currentToken),
         apiFetchList<ClientOption>('/clients?limit=300', {}, currentToken),
@@ -825,7 +845,8 @@ export default function FinanceiroPage() {
       const query = new URLSearchParams();
       if (billingSearch) query.set('search', billingSearch);
       if (billingStatusFilter) query.set('status', billingStatusFilter);
-      query.set('limit', '300');
+      aplicarMesVencimento(query, billingDueMonth);
+      query.set('limit', billingDueMonth ? '1000' : '300');
       const billingsRes = await apiFetch<Billing[]>(`/billings?${query.toString()}`, {}, currentToken);
       setBillings(billingsRes);
       if (selectedBilling) setSelectedBilling(billingsRes.find(b => b.id === selectedBilling.id) || null);
@@ -858,7 +879,7 @@ export default function FinanceiroPage() {
   const billingSearchDebounced = useDebouncedValue(billingSearch);
   useEffectSkipFirst(() => {
     if (token) loadBillingsOnly(token);
-  }, [billingSearchDebounced, billingStatusFilter]);
+  }, [billingSearchDebounced, billingStatusFilter, billingDueMonth]);
 
   useEffect(() => {
     if (token && activeTab === 'payables') loadPayables(token);
@@ -1988,9 +2009,11 @@ export default function FinanceiroPage() {
               billingView={billingView}
               billingSearch={billingSearch}
               billingStatusFilter={billingStatusFilter}
+              billingDueMonth={billingDueMonth}
               onViewToggle={() => setBillingView(billingView === 'alert' ? 'all' : 'alert')}
               onSearchChange={setBillingSearch}
               onStatusFilterChange={setBillingStatusFilter}
+              onDueMonthChange={mes => { setBillingDueMonth(mes); setSelectedBillingIds([]); }}
               onRefresh={() => token && loadData(token)}
               onSelect={b => setSelectedBilling(b)}
               selectedId={selectedBilling?.id}
@@ -2360,9 +2383,11 @@ export default function FinanceiroPage() {
               billingView="all"
               billingSearch={billingSearch}
               billingStatusFilter={billingStatusFilter}
+              billingDueMonth={billingDueMonth}
               onViewToggle={() => {}}
               onSearchChange={setBillingSearch}
               onStatusFilterChange={setBillingStatusFilter}
+              onDueMonthChange={mes => { setBillingDueMonth(mes); setSelectedBillingIds([]); }}
               onRefresh={() => token && loadData(token)}
               onSelect={carteiraRowSelect}
               selectedId={selectedBilling?.id}
