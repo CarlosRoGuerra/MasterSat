@@ -184,6 +184,8 @@ class BillingOut(BillingBase):
     # Há boleto REGISTRADO na Ailos? Só então existe PDF para baixar/enviar —
     # sem registro o título não é pagável no banco.
     boleto_ailos: bool = False
+    # Situação fiscal da cobrança; None significa que ainda não há NFS-e.
+    nfse_status: str | None = None
     # Dados do boleto de origem, para cobrança migrada do SGR. O boleto
     # bancário some do SGR depois de baixado, então é isto que a tela de
     # detalhes tem para mostrar.

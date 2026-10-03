@@ -3,10 +3,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const { apiFetch } = vi.hoisted(() => ({ apiFetch: vi.fn() }));
 vi.mock('@/lib/api', () => ({ apiFetch }));
 
-import { processarBoletosSelecionados } from '@/lib/boleto-lote';
+import { processarBoletosSelecionados, separarBoletosPorRegistro } from '@/lib/boleto-lote';
 
 describe('ações em lote dos boletos selecionados', () => {
   beforeEach(() => apiFetch.mockReset());
+
+  it('ignora boletos registrados e preserva a ordem dos ausentes sem duplicar IDs', () => {
+    expect(separarBoletosPorRegistro([12, 8, 12, 5], [
+      { id: 12, boleto_ailos: true }, { id: 8, boleto_ailos: false }, { id: 5, boleto_ailos: true },
+    ])).toEqual({ existentes: [12, 5], ausentes: [8] });
+  });
 
   it('emite apenas os IDs selecionados, uma vez cada, e não envia e-mail', async () => {
     apiFetch.mockResolvedValue({ linha_digitavel: '123', codigo_barras: '456' });

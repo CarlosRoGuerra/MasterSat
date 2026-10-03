@@ -397,9 +397,11 @@ export default function NotasFiscaisPage() {
         throw new Error(detail);
       }
       // PDF abre em aba (é o que serve para imprimir); XML desce como arquivo.
+      const nomeArquivo = resp.headers.get('content-disposition')
+        ?.match(/filename="?([^";]+)"?/i)?.[1];
       entregarArquivo(
         await resp.blob(),
-        `nfse-${billingId}.${tipo === 'xml' ? 'xml' : 'pdf'}`,
+        nomeArquivo || `Notafical_${billingId}.${tipo === 'xml' ? 'xml' : 'pdf'}`,
         { emNovaAba: tipo !== 'xml' },
       );
     } catch (err) { setError(parseErr(err)); }

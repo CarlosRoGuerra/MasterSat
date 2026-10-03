@@ -7,6 +7,7 @@ from decimal import Decimal
 import pytest
 
 from app.models.billing import Billing
+from app.models.ailos_boleto import AilosBoleto
 from app.models.client import Client
 from app.models.contract import Contract
 from app.models.enums import BillingStatus, ClientStatus, UserRole
@@ -533,6 +534,44 @@ def test_envio_separado_de_nfse_usa_tomador_e_danfse_emitida(db, http_fin, monke
     assert resp.status_code == 200, resp.text
     assert enviados[0]['destinatario'] == 'nota@example.com'
     assert enviados[0]['anexo'][1] == b'%PDF-nota'
+    assert enviados[0]['anexo'][0] == 'Notafical_DESTINATARIO_NF_07-2026.pdf'
+
+
+def test_nome_nfse_usa_responsavel_e_mes_do_servico(db, http_fin, monkeypatch):
+    owner = _client(db, 'DONO', doc='111')
+    payer = _client(db, 'JOÃO & CIA LTDA', doc='222')
+    billing = _billing_com_interveniente(db, owner, payer, period='09/2026')
+    nota = _nota(db, billing, status='emitida')
+    nota.xml_retorno = '<NFSe/>'
+    db.commit()
+    from app.api.v1.endpoints import nfse
+    monkeypatch.setattr(nfse, '_danfse_local_bytes', lambda *args: b'%PDF-nota')
+
+    resposta = http_fin.get(f'/api/v1/nfse/{billing.id}/danfse-local')
+
+    assert resposta.status_code == 200
+    assert 'Notafical_JOAO_CIA_LTDA_09-2026.pdf' in resposta.headers['content-disposition']
+
+
+def test_carteira_exibe_estados_reais_do_boleto_e_da_nfse(db, http_fin):
+    billing = _billing(db, _client(db, 'CARTEIRA'))
+    antes = http_fin.get('/api/v1/billings/')
+    assert antes.status_code == 200
+    linha = next(item for item in antes.json() if item['id'] == billing.id)
+    assert linha['boleto_ailos'] is False
+    assert linha['nfse_status'] is None
+
+    db.add(AilosBoleto(
+        billing_id=billing.id, numero_convenio='102004', nosso_numero='000000301',
+        linha_digitavel='123', codigo_barras='456',
+    ))
+    _nota(db, billing, status='emitida')
+    depois = http_fin.get('/api/v1/billings/')
+
+    assert depois.status_code == 200
+    linha = next(item for item in depois.json() if item['id'] == billing.id)
+    assert linha['boleto_ailos'] is True
+    assert linha['nfse_status'] == 'emitida'
 
 
 def test_envio_separado_recusa_nfse_ainda_nao_emitida(db, http_fin, monkeypatch):

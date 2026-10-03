@@ -22,7 +22,7 @@ import { loadChargeLinks, type ChargeLinks } from '@/lib/financeiro-charge-links
 import { entregarArquivo, nomeArquivoCliente } from '@/lib/arquivo';
 import { podeEmitirNfse, precisaConsultarNfse } from '@/lib/nfse';
 import { enviarBoletoEmail, enviarBoletoWhats } from '@/lib/boleto-mensagem';
-import { processarBoletosSelecionados, type AcaoLoteBoleto } from '@/lib/boleto-lote';
+import { processarBoletosSelecionados, separarBoletosPorRegistro, type AcaoLoteBoleto } from '@/lib/boleto-lote';
 import { cancelarComConfirmacoes, corpoCancelamento } from '@/lib/cancelamento-cobranca';
 import { camposDiferenca, diferencaRecebimento, pendenciaDoFormulario, ROTULO_TRATAMENTO, type TratamentoDiferenca } from '@/lib/recebimento';
 import { descreverTitulo, podeConsultarDesfecho, ROTULO_PENDENCIA, type TituloBancario } from '@/lib/titulo-bancario';
@@ -80,7 +80,7 @@ type SgrPayload = {
   discriminacao?: { valor?: string; produto?: string; placa?: string; mes_referente?: string }[] | null;
 };
 
-type Billing = { id: number; contract_id?: number | null; client_id: number; payer_client_id?: number | null; item_id?: number | null; vehicle_id?: number | null; tracker_id?: number | null; title?: string | null; billing_type: string; installment_number?: number | null; installment_total?: number | null; amount: number; due_date: string; status: BillingStatus; payment_date?: string | null; payment_method?: string | null; notes?: string | null; paid_amount?: number | null; receipt_number?: string | null; period_label?: string | null; competencia?: string | null; competencia_liberada?: boolean; substituted_by_id?: number | null; client_name?: string | null; payer_name?: string | null; vehicle_plate?: string | null; tracker_identifier?: string | null; plan_name?: string | null; contract_status?: string | null; overdue_days: number; sgr_payload?: SgrPayload | null; titulo_bancario?: TituloBancario | null; relacoes_removidas?: string[] };
+type Billing = { id: number; contract_id?: number | null; client_id: number; payer_client_id?: number | null; item_id?: number | null; vehicle_id?: number | null; tracker_id?: number | null; title?: string | null; billing_type: string; installment_number?: number | null; installment_total?: number | null; amount: number; due_date: string; status: BillingStatus; payment_date?: string | null; payment_method?: string | null; notes?: string | null; paid_amount?: number | null; receipt_number?: string | null; period_label?: string | null; competencia?: string | null; competencia_liberada?: boolean; substituted_by_id?: number | null; client_name?: string | null; payer_name?: string | null; vehicle_plate?: string | null; tracker_identifier?: string | null; plan_name?: string | null; contract_status?: string | null; overdue_days: number; boleto_ailos?: boolean; nfse_status?: string | null; sgr_payload?: SgrPayload | null; titulo_bancario?: TituloBancario | null; relacoes_removidas?: string[] };
 type Summary = { active_plans: number; active_contracts: number; pending_billings: number; overdue_billings: number; pending_amount: number; overdue_amount: number; paid_this_month: number };
 // Bases (PROD-01): total_billed/total_outstanding/total_received_by_due pelo
 // VENCIMENTO; total_received é CAIXA (data do pagamento). Canceladas fora.
@@ -377,6 +377,7 @@ function BillingTableSection({
   onBatchEmailComNfse,
   onBatchNfseEmail,
   onBatchNfse,
+  onBatchEmitAll,
   batchBusy,
   batchProgress,
   batchActions,
@@ -405,12 +406,13 @@ function BillingTableSection({
   onBatchEmailComNfse?: () => void;
   onBatchNfseEmail?: () => void;
   onBatchNfse?: () => void;
+  onBatchEmitAll?: () => void;
   batchBusy?: boolean;
   batchProgress?: string;
-  batchActions?: Array<'receive' | 'cancel' | 'maint' | 'emit' | 'email' | 'email_com_nfse' | 'nfse_email' | 'nfse'>;
+  batchActions?: Array<'receive' | 'cancel' | 'maint' | 'emit' | 'emit_all' | 'email' | 'email_com_nfse' | 'nfse_email' | 'nfse'>;
   rowActionLabel?: string;
 }) {
-  const acoesLote = batchActions ?? ['receive', 'cancel', 'maint', 'emit', 'email', 'email_com_nfse', 'nfse_email', 'nfse'];
+  const acoesLote = batchActions ?? ['receive', 'cancel', 'maint', 'emit', 'emit_all', 'email', 'email_com_nfse', 'nfse_email', 'nfse'];
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const in7 = new Date(today); in7.setDate(in7.getDate() + 7);
 
@@ -459,6 +461,7 @@ function BillingTableSection({
         <div className="mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-brand-300 bg-brand-50 px-4 py-2.5 text-sm dark:border-brand-700 dark:bg-brand-950/30">
           <span className="font-bold text-brand-800 dark:text-brand-200">{batchIds.length} selecionada(s)</span>
           {onBatchEmit && acoesLote.includes('emit') && <Button disabled={batchBusy} onClick={onBatchEmit} className="!py-1.5 text-xs">Emitir na Ailos</Button>}
+          {onBatchEmitAll && acoesLote.includes('emit_all') && <Button disabled={batchBusy} onClick={onBatchEmitAll} className="!py-1.5 text-xs">Emitir boletos + NFS-e</Button>}
           {onBatchEmail && acoesLote.includes('email') && <Button disabled={batchBusy} variant="secondary" onClick={onBatchEmail} className="!py-1.5 text-xs">Enviar só boleto</Button>}
           {onBatchEmailComNfse && acoesLote.includes('email_com_nfse') && <Button disabled={batchBusy} variant="secondary" onClick={onBatchEmailComNfse} className="!py-1.5 text-xs">Enviar boleto + NFS-e</Button>}
           {onBatchNfseEmail && acoesLote.includes('nfse_email') && <Button disabled={batchBusy} variant="secondary" onClick={onBatchNfseEmail} className="!py-1.5 text-xs">Enviar só NFS-e</Button>}
@@ -507,6 +510,8 @@ function BillingTableSection({
                 <Th>Vencimento</Th>
                 <Th>Valor</Th>
                 <Th>Status</Th>
+                <Th>Boleto</Th>
+                <Th>Nota fiscal</Th>
                 <Th className="w-24" />
               </TableHead>
               <TableBody>
@@ -543,6 +548,8 @@ function BillingTableSection({
                     </Td>
                     <Td className="font-mono font-semibold">{formatCurrency(b.amount)}</Td>
                     <Td><Badge variant={statusVariant(b.status)}>{statusLabel(b.status)}</Badge></Td>
+                    <Td><Badge variant={b.boleto_ailos ? 'success' : 'default'}>{b.boleto_ailos ? 'Emitido' : 'Não emitido'}</Badge></Td>
+                    <Td><Badge variant={b.nfse_status === 'emitida' ? 'success' : b.nfse_status === 'erro' || b.nfse_status === 'desconhecido' ? 'danger' : b.nfse_status ? 'warning' : 'default'}>{b.nfse_status === 'emitida' ? 'Emitida' : b.nfse_status === 'erro' ? 'Erro' : b.nfse_status === 'desconhecido' ? 'Verificar' : b.nfse_status ? 'Em emissão' : 'Não emitida'}</Badge></Td>
                     <Td>
                       <Button variant="secondary" onClick={() => onSelect(b)} className="px-3 py-1.5 text-xs">
                         {rowActionLabel && (b.status === 'pendente' || b.status === 'vencida') ? rowActionLabel : 'Detalhes'}
@@ -1274,7 +1281,14 @@ export default function FinanceiroPage() {
 
   async function handleBatchBoletos(acao: AcaoLoteBoleto) {
     if (!token || !canEdit || batchBoletoAction || batchNfseBusy || selectedBillingIds.length === 0) return;
-    const ids = [...new Set(selectedBillingIds)];
+    const selecionados = [...new Set(selectedBillingIds)];
+    const ids = acao === 'emitir'
+      ? separarBoletosPorRegistro(selecionados, billings).ausentes
+      : selecionados;
+    if (ids.length === 0) {
+      setFeedback('Todos os boletos selecionados já estão emitidos na Ailos. Nenhum novo boleto foi gerado.');
+      return;
+    }
     const mensagem = {
       emitir: `Emitir/confirmar ${ids.length} boleto(s) selecionado(s) na Ailos? O envio por e-mail será feito somente no outro botão.`,
       email: `Enviar ${ids.length} boleto(s) por e-mail, um por cobrança, ao respectivo responsável financeiro?`,
@@ -1292,8 +1306,11 @@ export default function FinanceiroPage() {
         ids, acao, token,
         (concluidos, total) => setBatchBoletoProgress(`${concluidos}/${total}`),
       );
-      const rotulo = acao === 'emitir' ? 'registrado(s) ou já existente(s) na Ailos' : 'enviado(s) por e-mail';
-      setFeedback(`${resultado.processados.length} boleto(s) ${rotulo}.`);
+      await loadData(token);
+      const rotulo = acao === 'emitir' ? 'boleto(s) registrado(s) na Ailos'
+        : acao === 'nfse_email' ? 'NFS-e enviada(s) por e-mail'
+        : 'envio(s) por e-mail realizado(s)';
+      setFeedback(`${resultado.processados.length} ${rotulo}${acao === 'emitir' ? `; ${selecionados.length - ids.length} já emitido(s) ignorado(s)` : ''}.`);
       if (resultado.falhas.length) {
         const detalhes = resultado.falhas.slice(0, 8).map(f => `#${f.id}: ${f.mensagem}`).join(' · ');
         setError(`${resultado.falhas.length} boleto(s) não processado(s): ${detalhes}${resultado.falhas.length > 8 ? ` · e mais ${resultado.falhas.length - 8} falha(s).` : ''}`);
@@ -1303,11 +1320,83 @@ export default function FinanceiroPage() {
       if (acao !== 'emitir') {
         setSelectedBillingIds(current => current.filter(id => !resultado.processados.includes(id)));
       }
-      await loadData(token);
     } catch (err) {
       setError(parseError(err));
     } finally {
       setBatchBoletoAction(null);
+      setBatchBoletoProgress('');
+    }
+  }
+
+  async function handleBatchEmitAll() {
+    if (!token || !canEdit || batchBoletoAction || batchNfseBusy || selectedBillingIds.length === 0) return;
+    const ids = [...new Set(selectedBillingIds)];
+    setBatchNfseBusy(true);
+    setError(''); setFeedback('');
+    try {
+      setBatchBoletoProgress('Conferindo notas fiscais…');
+      const previa = await apiFetch<{
+        elegiveis: number[];
+        nao_emitem: { billing_id: number; cliente: string }[];
+        outros_ignorados: number[];
+      }>('/nfse/lotes/selecionados/previa', {
+        method: 'POST', body: JSON.stringify({ billing_ids: ids }),
+      }, token);
+      const { existentes: boletosExistentes, ausentes: boletosAusentes } = separarBoletosPorRegistro(ids, billings);
+      const nomesSemNota = previa.nao_emitem.map(item => `${item.cliente} (#${item.billing_id})`);
+      if (!boletosAusentes.length && !previa.elegiveis.length) {
+        setFeedback(`Nada a emitir: ${boletosExistentes.length} boleto(s) já registrado(s) e nenhuma NFS-e elegível.`);
+        if (nomesSemNota.length) setError(`Não emitem nota fiscal: ${nomesSemNota.join(', ')}.`);
+        return;
+      }
+      const aviso = [
+        `Emitir ${boletosAusentes.length} boleto(s) e até ${previa.elegiveis.length} NFS-e?`,
+        `${boletosExistentes.length} boleto(s) já emitido(s) serão ignorados.`,
+        `${previa.outros_ignorados.length} NFS-e já emitida(s), em processamento ou inelegível(is) serão ignoradas.`,
+        nomesSemNota.length ? `Clientes selecionados que não emitem nota fiscal:\n${nomesSemNota.join('\n')}` : '',
+      ].filter(Boolean).join('\n\n');
+      if (!window.confirm(aviso)) return;
+
+      const boletos = await processarBoletosSelecionados(
+        boletosAusentes, 'emitir', token,
+        (concluidos, total) => setBatchBoletoProgress(`Boletos ${concluidos}/${total}`),
+      );
+      const prontos = new Set([...boletosExistentes, ...boletos.processados]);
+      const nfseIds = previa.elegiveis.filter(id => prontos.has(id));
+      let loteId: number | null = null;
+      let totalNotas = 0;
+      const erros: string[] = [];
+      if (nfseIds.length) {
+        setBatchBoletoProgress('Iniciando lote de NFS-e…');
+        try {
+          const resultado = await apiFetch<{
+            lote: { id: number; total_notas: number };
+            ignorados: number[];
+          }>('/nfse/lotes/selecionados', {
+            method: 'POST', body: JSON.stringify({ billing_ids: nfseIds }),
+          }, token);
+          loteId = resultado.lote.id;
+          totalNotas = resultado.lote.total_notas;
+        } catch (err) {
+          erros.push(`Boletos processados, mas o lote de NFS-e não iniciou: ${parseError(err)}`);
+        }
+      }
+      const falhas = boletos.falhas.map(f => `#${f.id}: ${f.mensagem}`);
+      if (falhas.length) {
+        erros.push(`${falhas.length} boleto(s) falharam: ${falhas.slice(0, 8).join(' · ')}${falhas.length > 8 ? ` · e mais ${falhas.length - 8}` : ''}`);
+      }
+      await loadData(token);
+      if (erros.length) setError(erros.join(' '));
+      setFeedback(
+        `${boletos.processados.length} boleto(s) emitido(s); ${boletosExistentes.length} já emitido(s) ignorado(s). ` +
+        `${totalNotas} NFS-e iniciada(s)${loteId ? ` no lote #${loteId}` : ''}; ` +
+        `${previa.nao_emitem.length} cliente(s) sem autorização para nota fiscal. ` +
+        'A emissão das NFS-e continua em segundo plano.',
+      );
+    } catch (err) {
+      setError(parseError(err));
+    } finally {
+      setBatchNfseBusy(false);
       setBatchBoletoProgress('');
     }
   }
@@ -1912,6 +2001,7 @@ export default function FinanceiroPage() {
               onBatchCancel={handleBatchCancel}
               onBatchMaint={() => { setModalError(''); setBatchMaintModal(true); }}
               onBatchEmit={() => handleBatchBoletos('emitir')}
+              onBatchEmitAll={handleBatchEmitAll}
               onBatchEmail={() => handleBatchBoletos('email')}
               onBatchEmailComNfse={() => handleBatchBoletos('email_com_nfse')}
               onBatchNfseEmail={() => handleBatchBoletos('nfse_email')}
@@ -2283,6 +2373,7 @@ export default function FinanceiroPage() {
               onBatchCancel={handleBatchCancel}
               onBatchMaint={() => { setModalError(''); setBatchMaintModal(true); }}
               onBatchEmit={() => handleBatchBoletos('emitir')}
+              onBatchEmitAll={handleBatchEmitAll}
               onBatchEmail={() => handleBatchBoletos('email')}
               onBatchEmailComNfse={() => handleBatchBoletos('email_com_nfse')}
               onBatchNfseEmail={() => handleBatchBoletos('nfse_email')}

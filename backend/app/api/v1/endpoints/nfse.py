@@ -20,6 +20,8 @@ PDF da nota, dois caminhos:
 from __future__ import annotations
 
 import smtplib
+import re
+import unicodedata
 from datetime import date
 from typing import NoReturn
 
@@ -72,6 +74,27 @@ _ERROS_API = nfse_provider.ErrosApi
 # ficam DE FORA de propósito: o PDF local não resolve credencial nem emissão
 # incompleta, então esses erros têm de chegar ao operador.
 _STATUS_ADN_INSTAVEL = {502, 503, 504}
+
+
+def _nome_arquivo_nfse(db: Session, billing_id: int, *, extensao: str = 'pdf') -> str:
+    """Nome legível e seguro: período do serviço, não o mês do vencimento."""
+    billing = db.get(Billing, billing_id)
+    if billing is None:
+        raise HTTPException(status_code=404, detail='Cobrança não encontrada')
+    owner = db.get(Client, billing.client_id)
+    if owner is None:
+        raise HTTPException(status_code=404, detail='Cliente não encontrado')
+    payer = resolver_pagador(db, billing, owner)
+    nome = unicodedata.normalize('NFKD', payer.name or 'Cliente').encode('ascii', 'ignore').decode('ascii')
+    nome = re.sub(r'[^A-Za-z0-9]+', '_', nome).strip('_')[:80] or 'Cliente'
+    periodo = (billing.period_label or '').strip()
+    match = re.fullmatch(r'(0[1-9]|1[0-2])/(\d{4})', periodo)
+    if match:
+        mes_ano = f'{match.group(1)}-{match.group(2)}'
+    else:
+        data = billing.competencia or billing.due_date
+        mes_ano = data.strftime('%m-%Y') if data else 'sem-periodo'
+    return f'Notafical_{nome}_{mes_ano}.{extensao}'
 
 
 def _provedor():
@@ -352,7 +375,7 @@ def danfse(
     return Response(
         content=pdf,
         media_type='application/pdf',
-        headers={'Content-Disposition': f'inline; filename=nfse-{nota.numero_nfse or billing_id}.pdf'},
+        headers={'Content-Disposition': f'inline; filename="{_nome_arquivo_nfse(db, billing_id)}"'},
     )
 
 
@@ -407,7 +430,7 @@ def anexo_nfse_emitida(db: Session, billing_id: int) -> tuple[str, bytes, str]:
     if nota is None or nota.status != 'emitida':
         raise HTTPException(status_code=409, detail='A NFS-e ainda não foi emitida para esta cobrança.')
     pdf = _danfse_local_bytes(nota, db, billing_id)
-    return (f'nfse-{nota.numero_nfse or billing_id}.pdf', pdf, 'application/pdf')
+    return (_nome_arquivo_nfse(db, billing_id), pdf, 'application/pdf')
 
 
 @router.post('/{billing_id}/enviar-email')
@@ -463,7 +486,7 @@ def danfse_local(
         content=_danfse_local_bytes(nota, db, billing_id),
         media_type='application/pdf',
         headers={'Content-Disposition':
-                 f'inline; filename=nfse-{nota.numero_nfse or billing_id}.pdf'},
+                 f'inline; filename="{_nome_arquivo_nfse(db, billing_id)}"'},
     )
 
 
@@ -483,7 +506,7 @@ def xml_nfse(
         # acentuação da descrição do serviço vira "VigilÃ¢ncia".
         media_type='application/xml; charset=utf-8',
         headers={'Content-Disposition':
-                 f'attachment; filename=nfse-{nota.numero_nfse or billing_id}.xml'},
+                 f'attachment; filename="{_nome_arquivo_nfse(db, billing_id, extensao="xml")}"'},
     )
 
 

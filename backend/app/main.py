@@ -58,7 +58,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=['*'],
     allow_headers=['*'],
-    expose_headers=['X-Request-ID', 'Server-Timing', 'X-Dashboard-Cache'],
+    expose_headers=['X-Request-ID', 'Server-Timing', 'X-Dashboard-Cache', 'Content-Disposition'],
 )
 
 # ── Limite de tamanho de requisição (anti-DoS por upload gigante) ─────────────

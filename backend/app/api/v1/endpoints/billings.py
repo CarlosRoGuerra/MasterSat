@@ -21,6 +21,7 @@ from app.core.integrity import raise_integrity_conflict
 from app.core.timezone import hoje
 from app.db.session import get_db
 from app.models.ailos_boleto import AilosBoleto
+from app.models.nfse_nota import NfseNota
 from app.models.billing import RECURRING_BILLING_TYPES, Billing
 from app.models.billing_change_log import BillingChangeLog
 from app.models.client import Client
@@ -186,6 +187,7 @@ def base_query(db: Session, *, refresh_statuses: bool = False):
             Vehicle.plate.label('vehicle_plate'),
             Tracker.imei.label('tracker_identifier'),
             boleto_ailos,
+            NfseNota.status.label('nfse_status'),
             AilosBoleto,
             CnabRemessaItem.nosso_numero.label('cnab_nosso_numero'),
             Client.is_deleted.label('client_removed'),
@@ -202,6 +204,7 @@ def base_query(db: Session, *, refresh_statuses: bool = False):
         .outerjoin(Vehicle, Vehicle.id == Billing.vehicle_id)
         .outerjoin(Tracker, Tracker.id == Billing.tracker_id)
         .outerjoin(AilosBoleto, AilosBoleto.billing_id == Billing.id)
+        .outerjoin(NfseNota, NfseNota.billing_id == Billing.id)
         .outerjoin(
             CnabRemessaItem,
             and_(CnabRemessaItem.billing_id == Billing.id, CnabRemessaItem.status == 'reservado'),
@@ -231,7 +234,7 @@ def _titulo_bancario_out(billing_id: int, boleto: AilosBoleto | None, cnab_nosso
 def serialize_billing(row) -> BillingOut:
     (
         billing, client_name, payer_name, plan_name, contract_status,
-        vehicle_plate, tracker_identifier, boleto_ailos, ailos_boleto, cnab_nosso_numero,
+        vehicle_plate, tracker_identifier, boleto_ailos, nfse_status, ailos_boleto, cnab_nosso_numero,
         *removidas,
     ) = row
     overdue_days = 0
@@ -273,6 +276,7 @@ def serialize_billing(row) -> BillingOut:
             if billing.status == BillingStatus.OVERDUE else None
         ),
         boleto_ailos=bool(boleto_ailos),
+        nfse_status=nfse_status,
         titulo_bancario=_titulo_bancario_out(billing.id, ailos_boleto, cnab_nosso_numero),
         relacoes_removidas=[nome for nome, removida in zip(_RELACOES, removidas) if removida],
     )

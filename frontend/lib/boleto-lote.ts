@@ -6,6 +6,19 @@ export type ResultadoLoteBoletos = {
   falhas: { id: number; mensagem: string }[];
 };
 
+/** Usa o estado bancário da carteira para não repetir o registro de boletos. */
+export function separarBoletosPorRegistro(
+  ids: number[],
+  billings: ReadonlyArray<{ id: number; boleto_ailos?: boolean }>,
+): { existentes: number[]; ausentes: number[] } {
+  const registrados = new Set(billings.filter(b => b.boleto_ailos).map(b => b.id));
+  const selecionados = [...new Set(ids)];
+  return {
+    existentes: selecionados.filter(id => registrados.has(id)),
+    ausentes: selecionados.filter(id => !registrados.has(id)),
+  };
+}
+
 /** Processa somente os IDs selecionados, mantendo o resultado de cada cobrança. */
 export async function processarBoletosSelecionados(
   ids: number[],

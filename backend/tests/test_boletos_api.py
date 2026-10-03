@@ -177,7 +177,7 @@ def test_envio_de_boleto_com_nfse_anexa_os_dois_pdfs_no_mesmo_email(http, db, cl
     assert enviados[0]['destinatario'] == cliente.email
     assert len(enviados[0]['anexos']) == 2
     assert enviados[0]['anexos'][0][0].endswith('.pdf')
-    assert enviados[0]['anexos'][1][0] == 'nfse-321.pdf'
+    assert enviados[0]['anexos'][1][0] == 'Notafical_Joao_Silva_10-2026.pdf'
     assert enviados[0]['anexos'][0][1].startswith(b'%PDF')
     assert enviados[0]['anexos'][1][1] == b'%PDF-nfse'
 
