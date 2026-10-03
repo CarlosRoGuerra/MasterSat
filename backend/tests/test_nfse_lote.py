@@ -591,6 +591,40 @@ def test_carteira_exibe_estados_reais_do_boleto_e_da_nfse(db, http_fin):
     assert linha['nfse_status'] == 'emitida'
 
 
+def test_carteira_filtra_combinacoes_de_boleto_e_nfse_antes_do_limite(db, http_fin):
+    client = _client(db, 'FILTRO EMISSAO')
+    sem_ambos = _billing(db, client)
+    so_boleto = _billing(db, client)
+    so_nfse = _billing(db, client)
+    com_ambos = _billing(db, client)
+    nfse_com_erro = _billing(db, client)
+    for billing in (so_boleto, com_ambos):
+        db.add(AilosBoleto(
+            billing_id=billing.id, numero_convenio='102004',
+            nosso_numero=str(billing.id), linha_digitavel='123', codigo_barras='456',
+        ))
+    db.commit()
+    _nota(db, so_nfse, status='emitida')
+    _nota(db, com_ambos, status='emitida')
+    _nota(db, nfse_com_erro, status='erro')
+
+    combinacoes = (
+        ({'boleto_emitido': True, 'nfse_emitida': True}, {com_ambos.id}),
+        ({'boleto_emitido': False, 'nfse_emitida': False}, {sem_ambos.id, nfse_com_erro.id}),
+        ({'boleto_emitido': True, 'nfse_emitida': False}, {so_boleto.id}),
+        ({'boleto_emitido': False, 'nfse_emitida': True}, {so_nfse.id}),
+    )
+    for filtros, esperados in combinacoes:
+        resp = http_fin.get('/api/v1/billings/', params=filtros)
+        assert resp.status_code == 200, resp.text
+        assert {item['id'] for item in resp.json()} == esperados
+
+    limitado = http_fin.get('/api/v1/billings/', params={
+        'boleto_emitido': True, 'nfse_emitida': True, 'limit': 1,
+    })
+    assert [item['id'] for item in limitado.json()] == [com_ambos.id]
+
+
 def test_envio_separado_recusa_nfse_ainda_nao_emitida(db, http_fin, monkeypatch):
     client = _client(db, 'SEM NOTA EMITIDA')
     client.email = 'nota@example.com'

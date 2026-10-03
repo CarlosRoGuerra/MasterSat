@@ -376,11 +376,15 @@ function BillingTableSection({
   billingStatusFilter,
   billingDueMonth,
   billingClosingMonth,
+  billingBoletoFilter,
+  billingNfseFilter,
   onViewToggle,
   onSearchChange,
   onStatusFilterChange,
   onDueMonthChange,
   onClosingMonthChange,
+  onBoletoFilterChange,
+  onNfseFilterChange,
   onRefresh,
   onSelect,
   selectedId,
@@ -409,11 +413,15 @@ function BillingTableSection({
   billingStatusFilter: string;
   billingDueMonth: string;
   billingClosingMonth: string;
+  billingBoletoFilter: string;
+  billingNfseFilter: string;
   onViewToggle: () => void;
   onSearchChange: (v: string) => void;
   onStatusFilterChange: (v: string) => void;
   onDueMonthChange: (v: string) => void;
   onClosingMonthChange: (v: string) => void;
+  onBoletoFilterChange: (v: string) => void;
+  onNfseFilterChange: (v: string) => void;
   onRefresh: () => void;
   onSelect: (b: Billing) => void;
   selectedId?: number;
@@ -435,6 +443,17 @@ function BillingTableSection({
   rowActionLabel?: string;
 }) {
   const acoesLote = batchActions ?? ['receive', 'cancel', 'maint', 'emit', 'emit_all', 'email', 'email_com_nfse', 'nfse_email', 'nfse'];
+  const [tipoEnvio, setTipoEnvio] = useState<'email' | 'email_com_nfse' | 'nfse_email' | ''>('');
+  const podeEnviarBoleto = !!onBatchEmail && acoesLote.includes('email');
+  const podeEnviarBoletoComNfse = !!onBatchEmailComNfse && acoesLote.includes('email_com_nfse');
+  const podeEnviarNfse = !!onBatchNfseEmail && acoesLote.includes('nfse_email');
+  const envioSelecionado =
+    (tipoEnvio === 'email' && podeEnviarBoleto) ||
+    (tipoEnvio === 'email_com_nfse' && podeEnviarBoletoComNfse) ||
+    (tipoEnvio === 'nfse_email' && podeEnviarNfse) ? tipoEnvio : '';
+  useEffect(() => {
+    if (!batchIds?.length) setTipoEnvio('');
+  }, [batchIds?.length]);
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const in7 = new Date(today); in7.setDate(in7.getDate() + 7);
 
@@ -488,6 +507,22 @@ function BillingTableSection({
                    onChange={e => onClosingMonthChange(e.target.value)} />
           </label>
           {billingClosingMonth && <Button variant="secondary" onClick={() => onClosingMonthChange('')} className="text-xs px-3 py-1.5">Limpar fechamento</Button>}
+          <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+            Boleto
+            <select className={fc} style={{ width: 155 }} value={billingBoletoFilter} onChange={e => onBoletoFilterChange(e.target.value)}>
+              <option value="">Todos</option>
+              <option value="true">Emitido</option>
+              <option value="false">Não emitido</option>
+            </select>
+          </label>
+          <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+            Nota fiscal
+            <select className={fc} style={{ width: 155 }} value={billingNfseFilter} onChange={e => onNfseFilterChange(e.target.value)}>
+              <option value="">Todas</option>
+              <option value="true">Emitida</option>
+              <option value="false">Não emitida</option>
+            </select>
+          </label>
         </div>
       )}
       {/* Barra de ações em lote */}
@@ -496,9 +531,25 @@ function BillingTableSection({
           <span className="font-bold text-brand-800 dark:text-brand-200">{batchIds.length} selecionada(s)</span>
           {onBatchEmit && acoesLote.includes('emit') && <Button disabled={batchBusy} onClick={onBatchEmit} className="!py-1.5 text-xs">Emitir na Ailos</Button>}
           {onBatchEmitAll && acoesLote.includes('emit_all') && <Button disabled={batchBusy} onClick={onBatchEmitAll} className="!py-1.5 text-xs">Emitir boletos + NFS-e</Button>}
-          {onBatchEmail && acoesLote.includes('email') && <Button disabled={batchBusy} variant="secondary" onClick={onBatchEmail} className="!py-1.5 text-xs">Enviar só boleto</Button>}
-          {onBatchEmailComNfse && acoesLote.includes('email_com_nfse') && <Button disabled={batchBusy} variant="secondary" onClick={onBatchEmailComNfse} className="!py-1.5 text-xs">Enviar boleto + NFS-e</Button>}
-          {onBatchNfseEmail && acoesLote.includes('nfse_email') && <Button disabled={batchBusy} variant="secondary" onClick={onBatchNfseEmail} className="!py-1.5 text-xs">Enviar só NFS-e</Button>}
+          {(podeEnviarBoleto || podeEnviarBoletoComNfse || podeEnviarNfse) && (
+            <label className="flex items-center gap-2 text-xs text-brand-800 dark:text-brand-200">
+              Tipo de envio
+              <select
+                className="rounded-lg border border-brand-300 bg-white px-2 py-1.5 text-xs text-slate-900 outline-none focus:ring-2 focus:ring-brand-500/20 disabled:opacity-50 dark:border-brand-700 dark:bg-slate-900 dark:text-white"
+                value={envioSelecionado}
+                disabled={batchBusy}
+                onChange={e => setTipoEnvio(e.target.value as typeof tipoEnvio)}
+              >
+                <option value="">Selecionar envio</option>
+                {podeEnviarBoleto && <option value="email">Só boleto</option>}
+                {podeEnviarBoletoComNfse && <option value="email_com_nfse">Boleto + NFS-e</option>}
+                {podeEnviarNfse && <option value="nfse_email">Só NFS-e</option>}
+              </select>
+            </label>
+          )}
+          {envioSelecionado === 'email' && onBatchEmail && <Button disabled={batchBusy} variant="secondary" onClick={onBatchEmail} className="!py-1.5 text-xs">Enviar só boleto</Button>}
+          {envioSelecionado === 'email_com_nfse' && onBatchEmailComNfse && <Button disabled={batchBusy} variant="secondary" onClick={onBatchEmailComNfse} className="!py-1.5 text-xs">Enviar boleto + NFS-e</Button>}
+          {envioSelecionado === 'nfse_email' && onBatchNfseEmail && <Button disabled={batchBusy} variant="secondary" onClick={onBatchNfseEmail} className="!py-1.5 text-xs">Enviar só NFS-e</Button>}
           {onBatchNfse && acoesLote.includes('nfse') && <Button disabled={batchBusy} variant="secondary" onClick={onBatchNfse} className="!py-1.5 text-xs">Emitir NFS-e</Button>}
           {onBatchReceive && acoesLote.includes('receive') && <Button disabled={batchBusy} onClick={onBatchReceive} className="!py-1.5 text-xs">Receber em lote</Button>}
           {onBatchMaint && acoesLote.includes('maint') && <Button disabled={batchBusy} variant="secondary" onClick={onBatchMaint} className="!py-1.5 text-xs">Alterar venc./valor</Button>}
@@ -646,6 +697,8 @@ export default function FinanceiroPage() {
   const [billingStatusFilter, setBillingStatusFilter] = useState('');
   const [billingDueMonth, setBillingDueMonth] = useState('');
   const [billingClosingMonth, setBillingClosingMonth] = useState('');
+  const [billingBoletoFilter, setBillingBoletoFilter] = useState('');
+  const [billingNfseFilter, setBillingNfseFilter] = useState('');
   const [billingView, setBillingView] = useState<'alert' | 'all'>('alert');
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
@@ -823,6 +876,8 @@ export default function FinanceiroPage() {
       if (billingStatusFilter) query.set('status', billingStatusFilter);
       aplicarMesVencimento(query, billingDueMonth);
       aplicarMesFechamento(query, billingClosingMonth);
+      if (billingBoletoFilter) query.set('boleto_emitido', billingBoletoFilter);
+      if (billingNfseFilter) query.set('nfse_emitida', billingNfseFilter);
       query.set('limit', billingDueMonth || billingClosingMonth ? '1000' : '300');
       const [plansRes, clientsRes, vehiclesRes, trackersRes, contractsRes, productsRes, billingsRes, summaryRes, revenueRes, delinquentRes] = await Promise.all([
         apiFetch<Plan[]>('/plans', {}, currentToken),
@@ -865,6 +920,8 @@ export default function FinanceiroPage() {
       if (billingStatusFilter) query.set('status', billingStatusFilter);
       aplicarMesVencimento(query, billingDueMonth);
       aplicarMesFechamento(query, billingClosingMonth);
+      if (billingBoletoFilter) query.set('boleto_emitido', billingBoletoFilter);
+      if (billingNfseFilter) query.set('nfse_emitida', billingNfseFilter);
       query.set('limit', billingDueMonth || billingClosingMonth ? '1000' : '300');
       const billingsRes = await apiFetch<Billing[]>(`/billings?${query.toString()}`, {}, currentToken);
       setBillings(billingsRes);
@@ -898,7 +955,7 @@ export default function FinanceiroPage() {
   const billingSearchDebounced = useDebouncedValue(billingSearch);
   useEffectSkipFirst(() => {
     if (token) loadBillingsOnly(token);
-  }, [billingSearchDebounced, billingStatusFilter, billingDueMonth, billingClosingMonth]);
+  }, [billingSearchDebounced, billingStatusFilter, billingDueMonth, billingClosingMonth, billingBoletoFilter, billingNfseFilter]);
 
   useEffect(() => {
     if (token && activeTab === 'payables') loadPayables(token);
@@ -2030,11 +2087,15 @@ export default function FinanceiroPage() {
               billingStatusFilter={billingStatusFilter}
               billingDueMonth={billingDueMonth}
               billingClosingMonth={billingClosingMonth}
+              billingBoletoFilter={billingBoletoFilter}
+              billingNfseFilter={billingNfseFilter}
               onViewToggle={() => setBillingView(billingView === 'alert' ? 'all' : 'alert')}
               onSearchChange={setBillingSearch}
               onStatusFilterChange={setBillingStatusFilter}
               onDueMonthChange={mes => { setBillingDueMonth(mes); setSelectedBillingIds([]); }}
               onClosingMonthChange={mes => { setBillingClosingMonth(mes); setSelectedBillingIds([]); }}
+              onBoletoFilterChange={valor => { setBillingBoletoFilter(valor); setSelectedBillingIds([]); }}
+              onNfseFilterChange={valor => { setBillingNfseFilter(valor); setSelectedBillingIds([]); }}
               onRefresh={() => token && loadData(token)}
               onSelect={b => setSelectedBilling(b)}
               selectedId={selectedBilling?.id}
@@ -2406,11 +2467,15 @@ export default function FinanceiroPage() {
               billingStatusFilter={billingStatusFilter}
               billingDueMonth={billingDueMonth}
               billingClosingMonth={billingClosingMonth}
+              billingBoletoFilter={billingBoletoFilter}
+              billingNfseFilter={billingNfseFilter}
               onViewToggle={() => {}}
               onSearchChange={setBillingSearch}
               onStatusFilterChange={setBillingStatusFilter}
               onDueMonthChange={mes => { setBillingDueMonth(mes); setSelectedBillingIds([]); }}
               onClosingMonthChange={mes => { setBillingClosingMonth(mes); setSelectedBillingIds([]); }}
+              onBoletoFilterChange={valor => { setBillingBoletoFilter(valor); setSelectedBillingIds([]); }}
+              onNfseFilterChange={valor => { setBillingNfseFilter(valor); setSelectedBillingIds([]); }}
               onRefresh={() => token && loadData(token)}
               onSelect={carteiraRowSelect}
               selectedId={selectedBilling?.id}

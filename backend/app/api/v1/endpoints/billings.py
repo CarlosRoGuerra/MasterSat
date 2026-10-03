@@ -589,7 +589,7 @@ def billing_components(
 
 
 @router.get('/', response_model=list[BillingOut])
-def list_items(search: str | None = None, status: str | None = None, client_id: int | None = None, contract_id: int | None = None, vehicle_id: int | None = None, due_from: date | None = None, due_to: date | None = None, period_label: str | None = Query(default=None, pattern=r'^(0[1-9]|1[0-2])/\d{4}$'), include_substituted: bool = False, limit: int = Query(default=200, ge=1, le=1000), db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
+def list_items(search: str | None = None, status: str | None = None, client_id: int | None = None, contract_id: int | None = None, vehicle_id: int | None = None, due_from: date | None = None, due_to: date | None = None, period_label: str | None = Query(default=None, pattern=r'^(0[1-9]|1[0-2])/\d{4}$'), boleto_emitido: bool | None = None, nfse_emitida: bool | None = None, include_substituted: bool = False, limit: int = Query(default=200, ge=1, le=1000), db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
     query = apply_filters(base_query(db), search, status, client_id, contract_id, due_from, due_to, vehicle_id)
     if period_label:
         mes, ano = period_label.split('/')
@@ -601,6 +601,19 @@ def list_items(search: str | None = None, status: str | None = None, client_id: 
             Billing.period_label == period_label,
             Billing.competencia == competencia,
         ))
+    if boleto_emitido is not None:
+        # O indicador da carteira exige os dois dados bancários. O LEFT JOIN
+        # produz NULL quando não existe boleto; a negação simples perderia essas linhas.
+        query = query.filter(
+            and_(AilosBoleto.linha_digitavel.isnot(None), AilosBoleto.codigo_barras.isnot(None))
+            if boleto_emitido else
+            or_(AilosBoleto.linha_digitavel.is_(None), AilosBoleto.codigo_barras.is_(None))
+        )
+    if nfse_emitida is not None:
+        query = query.filter(
+            NfseNota.status == 'emitida' if nfse_emitida else
+            or_(NfseNota.status.is_(None), NfseNota.status != 'emitida')
+        )
     if not include_substituted:
         # Componentes de um fechamento não são boletos independentes.
         query = query.filter(Billing.substituted_by_id.is_(None))
