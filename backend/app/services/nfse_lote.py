@@ -65,6 +65,7 @@ def listar_elegiveis(
     *,
     busca: str | None = None,
     tipo: str | None = None,
+    billing_ids: list[int] | None = None,
 ) -> dict:
     """
     Candidatos à emissão no lote de fechamento informado: cobranças cujo cliente
@@ -84,9 +85,14 @@ def listar_elegiveis(
             # Cobrança cancelada (inclui as originais consolidadas em boleto
             # único) não é elegível para NFS-e.
             Billing.status != BillingStatus.CANCELED,
-            Billing.period_label == period_label,
             Client.is_deleted.is_(False),
         )
+    )
+    # A seleção manual pode abranger cobranças de meses diferentes e avulsas
+    # sem period_label. A consulta do fechamento continua restrita ao mês.
+    query = query.filter(
+        Billing.period_label == period_label if billing_ids is None
+        else Billing.id.in_(billing_ids)
     )
 
     busca_alvo = (busca or '').strip().lower()
@@ -130,6 +136,37 @@ def listar_elegiveis(
     }
 
 
+def previsualizar_selecionados(db: Session, billing_ids: list[int]) -> dict:
+    """Mostra quem não permite NFS-e antes da confirmação, sem emitir nada."""
+    alvos = sorted(set(billing_ids))
+    elegiveis = {
+        item['billing_id'] for item in listar_elegiveis(
+            db, 'Seleção manual', billing_ids=alvos,
+        )['itens']
+    }
+    nao_emitem = []
+    outros_ignorados = []
+    encontrados = set()
+    for billing in db.query(Billing).filter(Billing.id.in_(alvos)).all():
+        encontrados.add(billing.id)
+        if billing.id in elegiveis:
+            continue
+        owner = db.get(Client, billing.client_id)
+        tomador = resolver_pagador(db, billing, owner) if owner else None
+        if billing.is_deleted or billing.status == BillingStatus.CANCELED or not tomador or tomador.is_deleted:
+            outros_ignorados.append(billing.id)
+        elif tomador.issue_invoice != 'sim':
+            nao_emitem.append({'billing_id': billing.id, 'cliente': tomador.name})
+        else:
+            outros_ignorados.append(billing.id)  # nota já emitida/em processamento
+    outros_ignorados.extend(set(alvos) - encontrados)
+    return {
+        'elegiveis': sorted(elegiveis),
+        'nao_emitem': sorted(nao_emitem, key=lambda item: (item['cliente'], item['billing_id'])),
+        'outros_ignorados': sorted(outros_ignorados),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Criação do lote (transacional) + disparo assíncrono
 # ---------------------------------------------------------------------------
@@ -144,6 +181,7 @@ def criar_lote(
     discriminacao: str | None = None,
     criado_por: int | None = None,
     emitir_async: bool = True,
+    selecionados_livres: bool = False,
 ) -> NfseLote:
     """
     Cria o lote e as notas pendentes numa única transação e dispara a emissão.
@@ -159,7 +197,11 @@ def criar_lote(
         # elegibilidade é lida DEPOIS do lock; o mapa da tela não é uma reserva.
         alvos = sorted(set(billing_ids))
         db.query(Billing).filter(Billing.id.in_(alvos)).order_by(Billing.id).with_for_update().all()
-        elegiveis = {i['billing_id'] for i in listar_elegiveis(db, period_label)['itens']}
+        candidatos = (
+            listar_elegiveis(db, period_label, billing_ids=alvos)
+            if selecionados_livres else listar_elegiveis(db, period_label)
+        )
+        elegiveis = {i['billing_id'] for i in candidatos['itens']}
         lote = NfseLote(
             period_label=period_label,
             competencia=competencia,
@@ -325,6 +367,9 @@ def _emitir_uma(db: Session, nota: NfseNota, emitir_fn, cod_trib_nacional=None,
         return
     if billing.is_deleted or billing.status == BillingStatus.CANCELED or client.is_deleted:
         _erro_antes_da_reserva(db, nota_id, lote_id, 'Cobrança cancelada/excluída ou tomador excluído.')
+        return
+    if client.issue_invoice != 'sim':
+        _erro_antes_da_reserva(db, nota_id, lote_id, 'Tomador não está configurado para emitir nota fiscal.')
         return
     from app.services import nfse_provider  # tardio: evita ciclo de import (ver _processar_lote)
     erros_esperados = (*nfse_provider.ErrosConfig, *nfse_provider.ErrosApi)

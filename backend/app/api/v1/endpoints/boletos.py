@@ -525,6 +525,7 @@ def _valor_brl(v) -> str:
 @router.post("/{billing_id}/enviar-email")
 def enviar_boleto_email(
     billing_id: int,
+    incluir_nfse: bool = Query(default=False),
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*ALLOWED_ROLES)),
 ):
@@ -550,6 +551,10 @@ def enviar_boleto_email(
 
     dados = dados_boleto(b, c, db, ailos_boleto)
     pdf_bytes, filename = _montar_pdf_boleto(b, c, db, ailos_boleto)
+    nfse_anexo = None
+    if incluir_nfse:
+        from app.api.v1.endpoints.nfse import anexo_nfse_emitida
+        nfse_anexo = anexo_nfse_emitida(db, billing_id)
 
     variaveis = {
         'NOME': (c.name or '').upper(),
@@ -562,15 +567,15 @@ def enviar_boleto_email(
     tpl = carregar_mensagens(db)
     assunto = render_template(tpl['msg_boleto_assunto'], variaveis)
     corpo = render_template(tpl['msg_boleto'], variaveis)
+    if nfse_anexo:
+        corpo += '\n\nA NFS-e desta cobrança também está anexada a este e-mail.'
 
     from app.services.email_smtp import EmailConfigError, enviar_email
     try:
+        anexos = [(filename, pdf_bytes, 'application/pdf')]
         enviar_email(
-            db,
-            destinatario=c.email,
-            assunto=assunto,
-            corpo=corpo,
-            anexo=(filename, pdf_bytes, 'application/pdf'),
+            db, destinatario=c.email, assunto=assunto, corpo=corpo,
+            **({'anexos': [*anexos, nfse_anexo]} if nfse_anexo else {'anexo': anexos[0]}),
         )
     except EmailConfigError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

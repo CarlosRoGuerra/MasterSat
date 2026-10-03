@@ -65,6 +65,26 @@ class LoteResumo(BaseModel):
     concluido_em: str | None = None
 
 
+class LoteSelecionadosIn(BaseModel):
+    billing_ids: list[int] = Field(..., min_length=1, description='Cobranças marcadas no Financeiro')
+
+
+class LoteSelecionadosOut(BaseModel):
+    lote: LoteResumo
+    ignorados: list[int] = Field(default_factory=list)
+
+
+class NfseClienteNaoEmite(BaseModel):
+    billing_id: int
+    cliente: str
+
+
+class LoteSelecionadosPreviaOut(BaseModel):
+    elegiveis: list[int] = Field(default_factory=list)
+    nao_emitem: list[NfseClienteNaoEmite] = Field(default_factory=list)
+    outros_ignorados: list[int] = Field(default_factory=list)
+
+
 class LoteNotaItem(BaseModel):
     """Linha do drill-down: status individual de uma nota do lote."""
 

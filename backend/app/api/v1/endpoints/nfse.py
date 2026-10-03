@@ -19,6 +19,7 @@ PDF da nota, dois caminhos:
 """
 from __future__ import annotations
 
+import smtplib
 from datetime import date
 from typing import NoReturn
 
@@ -40,6 +41,9 @@ from app.schemas.nfse import (
     LoteDetalhe,
     LoteEmitirIn,
     LoteResumo,
+    LoteSelecionadosIn,
+    LoteSelecionadosOut,
+    LoteSelecionadosPreviaOut,
     NfseClientItem,
     NfseOut,
     NotasOut,
@@ -131,6 +135,8 @@ def emitir(
         raise HTTPException(status_code=404, detail='Cliente da cobrança não encontrado')
     # Tomador = interveniente do contrato, quando houver (coerente com o boleto).
     client = resolver_pagador(db, billing, owner)
+    if client.issue_invoice != 'sim':
+        raise HTTPException(status_code=409, detail='O responsável financeiro não está configurado com Emitir Nota Fiscal = Sim.')
     try:
         return nfse_provider.emitir_nfse(db, billing, client, cod_trib_nacional=cod_trib_nacional,
                                        competencia=competencia, discriminacao=discriminacao)
@@ -248,6 +254,38 @@ def lote_emitir(
     return nfse_lote._lote_resumo(lote)
 
 
+@router.post('/lotes/selecionados/previa', response_model=LoteSelecionadosPreviaOut)
+def lote_previa_selecionados(
+    payload: LoteSelecionadosIn,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    return nfse_lote.previsualizar_selecionados(db, payload.billing_ids)
+
+
+@router.post('/lotes/selecionados', response_model=LoteSelecionadosOut, status_code=201)
+def lote_emitir_selecionados(
+    payload: LoteSelecionadosIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    """Emite em lote apenas as cobranças marcadas e com tomador optante por NFS-e."""
+    try:
+        lote = nfse_lote.criar_lote(
+            db, 'Seleção manual', payload.billing_ids,
+            criado_por=user.id, selecionados_livres=True,
+        )
+    except nfse_lote.LoteError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    incluidos = {
+        row[0] for row in db.query(NfseNota.billing_id).filter(NfseNota.lote_id == lote.id).all()
+    }
+    return LoteSelecionadosOut(
+        lote=nfse_lote._lote_resumo(lote),
+        ignorados=sorted(set(payload.billing_ids) - incluidos),
+    )
+
+
 @router.get('/lotes', response_model=list[LoteResumo])
 def lote_listar(
     limit: int = 100,
@@ -361,6 +399,48 @@ def _danfse_local_bytes(nota: NfseNota, db: Session, billing_id: int) -> bytes:
         )
     except nfse_danfse.DanfseError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def anexo_nfse_emitida(db: Session, billing_id: int) -> tuple[str, bytes, str]:
+    """DANFSe de uma nota autorizada; usado pelo envio separado ou junto ao boleto."""
+    nota = db.query(NfseNota).filter_by(billing_id=billing_id).first()
+    if nota is None or nota.status != 'emitida':
+        raise HTTPException(status_code=409, detail='A NFS-e ainda não foi emitida para esta cobrança.')
+    pdf = _danfse_local_bytes(nota, db, billing_id)
+    return (f'nfse-{nota.numero_nfse or billing_id}.pdf', pdf, 'application/pdf')
+
+
+@router.post('/{billing_id}/enviar-email')
+def enviar_nfse_email(
+    billing_id: int,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    """Envia somente a NFS-e já emitida ao tomador financeiro da cobrança."""
+    billing = db.get(Billing, billing_id)
+    if billing is None or billing.is_deleted:
+        raise HTTPException(status_code=404, detail='Cobrança não encontrada')
+    owner = db.get(Client, billing.client_id)
+    if owner is None or owner.is_deleted:
+        raise HTTPException(status_code=404, detail='Cliente da cobrança não encontrado')
+    tomador = resolver_pagador(db, billing, owner)
+    if not tomador.email:
+        raise HTTPException(status_code=400, detail='Responsável financeiro sem e-mail cadastrado.')
+    anexo = anexo_nfse_emitida(db, billing_id)
+    from app.services.email_smtp import EmailConfigError, enviar_email
+    try:
+        enviar_email(
+            db,
+            destinatario=tomador.email,
+            assunto=f'NFS-e da cobrança #{billing_id} - MasterSat',
+            corpo=f'Olá, {tomador.name}.\n\nSegue em anexo a nota fiscal da cobrança #{billing_id}.\n\nMasterSat',
+            anexo=anexo,
+        )
+    except EmailConfigError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (smtplib.SMTPException, OSError) as exc:
+        raise HTTPException(status_code=400, detail=f'Não foi possível enviar a NFS-e por e-mail: {exc}') from exc
+    return {'message': f'NFS-e enviada para {tomador.email}.'}
 
 
 @router.get('/{billing_id}/danfse-local')

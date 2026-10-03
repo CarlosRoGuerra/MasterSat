@@ -45,4 +45,14 @@ describe('ações em lote dos boletos selecionados', () => {
     expect(resultado.processados).toEqual([]);
     expect(resultado.falhas[0]).toMatchObject({ id: 9 });
   });
+
+  it('permite escolher boleto e NFS-e juntos ou enviar somente a NFS-e', async () => {
+    apiFetch.mockResolvedValue({});
+
+    await processarBoletosSelecionados([7], 'email_com_nfse', 'token');
+    await processarBoletosSelecionados([8], 'nfse_email', 'token');
+
+    expect(apiFetch).toHaveBeenNthCalledWith(1, '/boletos/7/enviar-email?incluir_nfse=true', { method: 'POST' }, 'token');
+    expect(apiFetch).toHaveBeenNthCalledWith(2, '/nfse/8/enviar-email', { method: 'POST' }, 'token');
+  });
 });

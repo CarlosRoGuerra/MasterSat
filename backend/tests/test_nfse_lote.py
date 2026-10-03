@@ -245,6 +245,22 @@ def test_criar_lote_ignora_ids_nao_elegiveis(db):
     assert lote.total_notas == 1
 
 
+def test_worker_recusa_nota_se_tomador_desativou_emissao_apos_selecao(db):
+    client = _client(db, 'MUDOU CADASTRO')
+    billing = _billing(db, client)
+    lote = nfse_lote.criar_lote(db, '07/2026', [billing.id], emitir_async=False)
+    nota = db.query(NfseNota).filter_by(lote_id=lote.id).one()
+    client.issue_invoice = 'nao'
+    db.commit()
+    chamadas = []
+
+    nfse_lote._emitir_uma(db, nota, lambda *args, **kwargs: chamadas.append(True))
+
+    db.refresh(nota)
+    assert nota.status == 'erro'
+    assert chamadas == []
+
+
 def test_criar_lote_sem_selecao_falha(db):
     with pytest.raises(nfse_lote.LoteError, match='Nenhuma cobrança'):
         nfse_lote.criar_lote(db, '07/2026', [], emitir_async=False)
@@ -444,6 +460,94 @@ def test_endpoint_emitir_lote_cria_e_retorna(db, http_fin, monkeypatch):
     body = r.json()
     assert body['total_notas'] == 1
     assert body['status'] == 'processando'
+
+
+def test_endpoint_selecionados_emite_apenas_tomadores_sim_em_qualquer_periodo(db, http_fin, monkeypatch):
+    monkeypatch.setattr(nfse_lote, '_emitir_lote_worker', lambda lote_id: None)
+    sim_julho = _billing(db, _client(db, 'JULHO', doc='111'), period='07/2026')
+    sim_agosto = _billing(db, _client(db, 'AGOSTO', doc='222'), period='08/2026')
+    sim_avulsa = _billing(db, _client(db, 'AVULSA', doc='333'), period=None)
+    nao = _billing(db, _client(db, 'NAO', emitir='nao', doc='444'))
+    vazio = _billing(db, _client(db, 'VAZIO', emitir=None, doc='555'))
+    ja_emitida = _billing(db, _client(db, 'JA EMITIDA', doc='666'))
+    _nota(db, ja_emitida, status='emitida')
+
+    selecionados = [sim_julho.id, sim_agosto.id, sim_avulsa.id, nao.id, vazio.id, ja_emitida.id]
+    previa = http_fin.post('/api/v1/nfse/lotes/selecionados/previa', json={'billing_ids': selecionados})
+    assert previa.status_code == 200
+    assert previa.json()['elegiveis'] == sorted([sim_julho.id, sim_agosto.id, sim_avulsa.id])
+    assert previa.json()['nao_emitem'] == [
+        {'billing_id': nao.id, 'cliente': 'NAO'},
+        {'billing_id': vazio.id, 'cliente': 'VAZIO'},
+    ]
+    assert previa.json()['outros_ignorados'] == [ja_emitida.id]
+    resp = http_fin.post('/api/v1/nfse/lotes/selecionados', json={'billing_ids': selecionados})
+
+    assert resp.status_code == 201, resp.text
+    assert resp.json()['lote']['total_notas'] == 3
+    assert resp.json()['ignorados'] == sorted([nao.id, vazio.id, ja_emitida.id])
+    lote_id = resp.json()['lote']['id']
+    assert {n.billing_id for n in db.query(NfseNota).filter_by(lote_id=lote_id)} == {
+        sim_julho.id, sim_agosto.id, sim_avulsa.id,
+    }
+
+
+def test_emissao_individual_recusa_tomador_sem_sim(db, http_fin, monkeypatch):
+    from app.services import nfse_provider
+
+    nao = _billing(db, _client(db, 'SEM NOTA', emitir='nao'))
+    chamado = []
+    monkeypatch.setattr(nfse_provider, 'emitir_nfse', lambda *args, **kwargs: chamado.append(True))
+
+    resp = http_fin.post(f'/api/v1/nfse/emitir/{nao.id}')
+
+    assert resp.status_code == 409
+    assert 'Sim' in resp.json()['detail']
+    assert chamado == []
+
+
+def test_endpoint_selecionados_sem_cliente_sim_nao_cria_lote(db, http_fin):
+    nao = _billing(db, _client(db, 'SEM NOTA', emitir='nao'))
+
+    resp = http_fin.post('/api/v1/nfse/lotes/selecionados', json={'billing_ids': [nao.id]})
+
+    assert resp.status_code == 422
+    assert db.query(NfseLote).count() == 0
+    assert db.query(NfseNota).count() == 0
+
+
+def test_envio_separado_de_nfse_usa_tomador_e_danfse_emitida(db, http_fin, monkeypatch):
+    client = _client(db, 'DESTINATARIO NF')
+    client.email = 'nota@example.com'
+    billing = _billing(db, client)
+    db.commit()
+    _nota(db, billing, status='emitida')
+    from app.api.v1.endpoints import nfse
+    from app.services import email_smtp
+    monkeypatch.setattr(nfse, '_danfse_local_bytes', lambda *args: b'%PDF-nota')
+    enviados = []
+    monkeypatch.setattr(email_smtp, 'enviar_email', lambda *args, **kwargs: enviados.append(kwargs))
+
+    resp = http_fin.post(f'/api/v1/nfse/{billing.id}/enviar-email')
+
+    assert resp.status_code == 200, resp.text
+    assert enviados[0]['destinatario'] == 'nota@example.com'
+    assert enviados[0]['anexo'][1] == b'%PDF-nota'
+
+
+def test_envio_separado_recusa_nfse_ainda_nao_emitida(db, http_fin, monkeypatch):
+    client = _client(db, 'SEM NOTA EMITIDA')
+    client.email = 'nota@example.com'
+    billing = _billing(db, client)
+    db.commit()
+    from app.services import email_smtp
+    enviados = []
+    monkeypatch.setattr(email_smtp, 'enviar_email', lambda *args, **kwargs: enviados.append(kwargs))
+
+    resp = http_fin.post(f'/api/v1/nfse/{billing.id}/enviar-email')
+
+    assert resp.status_code == 409
+    assert enviados == []
 
 
 def test_endpoint_emitir_lote_sem_elegiveis_retorna_422(db, http_fin):

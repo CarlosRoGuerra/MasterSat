@@ -117,11 +117,12 @@ def enviar_email(
     html: str | None = None,
     anexo: tuple[str, bytes, str] | None = None,
     config: dict | None = None,
+    anexos: list[tuple[str, bytes, str]] | None = None,
 ) -> None:
     """Envia um e-mail. Levanta EmailConfigError/smtplib.* em caso de falha.
 
-    ``anexo``, se informado, é ``(nome_do_arquivo, conteudo, content_type)``
-    (ex.: ``("boleto.pdf", pdf_bytes, "application/pdf")``).
+    ``anexo`` é mantido para as chamadas existentes; ``anexos`` permite
+    mandar boleto e NFS-e juntos no mesmo e-mail.
     """
     cfg = config or load_config(db)
     if not cfg['host'] or not cfg['from_email']:
@@ -134,8 +135,7 @@ def enviar_email(
     msg.set_content(corpo)
     if html:
         msg.add_alternative(html, subtype='html')
-    if anexo:
-        nome, conteudo, content_type = anexo
+    for nome, conteudo, content_type in ([anexo] if anexo else []) + (anexos or []):
         maintype, _, subtype = content_type.partition('/')
         msg.add_attachment(conteudo, maintype=maintype or 'application', subtype=subtype or 'octet-stream', filename=nome)
 

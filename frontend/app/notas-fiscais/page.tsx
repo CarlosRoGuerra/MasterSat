@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   FileText, RefreshCw, CheckCircle2, AlertTriangle, Loader2, Receipt,
   ListChecks, ChevronLeft, ExternalLink, FileDown, FileCode2, Search, Printer,
-  LayoutDashboard, Layers, Plus, SlidersHorizontal, ShieldCheck, Upload,
+  LayoutDashboard, Layers, Plus, SlidersHorizontal, ShieldCheck, Upload, Mail,
 } from 'lucide-react';
 
 import { PageShell } from '@/components/page-shell';
@@ -173,10 +173,10 @@ function Campo({ label, children, className }: { label: string; children: React.
 
 /** Botão de ação em ícone, no padrão da grid do sistema antigo. */
 function AcaoIcone({
-  title, onClick, href, children, tone = 'brand',
+  title, onClick, href, children, tone = 'brand', disabled = false,
 }: {
   title: string; onClick?: () => void; href?: string;
-  children: React.ReactNode; tone?: 'brand' | 'slate';
+  children: React.ReactNode; tone?: 'brand' | 'slate'; disabled?: boolean;
 }) {
   const cls =
     `inline-flex h-7 w-7 items-center justify-center rounded-lg border transition-colors ${
@@ -192,7 +192,7 @@ function AcaoIcone({
     );
   }
   return (
-    <button type="button" title={title} aria-label={title} onClick={onClick} className={cls}>
+    <button type="button" title={title} aria-label={title} onClick={onClick} disabled={disabled} className={cls}>
       {children}
     </button>
   );
@@ -238,6 +238,7 @@ export default function NotasFiscaisPage() {
   const [buscando, setBuscando] = useState(false);
   const [emitindo, setEmitindo] = useState(false);
   const [consultandoNota, setConsultandoNota] = useState<number | null>(null);
+  const [enviandoNota, setEnviandoNota] = useState<number | null>(null);
 
   /* ── Carregamentos ── */
   const carregarResumo = useCallback(() => {
@@ -404,6 +405,16 @@ export default function NotasFiscaisPage() {
     } catch (err) { setError(parseErr(err)); }
   }
 
+  async function enviarNotaEmail(billingId: number) {
+    if (!window.confirm('Enviar esta NFS-e por e-mail ao responsável financeiro?')) return;
+    setError(''); setFeedback(''); setEnviandoNota(billingId);
+    try {
+      await apiFetch(`/nfse/${billingId}/enviar-email`, { method: 'POST' }, token);
+      setFeedback(`NFS-e da cobrança #${billingId} enviada por e-mail.`);
+    } catch (err) { setError(parseErr(err)); }
+    finally { setEnviandoNota(null); }
+  }
+
   const totalSelecionado = elegiveis
     ? elegiveis.itens.filter((i) => selecionados.has(i.billing_id)).reduce((s, i) => s + i.valor, 0)
     : 0;
@@ -432,6 +443,7 @@ export default function NotasFiscaisPage() {
         }
       >
         {error && <ErrorBanner message={error} />}
+        {feedback && <p role="status" className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-700">{feedback}</p>}
         <div className="grid grid-cols-2 gap-5 sm:grid-cols-4">
           <MetricCard label="Situação" value={statusBadge(loteAberto.status)} />
           <MetricCard label="Notas" value={loteAberto.total_notas} icon={<Receipt className="h-4 w-4" />} />
@@ -473,6 +485,10 @@ export default function NotasFiscaisPage() {
                         </AcaoIcone>
                         <AcaoIcone title="XML da NFS-e" onClick={() => baixarArquivo(n.billing_id, 'xml')}>
                           <FileCode2 className="h-3.5 w-3.5" />
+                        </AcaoIcone>
+                        <AcaoIcone title="Enviar NFS-e por e-mail" disabled={enviandoNota !== null}
+                                   onClick={() => enviarNotaEmail(n.billing_id)}>
+                          <Mail className="h-3.5 w-3.5" />
                         </AcaoIcone>
                         {n.link_visualizacao && (
                           <AcaoIcone title="Consulta pública" href={n.link_visualizacao} tone="slate">
@@ -673,6 +689,10 @@ export default function NotasFiscaisPage() {
                                   <ExternalLink className="h-3.5 w-3.5" />
                                 </AcaoIcone>
                               )}
+                              <AcaoIcone title="Enviar NFS-e por e-mail" disabled={enviandoNota !== null}
+                                         onClick={() => enviarNotaEmail(n.billing_id)}>
+                                <Mail className="h-3.5 w-3.5" />
+                              </AcaoIcone>
                             </>
                           )}
                           {n.lote_id && (

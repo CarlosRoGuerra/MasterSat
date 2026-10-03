@@ -17,6 +17,7 @@ from app.api.v1.endpoints.boletos import _public_token
 from app.models.ailos_boleto import AilosBoleto
 from app.models.billing import Billing
 from app.models.enums import BillingStatus
+from app.models.nfse_nota import NfseNota
 
 
 @pytest.fixture()
@@ -158,6 +159,39 @@ def test_envio_por_email_manda_pdf_anexado_pelo_smtp_configurado(http, db, clien
     assert nome_arquivo.endswith('.pdf')
     assert conteudo[:4] == b'%PDF'
     assert content_type == 'application/pdf'
+
+
+def test_envio_de_boleto_com_nfse_anexa_os_dois_pdfs_no_mesmo_email(http, db, cliente, cobranca, monkeypatch):
+    _registrar(db, cobranca.id)
+    db.add(NfseNota(billing_id=cobranca.id, status='emitida', numero_nfse='321', xml_retorno='<xml/>'))
+    db.commit()
+    from app.api.v1.endpoints import nfse
+    from app.services import email_smtp
+    monkeypatch.setattr(nfse, '_danfse_local_bytes', lambda *args: b'%PDF-nfse')
+    enviados = []
+    monkeypatch.setattr(email_smtp, 'enviar_email', lambda *args, **kwargs: enviados.append(kwargs))
+
+    resp = http.post(f'/api/v1/boletos/{cobranca.id}/enviar-email?incluir_nfse=true')
+
+    assert resp.status_code == 200, resp.text
+    assert enviados[0]['destinatario'] == cliente.email
+    assert len(enviados[0]['anexos']) == 2
+    assert enviados[0]['anexos'][0][0].endswith('.pdf')
+    assert enviados[0]['anexos'][1][0] == 'nfse-321.pdf'
+    assert enviados[0]['anexos'][0][1].startswith(b'%PDF')
+    assert enviados[0]['anexos'][1][1] == b'%PDF-nfse'
+
+
+def test_envio_de_boleto_com_nfse_recusa_se_nota_nao_foi_emitida(http, db, cobranca, monkeypatch):
+    _registrar(db, cobranca.id)
+    from app.services import email_smtp
+    enviados = []
+    monkeypatch.setattr(email_smtp, 'enviar_email', lambda *args, **kwargs: enviados.append(True))
+
+    resp = http.post(f'/api/v1/boletos/{cobranca.id}/enviar-email?incluir_nfse=true')
+
+    assert resp.status_code == 409
+    assert enviados == []
 
 
 def test_envio_por_email_propaga_erro_de_configuracao_smtp(http, db, cobranca, monkeypatch):

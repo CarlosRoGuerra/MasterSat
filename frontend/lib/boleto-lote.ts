@@ -1,6 +1,6 @@
 import { apiFetch } from '@/lib/api';
 
-export type AcaoLoteBoleto = 'emitir' | 'email';
+export type AcaoLoteBoleto = 'emitir' | 'email' | 'email_com_nfse' | 'nfse_email';
 export type ResultadoLoteBoletos = {
   processados: number[];
   falhas: { id: number; mensagem: string }[];
@@ -25,6 +25,10 @@ export async function processarBoletosSelecionados(
         if (!boleto.linha_digitavel || !boleto.codigo_barras) {
           throw new Error('A Ailos ainda não confirmou linha digitável e código de barras.');
         }
+      } else if (acao === 'email_com_nfse') {
+        await apiFetch(`/boletos/${id}/enviar-email?incluir_nfse=true`, { method: 'POST' }, token);
+      } else if (acao === 'nfse_email') {
+        await apiFetch(`/nfse/${id}/enviar-email`, { method: 'POST' }, token);
       } else {
         await apiFetch(`/boletos/${id}/enviar-email`, { method: 'POST' }, token);
       }
