@@ -522,18 +522,8 @@ def _valor_brl(v) -> str:
     return f'{float(v or 0):,.2f}'.replace(',', 'X').replace('.', ',').replace('X', '.')
 
 
-@router.post("/{billing_id}/enviar-email")
-def enviar_boleto_email(
-    billing_id: int,
-    incluir_nfse: bool = Query(default=False),
-    db: Session = Depends(get_db),
-    _: object = Depends(require_roles(*ALLOWED_ROLES)),
-):
-    """
-    Envia o boleto por e-mail direto do painel, via SMTP configurado em
-    Configurações → E-mail, com o PDF anexado — sem depender de cliente de
-    e-mail externo na máquina do operador.
-    """
+def preparar_envio_boleto_email(db: Session, billing_id: int, incluir_nfse: bool):
+    """Valida e monta o e-mail antes de reservar um envio de fechamento."""
     b = _get_billing_or_404(billing_id, db)
     if b.status not in (BillingStatus.PENDING, BillingStatus.OVERDUE):
         raise HTTPException(status_code=409, detail='Somente cobranças em aberto podem ser enviadas por e-mail.')
@@ -570,12 +560,29 @@ def enviar_boleto_email(
     if nfse_anexo:
         corpo += '\n\nA NFS-e desta cobrança também está anexada a este e-mail.'
 
+    anexos = [(filename, pdf_bytes, 'application/pdf')]
+    if nfse_anexo:
+        anexos.append(nfse_anexo)
+    return c.email, assunto, corpo, anexos
+
+
+@router.post("/{billing_id}/enviar-email")
+def enviar_boleto_email(
+    billing_id: int,
+    incluir_nfse: bool = Query(default=False),
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    """Envia boleto por SMTP; anexa a NFS-e quando solicitada."""
+    destinatario, assunto, corpo, anexos = preparar_envio_boleto_email(
+        db, billing_id, incluir_nfse,
+    )
+
     from app.services.email_smtp import EmailConfigError, enviar_email
     try:
-        anexos = [(filename, pdf_bytes, 'application/pdf')]
         enviar_email(
-            db, destinatario=c.email, assunto=assunto, corpo=corpo,
-            **({'anexos': [*anexos, nfse_anexo]} if nfse_anexo else {'anexo': anexos[0]}),
+            db, destinatario=destinatario, assunto=assunto, corpo=corpo,
+            **({'anexos': anexos} if incluir_nfse else {'anexo': anexos[0]}),
         )
     except EmailConfigError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -584,7 +591,7 @@ def enviar_boleto_email(
     except OSError as exc:
         raise HTTPException(status_code=400, detail=f'Não foi possível conectar ao servidor de e-mail: {exc}') from exc
 
-    return {'message': f'E-mail enviado para {c.email}.'}
+    return {'message': f'E-mail enviado para {destinatario}.'}
 
 
 @router.get("/carne/{lote_id}/pdf")

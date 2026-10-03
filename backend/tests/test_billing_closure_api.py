@@ -25,6 +25,7 @@ from openpyxl import load_workbook
 from sqlalchemy import select
 
 from app.models.billing import Billing
+from app.models.closure_job import ClosureJob
 from app.models.client_charge_item import ClientChargeItem
 from app.models.contract import Contract
 from app.models.enums import BillingStatus
@@ -78,6 +79,9 @@ def test_september_service_closure_is_due_in_october(
     assert result.status_code == 200, result.text
     assert result.json()['reference_month'] == '2026-09'
     assert result.json()['billing_month'] == '10/2026'
+    lote = db.get(ClosureJob, result.json()['closure_batch_id'])
+    assert lote.reference_month == '2026-09'
+    assert lote.result['payment_billing_ids'] == result.json()['payment_billing_ids']
     billings = db.scalars(select(Billing).where(
         Billing.id.in_(
             result.json()['billing_ids']

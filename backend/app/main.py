@@ -17,7 +17,7 @@ from app.api.v1.api import api_router
 from app.core.config import settings
 from app.core.limiter import limiter
 from app.db.session import SessionLocal, engine
-from app.models import ailos_api_log, ailos_boleto, ailos_client_token, ailos_integration, ailos_lote, ailos_retorno_arquivo, audit_log, billing, billing_adjustment, billing_change_log, billing_charge_item, client, client_charge_item, closure_job, cnab_remessa, contract, document, integration_log, multiportal_outbox, nfse_certificado, nfse_lote, nfse_nota, password_reset_token, payable, payable_change_log, plan, refresh_token, service_order, service_order_status_log, service_product, sgr_migracao, system_setting, tracker, tracker_history, uninstall_event, user, vehicle  # noqa: F401 — side-effect imports that register models with SQLAlchemy Base
+from app.models import ailos_api_log, ailos_boleto, ailos_client_token, ailos_integration, ailos_lote, ailos_retorno_arquivo, audit_log, billing, billing_adjustment, billing_change_log, billing_charge_item, client, client_charge_item, closure_email_delivery, closure_job, cnab_remessa, contract, document, integration_log, multiportal_outbox, nfse_certificado, nfse_lote, nfse_nota, password_reset_token, payable, payable_change_log, plan, refresh_token, service_order, service_order_status_log, service_product, sgr_migracao, system_setting, tracker, tracker_history, uninstall_event, user, vehicle  # noqa: F401 — side-effect imports that register models with SQLAlchemy Base
 from app.core.audit import AuditMiddleware
 from app.core.audit_queue import run_audit_worker
 from app.core.request_timing import RequestTimingMiddleware

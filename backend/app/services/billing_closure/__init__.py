@@ -12,6 +12,7 @@ from app.core.timezone import hoje
 from app.models.billing import Billing, CONSOLIDATED_BILLING_TYPE
 from app.models.client import Client
 from app.models.client_charge_item import ClientChargeItem
+from app.models.closure_job import ClosureJob
 from app.models.contract import Contract
 from app.models.enums import BillingStatus
 from app.models.plan import Plan
@@ -789,6 +790,20 @@ def execute_closure(
             created_ids.append(unico.id)
         consolidated_ids.append(unico.id)
 
+    lote = None
+    if payment_billing_ids:
+        lote = ClosureJob(
+            reference_month=activity_month.strftime('%Y-%m'),
+            filter_type=filter_type,
+            client_id=client_id,
+            status='completed',
+            result={'payment_billing_ids': payment_billing_ids},
+            started_at=now_utc,
+            completed_at=datetime.now(timezone.utc),
+        )
+        db.add(lote)
+        db.flush()
+
     # Único commit do fechamento: até aqui nada foi confirmado, então uma falha
     # em qualquer etapa acima desfaz o fechamento inteiro em vez de deixar
     # metade das cobranças gravadas.
@@ -802,6 +817,7 @@ def execute_closure(
     total_services_amount = round(float(source_service_amount), 2)
 
     return {
+        'closure_batch_id': lote.id if lote else None,
         'reference_month': simulation['reference_month'],
         'generated': len(created_ids),
         'billing_ids': created_ids,

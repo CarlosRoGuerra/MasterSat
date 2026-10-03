@@ -64,6 +64,7 @@ import { VehiclesModal } from './_components/vehicles-modal';
 import { IntervenienteModal } from './_components/interveniente-modal';
 import { NfseModal } from './_components/nfse-modal';
 import { ContractSheetModal } from './_components/contract-sheet-modal';
+import { ClosureDeliveryModal } from './_components/closure-delivery-modal';
 import {
   clientsKeys,
   useClientVehiclesDetailedQuery,
@@ -94,6 +95,7 @@ function ClientesPageInner() {
   const [lookingUpCep, setLookingUpCep] = useState(false);
   const [error, setError] = useState('');
   const [feedback, setFeedback] = useState('');
+  const [closureDeliveryOpen, setClosureDeliveryOpen] = useState(false);
   const [modalError, setModalError] = useState('');
   const [docCategory, setDocCategory] = useState('cnh');
   const [docFiles, setDocFiles] = useState<File[]>([]);
@@ -1049,6 +1051,7 @@ function ClientesPageInner() {
             actions={
               <div className="flex items-center gap-2">
                 {token && <ExportButton path="exports/clients" basename="clientes" token={token} params={{ status: statusFilter, type: typeFilter }} />}
+                {canFinance && <Button type="button" variant="secondary" onClick={() => setClosureDeliveryOpen(true)}>Enviar fechamento</Button>}
                 {canEdit && <Button type="button" onClick={openCreateModal} className="gap-2"><Plus className="h-4 w-4" />Adicionar cliente</Button>}
               </div>
             }
@@ -1211,6 +1214,7 @@ function ClientesPageInner() {
       </section>
 
       {/* Modal de detalhes */}
+      <ClosureDeliveryModal open={closureDeliveryOpen} token={token} onClose={() => setClosureDeliveryOpen(false)} />
       <ClientDetailModal
         open={detailsOpen}
         client={selectedClient}

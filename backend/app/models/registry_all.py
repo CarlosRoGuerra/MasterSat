@@ -20,6 +20,7 @@ from app.models import (  # noqa: F401
     billing_change_log,
     client,
     client_charge_item,
+    closure_email_delivery,
     closure_job,
     cnab_remessa,
     contract,

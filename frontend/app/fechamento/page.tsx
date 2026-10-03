@@ -108,6 +108,7 @@ type Simulation = {
 
 type GenerateResult = {
   status: 'completed';
+  closure_batch_id: number | null;
   /** Formato canônico da API (YYYY-MM) — o mesmo aceito nos parâmetros. */
   reference_month: string;
   /** Mesmo mês em formato de exibição (MM/YYYY). */
@@ -1077,6 +1078,7 @@ export default function FechamentoPage() {
                 <CheckCircle2 className="h-3.5 w-3.5" />
                 Fechamento concluído — {generateResult.reference_month_label || generateResult.reference_month}
               </span>
+              {generateResult.closure_batch_id && <p className="text-sm font-medium text-slate-700 dark:text-slate-200">Lote de fechamento #{generateResult.closure_batch_id}. Para enviar os documentos, abra Clientes → Enviar fechamento após emitir os boletos e as NFS-e obrigatórias.</p>}
 
               <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
                 <MetricCard

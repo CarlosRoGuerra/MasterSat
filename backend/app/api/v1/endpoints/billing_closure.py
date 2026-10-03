@@ -14,10 +14,38 @@ from app.services.billing_closure import (
     simulate_closure,
 )
 from app.services.financial import add_months
+from app.services.closure_delivery import conferir_lote, enviar_titulo, listar_lotes
 
 router = APIRouter()
 
 ALLOWED_ROLES = (UserRole.ADMIN, UserRole.FINANCIAL)
+
+
+@router.get('/lotes')
+def closure_batches(
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    return listar_lotes(db)
+
+
+@router.get('/lotes/{lote_id}')
+def closure_batch_preview(
+    lote_id: int,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    return conferir_lote(db, lote_id)
+
+
+@router.post('/lotes/{lote_id}/enviar/{billing_id}')
+def closure_batch_send_title(
+    lote_id: int,
+    billing_id: int,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    return enviar_titulo(db, lote_id, billing_id)
 
 
 def _parse_reference_month(reference_month: str):

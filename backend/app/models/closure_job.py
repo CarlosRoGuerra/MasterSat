@@ -9,9 +9,9 @@ from app.models.base import TimestampMixin
 
 class ClosureJob(Base, TimestampMixin):
     """
-    Rastreia jobs assíncronos de fechamento de faturamento.
-    POST /billing-closure/generate retorna o job_id imediatamente;
-    GET /billing-closure/jobs/{job_id} retorna o status e resultado.
+    Registra cada execução de fechamento como um lote identificável.
+    ``result.payment_billing_ids`` contém apenas os títulos efetivos criados
+    nessa execução, sem carnês nem componentes substituídos.
     """
 
     __tablename__ = 'closure_jobs'
