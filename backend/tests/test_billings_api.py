@@ -71,6 +71,32 @@ class TestListBillings:
         assert r.status_code == 200
         assert len(r.json()) >= 1
 
+    def test_filter_by_fechamento_and_due_month_independently(self, http, db, contrato, billing_pendente):
+        billing_pendente.period_label = '09/2026'
+        billing_pendente.due_date = date(2026, 10, 15)
+        db.commit()
+        outro_vencimento = cobranca(
+            db, contrato, period_label='09/2026', due_date=date(2026, 9, 20),
+        )
+        outro_fechamento = cobranca(
+            db, contrato, period_label='10/2026', due_date=date(2026, 10, 20),
+        )
+
+        fechamento = http.get(PREFIX + '/', params={'period_label': '09/2026'})
+        assert fechamento.status_code == 200
+        assert {item['id'] for item in fechamento.json()} == {billing_pendente.id, outro_vencimento.id}
+
+        combinados = http.get(PREFIX + '/', params={
+            'period_label': '09/2026', 'due_from': '2026-10-01', 'due_to': '2026-10-31',
+        })
+        assert combinados.status_code == 200
+        assert [item['id'] for item in combinados.json()] == [billing_pendente.id]
+        assert outro_fechamento.id not in {item['id'] for item in combinados.json()}
+
+    def test_rejects_invalid_fechamento_month(self, http):
+        assert http.get(PREFIX + '/', params={'period_label': '13/2026'}).status_code == 422
+        assert http.get(PREFIX + '/', params={'period_label': '01/0000'}).status_code == 422
+
     def test_search_by_billing_id(self, http, billing_pendente):
         r = http.get(PREFIX + "/", params={"search": str(billing_pendente.id)})
         assert r.status_code == 200

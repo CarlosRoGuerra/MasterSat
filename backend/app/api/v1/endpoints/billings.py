@@ -589,8 +589,18 @@ def billing_components(
 
 
 @router.get('/', response_model=list[BillingOut])
-def list_items(search: str | None = None, status: str | None = None, client_id: int | None = None, contract_id: int | None = None, vehicle_id: int | None = None, due_from: date | None = None, due_to: date | None = None, include_substituted: bool = False, limit: int = Query(default=200, ge=1, le=1000), db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
+def list_items(search: str | None = None, status: str | None = None, client_id: int | None = None, contract_id: int | None = None, vehicle_id: int | None = None, due_from: date | None = None, due_to: date | None = None, period_label: str | None = Query(default=None, pattern=r'^(0[1-9]|1[0-2])/\d{4}$'), include_substituted: bool = False, limit: int = Query(default=200, ge=1, le=1000), db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
     query = apply_filters(base_query(db), search, status, client_id, contract_id, due_from, due_to, vehicle_id)
+    if period_label:
+        mes, ano = period_label.split('/')
+        try:
+            competencia = date(int(ano), int(mes), 1)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail='Mês de fechamento inválido.') from exc
+        query = query.filter(or_(
+            Billing.period_label == period_label,
+            Billing.competencia == competencia,
+        ))
     if not include_substituted:
         # Componentes de um fechamento não são boletos independentes.
         query = query.filter(Billing.substituted_by_id.is_(None))

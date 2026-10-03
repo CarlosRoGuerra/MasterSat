@@ -361,6 +361,12 @@ function aplicarMesVencimento(query: URLSearchParams, mes: string) {
   query.set('due_to', `${mes}-${String(ultimoDia).padStart(2, '0')}`);
 }
 
+function aplicarMesFechamento(query: URLSearchParams, mes: string) {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(mes)) return;
+  const [ano, numeroMes] = mes.split('-');
+  query.set('period_label', `${numeroMes}/${ano}`);
+}
+
 function BillingTableSection({
   billings,
   loading,
@@ -369,10 +375,12 @@ function BillingTableSection({
   billingSearch,
   billingStatusFilter,
   billingDueMonth,
+  billingClosingMonth,
   onViewToggle,
   onSearchChange,
   onStatusFilterChange,
   onDueMonthChange,
+  onClosingMonthChange,
   onRefresh,
   onSelect,
   selectedId,
@@ -400,10 +408,12 @@ function BillingTableSection({
   billingSearch: string;
   billingStatusFilter: string;
   billingDueMonth: string;
+  billingClosingMonth: string;
   onViewToggle: () => void;
   onSearchChange: (v: string) => void;
   onStatusFilterChange: (v: string) => void;
   onDueMonthChange: (v: string) => void;
+  onClosingMonthChange: (v: string) => void;
   onRefresh: () => void;
   onSelect: (b: Billing) => void;
   selectedId?: number;
@@ -471,7 +481,13 @@ function BillingTableSection({
             <input type="month" className={fc} style={{ width: 165 }} value={billingDueMonth}
                    onChange={e => onDueMonthChange(e.target.value)} />
           </label>
-          {billingDueMonth && <Button variant="secondary" onClick={() => onDueMonthChange('')} className="text-xs px-3 py-1.5">Limpar mês</Button>}
+          {billingDueMonth && <Button variant="secondary" onClick={() => onDueMonthChange('')} className="text-xs px-3 py-1.5">Limpar vencimento</Button>}
+          <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+            Fechamento (mês/ano)
+            <input type="month" className={fc} style={{ width: 165 }} value={billingClosingMonth}
+                   onChange={e => onClosingMonthChange(e.target.value)} />
+          </label>
+          {billingClosingMonth && <Button variant="secondary" onClick={() => onClosingMonthChange('')} className="text-xs px-3 py-1.5">Limpar fechamento</Button>}
         </div>
       )}
       {/* Barra de ações em lote */}
@@ -629,6 +645,7 @@ export default function FinanceiroPage() {
   const [billingSearch, setBillingSearch] = useState('');
   const [billingStatusFilter, setBillingStatusFilter] = useState('');
   const [billingDueMonth, setBillingDueMonth] = useState('');
+  const [billingClosingMonth, setBillingClosingMonth] = useState('');
   const [billingView, setBillingView] = useState<'alert' | 'all'>('alert');
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
@@ -805,7 +822,8 @@ export default function FinanceiroPage() {
       if (billingSearch) query.set('search', billingSearch);
       if (billingStatusFilter) query.set('status', billingStatusFilter);
       aplicarMesVencimento(query, billingDueMonth);
-      query.set('limit', billingDueMonth ? '1000' : '300');
+      aplicarMesFechamento(query, billingClosingMonth);
+      query.set('limit', billingDueMonth || billingClosingMonth ? '1000' : '300');
       const [plansRes, clientsRes, vehiclesRes, trackersRes, contractsRes, productsRes, billingsRes, summaryRes, revenueRes, delinquentRes] = await Promise.all([
         apiFetch<Plan[]>('/plans', {}, currentToken),
         apiFetchList<ClientOption>('/clients?limit=300', {}, currentToken),
@@ -846,7 +864,8 @@ export default function FinanceiroPage() {
       if (billingSearch) query.set('search', billingSearch);
       if (billingStatusFilter) query.set('status', billingStatusFilter);
       aplicarMesVencimento(query, billingDueMonth);
-      query.set('limit', billingDueMonth ? '1000' : '300');
+      aplicarMesFechamento(query, billingClosingMonth);
+      query.set('limit', billingDueMonth || billingClosingMonth ? '1000' : '300');
       const billingsRes = await apiFetch<Billing[]>(`/billings?${query.toString()}`, {}, currentToken);
       setBillings(billingsRes);
       if (selectedBilling) setSelectedBilling(billingsRes.find(b => b.id === selectedBilling.id) || null);
@@ -879,7 +898,7 @@ export default function FinanceiroPage() {
   const billingSearchDebounced = useDebouncedValue(billingSearch);
   useEffectSkipFirst(() => {
     if (token) loadBillingsOnly(token);
-  }, [billingSearchDebounced, billingStatusFilter, billingDueMonth]);
+  }, [billingSearchDebounced, billingStatusFilter, billingDueMonth, billingClosingMonth]);
 
   useEffect(() => {
     if (token && activeTab === 'payables') loadPayables(token);
@@ -2010,10 +2029,12 @@ export default function FinanceiroPage() {
               billingSearch={billingSearch}
               billingStatusFilter={billingStatusFilter}
               billingDueMonth={billingDueMonth}
+              billingClosingMonth={billingClosingMonth}
               onViewToggle={() => setBillingView(billingView === 'alert' ? 'all' : 'alert')}
               onSearchChange={setBillingSearch}
               onStatusFilterChange={setBillingStatusFilter}
               onDueMonthChange={mes => { setBillingDueMonth(mes); setSelectedBillingIds([]); }}
+              onClosingMonthChange={mes => { setBillingClosingMonth(mes); setSelectedBillingIds([]); }}
               onRefresh={() => token && loadData(token)}
               onSelect={b => setSelectedBilling(b)}
               selectedId={selectedBilling?.id}
@@ -2384,10 +2405,12 @@ export default function FinanceiroPage() {
               billingSearch={billingSearch}
               billingStatusFilter={billingStatusFilter}
               billingDueMonth={billingDueMonth}
+              billingClosingMonth={billingClosingMonth}
               onViewToggle={() => {}}
               onSearchChange={setBillingSearch}
               onStatusFilterChange={setBillingStatusFilter}
               onDueMonthChange={mes => { setBillingDueMonth(mes); setSelectedBillingIds([]); }}
+              onClosingMonthChange={mes => { setBillingClosingMonth(mes); setSelectedBillingIds([]); }}
               onRefresh={() => token && loadData(token)}
               onSelect={carteiraRowSelect}
               selectedId={selectedBilling?.id}
