@@ -109,6 +109,23 @@ def test_envio_por_email_recusado_sem_registro_na_ailos(http, cobranca):
     assert 'Ailos' in resp.json()['detail']
 
 
+def test_envio_por_email_recusa_cobranca_que_foi_paga_antes_do_disparo(http, db, cobranca, monkeypatch):
+    from unittest.mock import Mock
+
+    _registrar(db, cobranca.id)
+    cobranca.status = BillingStatus.PAID
+    db.commit()
+    import app.services.email_smtp as email_smtp
+    enviar = Mock()
+    monkeypatch.setattr(email_smtp, 'enviar_email', enviar)
+
+    resp = http.post(f'/api/v1/boletos/{cobranca.id}/enviar-email')
+
+    assert resp.status_code == 409
+    assert 'em aberto' in resp.json()['detail']
+    enviar.assert_not_called()
+
+
 def test_envio_por_email_recusado_sem_email_cadastrado(http, db, cliente, cobranca):
     cliente.email = None
     db.commit()

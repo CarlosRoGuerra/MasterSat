@@ -22,6 +22,7 @@ import { loadChargeLinks, type ChargeLinks } from '@/lib/financeiro-charge-links
 import { entregarArquivo, nomeArquivoCliente } from '@/lib/arquivo';
 import { podeEmitirNfse, precisaConsultarNfse } from '@/lib/nfse';
 import { enviarBoletoEmail, enviarBoletoWhats } from '@/lib/boleto-mensagem';
+import { processarBoletosSelecionados, type AcaoLoteBoleto } from '@/lib/boleto-lote';
 import { cancelarComConfirmacoes, corpoCancelamento } from '@/lib/cancelamento-cobranca';
 import { camposDiferenca, diferencaRecebimento, pendenciaDoFormulario, ROTULO_TRATAMENTO, type TratamentoDiferenca } from '@/lib/recebimento';
 import { descreverTitulo, podeConsultarDesfecho, ROTULO_PENDENCIA, type TituloBancario } from '@/lib/titulo-bancario';
@@ -371,6 +372,10 @@ function BillingTableSection({
   onBatchReceive,
   onBatchCancel,
   onBatchMaint,
+  onBatchEmit,
+  onBatchEmail,
+  batchBusy,
+  batchProgress,
   batchActions,
   rowActionLabel,
 }: {
@@ -392,10 +397,14 @@ function BillingTableSection({
   onBatchReceive?: () => void;
   onBatchCancel?: () => void;
   onBatchMaint?: () => void;
-  batchActions?: Array<'receive' | 'cancel' | 'maint'>;
+  onBatchEmit?: () => void;
+  onBatchEmail?: () => void;
+  batchBusy?: boolean;
+  batchProgress?: string;
+  batchActions?: Array<'receive' | 'cancel' | 'maint' | 'emit' | 'email'>;
   rowActionLabel?: string;
 }) {
-  const acoesLote = batchActions ?? ['receive', 'cancel', 'maint'];
+  const acoesLote = batchActions ?? ['receive', 'cancel', 'maint', 'emit', 'email'];
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const in7 = new Date(today); in7.setDate(in7.getDate() + 7);
 
@@ -443,10 +452,13 @@ function BillingTableSection({
       {batchIds && batchIds.length > 0 && (
         <div className="mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-brand-300 bg-brand-50 px-4 py-2.5 text-sm dark:border-brand-700 dark:bg-brand-950/30">
           <span className="font-bold text-brand-800 dark:text-brand-200">{batchIds.length} selecionada(s)</span>
-          {onBatchReceive && acoesLote.includes('receive') && <Button onClick={onBatchReceive} className="!py-1.5 text-xs">Receber em lote</Button>}
-          {onBatchMaint && acoesLote.includes('maint') && <Button variant="secondary" onClick={onBatchMaint} className="!py-1.5 text-xs">Alterar venc./valor</Button>}
-          {onBatchCancel && acoesLote.includes('cancel') && <Button variant="secondary" onClick={onBatchCancel} className="!py-1.5 text-xs">Cancelar em lote</Button>}
-          <button type="button" onClick={() => onBatchIdsChange?.([])} className="ml-auto text-xs text-slate-500 underline hover:text-slate-600 dark:hover:text-slate-200">
+          {onBatchEmit && acoesLote.includes('emit') && <Button disabled={batchBusy} onClick={onBatchEmit} className="!py-1.5 text-xs">Emitir na Ailos</Button>}
+          {onBatchEmail && acoesLote.includes('email') && <Button disabled={batchBusy} variant="secondary" onClick={onBatchEmail} className="!py-1.5 text-xs">Enviar por e-mail</Button>}
+          {onBatchReceive && acoesLote.includes('receive') && <Button disabled={batchBusy} onClick={onBatchReceive} className="!py-1.5 text-xs">Receber em lote</Button>}
+          {onBatchMaint && acoesLote.includes('maint') && <Button disabled={batchBusy} variant="secondary" onClick={onBatchMaint} className="!py-1.5 text-xs">Alterar venc./valor</Button>}
+          {onBatchCancel && acoesLote.includes('cancel') && <Button disabled={batchBusy} variant="secondary" onClick={onBatchCancel} className="!py-1.5 text-xs">Cancelar em lote</Button>}
+          {batchBusy && <span role="status" className="text-xs text-brand-800 dark:text-brand-200">{batchProgress}</span>}
+          <button type="button" disabled={batchBusy} onClick={() => onBatchIdsChange?.([])} className="ml-auto text-xs text-slate-500 underline hover:text-slate-600 disabled:opacity-50 dark:hover:text-slate-200">
             Limpar seleção
           </button>
         </div>
@@ -466,6 +478,7 @@ function BillingTableSection({
                   <Th className="w-8">
                     <input
                       type="checkbox"
+                      disabled={batchBusy}
                       className="h-4 w-4 rounded accent-brand-700"
                       title="Selecionar todas em aberto (desta página)"
                       checked={
@@ -495,6 +508,7 @@ function BillingTableSection({
                         {(b.status === 'pendente' || b.status === 'vencida') ? (
                           <input
                             type="checkbox"
+                            disabled={batchBusy}
                             className="h-4 w-4 rounded accent-brand-700"
                             checked={(batchIds ?? []).includes(b.id)}
                             onChange={() => {
@@ -618,6 +632,8 @@ export default function FinanceiroPage() {
 
   // Operações em lote na carteira de cobranças
   const [selectedBillingIds, setSelectedBillingIds] = useState<number[]>([]);
+  const [batchBoletoAction, setBatchBoletoAction] = useState<AcaoLoteBoleto | null>(null);
+  const [batchBoletoProgress, setBatchBoletoProgress] = useState('');
   const [gerandoCarne, setGerandoCarne] = useState(false);
   // Modal "Gerar carnê" (por cliente)
   const [carneModal, setCarneModal] = useState(false);
@@ -1246,6 +1262,43 @@ export default function FinanceiroPage() {
     } catch (err) { setError(parseError(err)); } finally { setProcessing(false); }
   }
 
+  async function handleBatchBoletos(acao: AcaoLoteBoleto) {
+    if (!token || !canEdit || batchBoletoAction || selectedBillingIds.length === 0) return;
+    const ids = [...new Set(selectedBillingIds)];
+    const mensagem = acao === 'emitir'
+      ? `Emitir/confirmar ${ids.length} boleto(s) selecionado(s) na Ailos? O envio por e-mail será feito somente no outro botão.`
+      : `Enviar ${ids.length} boleto(s) selecionado(s) por e-mail, um por cobrança, ao respectivo responsável financeiro? Somente boletos registrados na Ailos serão enviados.`;
+    if (!window.confirm(mensagem)) return;
+
+    setBatchBoletoAction(acao);
+    setBatchBoletoProgress(`0/${ids.length}`);
+    setError('');
+    setFeedback('');
+    try {
+      const resultado = await processarBoletosSelecionados(
+        ids, acao, token,
+        (concluidos, total) => setBatchBoletoProgress(`${concluidos}/${total}`),
+      );
+      const rotulo = acao === 'emitir' ? 'registrado(s) ou já existente(s) na Ailos' : 'enviado(s) por e-mail';
+      setFeedback(`${resultado.processados.length} boleto(s) ${rotulo}.`);
+      if (resultado.falhas.length) {
+        const detalhes = resultado.falhas.slice(0, 8).map(f => `#${f.id}: ${f.mensagem}`).join(' · ');
+        setError(`${resultado.falhas.length} boleto(s) não processado(s): ${detalhes}${resultado.falhas.length > 8 ? ` · e mais ${resultado.falhas.length - 8} falha(s).` : ''}`);
+      }
+      // Depois da emissão, a seleção fica pronta para o botão de envio.
+      // Depois do envio, só os IDs com falha permanecem selecionados para revisão.
+      if (acao === 'email') {
+        setSelectedBillingIds(current => current.filter(id => !resultado.processados.includes(id)));
+      }
+      await loadData(token);
+    } catch (err) {
+      setError(parseError(err));
+    } finally {
+      setBatchBoletoAction(null);
+      setBatchBoletoProgress('');
+    }
+  }
+
   function openCarneModal() {
     setCarneMode('existentes');
     setCarneClientId('');
@@ -1793,6 +1846,10 @@ export default function FinanceiroPage() {
               onBatchReceive={() => setBatchReceiveModal(true)}
               onBatchCancel={handleBatchCancel}
               onBatchMaint={() => { setModalError(''); setBatchMaintModal(true); }}
+              onBatchEmit={() => handleBatchBoletos('emitir')}
+              onBatchEmail={() => handleBatchBoletos('email')}
+              batchBusy={!!batchBoletoAction}
+              batchProgress={batchBoletoProgress}
             />
 
             {/* ── Indicadores + gráficos no rodapé ── */}
@@ -2157,6 +2214,10 @@ export default function FinanceiroPage() {
               onBatchReceive={() => setBatchReceiveModal(true)}
               onBatchCancel={handleBatchCancel}
               onBatchMaint={() => { setModalError(''); setBatchMaintModal(true); }}
+              onBatchEmit={() => handleBatchBoletos('emitir')}
+              onBatchEmail={() => handleBatchBoletos('email')}
+              batchBusy={!!batchBoletoAction}
+              batchProgress={batchBoletoProgress}
               batchActions={cfg?.lote}
               rowActionLabel={cfg?.rotulo}
             />

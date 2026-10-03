@@ -534,6 +534,8 @@ def enviar_boleto_email(
     e-mail externo na máquina do operador.
     """
     b = _get_billing_or_404(billing_id, db)
+    if b.status not in (BillingStatus.PENDING, BillingStatus.OVERDUE):
+        raise HTTPException(status_code=409, detail='Somente cobranças em aberto podem ser enviadas por e-mail.')
     ailos_boleto = boleto_registrado(billing_id, db)
     if ailos_boleto is None:
         raise HTTPException(
