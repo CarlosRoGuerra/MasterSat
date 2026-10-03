@@ -14,7 +14,7 @@ from app.services.billing_closure import (
     simulate_closure,
 )
 from app.services.financial import add_months
-from app.services.closure_delivery import conferir_lote, enviar_titulo, listar_lotes
+from app.services.closure_delivery import conferir_lote, enviar_titulo, listar_lotes, recuperar_lotes_anteriores
 
 router = APIRouter()
 
@@ -27,6 +27,14 @@ def closure_batches(
     _: object = Depends(require_roles(*ALLOWED_ROLES)),
 ):
     return listar_lotes(db)
+
+
+@router.post('/lotes/recuperar')
+def recover_older_closure_batches(
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    return recuperar_lotes_anteriores(db)
 
 
 @router.get('/lotes/{lote_id}')

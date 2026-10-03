@@ -11,6 +11,7 @@ type Lote = {
   mes_servico: string;
   criado_em: string;
   total_titulos: number;
+  recuperado: boolean;
 };
 
 type Item = {
@@ -78,7 +79,7 @@ export function ClosureDeliveryModal({
     if (!open || !token) return;
     setLoading(true);
     setError('');
-    apiFetch<Lote[]>('/billing-closure/lotes', {}, token)
+    apiFetch<Lote[]>('/billing-closure/lotes/recuperar', { method: 'POST' }, token)
       .then(setLotes)
       .catch(err => setError(mensagemErro(err)))
       .finally(() => setLoading(false));
@@ -143,7 +144,7 @@ export function ClosureDeliveryModal({
 
   return (
     <Modal open={open} onClose={() => { if (!sending) onClose(); }} title="Enviar fechamento por e-mail"
-      description="Escolha um lote de fechamento. A lista inclui todos os títulos dessa execução, independentemente da paginação da carteira."
+      description="Escolha um lote de fechamento. A lista inclui todos os títulos dessa execução, inclusive fechamentos anteriores recuperados, sem depender da paginação da carteira."
       size="2xl">
       <div className="space-y-4">
         <label className="block text-sm font-medium text-slate-700 dark:text-slate-200">
@@ -153,11 +154,11 @@ export function ClosureDeliveryModal({
             className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm dark:border-slate-700 dark:bg-slate-900">
             <option value="">Selecione o fechamento</option>
             {lotes.map(lote => <option key={lote.id} value={lote.id}>
-              #{lote.id} · serviço {rotuloMes(lote.mes_servico)} · {lote.total_titulos} título(s)
+              #{lote.id} · serviço {rotuloMes(lote.mes_servico)} · {lote.total_titulos} título(s) · {new Date(lote.criado_em).toLocaleString('pt-BR')}{lote.recuperado ? ' · recuperado' : ''}
             </option>)}
           </select>
         </label>
-        {lotes.length === 0 && !loading && <p className="text-sm text-slate-500">Nenhum fechamento com lote registrado. Fechamentos anteriores a esta função não tinham identificador de execução.</p>}
+        {lotes.length === 0 && !loading && !error && <p className="text-sm text-slate-500">Nenhum fechamento identificável foi encontrado. Confira se já existem cobranças geradas por um fechamento.</p>}
         {loading && <p className="text-sm text-slate-500">Carregando fechamento…</p>}
         {previa && !loading && <>
           <div className="flex flex-wrap gap-2 text-sm">

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, JSON, String, Text
+from sqlalchemy import DateTime, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -15,6 +15,7 @@ class ClosureJob(Base, TimestampMixin):
     """
 
     __tablename__ = 'closure_jobs'
+    __table_args__ = (UniqueConstraint('legacy_created_at', name='uq_closure_jobs_legacy_created_at'),)
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     reference_month: Mapped[str] = mapped_column(String(7))  # YYYY-MM
@@ -26,3 +27,8 @@ class ClosureJob(Base, TimestampMixin):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Horário exato da transação que criou os títulos de um fechamento anterior
+    # ao registro de lotes. Evita recuperar a mesma execução duas vezes.
+    legacy_created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )

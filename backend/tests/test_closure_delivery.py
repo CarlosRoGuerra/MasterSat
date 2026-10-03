@@ -1,5 +1,5 @@
 """A closure batch sends exactly its payment titles, independently of list pagination."""
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from app.models.ailos_boleto import AilosBoleto
@@ -120,3 +120,42 @@ def test_batch_send_attaches_nfse_only_when_required_and_does_not_repeat(http, d
     assert [len(email['anexos']) for email in emails] == [2, 1]
     assert db.query(ClosureEmailDelivery).count() == 2
     assert http.get(f'{PREFIX}/{lote.id}').json()['enviados'] == 2
+
+
+def test_recovers_older_closure_without_carnets_or_duplicate_batches(http, db):
+    client = _client(db, 'Fechamento antigo', '30000000001', 'nao')
+    individual = _client(db, 'Faturas individuais', '30000000002', 'nao')
+    momento = datetime(2026, 10, 2, 21, 7, 50, 272814, tzinfo=timezone.utc)
+    antigo = _billing(db, client)
+    componente = _billing(db, client)
+    avulsa = _billing(db, client)
+    carne = _billing(db, client)
+    individuais = [_billing(db, individual) for _ in range(29)]
+    for billing in (antigo, componente):
+        billing.created_at = momento
+    for billing in individuais:
+        billing.created_at = momento
+        billing.billing_type = 'recorrente'
+    antigo.title = 'Fechamento 09/2026 - boleto único'
+    componente.status = BillingStatus.CANCELED
+    componente.substituted_by_id = antigo.id
+    avulsa.billing_type = 'avulsa'
+    carne.billing_type = 'carne'
+    db.commit()
+
+    first = http.post(PREFIX + '/recuperar')
+    assert first.status_code == 200, first.text
+    assert len(first.json()) == 1
+    lote = first.json()[0]
+    assert lote['mes_servico'] == '2026-09'
+    assert lote['recuperado'] is True
+    assert lote['total_titulos'] == 30
+    preview = http.get(f"{PREFIX}/{lote['id']}").json()
+    assert len(preview['itens']) == 30
+    assert {item['billing_id'] for item in preview['itens']} == {antigo.id, *(b.id for b in individuais)}
+    assert avulsa.id not in [item['billing_id'] for item in preview['itens']]
+    assert carne.id not in [item['billing_id'] for item in preview['itens']]
+    second = http.post(PREFIX + '/recuperar')
+    assert second.status_code == 200
+    assert second.json() == first.json()
+    assert db.query(ClosureJob).count() == 1

@@ -2,14 +2,16 @@
 from __future__ import annotations
 
 import smtplib
-from datetime import datetime, timezone
+import re
+from datetime import date, datetime, timezone
 
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.ailos_boleto import AilosBoleto
-from app.models.billing import Billing
+from app.models.billing import Billing, CONSOLIDATED_BILLING_TYPE
 from app.models.client import Client
 from app.models.closure_email_delivery import ClosureEmailDelivery
 from app.models.closure_job import ClosureJob
@@ -28,19 +30,104 @@ def _lote(db: Session, lote_id: int) -> tuple[ClosureJob, list[int]]:
 
 def listar_lotes(db: Session) -> list[dict]:
     lotes = db.query(ClosureJob).filter(ClosureJob.status == 'completed').order_by(
-        ClosureJob.id.desc(),
+        ClosureJob.completed_at.desc(), ClosureJob.id.desc(),
     ).limit(300).all()
     return [
         {
             'id': lote.id,
             'mes_servico': lote.reference_month,
-            'criado_em': lote.created_at,
+            'criado_em': lote.legacy_created_at or lote.created_at,
             'total_titulos': len(lote.result['payment_billing_ids']),
+            'recuperado': lote.legacy_created_at is not None,
         }
         for lote in lotes
         if isinstance((lote.result or {}).get('payment_billing_ids'), list)
         and lote.result['payment_billing_ids']
     ]
+
+
+def _mes_anterior(data: date) -> str:
+    ano = data.year if data.month > 1 else data.year - 1
+    mes = data.month - 1 if data.month > 1 else 12
+    return f'{ano:04d}-{mes:02d}'
+
+
+def _referencia_legada(billings: list[Billing], efetivos: list[Billing]) -> str | None:
+    """Só rotula o serviço quando o período pode ser identificado sem ambiguidade."""
+    periodos = {b.period_label for b in billings if b.billing_type == CONSOLIDATED_BILLING_TYPE}
+    if periodos:
+        if len(periodos) != 1:
+            return None
+        periodo = next(iter(periodos))
+        if not periodo or not re.fullmatch(r'(0[1-9]|1[0-2])/\d{4}', periodo):
+            return None
+        mes, ano = periodo.split('/')
+        return f'{ano}-{mes}'
+    vencimentos = {(b.due_date.year, b.due_date.month) for b in efetivos if b.due_date}
+    if len(vencimentos) != 1:
+        return None
+    ano, mes = next(iter(vencimentos))
+    return _mes_anterior(date(ano, mes, 1))
+
+
+def recuperar_lotes_anteriores(db: Session) -> list[dict]:
+    """Reconstitui execuções anteriores pelo timestamp exato da transação.
+
+    O fechamento antigo gravava todos os títulos de uma execução com o mesmo
+    ``created_at`` no PostgreSQL. Exigimos também um marcador criado somente
+    pelo fechamento; carnês e cobranças avulsas do mês ficam de fora.
+    """
+    marcadores = db.query(Billing.created_at).filter(
+        or_(
+            Billing.billing_type == CONSOLIDATED_BILLING_TYPE,
+            Billing.notes.ilike('Fechamento %'),
+            Billing.notes.ilike('Taxas processadas no fechamento:%'),
+        ),
+    ).distinct().order_by(Billing.created_at.desc()).limit(300).all()
+    jobs = db.query(ClosureJob).all()
+    timestamps = {j.legacy_created_at for j in jobs if j.legacy_created_at is not None}
+    registrados = {
+        int(billing_id)
+        for job in jobs
+        for billing_id in (job.result or {}).get('payment_billing_ids', [])
+    }
+    tipos = {
+        'recorrente', 'prorata', 'primeira_mensalidade',
+        'taxa_desinstalacao', 'item', CONSOLIDATED_BILLING_TYPE,
+    }
+    for (criado_em,) in marcadores:
+        if criado_em in timestamps:
+            continue
+        billings = db.query(Billing).filter(Billing.created_at == criado_em).order_by(Billing.id).all()
+        if len(billings) > 1000:
+            continue  # Importações em massa não são uma execução individual.
+        efetivos = [
+            b for b in billings
+            if not b.is_deleted and b.substituted_by_id is None and b.billing_type in tipos
+        ]
+        ids = [b.id for b in efetivos]
+        if not ids or any(billing_id in registrados for billing_id in ids):
+            continue
+        referencia = _referencia_legada(billings, efetivos)
+        if referencia is None:
+            continue
+        try:
+            with db.begin_nested():
+                job = ClosureJob(
+                    reference_month=referencia,
+                    filter_type='legacy', status='completed',
+                    legacy_created_at=criado_em,
+                    started_at=criado_em, completed_at=criado_em,
+                    result={'payment_billing_ids': ids},
+                )
+                db.add(job)
+                db.flush()
+        except IntegrityError:
+            continue  # Outro operador já recuperou esta execução.
+        timestamps.add(criado_em)
+        registrados.update(ids)
+    db.commit()
+    return listar_lotes(db)
 
 
 def conferir_lote(db: Session, lote_id: int, billing_id: int | None = None) -> dict:
