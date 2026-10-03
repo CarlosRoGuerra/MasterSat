@@ -22,7 +22,7 @@ import logging
 import threading
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -37,6 +37,7 @@ from app.models.nfse_nota import NfseNota
 # tomador da NFS-e (coerente com o pagador do boleto). resolver_pagador devolve
 # o interveniente-ou-cliente da cobrança.
 from app.services.ailos_boletos import resolver_pagador
+from app.services.competencia import competencia_do_rotulo
 
 logger = logging.getLogger(__name__)
 
@@ -88,25 +89,54 @@ def listar_elegiveis(
             Client.is_deleted.is_(False),
         )
     )
-    # A seleção manual pode abranger cobranças de meses diferentes e avulsas
-    # sem period_label. A consulta do fechamento continua restrita ao mês.
-    query = query.filter(
-        Billing.period_label == period_label if billing_ids is None
-        else Billing.id.in_(billing_ids)
-    )
+    # O fechamento individual conserva a competência técnica da mensalidade
+    # (mês do vencimento), enquanto o boleto único usa o mês do serviço. Para
+    # NFS-e, ambos pertencem ao mesmo fechamento. A assinatura nas observações
+    # limita a exceção aos títulos efetivamente criados pelo fechamento.
+    if billing_ids is None:
+        periodo = competencia_do_rotulo(period_label)
+        periodo_seguinte = (
+            date(periodo.year + (periodo.month == 12), periodo.month % 12 + 1, 1)
+            if periodo else None
+        )
+        if periodo_seguinte:
+            fim_mes_seguinte = date(
+                periodo_seguinte.year + (periodo_seguinte.month == 12),
+                periodo_seguinte.month % 12 + 1, 1,
+            )
+            fechamento_individual = and_(
+                Billing.competencia == periodo_seguinte,
+                Billing.due_date >= periodo_seguinte,
+                Billing.due_date < fim_mes_seguinte,
+                Billing.sgr_payload.is_(None),
+                or_(
+                    and_(Billing.billing_type == 'recorrente', Billing.notes.like('Fechamento%')),
+                    and_(Billing.billing_type == 'prorata', Billing.notes.like('Pró-rata:%')),
+                    and_(Billing.billing_type == 'primeira_mensalidade', Billing.notes.like('Mensalidade (%')),
+                    and_(Billing.billing_type == 'taxa_desinstalacao', Billing.notes.like('Taxas processadas no fechamento:%')),
+                ),
+            )
+            query = query.filter(or_(Billing.period_label == period_label, fechamento_individual))
+        else:
+            query = query.filter(Billing.period_label == period_label)
+    else:
+        query = query.filter(Billing.id.in_(billing_ids))
 
     busca_alvo = (busca or '').strip().lower()
     itens: list[dict] = []
     ja_emitidas = 0
+    sem_configuracao: dict[int, str] = {}
     for billing, owner, nota, boleto in query.populate_existing().all():
         tomador = resolver_pagador(db, billing, owner)
-        # Só emite NF para tomador com issue_invoice == 'sim'.
-        if (tomador.issue_invoice or '') != 'sim':
-            continue
         if tipo in ('pf', 'pj') and tomador.type != tipo:
             continue
         if busca_alvo and busca_alvo not in (tomador.name or '').lower() \
                 and busca_alvo not in (tomador.cpf_cnpj or '').lower():
+            continue
+        if tomador.issue_invoice is None:
+            sem_configuracao[tomador.id] = tomador.name
+        # Só emite NF para tomador com issue_invoice == 'sim'.
+        if (tomador.issue_invoice or '') != 'sim':
             continue
         if nota is not None and not _reprocessavel(nota):
             if nota.status == 'emitida':
@@ -132,6 +162,10 @@ def listar_elegiveis(
         'period_label': period_label,
         'total_elegiveis': len(itens),
         'ja_emitidas': ja_emitidas,
+        'sem_configuracao': [
+            {'client_id': client_id, 'nome': nome}
+            for client_id, nome in sorted(sem_configuracao.items(), key=lambda item: item[1].lower())
+        ],
         'itens': itens,
     }
 

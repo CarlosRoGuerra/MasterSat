@@ -60,6 +60,11 @@ CLIENTE_DOC_EXAMPLE = {
 
 
 class TestMapCliente:
+    def test_maps_invoice_preference_without_assuming_missing_means_yes(self):
+        assert map_cliente({**CLIENTE_DOC_EXAMPLE, 'nota_fiscal_cliente': 'S'})[0]['issue_invoice'] == 'sim'
+        assert map_cliente(CLIENTE_DOC_EXAMPLE)[0]['issue_invoice'] == 'nao'
+        assert map_cliente({**CLIENTE_DOC_EXAMPLE, 'nota_fiscal_cliente': None})[0]['issue_invoice'] is None
+
     def test_maps_core_identity_fields(self):
         mapped, _issues = map_cliente(CLIENTE_DOC_EXAMPLE)
         assert mapped['external_id'] == '11946'

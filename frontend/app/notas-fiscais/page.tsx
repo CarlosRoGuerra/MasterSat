@@ -30,7 +30,10 @@ type Elegivel = {
   tipo: string | null; cidade: string | null; nosso_numero: string | null;
   valor: number; titulo: string | null; reprocessamento: boolean;
 };
-type Elegiveis = { period_label: string; total_elegiveis: number; ja_emitidas: number; itens: Elegivel[] };
+type Elegiveis = {
+  period_label: string; total_elegiveis: number; ja_emitidas: number;
+  sem_configuracao: { client_id: number; nome: string }[]; itens: Elegivel[];
+};
 
 type LoteResumo = {
   id: number; period_label: string; competencia: string | null; codigo_servico: string | null;
@@ -849,6 +852,13 @@ export default function NotasFiscaisPage() {
           </Card>
 
           {/* Listagem de boletos */}
+          {elegiveis && elegiveis.sem_configuracao.length > 0 && (
+            <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+              <strong>{elegiveis.sem_configuracao.length} cliente(s) sem definição de emissão de nota fiscal.</strong>{' '}
+              Confirme “Emitir Nota Fiscal = Sim” no cadastro para incluí-los neste lote. Nenhuma nota será emitida para eles automaticamente.
+              <div className="mt-2">{elegiveis.sem_configuracao.map((item) => item.nome).join(', ')}</div>
+            </div>
+          )}
           {elegiveis && (
             elegiveis.itens.length === 0 ? (
               <Card className="p-6">

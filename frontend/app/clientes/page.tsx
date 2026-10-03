@@ -824,7 +824,7 @@ function ClientesPageInner() {
       em2_mobile: client.emergency_contacts?.[1]?.mobile || '',
       boleto_format: client.boleto_format || 'unico',
       boleto_fee: client.boleto_fee || 'nao',
-      issue_invoice: client.issue_invoice || 'sim',
+      issue_invoice: client.issue_invoice ?? '',
       tributacao: client.tributacao || 'dentro_municipio',
       iss_retido: client.iss_retido || 'nao',
       optante_simples: client.optante_simples || 'sim',

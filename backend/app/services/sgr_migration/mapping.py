@@ -357,6 +357,9 @@ def map_cliente(raw: dict) -> tuple[dict, list[str]]:
         'state': ci_get(endereco, 'uf'),
         'rg_ie': ci_get(raw, 'rg_cliente'),
         'birth_date': birth.isoformat() if birth else None,
+        'issue_invoice': {
+            'S': 'sim', 'SIM': 'sim', 'N': 'nao', 'NAO': 'nao', 'NÃO': 'nao',
+        }.get(str(ci_get(raw, 'nota_fiscal_cliente') or '').strip().upper()),
     }
     return mapped, issues
 

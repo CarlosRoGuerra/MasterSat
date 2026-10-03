@@ -247,6 +247,7 @@ export function ClientFormModal({
             </FormField>
             <FormField label="Emitir Nota Fiscal">
               <Select value={form.issue_invoice} onChange={(e) => onFieldChange('issue_invoice', e.target.value)}>
+                <option value="">Não informado</option>
                 <option value="sim">Sim</option>
                 <option value="nao">Não</option>
               </Select>

@@ -123,6 +123,7 @@ class ElegiveisOut(BaseModel):
     period_label: str
     total_elegiveis: int
     ja_emitidas: int
+    sem_configuracao: list[dict] = []
     itens: list[ElegivelItem] = []
 
 

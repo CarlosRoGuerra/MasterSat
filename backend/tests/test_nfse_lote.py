@@ -147,6 +147,7 @@ def test_elegiveis_apenas_clientes_com_emitir_nf_sim(db):
     nomes = {i['tomador'] for i in res['itens']}
     assert nomes == {'COM NF'}
     assert res['total_elegiveis'] == 1
+    assert res['sem_configuracao'] == [{'client_id': c_nulo.id, 'nome': 'NULO'}]
 
 
 def test_elegiveis_filtra_por_lote_de_fechamento(db):
@@ -156,6 +157,22 @@ def test_elegiveis_filtra_por_lote_de_fechamento(db):
 
     res = nfse_lote.listar_elegiveis(db, '07/2026')
     assert res['total_elegiveis'] == 1
+
+
+def test_lote_servico_setembro_inclui_fechamento_individual_vencendo_outubro(db):
+    c = _client(db, 'CLIENTE DO FECHAMENTO')
+    individual = _billing(db, c, period='10/2026')
+    individual.due_date = date(2026, 10, 10)
+    individual.notes = 'Fechamento — 10/2026'
+    manual = _billing(db, c, period='10/2026')
+    manual.due_date = date(2026, 10, 10)
+    manual.notes = 'Cobrança criada manualmente'
+    db.commit()
+
+    ids = {item['billing_id'] for item in nfse_lote.listar_elegiveis(db, '09/2026')['itens']}
+    assert ids == {individual.id}
+    lote = nfse_lote.criar_lote(db, '09/2026', [individual.id], emitir_async=False)
+    assert lote.total_notas == 1
 
 
 def test_elegiveis_ignora_cobranca_deletada(db):

@@ -393,6 +393,7 @@ def _build_client(mapped: dict) -> Client:
         state=_trunc(mapped.get('state'), 2),
         rg_ie=_trunc(mapped.get('rg_ie'), 30),
         birth_date=_to_date(mapped.get('birth_date')),
+        issue_invoice=mapped.get('issue_invoice'),
         notes=_NOTA_IMPORTADO,
     )
 
@@ -472,6 +473,10 @@ def _resolver_cliente(ctx: _Contexto, stats: ImportStats, node: ClientNode) -> C
                       tabela='clients', local_id=client.id, hash_origem=_hash(cpf_cnpj),
                       detalhe={'observacao': 'CPF/CNPJ da origem difere do cadastro local'})
         _tocar(ctx, vinculo)
+        # Importações antigas não traziam este campo. Completa apenas cadastros
+        # sem decisão local; nunca substitui uma escolha explícita do usuário.
+        if client.issue_invoice is None and mapped.get('issue_invoice') is not None:
+            client.issue_invoice = mapped['issue_invoice']
         stats.clients_reused += 1
         return client
 
@@ -486,6 +491,8 @@ def _resolver_cliente(ctx: _Contexto, stats: ImportStats, node: ClientNode) -> C
                 raise _Bloqueio('documento_em_outro_cliente_sgr')
             if outro is None:
                 _vincular(ctx, 'cliente', codigo, existente.id, 'adocao')
+        if existente.issue_invoice is None and mapped.get('issue_invoice') is not None:
+            existente.issue_invoice = mapped['issue_invoice']
         stats.clients_reused += 1
         return existente
 

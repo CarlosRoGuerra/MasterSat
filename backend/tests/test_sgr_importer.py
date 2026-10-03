@@ -65,6 +65,21 @@ class TestDryRun:
 
 
 class TestImportacao:
+    def test_importa_e_completa_preferencia_de_nota_sem_sobrescrever_escolha_local(self, db):
+        import_poc_result(db, _resultado(client_over={'issue_invoice': None}), dry_run=False)
+        cliente = db.query(Client).one()
+        assert cliente.issue_invoice is None
+
+        import_poc_result(db, _resultado(client_over={'issue_invoice': 'sim'}), dry_run=False)
+        db.refresh(cliente)
+        assert cliente.issue_invoice == 'sim'
+
+        cliente.issue_invoice = 'nao'
+        db.commit()
+        import_poc_result(db, _resultado(client_over={'issue_invoice': 'sim'}), dry_run=False)
+        db.refresh(cliente)
+        assert cliente.issue_invoice == 'nao'
+
     def test_cria_cliente_veiculo_e_rastreador_vinculados(self, db):
         stats = import_poc_result(db, _resultado(), dry_run=False)
         assert (stats.clients_created, stats.vehicles_created, stats.trackers_created) == (1, 1, 1)
