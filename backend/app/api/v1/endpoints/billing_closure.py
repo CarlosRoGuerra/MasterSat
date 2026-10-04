@@ -14,11 +14,31 @@ from app.services.billing_closure import (
     simulate_closure,
 )
 from app.services.financial import add_months
-from app.services.closure_delivery import conferir_lote, enviar_titulo, listar_lotes, recuperar_lotes_anteriores
+from app.services.closure_delivery import (
+    conferir_lote, conferir_mes, enviar_titulo, listar_lotes, listar_meses,
+    recuperar_lotes_anteriores,
+)
 
 router = APIRouter()
 
 ALLOWED_ROLES = (UserRole.ADMIN, UserRole.FINANCIAL)
+
+
+@router.get('/meses')
+def closure_service_months(
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    return listar_meses(db)
+
+
+@router.get('/meses/{mes_servico}')
+def closure_month_preview(
+    mes_servico: str,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    return conferir_mes(db, mes_servico)
 
 
 @router.get('/lotes')

@@ -46,6 +46,17 @@ def listar_lotes(db: Session) -> list[dict]:
     ]
 
 
+def listar_meses(db: Session) -> list[dict]:
+    meses: dict[str, int] = {}
+    for lote in db.query(ClosureJob).filter(ClosureJob.status == 'completed').all():
+        if isinstance((lote.result or {}).get('payment_billing_ids'), list) and lote.result['payment_billing_ids']:
+            meses[lote.reference_month] = meses.get(lote.reference_month, 0) + 1
+    return [
+        {'mes_servico': mes, 'total_lotes': meses[mes]}
+        for mes in sorted(meses, reverse=True)
+    ]
+
+
 def _mes_anterior(data: date) -> str:
     ano = data.year if data.month > 1 else data.year - 1
     mes = data.month - 1 if data.month > 1 else 12
@@ -211,6 +222,38 @@ def conferir_lote(db: Session, lote_id: int, billing_id: int | None = None) -> d
         'id': lote.id,
         'mes_servico': lote.reference_month,
         'criado_em': lote.created_at,
+        'total': len(itens),
+        'prontos': sum(item['estado'] == 'pronto' for item in itens),
+        'enviados': sum(item['estado'] == 'enviado' for item in itens),
+        'bloqueados': sum(item['estado'] == 'bloqueado' for item in itens),
+        'indeterminados': sum(item['estado'] in ('processando', 'desconhecido') for item in itens),
+        'itens': itens,
+    }
+
+
+def conferir_mes(db: Session, mes_servico: str) -> dict:
+    """Reúne todos os títulos efetivos dos fechamentos do mês, sem paginar."""
+    if not re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])', mes_servico):
+        raise HTTPException(status_code=422, detail='Mês do serviço inválido. Use YYYY-MM.')
+    lotes = db.query(ClosureJob).filter(
+        ClosureJob.status == 'completed', ClosureJob.reference_month == mes_servico,
+    ).order_by(ClosureJob.completed_at.desc(), ClosureJob.id.desc()).all()
+    itens = []
+    vistos: set[int] = set()
+    for lote in lotes:
+        if not isinstance((lote.result or {}).get('payment_billing_ids'), list) or not lote.result['payment_billing_ids']:
+            continue
+        previa = conferir_lote(db, lote.id)
+        for item in previa['itens']:
+            if item['billing_id'] not in vistos:
+                itens.append({'lote_id': lote.id, **item})
+                vistos.add(item['billing_id'])
+    if not itens:
+        raise HTTPException(status_code=404, detail='Nenhum fechamento encontrado para este mês.')
+    itens.sort(key=lambda item: (item['cliente'].casefold(), item['billing_id']))
+    return {
+        'mes_servico': mes_servico,
+        'total_lotes': len(lotes),
         'total': len(itens),
         'prontos': sum(item['estado'] == 'pronto' for item in itens),
         'enviados': sum(item['estado'] == 'enviado' for item in itens),

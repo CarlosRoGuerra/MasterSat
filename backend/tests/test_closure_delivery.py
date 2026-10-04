@@ -76,6 +76,26 @@ def test_batch_preview_contains_all_titles_and_only_exact_run(http, db):
     assert 'Boleto Ailos não emitido' in data['itens'][32]['motivo']
     assert http.post(f'{PREFIX}/{lote.id}/enviar/{unrelated.id}').status_code == 404
 
+    additional = _billing(db, no_nfse)
+    second_lote = ClosureJob(
+        reference_month='2026-09', status='completed',
+        result={'payment_billing_ids': [additional.id]},
+    )
+    db.add(second_lote)
+    db.commit()
+    meses = http.get('/api/v1/billing-closure/meses')
+    assert meses.status_code == 200
+    assert meses.json() == [{'mes_servico': '2026-09', 'total_lotes': 2}]
+    por_mes = http.get('/api/v1/billing-closure/meses/2026-09')
+    assert por_mes.status_code == 200, por_mes.text
+    assert por_mes.json()['total'] == 34
+    assert por_mes.json()['total_lotes'] == 2
+    ids_do_mes = {item['billing_id'] for item in por_mes.json()['itens']}
+    assert ids_do_mes == {*(b.id for b in included), additional.id}
+    assert unrelated.id not in ids_do_mes
+    assert next(item for item in por_mes.json()['itens'] if item['billing_id'] == additional.id)['lote_id'] == second_lote.id
+    assert http.get('/api/v1/billing-closure/meses/2026-13').status_code == 422
+
     db.query(AilosBoleto).filter_by(billing_id=included[0].id).one().status_ailos = '5'
     db.commit()
     liquidado = http.get(f'{PREFIX}/{lote.id}').json()['itens'][0]

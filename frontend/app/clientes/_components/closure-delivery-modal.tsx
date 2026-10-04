@@ -6,15 +6,13 @@ import { formatCurrency, formatDate } from '@/lib/format';
 import { Button } from '@/components/ui/button';
 import { Modal } from '@/components/ui/modal';
 
-type Lote = {
-  id: number;
+type Mes = {
   mes_servico: string;
-  criado_em: string;
-  total_titulos: number;
-  recuperado: boolean;
+  total_lotes: number;
 };
 
 type Item = {
+  lote_id: number;
   billing_id: number;
   cliente: string;
   email: string | null;
@@ -27,8 +25,8 @@ type Item = {
 };
 
 type Previa = {
-  id: number;
   mes_servico: string;
+  total_lotes: number;
   total: number;
   prontos: number;
   enviados: number;
@@ -53,8 +51,8 @@ export function ClosureDeliveryModal({
   token: string | null;
   onClose: () => void;
 }) {
-  const [lotes, setLotes] = useState<Lote[]>([]);
-  const [loteId, setLoteId] = useState('');
+  const [meses, setMeses] = useState<Mes[]>([]);
+  const [mesServico, setMesServico] = useState('');
   const [previa, setPrevia] = useState<Previa | null>(null);
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
@@ -63,11 +61,11 @@ export function ClosureDeliveryModal({
   const [feedback, setFeedback] = useState('');
 
   async function atualizarPrevia() {
-    if (!token || !loteId || sending) return;
+    if (!token || !mesServico || sending) return;
     setLoading(true);
     setError('');
     try {
-      setPrevia(await apiFetch<Previa>(`/billing-closure/lotes/${loteId}`, {}, token));
+      setPrevia(await apiFetch<Previa>(`/billing-closure/meses/${mesServico}`, {}, token));
     } catch (err) {
       setError(mensagemErro(err));
     } finally {
@@ -79,14 +77,15 @@ export function ClosureDeliveryModal({
     if (!open || !token) return;
     setLoading(true);
     setError('');
-    apiFetch<Lote[]>('/billing-closure/lotes/recuperar', { method: 'POST' }, token)
-      .then(setLotes)
+    apiFetch('/billing-closure/lotes/recuperar', { method: 'POST' }, token)
+      .then(() => apiFetch<Mes[]>('/billing-closure/meses', {}, token))
+      .then(setMeses)
       .catch(err => setError(mensagemErro(err)))
       .finally(() => setLoading(false));
   }, [open, token]);
 
   useEffect(() => {
-    if (!open || !token || !loteId) {
+    if (!open || !token || !mesServico) {
       setPrevia(null);
       return;
     }
@@ -94,19 +93,19 @@ export function ClosureDeliveryModal({
     setLoading(true);
     setError('');
     setFeedback('');
-    apiFetch<Previa>(`/billing-closure/lotes/${loteId}`, {}, token)
+    apiFetch<Previa>(`/billing-closure/meses/${mesServico}`, {}, token)
       .then(data => { if (active) setPrevia(data); })
       .catch(err => { if (active) setError(mensagemErro(err)); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [open, token, loteId]);
+  }, [open, token, mesServico]);
 
-  async function enviarLote() {
+  async function enviarMes() {
     if (!token || !previa || sending) return;
     const prontos = previa.itens.filter(item => item.estado === 'pronto');
     if (!prontos.length) return;
     if (!window.confirm(
-      `Enviar por e-mail ${prontos.length} cobrança(s) do fechamento #${previa.id}? ` +
+      `Enviar por e-mail ${prontos.length} cobrança(s) dos fechamentos de ${rotuloMes(previa.mes_servico)}? ` +
       `Cada responsável receberá o boleto e, quando seu cadastro exigir, também a NFS-e.`,
     )) return;
 
@@ -119,7 +118,7 @@ export function ClosureDeliveryModal({
       for (const [index, item] of prontos.entries()) {
         setProgress(`${index + 1}/${prontos.length} · ${item.cliente}`);
         try {
-          await apiFetch(`/billing-closure/lotes/${previa.id}/enviar/${item.billing_id}`, {
+          await apiFetch(`/billing-closure/lotes/${item.lote_id}/enviar/${item.billing_id}`, {
             method: 'POST',
           }, token);
           enviados += 1;
@@ -133,7 +132,7 @@ export function ClosureDeliveryModal({
       }
       setFeedback(`${enviados} envio(s) concluído(s)${falhas.length ? `; ${falhas.length} não concluído(s)` : ''}.`);
       if (falhas.length) setError(falhas.slice(0, 8).join(' · ') + (falhas.length > 8 ? ` · e mais ${falhas.length - 8}` : ''));
-      setPrevia(await apiFetch<Previa>(`/billing-closure/lotes/${previa.id}`, {}, token));
+      setPrevia(await apiFetch<Previa>(`/billing-closure/meses/${previa.mes_servico}`, {}, token));
     } catch (err) {
       setError(mensagemErro(err));
     } finally {
@@ -144,24 +143,25 @@ export function ClosureDeliveryModal({
 
   return (
     <Modal open={open} onClose={() => { if (!sending) onClose(); }} title="Enviar fechamento por e-mail"
-      description="Escolha um lote de fechamento. A lista inclui todos os títulos dessa execução, inclusive fechamentos anteriores recuperados, sem depender da paginação da carteira."
+      description="Selecione o mês do serviço para ver todos os títulos gerados pelos fechamentos daquele mês, sem carnês ou cobranças antigas fora do fechamento."
       size="2xl">
       <div className="space-y-4">
         <label className="block text-sm font-medium text-slate-700 dark:text-slate-200">
-          Lote de fechamento
-          <select value={loteId} disabled={sending || loading}
-            onChange={e => setLoteId(e.target.value)}
+          Mês do serviço
+          <select value={mesServico} disabled={sending || loading}
+            onChange={e => setMesServico(e.target.value)}
             className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm dark:border-slate-700 dark:bg-slate-900">
-            <option value="">Selecione o fechamento</option>
-            {lotes.map(lote => <option key={lote.id} value={lote.id}>
-              #{lote.id} · serviço {rotuloMes(lote.mes_servico)} · {lote.total_titulos} título(s) · {new Date(lote.criado_em).toLocaleString('pt-BR')}{lote.recuperado ? ' · recuperado' : ''}
+            <option value="">Selecione o mês</option>
+            {meses.map(mes => <option key={mes.mes_servico} value={mes.mes_servico}>
+              {rotuloMes(mes.mes_servico)} · {mes.total_lotes} fechamento(s)
             </option>)}
           </select>
         </label>
-        {lotes.length === 0 && !loading && !error && <p className="text-sm text-slate-500">Nenhum fechamento identificável foi encontrado. Confira se já existem cobranças geradas por um fechamento.</p>}
+        {meses.length === 0 && !loading && !error && <p className="text-sm text-slate-500">Nenhum fechamento identificável foi encontrado. Confira se já existem cobranças geradas por um fechamento.</p>}
         {loading && <p className="text-sm text-slate-500">Carregando fechamento…</p>}
         {previa && !loading && <>
           <div className="flex flex-wrap gap-2 text-sm">
+            <span className="rounded-lg bg-slate-100 px-3 py-2 dark:bg-slate-800">Serviços de {rotuloMes(previa.mes_servico)} · {previa.total_lotes} fechamento(s)</span>
             <span className="rounded-lg bg-slate-100 px-3 py-2 dark:bg-slate-800">{previa.total} título(s)</span>
             <span className="rounded-lg bg-emerald-50 px-3 py-2 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">{previa.prontos} pronto(s)</span>
             <span className="rounded-lg bg-blue-50 px-3 py-2 text-blue-800 dark:bg-blue-950/40 dark:text-blue-300">{previa.enviados} enviado(s)</span>
@@ -189,8 +189,8 @@ export function ClosureDeliveryModal({
             <Button type="button" variant="secondary" onClick={atualizarPrevia} disabled={sending || loading}>
               Atualizar conferência
             </Button>
-            <Button type="button" onClick={enviarLote} disabled={sending || previa.prontos === 0}>
-              {sending ? `Enviando ${progress}` : `Enviar fechamento: ${previa.prontos} pronto(s)`}
+            <Button type="button" onClick={enviarMes} disabled={sending || previa.prontos === 0}>
+              {sending ? `Enviando ${progress}` : `Enviar mês: ${previa.prontos} pronto(s)`}
             </Button>
           </div>
         </>}
