@@ -156,6 +156,7 @@ def test_recovers_older_closure_without_carnets_or_duplicate_batches(http, db):
     for billing in individuais:
         billing.created_at = momento
         billing.billing_type = 'recorrente'
+        billing.period_label = '10/2026'  # Vence em outubro, mas pertence ao fechamento de setembro.
     antigo.title = 'Fechamento 09/2026 - boleto único'
     componente.status = BillingStatus.CANCELED
     componente.substituted_by_id = antigo.id
@@ -175,6 +176,10 @@ def test_recovers_older_closure_without_carnets_or_duplicate_batches(http, db):
     assert {item['billing_id'] for item in preview['itens']} == {antigo.id, *(b.id for b in individuais)}
     assert avulsa.id not in [item['billing_id'] for item in preview['itens']]
     assert carne.id not in [item['billing_id'] for item in preview['itens']]
+    setembro = http.get('/api/v1/billings/', params={'closure_month': '2026-09'})
+    assert setembro.status_code == 200, setembro.text
+    assert {item['id'] for item in setembro.json()} == {antigo.id, *(b.id for b in individuais)}
+    assert http.get('/api/v1/billings/', params={'closure_month': '2026-10'}).json() == []
     second = http.post(PREFIX + '/recuperar')
     assert second.status_code == 200
     assert second.json() == first.json()

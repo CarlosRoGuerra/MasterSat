@@ -363,8 +363,7 @@ function aplicarMesVencimento(query: URLSearchParams, mes: string) {
 
 function aplicarMesFechamento(query: URLSearchParams, mes: string) {
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(mes)) return;
-  const [ano, numeroMes] = mes.split('-');
-  query.set('period_label', `${numeroMes}/${ano}`);
+  query.set('closure_month', mes);
 }
 
 function BillingTableSection({
@@ -697,6 +696,7 @@ export default function FinanceiroPage() {
   const [billingStatusFilter, setBillingStatusFilter] = useState('');
   const [billingDueMonth, setBillingDueMonth] = useState('');
   const [billingClosingMonth, setBillingClosingMonth] = useState('');
+  const closureRecoveredMonths = useRef<Set<string>>(new Set());
   const [billingBoletoFilter, setBillingBoletoFilter] = useState('');
   const [billingNfseFilter, setBillingNfseFilter] = useState('');
   const [billingView, setBillingView] = useState<'alert' | 'all'>('alert');
@@ -867,10 +867,17 @@ export default function FinanceiroPage() {
     } catch (err) { setError(parseError(err)); } finally { setProcessing(false); }
   }
 
+  async function ensureClosureMonth(currentToken: string) {
+    if (!billingClosingMonth || closureRecoveredMonths.current.has(billingClosingMonth)) return;
+    await apiFetch('/billing-closure/lotes/recuperar', { method: 'POST' }, currentToken);
+    closureRecoveredMonths.current.add(billingClosingMonth);
+  }
+
   async function loadData(currentToken: string) {
     setLoading(true);
     setError('');
     try {
+      await ensureClosureMonth(currentToken);
       const query = new URLSearchParams();
       if (billingSearch) query.set('search', billingSearch);
       if (billingStatusFilter) query.set('status', billingStatusFilter);
@@ -915,6 +922,7 @@ export default function FinanceiroPage() {
   async function loadBillingsOnly(currentToken: string) {
     setLoading(true);
     try {
+      await ensureClosureMonth(currentToken);
       const query = new URLSearchParams();
       if (billingSearch) query.set('search', billingSearch);
       if (billingStatusFilter) query.set('status', billingStatusFilter);

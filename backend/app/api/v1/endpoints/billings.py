@@ -26,6 +26,7 @@ from app.models.billing import RECURRING_BILLING_TYPES, Billing
 from app.models.billing_change_log import BillingChangeLog
 from app.models.client import Client
 from app.models.client_charge_item import ClientChargeItem
+from app.models.closure_job import ClosureJob
 from app.models.cnab_remessa import CnabRemessaItem
 from app.models.contract import Contract
 from app.models.enums import BillingStatus, UserRole
@@ -589,7 +590,7 @@ def billing_components(
 
 
 @router.get('/', response_model=list[BillingOut])
-def list_items(search: str | None = None, status: str | None = None, client_id: int | None = None, contract_id: int | None = None, vehicle_id: int | None = None, due_from: date | None = None, due_to: date | None = None, period_label: str | None = Query(default=None, pattern=r'^(0[1-9]|1[0-2])/\d{4}$'), boleto_emitido: bool | None = None, nfse_emitida: bool | None = None, include_substituted: bool = False, limit: int = Query(default=200, ge=1, le=1000), db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
+def list_items(search: str | None = None, status: str | None = None, client_id: int | None = None, contract_id: int | None = None, vehicle_id: int | None = None, due_from: date | None = None, due_to: date | None = None, period_label: str | None = Query(default=None, pattern=r'^(0[1-9]|1[0-2])/\d{4}$'), closure_month: str | None = Query(default=None, pattern=r'^\d{4}-(0[1-9]|1[0-2])$'), boleto_emitido: bool | None = None, nfse_emitida: bool | None = None, include_substituted: bool = False, limit: int = Query(default=200, ge=1, le=1000), db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
     query = apply_filters(base_query(db), search, status, client_id, contract_id, due_from, due_to, vehicle_id)
     if period_label:
         mes, ano = period_label.split('/')
@@ -601,6 +602,19 @@ def list_items(search: str | None = None, status: str | None = None, client_id: 
             Billing.period_label == period_label,
             Billing.competencia == competencia,
         ))
+    if closure_month:
+        # O período técnico da mensalidade pode ser o mês do vencimento. O mês
+        # selecionado em "Fechamento" identifica a execução que criou o título.
+        # Isso exclui carnês e cobranças antigas com o mesmo period_label.
+        ids_fechamento = {
+            int(billing_id)
+            for (result,) in db.query(ClosureJob.result).filter(
+                ClosureJob.status == 'completed',
+                ClosureJob.reference_month == closure_month,
+            ).all()
+            for billing_id in (result or {}).get('payment_billing_ids', [])
+        }
+        query = query.filter(Billing.id.in_(ids_fechamento))
     if boleto_emitido is not None:
         # O indicador da carteira exige os dois dados bancários. O LEFT JOIN
         # produz NULL quando não existe boleto; a negação simples perderia essas linhas.

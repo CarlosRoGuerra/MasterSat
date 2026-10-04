@@ -20,6 +20,7 @@ from decimal import Decimal
 import pytest
 
 from app.models.billing import Billing
+from app.models.closure_job import ClosureJob
 from app.models.enums import BillingStatus
 from tests.fase03_apoio import cobranca
 
@@ -96,6 +97,29 @@ class TestListBillings:
     def test_rejects_invalid_fechamento_month(self, http):
         assert http.get(PREFIX + '/', params={'period_label': '13/2026'}).status_code == 422
         assert http.get(PREFIX + '/', params={'period_label': '01/0000'}).status_code == 422
+
+    def test_closure_month_uses_actual_run_not_due_period_or_old_carnets(self, http, db, contrato, billing_pendente):
+        billing_pendente.period_label = '10/2026'
+        billing_pendente.due_date = date(2026, 10, 20)
+        billing_pendente.notes = 'Fechamento — 10/2026'
+        carne_antigo = cobranca(db, contrato, period_label='09/2026', due_date=date(2026, 10, 15))
+        carne_antigo.billing_type = 'carne'
+        outro = cobranca(db, contrato, period_label='10/2026', due_date=date(2026, 10, 15))
+        db.add(ClosureJob(
+            reference_month='2026-09', status='completed',
+            result={'payment_billing_ids': [billing_pendente.id]},
+        ))
+        db.commit()
+
+        setembro = http.get(PREFIX + '/', params={'closure_month': '2026-09'})
+        assert setembro.status_code == 200, setembro.text
+        assert [item['id'] for item in setembro.json()] == [billing_pendente.id]
+        assert carne_antigo.id not in {item['id'] for item in setembro.json()}
+        assert outro.id not in {item['id'] for item in setembro.json()}
+        outubro = http.get(PREFIX + '/', params={'closure_month': '2026-10'})
+        assert outubro.status_code == 200
+        assert outubro.json() == []
+        assert http.get(PREFIX + '/', params={'closure_month': '2026-13'}).status_code == 422
 
     def test_search_by_billing_id(self, http, billing_pendente):
         r = http.get(PREFIX + "/", params={"search": str(billing_pendente.id)})
