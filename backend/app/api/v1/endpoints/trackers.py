@@ -36,6 +36,7 @@ from app.schemas.tracker import (
     TrackerUpdate,
 )
 from app.schemas.pagination import Page
+from app.services.dia_vencimento import sugerir_dia_vencimento
 from app.services.multiportal_lifecycle import (
     LifecycleResult,
     LifecycleSyncError,
@@ -471,6 +472,21 @@ def create_lote(
     )
 
 
+@router.get('/billing-day-suggestion')
+def billing_day_suggestion(
+    vehicle_id: int,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*VIEW_ROLES)),
+):
+    """Dia de vencimento que o contrato do veículo herdaria (ver dia_vencimento)."""
+    vehicle = db.get(Vehicle, vehicle_id)
+    if not vehicle or vehicle.is_deleted:
+        raise HTTPException(status_code=404, detail='Veículo não encontrado')
+    if not vehicle.client_id:
+        return {'dia': None, 'origem': None, 'contrato_id': None, 'alternativas': []}
+    return sugerir_dia_vencimento(db, vehicle.client_id, vehicle.id)
+
+
 @router.get('/{item_id}', response_model=TrackerOut)
 def get_item(
     item_id: int,
@@ -883,9 +899,11 @@ def link_vehicle(
 
     contract_out: ContractOut | None = None
     if plan:
-        # Dia de vencimento: usa payload > cliente > dia do mês de início (cap 28)
-        client_billing_day = getattr(new_client, 'billing_day', None)
-        billing_day = payload.billing_day or client_billing_day or (
+        # Dia de vencimento: payload > cliente > contratos do cliente/veículo
+        # (no SGR o dia mora no contrato) > dia do mês de início (cap 28).
+        billing_day = payload.billing_day or sugerir_dia_vencimento(
+            db, new_client.id, vehicle.id,
+        )['dia'] or (
             payload.start_date.day if payload.start_date.day <= 28 else 28
         )
 

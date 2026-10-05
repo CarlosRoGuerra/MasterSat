@@ -18,7 +18,7 @@ import { ExportButton } from '@/components/ui/export-button';
 import { ClientAutocomplete } from '@/components/ui/client-autocomplete';
 import { BillingDayInput, erroDiaVencimento } from '@/components/ui/billing-day-input';
 import { useDebouncedValue, useEffectSkipFirst } from '@/lib/use-debounced-value';
-import { apiFetch, apiFetchList } from '@/lib/api';
+import { apiFetch, apiFetchAll, apiFetchList } from '@/lib/api';
 import { onlyDigits, formatCpfCnpj, formatDate, pricePeriodSuffix } from '@/lib/format';
 import { useAuthGuard } from '@/lib/use-auth-guard';
 import { ROUTE_ROLES } from '@/lib/route-roles';
@@ -98,8 +98,20 @@ type TrackerFormState = {
   link_start_date: string;
   link_billing_day: string;
   link_payment_method: string;
-  link_billing_cycles: string;
 };
+
+type DiaSugerido = {
+  dia: number | null;
+  origem: 'cliente' | 'contrato_ativo' | 'contrato_anterior' | null;
+  contrato_id: number | null;
+  alternativas: number[];
+};
+
+function origemDia(s: DiaSugerido) {
+  if (s.origem === 'cliente') return 'herdado do cadastro do cliente';
+  if (s.origem === 'contrato_ativo') return `herdado do contrato #${s.contrato_id}`;
+  return `herdado do contrato anterior #${s.contrato_id}`;
+}
 
 const initialForm: TrackerFormState = {
   imei: '',
@@ -122,7 +134,6 @@ const initialForm: TrackerFormState = {
   link_start_date: new Date().toISOString().split('T')[0],
   link_billing_day: '',
   link_payment_method: '',
-  link_billing_cycles: '12',
 };
 
 const fieldClass = 'w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-500 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 disabled:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-400 dark:focus:border-brand-400';
@@ -261,6 +272,10 @@ function RastreadoresPageInner() {
   const [clientFilter, setClientFilter] = useState('');
   const [vehicleFilter, setVehicleFilter] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
+  // Dia de vencimento a herdar (cliente > contratos do cliente/veículo). No SGR
+  // o dia mora no contrato, então o cadastro do cliente quase sempre vem vazio.
+  const [diaSugerido, setDiaSugerido] = useState<DiaSugerido | null>(null);
+  const [buscandoDia, setBuscandoDia] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -289,8 +304,8 @@ function RastreadoresPageInner() {
       query.set('limit', '100');
       const [trackerResponse, clientResponse, vehicleResponse, planResponse] = await Promise.all([
         apiFetchList<Tracker>(`/trackers?${query.toString()}`, {}, currentToken),
-        apiFetchList<ClientOption>('/clients?limit=300', {}, currentToken),
-        apiFetchList<VehicleOption>('/vehicles?limit=400', {}, currentToken),
+        apiFetchAll<ClientOption>('/clients', currentToken, 300),
+        apiFetchAll<VehicleOption>('/vehicles', currentToken, 500),
         apiFetch<PlanOption[]>('/plans?limit=100', {}, currentToken).catch(() => [] as PlanOption[]),
       ]);
       setTrackers(trackerResponse);
@@ -438,6 +453,25 @@ function RastreadoresPageInner() {
     maintenance: trackers.filter((item) => item.status === 'em_manutencao').length,
   }), [trackers]);
 
+  useEffect(() => {
+    setDiaSugerido(null);
+    if (!modalOpen || !token || !form.vehicle_id) return;
+    let ativo = true;
+    setBuscandoDia(true);
+    apiFetch<DiaSugerido>(`/trackers/billing-day-suggestion?vehicle_id=${form.vehicle_id}`, {}, token)
+      .then((sugestao) => {
+        if (!ativo) return;
+        setDiaSugerido(sugestao);
+        if (sugestao.dia) {
+          // Não sobrescreve um dia já digitado.
+          setForm((prev) => (prev.link_billing_day ? prev : { ...prev, link_billing_day: String(sugestao.dia) }));
+        }
+      })
+      .catch(() => { if (ativo) setDiaSugerido(null); })
+      .finally(() => { if (ativo) setBuscandoDia(false); });
+    return () => { ativo = false; };
+  }, [modalOpen, token, form.vehicle_id]);
+
   function resetForm() {
     setForm(initialForm);
     setIsEditing(false);
@@ -530,12 +564,9 @@ function RastreadoresPageInner() {
       // Contrato criado para um rastreador já instalado começa, por padrão, na
       // data da instalação (não no dia de hoje).
       link_start_date: tracker.install_date || new Date().toISOString().split('T')[0],
-      link_billing_day: (() => {
-        const cli = clients.find((c) => c.id === tracker.client_id);
-        return cli?.billing_day ? String(cli.billing_day) : '';
-      })(),
+      // Preenchido pela sugestão do backend (cliente > contratos), ver efeito.
+      link_billing_day: '',
       link_payment_method: '',
-      link_billing_cycles: '12',
     });
     setIsEditing(true);
     setModalOpen(true);
@@ -602,6 +633,9 @@ function RastreadoresPageInner() {
       if (isRemovingVehicle) {
         throw new Error('Use a desinstalação do veículo para remover um vínculo existente.');
       }
+      if (form.vehicle_id && form.link_plan_id && !form.link_billing_day) {
+        throw new Error('Informe o dia do vencimento do contrato.');
+      }
       if (isTransfer && !window.confirm(
         'Este rastreador já está instalado em outro veículo. A transferência encerrará o contrato anterior, '
         + 'desfará o vínculo no Multiportal e criará o novo vínculo. Deseja continuar?',
@@ -665,8 +699,6 @@ function RastreadoresPageInner() {
               start_date: form.link_start_date,
               billing_day: form.link_billing_day ? Number(form.link_billing_day) : null,
               payment_method: form.link_payment_method || null,
-              auto_generate_billings: true,
-              billing_cycles: Number(form.link_billing_cycles) || 12,
             }),
           }, token);
         }
@@ -1043,10 +1075,7 @@ function RastreadoresPageInner() {
               />
               <select className={fieldClass} value={form.vehicle_id} onChange={(e) => {
                 const vid = e.target.value;
-                const veh = filteredVehicles.find((v) => String(v.id) === vid);
-                const cli = veh ? clients.find((c) => c.id === veh.client_id) : null;
-                const autoDay = cli?.billing_day ? String(cli.billing_day) : '';
-                setForm((prev) => ({ ...prev, vehicle_id: vid, link_billing_day: autoDay }));
+                setForm((prev) => ({ ...prev, vehicle_id: vid, link_billing_day: '' }));
               }}><option value="">Sem veículo</option>{filteredVehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.plate} {vehicle.model ? `• ${vehicle.model}` : ''}</option>)}</select>
             </div>
           </div>
@@ -1124,8 +1153,10 @@ function RastreadoresPageInner() {
                       <div className="mt-1 flex items-center justify-between gap-3">
                         <p className="text-xs text-slate-500 dark:text-slate-400">
                           {form.link_billing_day
-                            ? <>Todo dia <span className="font-bold text-brand-700 dark:text-brand-300">{form.link_billing_day}</span> · herdado do cliente</>
-                            : <span className="text-amber-600 dark:text-amber-400">Selecione um veículo para herdar, ou informe ao lado</span>}
+                            ? <>Todo dia <span className="font-bold text-brand-700 dark:text-brand-300">{form.link_billing_day}</span> · {diaSugerido?.dia === Number(form.link_billing_day) ? origemDia(diaSugerido) : 'informado manualmente'}</>
+                            : buscandoDia
+                              ? 'Buscando o dia do cliente…'
+                              : <span className="text-amber-600 dark:text-amber-400">Cliente sem dia de vencimento no cadastro nem em contratos — informe ao lado</span>}
                         </p>
                         <BillingDayInput
                           value={form.link_billing_day}
@@ -1133,13 +1164,17 @@ function RastreadoresPageInner() {
                           className="w-20 shrink-0 text-center"
                         />
                       </div>
+                      {diaSugerido && diaSugerido.alternativas.length > 0 && (
+                        <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                          O cliente tem contratos com outros dias ({diaSugerido.alternativas.join(', ')}). Confira antes de salvar.
+                        </p>
+                      )}
                       {erroDiaVencimento(form.link_billing_day) && (
                         <p className="mt-1 text-xs text-rose-600 dark:text-rose-400">
                           {erroDiaVencimento(form.link_billing_day)}
                         </p>
                       )}
                     </div>
-                    <input className={fieldClass} placeholder="Ciclos (meses)" type="number" min={1} max={60} value={form.link_billing_cycles} onChange={(e) => setForm((prev) => ({ ...prev, link_billing_cycles: e.target.value }))} />
                   </>
                 )}
               </div>
