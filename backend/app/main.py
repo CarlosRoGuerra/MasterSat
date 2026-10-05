@@ -892,6 +892,15 @@ def _overdue_status_refresh_worker():
             logger.warning('Reclassificação de cobranças vencidas falhou (tentará novamente no próximo ciclo): %s', exc)
 
 
+def _closure_email_worker():
+    from app.services.closure_delivery import processar_fila
+    while not _audit_stop.wait(5):
+        try:
+            _run_locked(918273652, processar_fila)
+        except Exception:
+            logging.getLogger('uvicorn.error').exception('Falha no processamento da fila de e-mails.')
+
+
 @app.on_event('startup')
 def on_startup():
     # Com múltiplos workers (uvicorn --workers), o startup roda em cada processo.
@@ -938,6 +947,7 @@ def on_startup():
         target=run_audit_worker, args=(_audit_stop,), name='audit-batch-worker', daemon=True,
     )
     _audit_thread.start()
+    threading.Thread(target=_closure_email_worker, name='closure-email-worker', daemon=True).start()
 
     # Reclassifica cobranças pendente<->vencida (BE-05). Sempre ligado,
     # independente de qualquer integração — é regra de negócio pura sobre a

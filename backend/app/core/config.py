@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     password_reset_window_minutes: int = 15
     # Tentativas de envio do e-mail de reset (SMTP do painel), com espera crescente.
     password_reset_email_attempts: int = 3
+    # DreamHost: 100 destinatários/hora. Reserva de 10 para uso fora do sistema.
+    smtp_recipients_per_hour: int = 90
     # Produção: sempre False — nunca retorna token de reset no response
     debug_return_reset_token: bool = False
     # Swagger/OpenAPI: desabilitado por padrão (não expor a superfície da API em produção)

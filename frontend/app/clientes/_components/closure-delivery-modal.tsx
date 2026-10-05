@@ -5,6 +5,7 @@ import {
   Barcode,
   CalendarDays,
   Check,
+  Clock3,
   FileText,
   Inbox,
   Loader2,
@@ -36,8 +37,9 @@ type Item = {
   boleto_emitido: boolean;
   nfse_status: string | null;
   emitir_nfse: string | null;
-  estado: 'pronto' | 'bloqueado' | 'enviado' | 'processando' | 'desconhecido';
+  estado: 'pronto' | 'bloqueado' | 'enviado' | 'aguardando' | 'processando' | 'desconhecido';
   motivo: string | null;
+  proxima_tentativa_em?: string | null;
 };
 
 type Previa = {
@@ -49,6 +51,8 @@ type Previa = {
   enviados: number;
   bloqueados: number;
   indeterminados: number;
+  em_fila: number;
+  limite_destinatarios_hora: number;
   itens: Item[];
 };
 
@@ -61,7 +65,7 @@ function rotuloMes(value: string) {
   return `${mes}/${ano}`;
 }
 
-type Filtro = 'todos' | 'pronto' | 'bloqueado' | 'enviado' | 'conferir';
+type Filtro = 'todos' | 'pronto' | 'bloqueado' | 'enviado' | 'aguardando' | 'conferir';
 const selecionavel = (item: Item) => item.estado === 'pronto' || item.estado === 'bloqueado';
 const inputClass =
   'rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100';
@@ -79,6 +83,10 @@ const status = {
   enviado: {
     label: 'Enviado',
     color: 'bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300',
+  },
+  aguardando: {
+    label: 'Na fila',
+    color: 'bg-violet-50 text-violet-700 dark:bg-violet-950/40 dark:text-violet-300',
   },
   processando: {
     label: 'Em envio',
@@ -107,7 +115,6 @@ export function ClosureDeliveryModal({
   const [previa, setPrevia] = useState<Previa | null>(null);
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
-  const [progress, setProgress] = useState('');
   const [error, setError] = useState('');
   const [feedback, setFeedback] = useState('');
   const [loadingMeses, setLoadingMeses] = useState(false);
@@ -135,6 +142,7 @@ export function ClosureDeliveryModal({
     disponiveis.length > 0 && disponiveis.every((item) => selecionados.has(item.billing_id));
   const algunsMarcados = disponiveis.some((item) => selecionados.has(item.billing_id));
   const quantidadeValida = Number.isInteger(Number(quantidade)) && Number(quantidade) > 0;
+  const filaAtiva = itens.some(item => item.estado === 'aguardando' || item.estado === 'processando');
 
   function aplicarPrevia(data: Previa) {
     setPrevia(data);
@@ -228,14 +236,39 @@ export function ClosureDeliveryModal({
     };
   }, [open, token, loteId]);
 
+  useEffect(() => {
+    if (!open || !token || !loteId || !filaAtiva) return;
+    let active = true;
+    let fetching = false;
+    const timer = window.setInterval(async () => {
+      if (fetching || operacaoRef.current) return;
+      fetching = true;
+      const request = requestId.current;
+      try {
+        const data = await apiFetch<Previa>(`/billing-closure/lotes/${loteId}`, {}, token);
+        if (active && request === requestId.current) aplicarPrevia(data);
+      } catch (err) {
+        if (active && request === requestId.current) setError(mensagemErro(err));
+      } finally { fetching = false; }
+    }, 5000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [open, token, loteId, filaAtiva]);
+
   async function enviarSelecionados(loteCompleto = false) {
     const paraEnviar = loteCompleto ? prontosDoLote : prontos;
     if (!token || !previa || busy || operacaoRef.current || !paraEnviar.length) return;
+    const pendentes = loteCompleto
+      ? previa.bloqueados + previa.indeterminados
+      : marcados.filter((item) => item.estado !== 'pronto').length;
+    const cobrancas = paraEnviar.length === 1 ? 'cobrança' : 'cobranças';
     if (
       !window.confirm(
-        `Enviar ${paraEnviar.length} cobrança(s) ${loteCompleto ? 'pronta(s)' : 'selecionada(s)'} do lote #${previa.id} (${rotuloMes(previa.mes_servico)})? ` +
-          'O boleto e a NFS-e exigida serão anexados para todos os e-mails cadastrados do responsável. ' +
-          (previa.bloqueados || previa.indeterminados ? `${previa.bloqueados + previa.indeterminados} cobrança(s) com pendências não serão enviadas.` : ''),
+        `Confirmar o envio de ${paraEnviar.length} ${cobrancas}?\n\n` +
+          `${loteCompleto ? 'Envio do lote completo' : 'Envio somente da seleção'} · Lote #${previa.id} (${rotuloMes(previa.mes_servico)}).\n\n` +
+          (paraEnviar.length === 1 ? `Cobrança #${paraEnviar[0].billing_id} · ${paraEnviar[0].cliente}.\n\n` : '') +
+          'O boleto e a NFS-e exigida serão anexados para todos os e-mails cadastrados do responsável.\n\n' +
+          'As cobranças entrarão na fila com intervalo entre envios. Você poderá fechar esta tela e acompanhar depois.' +
+          (pendentes ? `\n\nFicarão de fora: ${pendentes} ${pendentes === 1 ? 'cobrança com pendências' : 'cobranças com pendências'} ${loteCompleto ? 'do lote' : 'da seleção'}.` : ''),
       )
     )
       return;
@@ -244,58 +277,23 @@ export function ClosureDeliveryModal({
     setSending(true);
     setError('');
     setFeedback('');
-    let enviados = 0;
-    const falhas: string[] = [];
     try {
-      for (const [index, item] of paraEnviar.entries()) {
-        setProgress(`${index + 1}/${paraEnviar.length} · ${item.cliente}`);
-        try {
-          await apiFetch(
-            `/billing-closure/lotes/${item.lote_id}/enviar/${item.billing_id}`,
-            {
-              method: 'POST',
-            },
-            token,
-          );
-          enviados += 1;
-          setSelecionados((current) => {
-            const next = new Set(current);
-            next.delete(item.billing_id);
-            return next;
-          });
-          setPrevia((current) =>
-            current
-              ? {
-                  ...current,
-                  prontos: current.prontos - 1,
-                  enviados: current.enviados + 1,
-                  itens: current.itens.map((row) =>
-                    row.billing_id === item.billing_id
-                      ? { ...row, estado: 'enviado', motivo: null }
-                      : row,
-                  ),
-                }
-              : current,
-          );
-        } catch (err) {
-          falhas.push(`#${item.billing_id} ${item.cliente}: ${mensagemErro(err)}`);
-        }
-      }
+      const result = await apiFetch<{
+        enfileirados: number[];
+        ignorados: { billing_id: number; estado: string; motivo: string | null }[];
+      }>(`/billing-closure/lotes/${previa.id}/enviar`, {
+        method: 'POST', body: JSON.stringify({ billing_ids: paraEnviar.map(item => item.billing_id) }),
+      }, token);
       await atualizarPrevia();
       setFeedback(
-        `${enviados} envio(s) concluído(s)${falhas.length ? `; ${falhas.length} não concluído(s)` : ''}.`,
+        `${result.enfileirados.length} cobrança(s) adicionada(s) à fila. O envio continuará mesmo com esta tela fechada.` +
+        (result.ignorados.length ? ` ${result.ignorados.length} já estavam enviadas, em andamento ou indisponíveis.` : ''),
       );
-      if (falhas.length)
-        setError(
-          falhas.slice(0, 8).join(' · ') +
-            (falhas.length > 8 ? ` · e mais ${falhas.length - 8}` : ''),
-        );
     } catch (err) {
       setError(mensagemErro(err));
     } finally {
       operacaoRef.current = false;
       setSending(false);
-      setProgress('');
     }
   }
 
@@ -348,6 +346,14 @@ export function ClosureDeliveryModal({
       }
     >
       <div className="space-y-5">
+        <div className="flex items-start gap-3 rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-100">
+          <Clock3 aria-hidden="true" className="mt-0.5 h-5 w-5 shrink-0" />
+          <div>
+            <p className="font-semibold">Envio automático com intervalo</p>
+            <p className="mt-1">Até {previa?.limite_destinatarios_hora ?? 90} destinatários por hora, com intervalo de {Math.ceil(3600 / (previa?.limite_destinatarios_hora ?? 90))} segundos por e-mail cadastrado. Você pode fechar esta tela; a fila continua no servidor.</p>
+            {filaAtiva && <p className="mt-2 font-medium">{previa?.em_fila ?? 0} cobrança(s) na fila · acompanhamento atualizado automaticamente.</p>}
+          </div>
+        </div>
         <div className="grid overflow-hidden rounded-xl border border-slate-200 md:grid-cols-[minmax(250px,1fr)_2fr] dark:border-slate-700">
           <div className="border-l-4 border-brand-500 bg-slate-900 p-5 text-white">
             <label
@@ -440,7 +446,7 @@ export function ClosureDeliveryModal({
               aria-hidden="true"
               className="h-4 w-4 animate-spin motion-reduce:animate-none"
             />
-            Enviando cobranças · {progress}
+            Adicionando cobranças à fila…
           </p>
         )}
         {(loading || loadingMeses) && !sending && (
@@ -462,6 +468,7 @@ export function ClosureDeliveryModal({
                     { id: 'pronto', label: 'Prontas', count: previa.prontos },
                     { id: 'bloqueado', label: 'Pendentes', count: previa.bloqueados },
                     { id: 'enviado', label: 'Enviadas', count: previa.enviados },
+                    { id: 'aguardando', label: 'Na fila', count: previa.em_fila ?? 0 },
                     ...(previa.indeterminados
                       ? [{ id: 'conferir', label: 'Conferir', count: previa.indeterminados }]
                       : []),
@@ -642,6 +649,9 @@ export function ClosureDeliveryModal({
                             <p className="mt-1.5 text-2xs leading-relaxed text-slate-500 dark:text-slate-400">
                               {item.motivo}
                             </p>
+                          )}
+                          {item.estado === 'aguardando' && item.proxima_tentativa_em && (
+                            <p className="mt-1 text-2xs text-slate-500">Retomada a partir de {new Date(item.proxima_tentativa_em).toLocaleString('pt-BR')}</p>
                           )}
                         </td>
                       </tr>

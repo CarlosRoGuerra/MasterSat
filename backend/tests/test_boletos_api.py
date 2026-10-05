@@ -199,7 +199,11 @@ def test_email_serializado_contem_pdf_para_download(http, db, cliente, cobranca,
     url = (f'/api/v1/billing-closure/lotes/{lote.id}/enviar/{cobranca.id}' if fechamento
            else f'/api/v1/boletos/{cobranca.id}/enviar-email?incluir_nfse={str(incluir_nfse).lower()}')
     response = http.post(url)
-    assert response.status_code == 200, response.text
+    assert response.status_code == (202 if fechamento else 200), response.text
+    if fechamento:
+        from app.services.closure_delivery import processar_fila
+        assert mensagens == []
+        processar_fila(db)
     assert len(mensagens) == 1
     msg = mensagens[0]
     destinatarios = [cliente.email.lower(), 'financeiro@example.test', 'contabilidade@example.test']

@@ -15,6 +15,7 @@ from __future__ import annotations
 import smtplib
 import ssl
 from email.message import EmailMessage
+from email.utils import getaddresses
 
 from sqlalchemy.orm import Session
 
@@ -49,6 +50,30 @@ _ALL_KEYS = (
 
 class EmailConfigError(Exception):
     """SMTP mal configurado (faltando host/remetente) ou senha ilegível."""
+
+
+class EmailRateLimitError(EmailConfigError):
+    """Nenhuma mensagem aceita: aguardar antes de tentar novamente."""
+
+    def __init__(self, retry_at):
+        self.retry_at = retry_at
+        super().__init__('Envio pausado pelo limite da conta de e-mail. Tente novamente após '
+                         + retry_at.strftime('%d/%m/%Y %H:%M UTC') + '.')
+
+
+def _quota_exceeded(value) -> bool:
+    return 'quota' in str(value).lower() and 'exceed' in str(value).lower()
+
+
+def verificar_intervalo(db: Session, config: dict, destinatario: str, *, reserve=False):
+    from app.services.smtp_rate_limit import check_budget, RateLimited
+    recipients = {address.lower() for _, address in getaddresses([destinatario]) if address}
+    try:
+        check_budget(db, config, len(recipients), reserve=reserve)
+    except RateLimited as exc:
+        raise EmailRateLimitError(exc.retry_at) from exc
+    except ValueError as exc:
+        raise EmailConfigError(str(exc)) from exc
 
 
 def load_config(db: Session) -> dict:
@@ -140,6 +165,8 @@ def enviar_email(
 
     msg = EmailMessage()
     msg['From'] = f"{cfg['from_name']} <{cfg['from_email']}>" if cfg['from_name'] else cfg['from_email']
+    # Envelope e quota usam a mesma lista, sem RCPT duplicado.
+    destinatario = ', '.join(dict.fromkeys(address.lower() for _, address in getaddresses([destinatario]) if address))
     msg['To'] = destinatario
     msg['Subject'] = assunto
     msg.set_content(corpo)
@@ -149,18 +176,31 @@ def enviar_email(
         maintype, _, subtype = content_type.partition('/')
         msg.add_attachment(conteudo, maintype=maintype or 'application', subtype=subtype or 'octet-stream', filename=nome)
 
-    srv = _abrir_conexao(cfg)
+    verificar_intervalo(db, cfg, destinatario, reserve=True)
+    srv = None
     try:
+        srv = _abrir_conexao(cfg)
         recusados = srv.send_message(msg)
         if recusados:
+            if _quota_exceeded(recusados):
+                from app.services.smtp_rate_limit import pause_after_quota
+                pause_after_quota(db, cfg)
             # SMTP pode aceitar alguns destinatários e recusar outros. Não
             # registrar sucesso integral nem repetir o envio automaticamente.
             raise smtplib.SMTPException(
                 'Envio parcial; destinatários recusados: ' + ', '.join(recusados)
                 + '. Confira os destinatários antes de reenviar.'
             )
+    except (smtplib.SMTPRecipientsRefused, smtplib.SMTPDataError) as exc:
+        # Recusa explícita de TODOS os destinatários ou do DATA: nenhuma
+        # mensagem aceita. Só esta falha de quota pode voltar à fila.
+        if _quota_exceeded(exc):
+            from app.services.smtp_rate_limit import pause_after_quota
+            raise EmailRateLimitError(pause_after_quota(db, cfg)) from exc
+        raise
     finally:
         try:
-            srv.quit()
+            if srv is not None:
+                srv.quit()
         except Exception:  # pragma: no cover - fechamento best-effort
             pass

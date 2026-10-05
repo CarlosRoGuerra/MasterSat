@@ -140,9 +140,13 @@ def test_batch_send_attaches_nfse_only_when_required_and_does_not_repeat(http, d
     monkeypatch.setattr(email_smtp, 'enviar_email', lambda db_, **kwargs: emails.append(kwargs))
 
     assert http.post(f'{PREFIX}/{lote.id}/enviar/{missing_nfse.id}').status_code == 409
-    assert http.post(f'{PREFIX}/{lote.id}/enviar/{sim.id}').json()['estado'] == 'enviado'
+    from app.services.closure_delivery import processar_fila
+    assert http.post(f'{PREFIX}/{lote.id}/enviar/{sim.id}').json()['estado'] == 'aguardando'
+    assert emails == []  # O HTTP somente agenda; o worker transmite.
+    processar_fila(db)
     assert http.post(f'{PREFIX}/{lote.id}/enviar/{sim.id}').json()['estado'] == 'ja_enviado'
-    assert http.post(f'{PREFIX}/{lote.id}/enviar/{nao.id}').json()['estado'] == 'enviado'
+    assert http.post(f'{PREFIX}/{lote.id}/enviar/{nao.id}').json()['estado'] == 'aguardando'
+    processar_fila(db)
     assert prepared == [(sim.id, True), (nao.id, False)]
     assert [len(email['anexos']) for email in emails] == [2, 1]
     assert db.query(ClosureEmailDelivery).count() == 2
@@ -230,8 +234,10 @@ def test_partial_smtp_acceptance_is_not_success_or_automatically_retried(http, d
     monkeypatch.setattr(email_smtp, '_abrir_conexao', lambda _: Server())
     url = f'{PREFIX}/{lote.id}/enviar/{billing.id}'
     result = http.post(url)
-    assert result.status_code == 409, result.text
-    assert 'recusado@example.test' in result.json()['detail']
+    assert result.status_code == 202, result.text
+    from app.services.closure_delivery import processar_fila
+    processar_fila(db)
+    assert 'recusado@example.test' in db.query(ClosureEmailDelivery).one().error
     assert db.query(ClosureEmailDelivery).one().status == 'desconhecido'
     assert http.get(f'{PREFIX}/{lote.id}').json()['indeterminados'] == 1
     assert http.post(url).status_code == 409

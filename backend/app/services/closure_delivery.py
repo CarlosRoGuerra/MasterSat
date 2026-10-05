@@ -1,9 +1,8 @@
 """Conferência e envio por lote de fechamento, sem depender da paginação da carteira."""
 from __future__ import annotations
 
-import smtplib
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
@@ -141,7 +140,7 @@ def recuperar_lotes_anteriores(db: Session) -> list[dict]:
     return listar_lotes(db)
 
 
-def conferir_lote(db: Session, lote_id: int, billing_id: int | None = None) -> dict:
+def conferir_lote(db: Session, lote_id: int, billing_id: int | None = None, *, ignorar_entrega=False) -> dict:
     lote, ids = _lote(db, lote_id)
     if billing_id is not None:
         if billing_id not in ids:
@@ -167,7 +166,7 @@ def conferir_lote(db: Session, lote_id: int, billing_id: int | None = None) -> d
                     payer = None
         boleto = boletos.get(billing_id)
         nota = notas.get(billing_id)
-        entrega = entregas.get(billing_id)
+        entrega = None if ignorar_entrega else entregas.get(billing_id)
         fiscal = payer.issue_invoice if payer else None
         emails = emails_cadastrados(payer) if payer else []
         boleto_ok = bool(boleto and boleto.linha_digitavel and boleto.codigo_barras)
@@ -194,9 +193,10 @@ def conferir_lote(db: Session, lote_id: int, billing_id: int | None = None) -> d
         if entrega and entrega.status == 'enviado':
             estado = 'enviado'
             motivo = None
-        elif entrega and entrega.status in ('processando', 'desconhecido'):
+        elif entrega and entrega.status in ('aguardando', 'processando', 'desconhecido'):
             estado = entrega.status
-            motivo = entrega.error or 'Confirme o resultado do envio antes de tentar novamente'
+            motivo = entrega.error or ('Aguardando envio automático' if estado == 'aguardando'
+                                      else 'Confirme o resultado do envio antes de tentar novamente')
         elif motivos:
             estado = 'bloqueado'
             motivo = '; '.join(motivos)
@@ -219,6 +219,7 @@ def conferir_lote(db: Session, lote_id: int, billing_id: int | None = None) -> d
             'estado': estado,
             'motivo': motivo,
             'enviado_em': entrega.sent_at if entrega else None,
+            'proxima_tentativa_em': entrega.next_attempt_at if entrega else None,
         })
 
     return {
@@ -229,6 +230,8 @@ def conferir_lote(db: Session, lote_id: int, billing_id: int | None = None) -> d
         'total': len(itens),
         'prontos': sum(item['estado'] == 'pronto' for item in itens),
         'enviados': sum(item['estado'] == 'enviado' for item in itens),
+        'em_fila': sum(item['estado'] == 'aguardando' for item in itens),
+        'limite_destinatarios_hora': _limite_envio(),
         'bloqueados': sum(item['estado'] == 'bloqueado' for item in itens),
         'indeterminados': sum(item['estado'] in ('processando', 'desconhecido') for item in itens),
         'itens': itens,
@@ -261,74 +264,122 @@ def conferir_mes(db: Session, mes_servico: str) -> dict:
         'total': len(itens),
         'prontos': sum(item['estado'] == 'pronto' for item in itens),
         'enviados': sum(item['estado'] == 'enviado' for item in itens),
+        'em_fila': sum(item['estado'] == 'aguardando' for item in itens),
         'bloqueados': sum(item['estado'] == 'bloqueado' for item in itens),
         'indeterminados': sum(item['estado'] in ('processando', 'desconhecido') for item in itens),
         'itens': itens,
     }
 
 
-def enviar_titulo(db: Session, lote_id: int, billing_id: int) -> dict:
-    _, ids = _lote(db, lote_id)
-    if billing_id not in ids:
+def _limite_envio():
+    from app.services.smtp_rate_limit import hourly_limit
+    return hourly_limit()
+
+
+def enfileirar_lote(db: Session, lote_id: int, billing_ids: list[int] | None = None) -> dict:
+    """Uma transação agenda toda a seleção, sem transmitir no request HTTP."""
+    from app.services.email_smtp import load_config
+    previa = conferir_lote(db, lote_id)
+    selected = set(billing_ids) if billing_ids is not None else {i['billing_id'] for i in previa['itens']}
+    if not selected.issubset({i['billing_id'] for i in previa['itens']}):
         raise HTTPException(status_code=404, detail='Cobrança não pertence a este fechamento.')
-    previa = conferir_lote(db, lote_id, billing_id)
-    item = next(i for i in previa['itens'] if i['billing_id'] == billing_id)
-    if item['estado'] == 'enviado':
-        return {'estado': 'ja_enviado', 'billing_id': billing_id}
-    if item['estado'] != 'pronto':
-        raise HTTPException(status_code=409, detail=item['motivo'] or 'Envio indisponível.')
-
-    from app.api.v1.endpoints.boletos import preparar_envio_boleto_email
-    from app.services.email_smtp import EmailConfigError, enviar_email, load_config
-
-    incluir_nfse = item['emitir_nfse'] == 'sim'
-    destinatario, assunto, corpo, anexos = preparar_envio_boleto_email(
-        db, billing_id, incluir_nfse,
-    )
     config = load_config(db)
     if not config['host'] or not config['from_email']:
         raise HTTPException(status_code=400, detail='SMTP não configurado para envio por e-mail.')
+    queued, ignored = [], []
+    for item in previa['itens']:
+        billing_id = item['billing_id']
+        if billing_id not in selected:
+            continue
+        if item['estado'] != 'pronto':
+            ignored.append({'billing_id': billing_id, 'estado': item['estado'], 'motivo': item['motivo']})
+            continue
+        try:
+            with db.begin_nested():
+                entrega = db.query(ClosureEmailDelivery).filter_by(
+                    closure_job_id=lote_id, billing_id=billing_id,
+                ).with_for_update().first()
+                if entrega and entrega.status != 'erro':
+                    ignored.append({'billing_id': billing_id, 'estado': entrega.status, 'motivo': 'Envio já reservado.'})
+                    continue
+                if not entrega:
+                    entrega = ClosureEmailDelivery(closure_job_id=lote_id, billing_id=billing_id)
+                    db.add(entrega)
+                entrega.status = 'aguardando'
+                entrega.error = None
+                entrega.next_attempt_at = None
+                entrega.recipient = item['email']
+                db.flush()
+                queued.append(billing_id)
+        except IntegrityError:
+            ignored.append({'billing_id': billing_id, 'estado': 'aguardando', 'motivo': 'Envio já reservado.'})
+    db.commit()
+    return {'enfileirados': queued, 'ignorados': ignored, 'limite_destinatarios_hora': _limite_envio()}
 
-    entrega = db.query(ClosureEmailDelivery).filter_by(
-        closure_job_id=lote_id, billing_id=billing_id,
-    ).with_for_update().first()
-    if entrega and entrega.status == 'enviado':
-        return {'estado': 'ja_enviado', 'billing_id': billing_id}
-    if entrega and entrega.status in ('processando', 'desconhecido'):
-        raise HTTPException(status_code=409, detail='Envio em andamento ou indeterminado; confira antes de reenviar.')
-    if not entrega:
-        entrega = ClosureEmailDelivery(closure_job_id=lote_id, billing_id=billing_id, status='processando')
-        db.add(entrega)
-    entrega.status = 'processando'
-    entrega.recipient = destinatario
-    entrega.error = None
-    entrega.started_at = datetime.now(timezone.utc)
-    try:
-        db.commit()  # Reserva durável antes do SMTP; uma repetição não envia duas vezes.
-    except IntegrityError as exc:
-        db.rollback()
-        raise HTTPException(status_code=409, detail='Outra operação reservou este envio.') from exc
 
+def processar_fila(db: Session) -> None:
+    """Processa no máximo um título; o scheduler chama de novo sem dormir aqui."""
+    from app.services.smtp_rate_limit import utc, utcnow
+    now = utcnow()
+    # Após queda no meio da transmissão, não presumir que o SMTP recusou.
+    db.query(ClosureEmailDelivery).filter(
+        ClosureEmailDelivery.status == 'processando',
+        ClosureEmailDelivery.started_at < now - timedelta(minutes=15),
+    ).update({'status': 'desconhecido', 'error': 'Envio interrompido; confira o servidor de e-mail antes de reenviar.'}, synchronize_session=False)
+    db.commit()
+    entrega = db.query(ClosureEmailDelivery).filter_by(status='aguardando').order_by(ClosureEmailDelivery.id).first()
+    if not entrega or (entrega.next_attempt_at and utc(entrega.next_attempt_at) > now):
+        return
+    # Compare-and-set: dois workers não podem transmitir o mesmo título.
+    claimed = db.query(ClosureEmailDelivery).filter_by(id=entrega.id, status='aguardando').update(
+        {'status': 'processando', 'started_at': now}, synchronize_session=False,
+    )
+    db.commit()
+    if not claimed:
+        return
+    db.refresh(entrega)
+    transmitir_titulo(db, entrega)
+
+
+def transmitir_titulo(db: Session, entrega: ClosureEmailDelivery) -> None:
+    from app.api.v1.endpoints.boletos import preparar_envio_boleto_email
+    from app.services.email_smtp import (
+        EmailConfigError, EmailRateLimitError, enviar_email, load_config, verificar_intervalo,
+    )
+    transmitting = False
     try:
+        item = conferir_lote(db, entrega.closure_job_id, entrega.billing_id, ignorar_entrega=True)['itens'][0]
+        if item['estado'] != 'pronto':
+            raise EmailConfigError(item['motivo'] or 'Cobrança não está pronta para envio.')
+        config = load_config(db)
+        if not config['host'] or not config['from_email']:
+            raise EmailConfigError('SMTP não configurado para envio por e-mail.')
+        # Não baixa PDFs enquanto aguarda o intervalo. O SMTP reserva a quota
+        # novamente, de forma atômica, imediatamente antes da transmissão.
+        verificar_intervalo(db, config, item['email'])
+        destinatario, assunto, corpo, anexos = preparar_envio_boleto_email(
+            db, entrega.billing_id, item['emitir_nfse'] == 'sim',
+        )
+        entrega.recipient = destinatario
+        db.commit()
+        transmitting = True
         enviar_email(db, destinatario=destinatario, assunto=assunto, corpo=corpo,
                      anexos=anexos, config=config)
+    except EmailRateLimitError as exc:
+        entrega.status = 'aguardando'
+        entrega.next_attempt_at = exc.retry_at
+        entrega.error = 'Aguardando o intervalo de segurança da conta de e-mail. O envio será retomado automaticamente.'
     except EmailConfigError as exc:
-        entrega.status = 'erro'  # Falha anterior à transmissão; pode tentar novamente.
+        entrega.status = 'erro'
         entrega.error = str(exc)
-        db.commit()
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except (smtplib.SMTPException, OSError) as exc:
-        entrega.status = 'desconhecido'  # SMTP pode ter aceitado a mensagem antes do erro.
-        entrega.error = f'Resultado do envio incerto: {exc}'
-        db.commit()
-        raise HTTPException(status_code=409, detail=entrega.error) from exc
-    except Exception:
-        entrega.status = 'desconhecido'
-        entrega.error = 'Resultado do envio incerto; confira o servidor de e-mail.'
-        db.commit()
-        raise
-
-    entrega.status = 'enviado'
-    entrega.sent_at = datetime.now(timezone.utc)
+    except Exception as exc:
+        entrega.status = 'desconhecido' if transmitting else 'erro'
+        detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+        entrega.error = (f'Resultado do envio incerto: {detail}' if transmitting
+                         else f'Falha ao preparar os documentos: {detail}')
+    else:
+        entrega.status = 'enviado'
+        entrega.error = None
+        entrega.next_attempt_at = None
+        entrega.sent_at = datetime.now(timezone.utc)
     db.commit()
-    return {'estado': 'enviado', 'billing_id': billing_id, 'email': destinatario}

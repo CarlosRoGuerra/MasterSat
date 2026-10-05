@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+from pydantic import BaseModel, Field
 
 from app.api.deps import require_roles
 from app.db.session import get_db
@@ -15,7 +16,7 @@ from app.services.billing_closure import (
 )
 from app.services.financial import add_months
 from app.services.closure_delivery import (
-    conferir_lote, conferir_mes, enviar_titulo, listar_lotes, listar_meses,
+    conferir_lote, conferir_mes, enfileirar_lote, listar_lotes, listar_meses,
     recuperar_lotes_anteriores,
 )
 
@@ -66,14 +67,37 @@ def closure_batch_preview(
     return conferir_lote(db, lote_id)
 
 
-@router.post('/lotes/{lote_id}/enviar/{billing_id}')
+class ClosureQueueIn(BaseModel):
+    billing_ids: list[int] = Field(min_length=1, max_length=1000)
+
+
+@router.post('/lotes/{lote_id}/enviar', status_code=202)
+def closure_batch_enqueue(
+    lote_id: int,
+    payload: ClosureQueueIn,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    return enfileirar_lote(db, lote_id, payload.billing_ids)
+
+
+@router.post('/lotes/{lote_id}/enviar/{billing_id}', status_code=202)
 def closure_batch_send_title(
     lote_id: int,
     billing_id: int,
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*ALLOWED_ROLES)),
 ):
-    return enviar_titulo(db, lote_id, billing_id)
+    # Clientes antigos também entram na fila; nunca contornam o intervalo.
+    result = enfileirar_lote(db, lote_id, [billing_id])
+    if result['enfileirados']:
+        return {'estado': 'aguardando', 'billing_id': billing_id}
+    item = result['ignorados'][0]
+    if item['estado'] == 'enviado':
+        return {'estado': 'ja_enviado', 'billing_id': billing_id}
+    if item['estado'] in ('aguardando', 'processando'):
+        return {'estado': item['estado'], 'billing_id': billing_id}
+    raise HTTPException(status_code=409, detail=item['motivo'] or 'Envio indisponível.')
 
 
 def _parse_reference_month(reference_month: str):

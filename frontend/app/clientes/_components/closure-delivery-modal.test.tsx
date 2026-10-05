@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { apiFetch } from '@/lib/api';
@@ -27,7 +27,7 @@ let rows: ReturnType<typeof item>[];
 let sendFailure: number | null;
 let previewFailure: boolean;
 const calls = () =>
-  vi.mocked(apiFetch).mock.calls.filter(([path]) => String(path).includes('/enviar/'));
+  vi.mocked(apiFetch).mock.calls.filter(([path]) => String(path).endsWith('/enviar'));
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -45,7 +45,7 @@ beforeEach(() => {
     item(5, 'desconhecido'),
     item(6, 'bloqueado', { boleto_emitido: false, motivo: 'Cobrança não está em aberto' }),
   ];
-  vi.mocked(apiFetch).mockImplementation(async (path) => {
+  vi.mocked(apiFetch).mockImplementation(async (path, options) => {
     if (path === '/billing-closure/lotes/recuperar') return {};
     if (path === '/billing-closure/lotes')
       return [
@@ -66,17 +66,19 @@ beforeEach(() => {
         enviados: batchRows.filter((r) => r.estado === 'enviado').length,
         bloqueados: batchRows.filter((r) => r.estado === 'bloqueado').length,
         indeterminados: 1,
+        em_fila: batchRows.filter(r => r.estado === 'aguardando').length,
+        limite_destinatarios_hora: 90,
         itens: batchRows,
       };
     }
-    if (String(path).includes('/enviar/')) {
-      const id = Number(String(path).split('/').pop());
-      if (id === sendFailure) {
-        rows = rows.map((r) => (r.billing_id === id ? { ...r, estado: 'desconhecido' } : r));
-        throw new Error('Resultado incerto');
-      }
-      rows = rows.map((r) => (r.billing_id === id ? { ...r, estado: 'enviado' } : r));
-      return { estado: 'enviado' };
+    if (String(path).endsWith('/enviar')) {
+      const ids: number[] = JSON.parse(String(options?.body)).billing_ids;
+      rows = rows.map(r => ids.includes(r.billing_id)
+        ? { ...r, estado: r.billing_id === sendFailure ? 'desconhecido' : 'aguardando' } : r);
+      return {
+        enfileirados: ids.filter(id => id !== sendFailure),
+        ignorados: ids.filter(id => id === sendFailure).map(billing_id => ({ billing_id, estado: 'desconhecido', motivo: 'Conferir envio' })),
+      };
     }
     throw new Error(`Unexpected request: ${path}`);
   });
@@ -95,6 +97,7 @@ async function abrir() {
 
 describe('ClosureDeliveryModal', () => {
   it('seleciona a quantidade informada no filtro e envia somente esses títulos', async () => {
+    rows = [item(1), item(2), ...Array.from({ length: 10 }, (_, i) => item(i + 3, 'bloqueado'))];
     const { user } = await abrir();
     await user.click(screen.getByRole('button', { name: 'Prontas 2' }));
     await user.clear(screen.getByLabelText('Seleção parcial (opcional)'));
@@ -103,11 +106,17 @@ describe('ClosureDeliveryModal', () => {
     expect(screen.getByRole('checkbox', { name: 'Selecionar cobrança #1' })).toBeChecked();
     expect(screen.getByRole('checkbox', { name: 'Selecionar cobrança #2' })).not.toBeChecked();
     await user.click(screen.getByRole('button', { name: 'Enviar selecionadas (1)' }));
-    await screen.findByText('1 envio(s) concluído(s).');
-    expect(calls().map(([path]) => path)).toEqual(['/billing-closure/lotes/10/enviar/1']);
+    const confirmation = vi.mocked(window.confirm).mock.calls[0][0];
+    expect(confirmation).toContain('Confirmar o envio de 1 cobrança?');
+    expect(confirmation).toContain('Envio somente da seleção');
+    expect(confirmation).toContain('Cobrança #1 · Cliente 1');
+    expect(confirmation).not.toContain('Ficarão de fora');
+    await screen.findByText(/1 cobrança\(s\) adicionada\(s\) à fila/);
+    expect(calls().map(([path]) => path)).toEqual(['/billing-closure/lotes/10/enviar']);
+    expect(JSON.parse(String(calls()[0][1]?.body))).toEqual({ billing_ids: [1] });
   });
 
-  it('ignora pendentes, enviados e incertos no envio; permite sucesso parcial', async () => {
+  it('ignora pendentes, enviados e incertos e não confunde fila com entrega', async () => {
     sendFailure = 2;
     const { user } = await abrir();
     expect(screen.getByRole('checkbox', { name: 'Selecionar cobrança #4' })).toBeDisabled();
@@ -118,8 +127,11 @@ describe('ClosureDeliveryModal', () => {
       }),
     );
     await user.click(screen.getByRole('button', { name: 'Enviar selecionadas (2)' }));
-    await screen.findByText('1 envio(s) concluído(s); 1 não concluído(s).');
-    expect(calls()).toHaveLength(2);
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('Ficarão de fora: 2 cobranças com pendências da seleção.'));
+    await screen.findByText(/1 cobrança\(s\) adicionada\(s\) à fila.*1 já estavam enviadas/);
+    expect(calls()).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Enviadas 1' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Na fila 1' })).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: 'Selecionar cobrança #2' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Enviar selecionadas (0)' })).toBeDisabled();
   });
@@ -159,10 +171,32 @@ it('envia mais de 25 títulos do lote completo, mesmo com filtro e seleção par
   await user.click(screen.getByRole('button', { name: 'Selecionar' }));
   await user.click(screen.getByRole('button', { name: 'Pendentes 1' }));
   await user.click(screen.getByRole('button', { name: 'Enviar lote completo (61)' }));
-  await screen.findByText('61 envio(s) concluído(s).');
-  expect(calls().map(([path]) => path)).toEqual(
-    Array.from({ length: 61 }, (_, i) => `/billing-closure/lotes/10/enviar/${i + 1}`),
-  );
+  expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('Confirmar o envio de 61 cobranças?'));
+  expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('Ficarão de fora: 2 cobranças com pendências do lote.'));
+  await screen.findByText(/61 cobrança\(s\) adicionada\(s\) à fila/);
+  expect(calls()).toHaveLength(1);
+  expect(JSON.parse(String(calls()[0][1]?.body)).billing_ids).toEqual(Array.from({ length: 61 }, (_, i) => i + 1));
+});
+
+it('atualiza o andamento automaticamente e permite fechar a modal com envios na fila', async () => {
+  let poll: () => Promise<void> = async () => {};
+  const nativeInterval = window.setInterval.bind(window) as typeof setInterval;
+  const interval = vi.spyOn(window, 'setInterval').mockImplementation((handler, delay, ...args) => {
+    if (delay !== 5000) return nativeInterval(handler, delay, ...args);
+    poll = handler as () => Promise<void>;
+    return nativeInterval(handler, delay, ...args);
+  });
+  try {
+    const { user, onClose } = await abrir();
+    await user.click(screen.getByRole('button', { name: 'Enviar lote completo (2)' }));
+    await screen.findByRole('button', { name: 'Na fila 2' });
+    rows = rows.map(r => r.billing_id === 1 ? { ...r, estado: 'enviado' } : r);
+    await act(async () => { await poll(); });
+    expect(screen.getByRole('button', { name: 'Na fila 1' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Enviadas 2' })).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    expect(onClose).toHaveBeenCalled();
+  } finally { interval.mockRestore(); }
 });
 
 it('abre diretamente o lote recém-gerado e mostra todos os destinatários', async () => {
