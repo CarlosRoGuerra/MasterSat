@@ -41,6 +41,7 @@ from app.models.enums import BillingStatus, UserRole
 from app.models.vehicle import Vehicle
 from app.models.uninstall_event import UninstallEvent
 from app.services import ailos_boletos, cnab_remessa
+from app.services.email_smtp import emails_cadastrados
 from app.services.ailos_boletos import aplicar_dados_oficiais_ailos
 from app.services.boleto_ailos import gerar_dados_boleto, DadosBoleto
 from app.services.boleto_pdf import gerar_boleto_pdf, gerar_carne_pdf
@@ -536,7 +537,8 @@ def preparar_envio_boleto_email(db: Session, billing_id: int, incluir_nfse: bool
         )
     _recusar_titulo_baixado(ailos_boleto)
     c = _pagador_do_billing(b, db)
-    if not c.email:
+    destinatarios = emails_cadastrados(c)
+    if not destinatarios:
         raise HTTPException(status_code=400, detail='Cliente sem e-mail cadastrado.')
 
     dados = dados_boleto(b, c, db, ailos_boleto)
@@ -565,7 +567,7 @@ def preparar_envio_boleto_email(db: Session, billing_id: int, incluir_nfse: bool
     anexos = [(filename, pdf_bytes, 'application/pdf')]
     if nfse_anexo:
         anexos.append(nfse_anexo)
-    return c.email, assunto, corpo, anexos
+    return ', '.join(destinatarios), assunto, corpo, anexos
 
 
 @router.post("/{billing_id}/enviar-email")

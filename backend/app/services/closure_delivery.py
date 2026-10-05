@@ -18,12 +18,13 @@ from app.models.closure_job import ClosureJob
 from app.models.enums import BillingStatus
 from app.models.nfse_nota import NfseNota
 from app.services.ailos_boletos import resolver_pagador
+from app.services.email_smtp import emails_cadastrados
 
 
 def _lote(db: Session, lote_id: int) -> tuple[ClosureJob, list[int]]:
     lote = db.get(ClosureJob, lote_id)
     ids = (lote.result or {}).get('payment_billing_ids') if lote else None
-    if not lote or lote.status != 'completed' or not isinstance(ids, list) or not ids:
+    if not lote or lote.status != 'completed' or not isinstance(ids, list):
         raise HTTPException(status_code=404, detail='Lote de fechamento não encontrado.')
     return lote, [int(billing_id) for billing_id in ids]
 
@@ -31,7 +32,7 @@ def _lote(db: Session, lote_id: int) -> tuple[ClosureJob, list[int]]:
 def listar_lotes(db: Session) -> list[dict]:
     lotes = db.query(ClosureJob).filter(ClosureJob.status == 'completed').order_by(
         ClosureJob.completed_at.desc(), ClosureJob.id.desc(),
-    ).limit(300).all()
+    ).all()
     return [
         {
             'id': lote.id,
@@ -42,14 +43,13 @@ def listar_lotes(db: Session) -> list[dict]:
         }
         for lote in lotes
         if isinstance((lote.result or {}).get('payment_billing_ids'), list)
-        and lote.result['payment_billing_ids']
     ]
 
 
 def listar_meses(db: Session) -> list[dict]:
     meses: dict[str, int] = {}
     for lote in db.query(ClosureJob).filter(ClosureJob.status == 'completed').all():
-        if isinstance((lote.result or {}).get('payment_billing_ids'), list) and lote.result['payment_billing_ids']:
+        if isinstance((lote.result or {}).get('payment_billing_ids'), list):
             meses[lote.reference_month] = meses.get(lote.reference_month, 0) + 1
     return [
         {'mes_servico': mes, 'total_lotes': meses[mes]}
@@ -169,6 +169,7 @@ def conferir_lote(db: Session, lote_id: int, billing_id: int | None = None) -> d
         nota = notas.get(billing_id)
         entrega = entregas.get(billing_id)
         fiscal = payer.issue_invoice if payer else None
+        emails = emails_cadastrados(payer) if payer else []
         boleto_ok = bool(boleto and boleto.linha_digitavel and boleto.codigo_barras)
         motivos = []
         if not b or b.is_deleted or b.substituted_by_id is not None or b.status not in (
@@ -177,7 +178,7 @@ def conferir_lote(db: Session, lote_id: int, billing_id: int | None = None) -> d
             motivos.append('Cobrança não está em aberto')
         if not payer or payer.is_deleted:
             motivos.append('Responsável financeiro indisponível')
-        elif not (payer.email or '').strip():
+        elif not emails:
             motivos.append('Responsável financeiro sem e-mail')
         if not boleto_ok:
             motivos.append('Boleto Ailos não emitido')
@@ -204,9 +205,11 @@ def conferir_lote(db: Session, lote_id: int, billing_id: int | None = None) -> d
             motivo = entrega.error if entrega and entrega.status == 'erro' else None
 
         itens.append({
+            'lote_id': lote.id,
             'billing_id': billing_id,
             'cliente': payer.name if payer else 'Responsável indisponível',
-            'email': payer.email if payer else None,
+            'email': ', '.join(emails) or None,
+            'emails': emails,
             'valor': float(b.amount) if b else 0,
             'vencimento': b.due_date if b else None,
             'boleto_emitido': boleto_ok,
@@ -220,6 +223,7 @@ def conferir_lote(db: Session, lote_id: int, billing_id: int | None = None) -> d
 
     return {
         'id': lote.id,
+        'total_lotes': 1,
         'mes_servico': lote.reference_month,
         'criado_em': lote.created_at,
         'total': len(itens),

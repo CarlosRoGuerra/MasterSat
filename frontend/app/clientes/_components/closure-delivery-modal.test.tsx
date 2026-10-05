@@ -47,22 +47,26 @@ beforeEach(() => {
   ];
   vi.mocked(apiFetch).mockImplementation(async (path) => {
     if (path === '/billing-closure/lotes/recuperar') return {};
-    if (path === '/billing-closure/meses')
+    if (path === '/billing-closure/lotes')
       return [
-        { mes_servico: '2026-10', total_lotes: 1 },
-        { mes_servico: '2026-09', total_lotes: 1 },
+        { id: 10, mes_servico: '2026-10', criado_em: '2026-10-01', total_titulos: rows.length },
+        { id: 11, mes_servico: '2026-10', criado_em: '2026-10-02', total_titulos: 1 },
+        { id: 12, mes_servico: '2026-09', criado_em: '2026-09-01', total_titulos: 1 },
       ];
-    if (String(path).includes('/meses/')) {
+    if (/^\/billing-closure\/lotes\/\d+$/.test(String(path))) {
       if (previewFailure) throw new Error('Conferência indisponível');
+      const id = Number(String(path).split('/').pop());
+      const batchRows = rows.filter((r) => r.lote_id === id);
       return {
+        id,
         mes_servico: String(path).endsWith('2026-09') ? '2026-09' : '2026-10',
         total_lotes: 1,
-        total: rows.length,
-        prontos: rows.filter((r) => r.estado === 'pronto').length,
-        enviados: rows.filter((r) => r.estado === 'enviado').length,
-        bloqueados: rows.filter((r) => r.estado === 'bloqueado').length,
+        total: batchRows.length,
+        prontos: batchRows.filter((r) => r.estado === 'pronto').length,
+        enviados: batchRows.filter((r) => r.estado === 'enviado').length,
+        bloqueados: batchRows.filter((r) => r.estado === 'bloqueado').length,
         indeterminados: 1,
-        itens: rows,
+        itens: batchRows,
       };
     }
     if (String(path).includes('/enviar/')) {
@@ -84,6 +88,7 @@ async function abrir() {
   render(<ClosureDeliveryModal open token="test-token" onClose={onClose} />);
   await waitFor(() => expect(screen.getByLabelText('Mês do serviço')).toBeEnabled());
   await user.selectOptions(screen.getByLabelText('Mês do serviço'), '2026-10');
+  await user.selectOptions(screen.getByLabelText('Número do lote'), '10');
   await screen.findByRole('checkbox', { name: 'Selecionar cobrança #1' });
   return { user, onClose };
 }
@@ -92,8 +97,8 @@ describe('ClosureDeliveryModal', () => {
   it('seleciona a quantidade informada no filtro e envia somente esses títulos', async () => {
     const { user } = await abrir();
     await user.click(screen.getByRole('button', { name: 'Prontas 2' }));
-    await user.clear(screen.getByLabelText('Quantidade do lote'));
-    await user.type(screen.getByLabelText('Quantidade do lote'), '1');
+    await user.clear(screen.getByLabelText('Seleção parcial (opcional)'));
+    await user.type(screen.getByLabelText('Seleção parcial (opcional)'), '1');
     await user.click(screen.getByRole('button', { name: 'Selecionar' }));
     expect(screen.getByRole('checkbox', { name: 'Selecionar cobrança #1' })).toBeChecked();
     expect(screen.getByRole('checkbox', { name: 'Selecionar cobrança #2' })).not.toBeChecked();
@@ -119,16 +124,16 @@ describe('ClosureDeliveryModal', () => {
     expect(screen.getByRole('button', { name: 'Enviar selecionadas (0)' })).toBeDisabled();
   });
 
-  it('limpa a seleção ao trocar o mês e rejeita quantidade inválida', async () => {
+  it('limpa a seleção ao trocar o lote e rejeita quantidade inválida', async () => {
     const { user } = await abrir();
     await user.click(screen.getByRole('checkbox', { name: 'Selecionar cobrança #1' }));
-    await user.clear(screen.getByLabelText('Quantidade do lote'));
-    await user.type(screen.getByLabelText('Quantidade do lote'), '0');
+    await user.clear(screen.getByLabelText('Seleção parcial (opcional)'));
+    await user.type(screen.getByLabelText('Seleção parcial (opcional)'), '0');
     expect(screen.getByRole('button', { name: 'Selecionar' })).toBeDisabled();
-    await user.selectOptions(screen.getByLabelText('Mês do serviço'), '2026-09');
-    expect(
-      await screen.findByRole('checkbox', { name: 'Selecionar cobrança #1' }),
-    ).not.toBeChecked();
+    rows.push(item(7, 'pronto', { lote_id: 11 }));
+    await user.selectOptions(screen.getByLabelText('Número do lote'), '11');
+    expect(await screen.findByRole('checkbox', { name: 'Selecionar cobrança #7' })).not.toBeChecked();
+    expect(screen.queryByRole('checkbox', { name: 'Selecionar cobrança #1' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Enviar selecionadas (0)' })).toBeDisabled();
   });
 
@@ -140,4 +145,30 @@ describe('ClosureDeliveryModal', () => {
     await screen.findByRole('alert');
     expect(screen.getByRole('button', { name: 'Enviar selecionadas (0)' })).toBeDisabled();
   });
+});
+
+
+it('envia mais de 25 títulos do lote completo, mesmo com filtro e seleção parcial', async () => {
+  rows = [
+    ...Array.from({ length: 61 }, (_, i) => item(i + 1)),
+    item(70, 'bloqueado'), item(71, 'enviado'), item(72, 'desconhecido'),
+    item(80, 'pronto', { lote_id: 11 }),
+  ];
+  const { user } = await abrir();
+  await user.type(screen.getByLabelText('Seleção parcial (opcional)'), '1');
+  await user.click(screen.getByRole('button', { name: 'Selecionar' }));
+  await user.click(screen.getByRole('button', { name: 'Pendentes 1' }));
+  await user.click(screen.getByRole('button', { name: 'Enviar lote completo (61)' }));
+  await screen.findByText('61 envio(s) concluído(s).');
+  expect(calls().map(([path]) => path)).toEqual(
+    Array.from({ length: 61 }, (_, i) => `/billing-closure/lotes/10/enviar/${i + 1}`),
+  );
+});
+
+it('abre diretamente o lote recém-gerado e mostra todos os destinatários', async () => {
+  rows[0].email = 'principal@example.test, adicional@example.test';
+  render(<ClosureDeliveryModal open token="test-token" initialLoteId={10} onClose={vi.fn()} />);
+  await screen.findByText('principal@example.test, adicional@example.test');
+  expect(screen.getByLabelText('Número do lote')).toHaveValue('10');
+  expect(screen.getByRole('button', { name: 'Enviar lote completo (2)' })).toBeEnabled();
 });

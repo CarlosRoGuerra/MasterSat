@@ -83,6 +83,13 @@ def test_batch_preview_contains_all_titles_and_only_exact_run(http, db):
     )
     db.add(second_lote)
     db.commit()
+    exact_batch = http.get('/api/v1/billings/', params={'closure_batch_id': lote.id})
+    assert exact_batch.status_code == 200, exact_batch.text
+    assert {row['id'] for row in exact_batch.json()} == {b.id for b in included}
+    second_batch = http.get('/api/v1/billings/', params={'closure_batch_id': second_lote.id})
+    assert {row['id'] for row in second_batch.json()} == {additional.id}
+    assert http.get('/api/v1/billings/', params={'closure_batch_id': 99999}).json() == []
+    assert http.get('/api/v1/billings/', params={'closure_batch_id': 0}).status_code == 422
     meses = http.get('/api/v1/billing-closure/meses')
     assert meses.status_code == 200
     assert meses.json() == [{'mes_servico': '2026-09', 'total_lotes': 2}]
@@ -184,3 +191,50 @@ def test_recovers_older_closure_without_carnets_or_duplicate_batches(http, db):
     assert second.status_code == 200
     assert second.json() == first.json()
     assert db.query(ClosureJob).count() == 1
+
+
+def test_partial_smtp_acceptance_is_not_success_or_automatically_retried(http, db, monkeypatch):
+    from app.api.v1.endpoints import boletos
+    from app.services import email_smtp
+
+    payer = _client(db, 'Pagador', '40000000001', 'nao')
+    payer.email = None
+    payer.extra_emails = ['financeiro@example.test', 'recusado@example.test']
+    owner = _client(db, 'Proprietário', '40000000002', 'nao')
+    billing = _billing(db, payer)
+    billing.client_id = owner.id
+    lote = ClosureJob(reference_month='2026-09', status='completed',
+                      result={'payment_billing_ids': [billing.id]})
+    db.add(lote)
+    db.commit()
+    preview = http.get(f'{PREFIX}/{lote.id}').json()['itens'][0]
+    assert preview['estado'] == 'pronto'
+    assert preview['emails'] == payer.extra_emails
+    assert owner.email not in preview['email']
+
+    monkeypatch.setattr(boletos, '_montar_pdf_boleto', lambda *args: (b'%PDF-test', 'boleto.pdf'))
+    monkeypatch.setattr(email_smtp, 'load_config', lambda _: {
+        'host': 'smtp.test', 'from_email': 'envio@example.test', 'from_name': '',
+    })
+    transmissions = []
+    closed = []
+
+    class Server:
+        def send_message(self, message):
+            transmissions.append(message)
+            return {'recusado@example.test': (550, b'Rejected')}
+
+        def quit(self):
+            closed.append(True)
+
+    monkeypatch.setattr(email_smtp, '_abrir_conexao', lambda _: Server())
+    url = f'{PREFIX}/{lote.id}/enviar/{billing.id}'
+    result = http.post(url)
+    assert result.status_code == 409, result.text
+    assert 'recusado@example.test' in result.json()['detail']
+    assert db.query(ClosureEmailDelivery).one().status == 'desconhecido'
+    assert http.get(f'{PREFIX}/{lote.id}').json()['indeterminados'] == 1
+    assert http.post(url).status_code == 409
+    assert len(transmissions) == 1
+    assert str(transmissions[0]['To']) == ', '.join(payer.extra_emails)
+    assert closed == [True]

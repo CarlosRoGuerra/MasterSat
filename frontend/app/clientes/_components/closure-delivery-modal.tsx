@@ -17,9 +17,11 @@ import { formatCurrency, formatDate } from '@/lib/format';
 import { Button } from '@/components/ui/button';
 import { Modal } from '@/components/ui/modal';
 
-type Mes = {
+type Lote = {
+  id: number;
   mes_servico: string;
-  total_lotes: number;
+  criado_em: string;
+  total_titulos: number;
 };
 
 type Item = {
@@ -27,6 +29,7 @@ type Item = {
   billing_id: number;
   cliente: string;
   email: string | null;
+  emails?: string[];
   valor: number;
   vencimento: string | null;
   documentos: string[];
@@ -38,6 +41,7 @@ type Item = {
 };
 
 type Previa = {
+  id: number;
   mes_servico: string;
   total_lotes: number;
   total: number;
@@ -90,13 +94,16 @@ export function ClosureDeliveryModal({
   open,
   token,
   onClose,
+  initialLoteId,
 }: {
   open: boolean;
   token: string | null;
   onClose: () => void;
+  initialLoteId?: number | null;
 }) {
-  const [meses, setMeses] = useState<Mes[]>([]);
+  const [lotes, setLotes] = useState<Lote[]>([]);
   const [mesServico, setMesServico] = useState('');
+  const [loteId, setLoteId] = useState('');
   const [previa, setPrevia] = useState<Previa | null>(null);
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
@@ -105,11 +112,13 @@ export function ClosureDeliveryModal({
   const [feedback, setFeedback] = useState('');
   const [loadingMeses, setLoadingMeses] = useState(false);
   const [selecionados, setSelecionados] = useState<Set<number>>(new Set());
-  const [quantidade, setQuantidade] = useState('25');
+  const [quantidade, setQuantidade] = useState('');
   const [filtro, setFiltro] = useState<Filtro>('todos');
   const operacaoRef = useRef(false);
   const requestId = useRef(0);
   const busy = sending || loading || loadingMeses;
+  const meses = [...new Set(lotes.map(lote => lote.mes_servico))].sort().reverse();
+  const lotesVisiveis = lotes.filter(lote => !mesServico || lote.mes_servico === mesServico);
   const itens = previa?.itens ?? [];
   const visiveis = itens.filter(
     (item) =>
@@ -121,6 +130,7 @@ export function ClosureDeliveryModal({
   const disponiveis = visiveis.filter(selecionavel);
   const marcados = itens.filter((item) => selecionados.has(item.billing_id));
   const prontos = marcados.filter((item) => item.estado === 'pronto');
+  const prontosDoLote = itens.filter(item => item.estado === 'pronto');
   const todosMarcados =
     disponiveis.length > 0 && disponiveis.every((item) => selecionados.has(item.billing_id));
   const algunsMarcados = disponiveis.some((item) => selecionados.has(item.billing_id));
@@ -148,12 +158,12 @@ export function ClosureDeliveryModal({
   }
 
   async function atualizarPrevia() {
-    if (!token || !mesServico) return;
+    if (!token || !loteId) return;
     const request = ++requestId.current;
     setLoading(true);
     setError('');
     try {
-      const data = await apiFetch<Previa>(`/billing-closure/meses/${mesServico}`, {}, token);
+      const data = await apiFetch<Previa>(`/billing-closure/lotes/${loteId}`, {}, token);
       if (request === requestId.current) aplicarPrevia(data);
     } catch (err) {
       if (request === requestId.current) {
@@ -170,10 +180,12 @@ export function ClosureDeliveryModal({
     let active = true;
     setLoadingMeses(true);
     setError('');
+    setLoteId(initialLoteId ? String(initialLoteId) : '');
+    setMesServico('');
     apiFetch('/billing-closure/lotes/recuperar', { method: 'POST' }, token)
-      .then(() => apiFetch<Mes[]>('/billing-closure/meses', {}, token))
+      .then(() => apiFetch<Lote[]>('/billing-closure/lotes', {}, token))
       .then((data) => {
-        if (active) setMeses(data);
+        if (active) setLotes(data);
       })
       .catch((err) => {
         if (active) setError(mensagemErro(err));
@@ -184,7 +196,7 @@ export function ClosureDeliveryModal({
     return () => {
       active = false;
     };
-  }, [open, token]);
+  }, [open, token, initialLoteId]);
 
   useEffect(() => {
     setPrevia(null);
@@ -192,7 +204,7 @@ export function ClosureDeliveryModal({
     setFiltro('todos');
     setFeedback('');
     const request = ++requestId.current;
-    if (!open || !token || !mesServico) {
+    if (!open || !token || !loteId) {
       setLoading(false);
       return;
     }
@@ -200,7 +212,7 @@ export function ClosureDeliveryModal({
     setLoading(true);
     setError('');
     setFeedback('');
-    apiFetch<Previa>(`/billing-closure/meses/${mesServico}`, {}, token)
+    apiFetch<Previa>(`/billing-closure/lotes/${loteId}`, {}, token)
       .then((data) => {
         if (active && request === requestId.current) setPrevia(data);
       })
@@ -214,14 +226,16 @@ export function ClosureDeliveryModal({
       active = false;
       requestId.current += 1;
     };
-  }, [open, token, mesServico]);
+  }, [open, token, loteId]);
 
-  async function enviarSelecionados() {
-    if (!token || !previa || busy || operacaoRef.current || !prontos.length) return;
+  async function enviarSelecionados(loteCompleto = false) {
+    const paraEnviar = loteCompleto ? prontosDoLote : prontos;
+    if (!token || !previa || busy || operacaoRef.current || !paraEnviar.length) return;
     if (
       !window.confirm(
-        `Enviar por e-mail ${prontos.length} cobrança(s) selecionada(s) dos fechamentos de ${rotuloMes(previa.mes_servico)}? ` +
-          `Cada responsável receberá o boleto e, quando seu cadastro exigir, também a NFS-e.`,
+        `Enviar ${paraEnviar.length} cobrança(s) ${loteCompleto ? 'pronta(s)' : 'selecionada(s)'} do lote #${previa.id} (${rotuloMes(previa.mes_servico)})? ` +
+          'O boleto e a NFS-e exigida serão anexados para todos os e-mails cadastrados do responsável. ' +
+          (previa.bloqueados || previa.indeterminados ? `${previa.bloqueados + previa.indeterminados} cobrança(s) com pendências não serão enviadas.` : ''),
       )
     )
       return;
@@ -233,8 +247,8 @@ export function ClosureDeliveryModal({
     let enviados = 0;
     const falhas: string[] = [];
     try {
-      for (const [index, item] of prontos.entries()) {
-        setProgress(`${index + 1}/${prontos.length} · ${item.cliente}`);
+      for (const [index, item] of paraEnviar.entries()) {
+        setProgress(`${index + 1}/${paraEnviar.length} · ${item.cliente}`);
         try {
           await apiFetch(
             `/billing-closure/lotes/${item.lote_id}/enviar/${item.billing_id}`,
@@ -293,7 +307,7 @@ export function ClosureDeliveryModal({
       }}
       title="Enviar fechamento por e-mail"
       subtitle="Financeiro / Fechamento mensal"
-      description="Confira os documentos, escolha as cobranças e envie no seu ritmo."
+      description="Escolha o número do lote e envie todos os documentos prontos aos e-mails cadastrados de cada responsável."
       size="2xl"
       footer={
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -308,7 +322,7 @@ export function ClosureDeliveryModal({
             <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
               {marcados.length
                 ? `${prontos.length} pronta(s) para envio${marcados.length > prontos.length ? ` · ${marcados.length - prontos.length} com pendências` : ''}`
-                : 'Selecione as cobranças para montar seu lote.'}
+                : previa ? `Lote #${previa.id} · ${prontosDoLote.length} pronta(s) para envio completo` : 'Escolha um lote de fechamento.'}
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -316,14 +330,18 @@ export function ClosureDeliveryModal({
               type="button"
               variant="secondary"
               onClick={atualizarPrevia}
-              disabled={busy || !mesServico}
+              disabled={busy || !loteId}
             >
               <RefreshCw aria-hidden="true" className="h-4 w-4" />
               Atualizar conferência
             </Button>
-            <Button type="button" onClick={enviarSelecionados} disabled={busy || !prontos.length}>
+            <Button type="button" variant="secondary" onClick={() => enviarSelecionados()} disabled={busy || !prontos.length}>
               <Send aria-hidden="true" className="h-4 w-4" />
               Enviar selecionadas ({prontos.length})
+            </Button>
+            <Button type="button" onClick={() => enviarSelecionados(true)} disabled={busy || !prontosDoLote.length}>
+              <Send aria-hidden="true" className="h-4 w-4" />
+              Enviar lote completo ({prontosDoLote.length})
             </Button>
           </div>
         </div>
@@ -343,18 +361,23 @@ export function ClosureDeliveryModal({
               id="closure-month"
               value={mesServico}
               disabled={busy}
-              onChange={(e) => setMesServico(e.target.value)}
+              onChange={(e) => { setMesServico(e.target.value); setLoteId(''); }}
               className={`${inputClass} w-full`}
             >
-              <option value="">Selecione o mês</option>
+              <option value="">Todos os meses</option>
               {meses.map((mes) => (
-                <option key={mes.mes_servico} value={mes.mes_servico}>
-                  {rotuloMes(mes.mes_servico)} · {mes.total_lotes} fechamento(s)
+                <option key={mes} value={mes}>
+                  {rotuloMes(mes)}
                 </option>
               ))}
             </select>
+            <label htmlFor="closure-batch" className="mb-2 mt-4 block text-xs font-semibold uppercase tracking-wider text-slate-300">Número do lote</label>
+            <select id="closure-batch" value={loteId} disabled={busy} onChange={e => setLoteId(e.target.value)} className={`${inputClass} w-full`}>
+              <option value="">Selecione o lote</option>
+              {lotesVisiveis.map(lote => <option key={lote.id} value={lote.id}>Lote #{lote.id} · {rotuloMes(lote.mes_servico)} · {formatDate(lote.criado_em)} · {lote.total_titulos} títulos</option>)}
+            </select>
             <p className="mt-2 text-xs leading-relaxed text-slate-400">
-              Somente cobranças geradas no fechamento.
+              Cada lote identifica uma execução do fechamento.
             </p>
           </div>
           <div className="flex flex-col justify-center gap-4 bg-slate-50/70 p-5 dark:bg-slate-800/40">
@@ -363,7 +386,7 @@ export function ClosureDeliveryModal({
                 Conferência de documentos
               </h4>
               <span className="text-xs text-slate-500">
-                {previa ? `${previa.total} cobranças no mês` : 'Boleto e nota fiscal'}
+                {previa ? `Lote #${previa.id} · ${previa.total} cobranças` : 'Boleto e nota fiscal'}
               </span>
             </div>
             <div className="grid grid-cols-3 divide-x divide-slate-200 dark:divide-slate-700">
@@ -461,7 +484,7 @@ export function ClosureDeliveryModal({
                   htmlFor="closure-quantity"
                   className="text-xs text-slate-600 dark:text-slate-300"
                 >
-                  Quantidade do lote
+                  Seleção parcial (opcional)
                 </label>
                 <input
                   id="closure-quantity"
@@ -469,6 +492,7 @@ export function ClosureDeliveryModal({
                   min="1"
                   step="1"
                   value={quantidade}
+                  placeholder="Qtd."
                   disabled={busy}
                   onChange={(e) => setQuantidade(e.target.value)}
                   className={`${inputClass} w-20 tabular-nums`}
@@ -568,7 +592,7 @@ export function ClosureDeliveryModal({
                           </p>
                           <span className="mt-1 flex items-center gap-1.5 text-slate-500 dark:text-slate-400">
                             <Mail aria-hidden="true" className="h-3 w-3 shrink-0" />
-                            {item.email || 'Sem e-mail cadastrado'}
+                              {item.emails?.length ? item.emails.join(' · ') : item.email || 'Sem e-mail cadastrado'}
                           </span>
                         </td>
                         <td className="whitespace-nowrap px-3 py-4 tabular-nums text-slate-600 dark:text-slate-300">
@@ -632,8 +656,7 @@ export function ClosureDeliveryModal({
               </div>
               <div className="flex flex-wrap justify-between gap-2 border-t border-slate-200 bg-slate-50 px-4 py-2.5 text-2xs text-slate-500 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-400">
                 <span>
-                  {visiveis.length} de {previa.total} cobrança(s) · {previa.total_lotes}{' '}
-                  fechamento(s)
+                  Lote #{previa.id} · {visiveis.length} de {previa.total} cobrança(s)
                 </span>
                 <span>Enviadas e envios a conferir não podem ser selecionados.</span>
               </div>
@@ -645,12 +668,12 @@ export function ClosureDeliveryModal({
             <Inbox aria-hidden="true" className="mb-3 h-8 w-8 text-slate-300" />
             <p className="text-sm font-medium text-slate-700 dark:text-slate-200">
               {meses.length
-                ? 'Escolha o mês para preparar seu envio'
+                ? 'Escolha o número do lote para preparar seu envio'
                 : 'Nenhum fechamento encontrado'}
             </p>
             <p className="mt-1 max-w-md text-xs leading-relaxed text-slate-500">
               {meses.length
-                ? 'Você poderá selecionar as cobranças e enviar os documentos por e-mail.'
+                ? 'Envie o lote completo em uma operação, sem selecionar grupos de 25 cobranças. Boletos e notas fiscais seguem em PDF para todos os e-mails do responsável.'
                 : 'Gere as cobranças de um fechamento para começar.'}
             </p>
           </div>

@@ -21,6 +21,8 @@ import { apiFetch, apiFetchList, API_URL } from '@/lib/api';
 import { useAuthGuard } from '@/lib/use-auth-guard';
 import { ROUTE_ROLES } from '@/lib/route-roles';
 import type { ClientOption } from '@/lib/domain-types';
+import { ClosureDeliveryModal } from '@/app/clientes/_components/closure-delivery-modal';
+import Link from 'next/link';
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
 type FilterType = 'all' | 'pf' | 'pj' | 'client';
@@ -108,7 +110,7 @@ type Simulation = {
 
 type GenerateResult = {
   status: 'completed';
-  closure_batch_id: number | null;
+  closure_batch_id: number;
   /** Formato canônico da API (YYYY-MM) — o mesmo aceito nos parâmetros. */
   reference_month: string;
   /** Mesmo mês em formato de exibição (MM/YYYY). */
@@ -233,6 +235,7 @@ export default function FechamentoPage() {
 
   // Step 3
   const [generateResult, setGenerateResult] = useState<GenerateResult | null>(null);
+  const [deliveryOpen, setDeliveryOpen] = useState(false);
   const [generating, setGenerating] = useState(false);
 
   const [error, setError] = useState('');
@@ -1078,7 +1081,11 @@ export default function FechamentoPage() {
                 <CheckCircle2 className="h-3.5 w-3.5" />
                 Fechamento concluído — {generateResult.reference_month_label || generateResult.reference_month}
               </span>
-              {generateResult.closure_batch_id && <p className="text-sm font-medium text-slate-700 dark:text-slate-200">Lote de fechamento #{generateResult.closure_batch_id}. Para enviar os documentos, abra Clientes → Enviar fechamento após emitir os boletos e as NFS-e obrigatórias.</p>}
+              <div className="flex flex-wrap items-center gap-3 rounded-xl border border-brand-200 bg-brand-50 px-4 py-3 dark:border-brand-900 dark:bg-brand-950/30">
+                <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">Lote de fechamento #{generateResult.closure_batch_id}</p>
+                <Button type="button" onClick={() => setDeliveryOpen(true)}>Conferir e enviar lote</Button>
+                <Link href={`/financeiro?tab=overview&closure_batch_id=${generateResult.closure_batch_id}`} className="text-sm font-medium text-brand-800 underline underline-offset-4 dark:text-brand-300">Ver cobranças deste lote</Link>
+              </div>
 
               <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
                 <MetricCard
@@ -1120,6 +1127,8 @@ export default function FechamentoPage() {
           </div>
         </Card>
       )}
+
+      <ClosureDeliveryModal open={deliveryOpen} token={token} onClose={() => setDeliveryOpen(false)} initialLoteId={generateResult?.closure_batch_id} />
 
       <Modal
         open={editingItem !== null}

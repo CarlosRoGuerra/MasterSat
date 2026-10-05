@@ -590,7 +590,7 @@ def billing_components(
 
 
 @router.get('/', response_model=list[BillingOut])
-def list_items(search: str | None = None, status: str | None = None, client_id: int | None = None, contract_id: int | None = None, vehicle_id: int | None = None, due_from: date | None = None, due_to: date | None = None, period_label: str | None = Query(default=None, pattern=r'^(0[1-9]|1[0-2])/\d{4}$'), closure_month: str | None = Query(default=None, pattern=r'^\d{4}-(0[1-9]|1[0-2])$'), boleto_emitido: bool | None = None, nfse_emitida: bool | None = None, include_substituted: bool = False, limit: int = Query(default=200, ge=1, le=1000), db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
+def list_items(search: str | None = None, status: str | None = None, client_id: int | None = None, contract_id: int | None = None, vehicle_id: int | None = None, due_from: date | None = None, due_to: date | None = None, period_label: str | None = Query(default=None, pattern=r'^(0[1-9]|1[0-2])/\d{4}$'), closure_month: str | None = Query(default=None, pattern=r'^\d{4}-(0[1-9]|1[0-2])$'), closure_batch_id: int | None = Query(default=None, ge=1), boleto_emitido: bool | None = None, nfse_emitida: bool | None = None, include_substituted: bool = False, limit: int = Query(default=200, ge=1, le=1000), db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
     query = apply_filters(base_query(db), search, status, client_id, contract_id, due_from, due_to, vehicle_id)
     if period_label:
         mes, ano = period_label.split('/')
@@ -615,6 +615,10 @@ def list_items(search: str | None = None, status: str | None = None, client_id: 
             for billing_id in (result or {}).get('payment_billing_ids', [])
         }
         query = query.filter(Billing.id.in_(ids_fechamento))
+    if closure_batch_id is not None:
+        lote = db.get(ClosureJob, closure_batch_id)
+        ids_lote = (lote.result or {}).get('payment_billing_ids', []) if lote and lote.status == 'completed' else []
+        query = query.filter(Billing.id.in_(ids_lote))
     if boleto_emitido is not None:
         # O indicador da carteira exige os dois dados bancários. O LEFT JOIN
         # produz NULL quando não existe boleto; a negação simples perderia essas linhas.

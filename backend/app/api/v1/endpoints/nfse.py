@@ -447,14 +447,16 @@ def enviar_nfse_email(
     if owner is None or owner.is_deleted:
         raise HTTPException(status_code=404, detail='Cliente da cobrança não encontrado')
     tomador = resolver_pagador(db, billing, owner)
-    if not tomador.email:
+    from app.services.email_smtp import emails_cadastrados
+    destinatarios = emails_cadastrados(tomador)
+    if not destinatarios:
         raise HTTPException(status_code=400, detail='Responsável financeiro sem e-mail cadastrado.')
     anexo = anexo_nfse_emitida(db, billing_id)
     from app.services.email_smtp import EmailConfigError, enviar_email
     try:
         enviar_email(
             db,
-            destinatario=tomador.email,
+            destinatario=', '.join(destinatarios),
             assunto=f'NFS-e da cobrança #{billing_id} - MasterSat',
             corpo=f'Olá, {tomador.name}.\n\nSegue em anexo a nota fiscal da cobrança #{billing_id}.\n\nMasterSat',
             anexo=anexo,
@@ -463,7 +465,7 @@ def enviar_nfse_email(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except (smtplib.SMTPException, OSError) as exc:
         raise HTTPException(status_code=400, detail=f'Não foi possível enviar a NFS-e por e-mail: {exc}') from exc
-    return {'message': f'NFS-e enviada para {tomador.email}.'}
+    return {'message': f'NFS-e enviada para {", ".join(destinatarios)}.'}
 
 
 @router.get('/{billing_id}/danfse-local')

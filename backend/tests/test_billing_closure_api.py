@@ -500,11 +500,19 @@ class TestGenerate:
         })
         assert r.status_code == 422
 
-    def test_second_call_generates_nothing(self, http):
-        http.post(PREFIX + "/generate", params={"reference_month": REF_MONTH})
+    def test_second_call_generates_nothing(self, http, db):
+        first = http.post(PREFIX + "/generate", params={"reference_month": REF_MONTH})
         r2 = http.post(PREFIX + "/generate", params={"reference_month": REF_MONTH})
         assert r2.status_code == 200
         assert r2.json()["generated"] == 0
+        first_id = first.json()['closure_batch_id']
+        second_id = r2.json()['closure_batch_id']
+        assert first_id != second_id
+        assert db.get(ClosureJob, second_id).result['payment_billing_ids'] == []
+        assert {first_id, second_id} <= {row['id'] for row in http.get(PREFIX + '/lotes').json()}
+        preview = http.get(f'{PREFIX}/lotes/{second_id}')
+        assert preview.status_code == 200
+        assert preview.json()['itens'] == []
 
     def test_operational_cannot_generate(self, http_op):
         r = http_op.post(PREFIX + "/generate", params={"reference_month": REF_MONTH})

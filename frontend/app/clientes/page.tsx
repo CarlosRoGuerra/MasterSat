@@ -463,8 +463,8 @@ function ClientesPageInner() {
   async function sendBoletoEmail(b: BillingItem) {
     if (!token || !billingsModalClient) return;
     try {
-      await enviarBoletoEmail(b, billingsModalClient, token);
-      alert(`E-mail enviado para ${billingsModalClient.email}.`);
+      const resultado = await enviarBoletoEmail(b, billingsModalClient, token);
+      alert(resultado.message);
     } catch (err) {
       alert(parseError(err));
     }

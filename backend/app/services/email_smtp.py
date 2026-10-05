@@ -20,6 +20,16 @@ from sqlalchemy.orm import Session
 
 from app.core.crypto import CryptoError, decrypt_token, encrypt_token
 from app.models.system_setting import SystemSetting
+from app.models.client import Client
+
+
+def emails_cadastrados(cliente: Client) -> list[str]:
+    """E-mail principal e adicionais do mesmo responsável, sem duplicatas."""
+    return list(dict.fromkeys(
+        email.strip().lower()
+        for email in [cliente.email, *(cliente.extra_emails or [])]
+        if email and email.strip()
+    ))
 
 # Chaves usadas em system_settings.
 KEY_HOST = 'smtp_host'
@@ -141,7 +151,14 @@ def enviar_email(
 
     srv = _abrir_conexao(cfg)
     try:
-        srv.send_message(msg)
+        recusados = srv.send_message(msg)
+        if recusados:
+            # SMTP pode aceitar alguns destinatários e recusar outros. Não
+            # registrar sucesso integral nem repetir o envio automaticamente.
+            raise smtplib.SMTPException(
+                'Envio parcial; destinatários recusados: ' + ', '.join(recusados)
+                + '. Confira os destinatários antes de reenviar.'
+            )
     finally:
         try:
             srv.quit()

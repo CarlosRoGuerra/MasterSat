@@ -21,7 +21,7 @@ class ClosureEmailDelivery(Base, TimestampMixin):
     closure_job_id: Mapped[int] = mapped_column(ForeignKey('closure_jobs.id'), index=True)
     billing_id: Mapped[int] = mapped_column(ForeignKey('billings.id'), index=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False)
-    recipient: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    recipient: Mapped[str | None] = mapped_column(Text, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

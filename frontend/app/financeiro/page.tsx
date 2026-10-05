@@ -376,6 +376,7 @@ function BillingTableSection({
   billingStatusFilter,
   billingDueMonth,
   billingClosingMonth,
+  billingClosureBatchId,
   billingBoletoFilter,
   billingNfseFilter,
   onViewToggle,
@@ -383,6 +384,7 @@ function BillingTableSection({
   onStatusFilterChange,
   onDueMonthChange,
   onClosingMonthChange,
+  onClosureBatchIdChange,
   onBoletoFilterChange,
   onNfseFilterChange,
   onRefresh,
@@ -408,6 +410,7 @@ function BillingTableSection({
   billingStatusFilter: string;
   billingDueMonth: string;
   billingClosingMonth: string;
+  billingClosureBatchId: string;
   billingBoletoFilter: string;
   billingNfseFilter: string;
   onViewToggle: () => void;
@@ -415,6 +418,7 @@ function BillingTableSection({
   onStatusFilterChange: (v: string) => void;
   onDueMonthChange: (v: string) => void;
   onClosingMonthChange: (v: string) => void;
+  onClosureBatchIdChange: (v: string) => void;
   onBoletoFilterChange: (v: string) => void;
   onNfseFilterChange: (v: string) => void;
   onRefresh: () => void;
@@ -493,6 +497,11 @@ function BillingTableSection({
                    onChange={e => onClosingMonthChange(e.target.value)} />
           </label>
           {billingClosingMonth && <Button variant="secondary" onClick={() => onClosingMonthChange('')} className="text-xs px-3 py-1.5">Limpar fechamento</Button>}
+          <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+            Nº do lote
+            <input type="number" min="1" step="1" placeholder="Todos" className={fc} style={{ width: 120 }} value={billingClosureBatchId} onChange={e => onClosureBatchIdChange(e.target.value)} />
+          </label>
+          {billingClosureBatchId && <Button variant="secondary" onClick={() => onClosureBatchIdChange('')} className="text-xs px-3 py-1.5">Limpar lote</Button>}
           <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
             Boleto
             <select className={fc} style={{ width: 155 }} value={billingBoletoFilter} onChange={e => onBoletoFilterChange(e.target.value)}>
@@ -662,6 +671,7 @@ export default function FinanceiroPage() {
   const [billingStatusFilter, setBillingStatusFilter] = useState('');
   const [billingDueMonth, setBillingDueMonth] = useState('');
   const [billingClosingMonth, setBillingClosingMonth] = useState('');
+  const [billingClosureBatchId, setBillingClosureBatchId] = useState('');
   const closureRecoveredMonths = useRef<Set<string>>(new Set());
   const [billingBoletoFilter, setBillingBoletoFilter] = useState('');
   const [billingNfseFilter, setBillingNfseFilter] = useState('');
@@ -678,6 +688,9 @@ export default function FinanceiroPage() {
   // Conciliação e pendências bancárias (Fase 03): desfecho desconhecido,
   // baixa pendente, pagamento divergente.
   const [pendenciasBancarias, setPendenciasBancarias] = useState<PendenciaBancaria[]>([]);
+  const [pendenciasModal, setPendenciasModal] = useState(false);
+  const [pendenciasLoading, setPendenciasLoading] = useState(false);
+  const [pendenciasError, setPendenciasError] = useState('');
   const [conciliacao, setConciliacao] = useState<Conciliacao | null>(null);
   const [canais, setCanais] = useState<CanaisBancarios | null>(null);
   const [connectingAilos, setConnectingAilos] = useState(false);
@@ -761,6 +774,8 @@ export default function FinanceiroPage() {
     const params = new URLSearchParams(window.location.search);
     const tab = params.get('tab');
     if (tab === 'overview' || tab === 'management' || tab === 'payables') setActiveTab(tab);
+    const lote = params.get('closure_batch_id');
+    if (lote && /^[1-9]\d*$/.test(lote)) { setBillingClosureBatchId(lote); setBillingView('all'); }
   }, []);
 
   // Clique na linha da carteira: vai direto para a ação do card que abriu o
@@ -848,9 +863,10 @@ export default function FinanceiroPage() {
       if (billingStatusFilter) query.set('status', billingStatusFilter);
       aplicarMesVencimento(query, billingDueMonth);
       aplicarMesFechamento(query, billingClosingMonth);
+      if (/^[1-9]\d*$/.test(billingClosureBatchId)) query.set('closure_batch_id', billingClosureBatchId);
       if (billingBoletoFilter) query.set('boleto_emitido', billingBoletoFilter);
       if (billingNfseFilter) query.set('nfse_emitida', billingNfseFilter);
-      query.set('limit', billingDueMonth || billingClosingMonth ? '1000' : '300');
+      query.set('limit', billingDueMonth || billingClosingMonth || billingClosureBatchId ? '1000' : '300');
       const [plansRes, clientsRes, vehiclesRes, trackersRes, contractsRes, productsRes, billingsRes, summaryRes, revenueRes, delinquentRes] = await Promise.all([
         apiFetch<Plan[]>('/plans', {}, currentToken),
         apiFetchList<ClientOption>('/clients?limit=300', {}, currentToken),
@@ -893,9 +909,10 @@ export default function FinanceiroPage() {
       if (billingStatusFilter) query.set('status', billingStatusFilter);
       aplicarMesVencimento(query, billingDueMonth);
       aplicarMesFechamento(query, billingClosingMonth);
+      if (/^[1-9]\d*$/.test(billingClosureBatchId)) query.set('closure_batch_id', billingClosureBatchId);
       if (billingBoletoFilter) query.set('boleto_emitido', billingBoletoFilter);
       if (billingNfseFilter) query.set('nfse_emitida', billingNfseFilter);
-      query.set('limit', billingDueMonth || billingClosingMonth ? '1000' : '300');
+      query.set('limit', billingDueMonth || billingClosingMonth || billingClosureBatchId ? '1000' : '300');
       const billingsRes = await apiFetch<Billing[]>(`/billings?${query.toString()}`, {}, currentToken);
       setBillings(billingsRes);
       if (selectedBilling) setSelectedBilling(billingsRes.find(b => b.id === selectedBilling.id) || null);
@@ -928,7 +945,7 @@ export default function FinanceiroPage() {
   const billingSearchDebounced = useDebouncedValue(billingSearch);
   useEffectSkipFirst(() => {
     if (token) loadBillingsOnly(token);
-  }, [billingSearchDebounced, billingStatusFilter, billingDueMonth, billingClosingMonth, billingBoletoFilter, billingNfseFilter]);
+  }, [billingSearchDebounced, billingStatusFilter, billingDueMonth, billingClosingMonth, billingClosureBatchId, billingBoletoFilter, billingNfseFilter]);
 
   useEffect(() => {
     if (token && activeTab === 'payables') loadPayables(token);
@@ -1154,6 +1171,8 @@ export default function FinanceiroPage() {
   }
 
   async function loadPendenciasBancarias(t: string) {
+    setPendenciasLoading(true);
+    setPendenciasError('');
     try {
       const [pend, conc] = await Promise.all([
         apiFetch<PendenciaBancaria[]>('/ailos/pendencias', {}, t),
@@ -1161,7 +1180,11 @@ export default function FinanceiroPage() {
       ]);
       setPendenciasBancarias(pend);
       setConciliacao(conc);
-    } catch { setPendenciasBancarias([]); setConciliacao(null); }
+    } catch (err) {
+      setPendenciasError(parseError(err));
+    } finally {
+      setPendenciasLoading(false);
+    }
   }
 
   // Registro com desfecho desconhecido: consulta a Ailos pelo número do
@@ -1196,11 +1219,12 @@ export default function FinanceiroPage() {
     if (!token || !canEdit) return;
     const justificativa = window.prompt('Como a pendência foi tratada? (fica no histórico da cobrança)', '');
     if (!justificativa || justificativa.trim().length < 3) return;
+    setProcessing(true);
     try {
       await apiFetch(`/ailos/boletos/${billingId}/resolver-pendencia`, { method: 'POST', body: JSON.stringify({ justificativa: justificativa.trim() }) }, token);
       setFeedback('Pendência encerrada.');
-      loadPendenciasBancarias(token);
-    } catch (err) { setError(parseError(err)); }
+      await loadPendenciasBancarias(token);
+    } catch (err) { setError(parseError(err)); } finally { setProcessing(false); }
   }
 
   async function handleAdjust() {
@@ -1681,6 +1705,67 @@ export default function FinanceiroPage() {
   return (
     <PageShell title="Financeiro" description="Gestão financeira com KPIs, cobranças, inadimplência e cadastro de planos e contratos.">
 
+      <Modal open={pendenciasModal} onClose={() => { if (!processing) setPendenciasModal(false); }}
+        title="Pendências bancárias" subtitle="Conferência com a Ailos" size="xl"
+        description="Acompanhe registros sem confirmação, baixas pendentes no banco e divergências de pagamento."
+        footer={<div className="flex flex-wrap justify-end gap-2">
+          <Button variant="secondary" disabled={!token || pendenciasLoading || processing} onClick={() => token && loadPendenciasBancarias(token)}>
+            {pendenciasLoading ? 'Atualizando…' : 'Atualizar pendências'}
+          </Button>
+          <Button disabled={processing} onClick={() => setPendenciasModal(false)}>Fechar</Button>
+        </div>}>
+        <div className="space-y-4">
+          {(pendenciasError || error) && <ErrorBanner message={pendenciasError || error} />}
+          {feedback && <p role="status" className="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200">{feedback}</p>}
+          {pendenciasLoading && <p role="status" className="text-sm text-slate-500">Atualizando pendências bancárias…</p>}
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <p className="text-xs font-bold uppercase tracking-widest text-slate-500">
+                Pendências bancárias ({pendenciasBancarias.length})
+              </p>
+              {conciliacao && (
+                <p className="text-xs text-slate-500">
+                  Conciliação: {conciliacao.carteira_monitorada} título(s) acompanhados · consulta mais antiga há {conciliacao.atraso_max_horas}h · carteira inteira em ~{conciliacao.janela_estimada_horas}h
+                  {conciliacao.alerta_atraso && <span className="ml-1 font-semibold text-rose-600"> — ATRASADA</span>}
+                </p>
+              )}
+            </div>
+            <div className="divide-y divide-slate-100 dark:divide-slate-800">
+              {pendenciasBancarias.map(p => {
+                const t = descreverTitulo({ estado: p.estado, nosso_numero: p.nosso_numero, baixa_status: (p.baixa_status as TituloBancario['baixa_status']) ?? null, pendencia: p.pendencia });
+                return (
+                  <div key={p.billing_id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
+                    <div className="min-w-0">
+                      <p className="font-medium">#{p.billing_id} · {p.cliente ?? '—'} · {formatCurrency(p.valor)} · venc. {formatDate(p.vencimento)}</p>
+                      <p className="text-xs text-slate-500">
+                        {p.pendencia ? (ROTULO_PENDENCIA[p.pendencia] ?? p.pendencia) : t.rotulo}
+                        {p.baixa_status === 'pendente' && ' · baixa pendente no banco'}
+                        {p.billing_removida ? ' · cobrança removida' : ` · cobrança ${p.billing_status}`}
+                        {p.ultima_consulta_erro && ` · última consulta falhou`}
+                      </p>
+                    </div>
+                    <div className="flex gap-2">
+                      {podeConsultarDesfecho({ estado: p.estado }) && (
+                        <Button variant="secondary" className="px-3 py-1.5 text-xs" disabled={!canEdit || processing} onClick={() => handleConsultarDesfecho(p.billing_id)}>Consultar</Button>
+                      )}
+                      {user?.role === 'admin' && p.baixa_status === 'pendente' && !['pendente', 'vencida'].includes(p.billing_status) && (
+                        <Button variant="secondary" className="px-3 py-1.5 text-xs" disabled={processing} onClick={() => handleConfirmarBaixa(p.billing_id)}>Confirmar baixa</Button>
+                      )}
+                      {p.pendencia && (
+                        <Button variant="secondary" className="px-3 py-1.5 text-xs" disabled={!canEdit || processing} onClick={() => handleResolverPendencia(p.billing_id)}>Encerrar</Button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          {!pendenciasLoading && !pendenciasError && !pendenciasBancarias.length && (
+            <EmptyState icon={CheckCircle2} title="Nenhuma pendência bancária" description="Não há títulos que precisem de conferência manual neste momento." />
+          )}
+        </div>
+      </Modal>
+
       {/* Feedback / error toasts */}
       {(guardError || error || feedback) && (
         <div className="mb-4 space-y-3">
@@ -1750,6 +1835,17 @@ export default function FinanceiroPage() {
       )}
 
       {/* ── 2. Tab navigation ── */}
+      <div className="mb-4 flex flex-wrap items-center justify-end gap-2">
+        {conciliacao?.alerta_atraso && <span className="text-xs font-medium text-rose-600 dark:text-rose-400">Conciliação bancária atrasada</span>}
+        {pendenciasError && <span className="text-xs text-amber-700 dark:text-amber-300">Não foi possível atualizar as pendências</span>}
+        <Button type="button" variant="secondary" aria-haspopup="dialog" onClick={() => setPendenciasModal(true)}>
+          <Banknote aria-hidden="true" className="h-4 w-4" />
+          Pendências bancárias
+          <span className="ml-1 rounded-md bg-amber-50 px-2 py-0.5 text-xs font-semibold tabular-nums text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+            {pendenciasLoading || pendenciasError ? '—' : pendenciasBancarias.length}
+          </span>
+        </Button>
+      </div>
       <div
         role="tablist"
         aria-label="Seções do Financeiro"
@@ -1875,56 +1971,6 @@ export default function FinanceiroPage() {
               </div>
             )}
 
-            {/* Pendências bancárias (Fase 03): desfecho desconhecido, baixa
-                pendente no banco e divergência de pagamento. Cada uma exige
-                ação humana — nada é resolvido em silêncio. */}
-            {(pendenciasBancarias.length > 0 || conciliacao?.alerta_atraso) && (
-              <Card>
-                <div className="space-y-3">
-                  <div className="flex flex-wrap items-baseline justify-between gap-2">
-                    <p className="text-xs font-bold uppercase tracking-widest text-slate-500">
-                      Pendências bancárias ({pendenciasBancarias.length})
-                    </p>
-                    {conciliacao && (
-                      <p className="text-xs text-slate-500">
-                        Conciliação: {conciliacao.carteira_monitorada} título(s) acompanhados · consulta mais antiga há {conciliacao.atraso_max_horas}h · carteira inteira em ~{conciliacao.janela_estimada_horas}h
-                        {conciliacao.alerta_atraso && <span className="ml-1 font-semibold text-rose-600"> — ATRASADA</span>}
-                      </p>
-                    )}
-                  </div>
-                  <div className="divide-y divide-slate-100 dark:divide-slate-800">
-                    {pendenciasBancarias.slice(0, 20).map(p => {
-                      const t = descreverTitulo({ estado: p.estado, nosso_numero: p.nosso_numero, baixa_status: (p.baixa_status as TituloBancario['baixa_status']) ?? null, pendencia: p.pendencia });
-                      return (
-                        <div key={p.billing_id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
-                          <div className="min-w-0">
-                            <p className="font-medium">#{p.billing_id} · {p.cliente ?? '—'} · {formatCurrency(p.valor)} · venc. {formatDate(p.vencimento)}</p>
-                            <p className="text-xs text-slate-500">
-                              {p.pendencia ? (ROTULO_PENDENCIA[p.pendencia] ?? p.pendencia) : t.rotulo}
-                              {p.baixa_status === 'pendente' && ' · baixa pendente no banco'}
-                              {p.billing_removida ? ' · cobrança removida' : ` · cobrança ${p.billing_status}`}
-                              {p.ultima_consulta_erro && ` · última consulta falhou`}
-                            </p>
-                          </div>
-                          <div className="flex gap-2">
-                            {podeConsultarDesfecho({ estado: p.estado }) && (
-                              <Button variant="secondary" className="px-3 py-1.5 text-xs" disabled={!canEdit || processing} onClick={() => handleConsultarDesfecho(p.billing_id)}>Consultar</Button>
-                            )}
-                            {user?.role === 'admin' && p.baixa_status === 'pendente' && !['pendente', 'vencida'].includes(p.billing_status) && (
-                              <Button variant="secondary" className="px-3 py-1.5 text-xs" disabled={processing} onClick={() => handleConfirmarBaixa(p.billing_id)}>Confirmar baixa</Button>
-                            )}
-                            {p.pendencia && (
-                              <Button variant="secondary" className="px-3 py-1.5 text-xs" disabled={!canEdit || processing} onClick={() => handleResolverPendencia(p.billing_id)}>Encerrar</Button>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              </Card>
-            )}
-
             {/* Billing table */}
             <BillingTableSection
               billings={billings}
@@ -1935,6 +1981,7 @@ export default function FinanceiroPage() {
               billingStatusFilter={billingStatusFilter}
               billingDueMonth={billingDueMonth}
               billingClosingMonth={billingClosingMonth}
+              billingClosureBatchId={billingClosureBatchId}
               billingBoletoFilter={billingBoletoFilter}
               billingNfseFilter={billingNfseFilter}
               onViewToggle={() => setBillingView(billingView === 'alert' ? 'all' : 'alert')}
@@ -1942,6 +1989,7 @@ export default function FinanceiroPage() {
               onStatusFilterChange={setBillingStatusFilter}
               onDueMonthChange={mes => { setBillingDueMonth(mes); setSelectedBillingIds([]); }}
               onClosingMonthChange={mes => { setBillingClosingMonth(mes); setSelectedBillingIds([]); }}
+              onClosureBatchIdChange={lote => { setBillingClosureBatchId(lote); setBillingView('all'); setSelectedBillingIds([]); }}
               onBoletoFilterChange={valor => { setBillingBoletoFilter(valor); setSelectedBillingIds([]); }}
               onNfseFilterChange={valor => { setBillingNfseFilter(valor); setSelectedBillingIds([]); }}
               onRefresh={() => token && loadData(token)}
@@ -2310,6 +2358,7 @@ export default function FinanceiroPage() {
               billingStatusFilter={billingStatusFilter}
               billingDueMonth={billingDueMonth}
               billingClosingMonth={billingClosingMonth}
+              billingClosureBatchId={billingClosureBatchId}
               billingBoletoFilter={billingBoletoFilter}
               billingNfseFilter={billingNfseFilter}
               onViewToggle={() => {}}
@@ -2317,6 +2366,7 @@ export default function FinanceiroPage() {
               onStatusFilterChange={setBillingStatusFilter}
               onDueMonthChange={mes => { setBillingDueMonth(mes); setSelectedBillingIds([]); }}
               onClosingMonthChange={mes => { setBillingClosingMonth(mes); setSelectedBillingIds([]); }}
+              onClosureBatchIdChange={lote => { setBillingClosureBatchId(lote); setBillingView('all'); setSelectedBillingIds([]); }}
               onBoletoFilterChange={valor => { setBillingBoletoFilter(valor); setSelectedBillingIds([]); }}
               onNfseFilterChange={valor => { setBillingNfseFilter(valor); setSelectedBillingIds([]); }}
               onRefresh={() => token && loadData(token)}
@@ -3000,7 +3050,7 @@ export default function FinanceiroPage() {
                         <Button
                           variant="secondary"
                           className="px-3 py-1.5 text-xs"
-                          onClick={async () => { try { await enviarBoletoEmail(b, envioCliente!, token!); alert(`E-mail enviado para ${envioCliente!.email}.`); } catch (e) { alert(e instanceof Error ? e.message : 'Erro ao enviar'); } }}
+                          onClick={async () => { try { const resultado = await enviarBoletoEmail(b, envioCliente!, token!); alert(resultado.message); } catch (e) { alert(e instanceof Error ? e.message : 'Erro ao enviar'); } }}
                         >
                           E-mail
                         </Button>

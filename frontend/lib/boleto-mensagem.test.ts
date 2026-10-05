@@ -45,10 +45,9 @@ describe('enviarBoletoWhats / enviarBoletoEmail', () => {
     );
   });
 
-  it('recusa enviar por e-mail sem e-mail cadastrado', async () => {
-    await expect(enviarBoletoEmail(billing, { name: 'Maria' }, 'token')).rejects.toThrow(
-      'Cliente sem e-mail cadastrado.',
-    );
+  it('delega os destinatários ao servidor quando o resumo não tem e-mail principal', async () => {
+    await enviarBoletoEmail(billing, { name: 'Maria' }, 'token');
+    expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/boletos/1/enviar-email'), expect.objectContaining({ method: 'POST' }));
   });
 
   it('abre o wa.me com a mensagem do template preenchida', async () => {

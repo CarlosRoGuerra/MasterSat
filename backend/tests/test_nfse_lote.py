@@ -537,6 +537,7 @@ def test_endpoint_selecionados_sem_cliente_sim_nao_cria_lote(db, http_fin):
 def test_envio_separado_de_nfse_usa_tomador_e_danfse_emitida(db, http_fin, monkeypatch):
     client = _client(db, 'DESTINATARIO NF')
     client.email = 'nota@example.com'
+    client.extra_emails = ['financeiro@example.com', 'NOTA@example.com']
     billing = _billing(db, client)
     db.commit()
     _nota(db, billing, status='emitida')
@@ -549,7 +550,7 @@ def test_envio_separado_de_nfse_usa_tomador_e_danfse_emitida(db, http_fin, monke
     resp = http_fin.post(f'/api/v1/nfse/{billing.id}/enviar-email')
 
     assert resp.status_code == 200, resp.text
-    assert enviados[0]['destinatario'] == 'nota@example.com'
+    assert enviados[0]['destinatario'] == 'nota@example.com, financeiro@example.com'
     assert enviados[0]['anexo'][1] == b'%PDF-nota'
     assert enviados[0]['anexo'][0] == 'Notafical_DESTINATARIO_NF_07-2026.pdf'
 

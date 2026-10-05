@@ -173,6 +173,7 @@ def test_email_serializado_contem_pdf_para_download(http, db, cliente, cobranca,
 
     _registrar(db, cobranca.id)
     cliente.issue_invoice = 'sim' if incluir_nfse else 'nao'
+    cliente.extra_emails = [' Financeiro@example.test ', cliente.email.upper(), 'contabilidade@example.test', 'financeiro@example.test']
     if incluir_nfse:
         db.add(NfseNota(billing_id=cobranca.id, status='emitida', numero_nfse='321', xml_retorno='<xml/>'))
         monkeypatch.setattr(nfse, '_danfse_local_bytes', lambda *args: b'%PDF-nota-fiscal')
@@ -201,7 +202,11 @@ def test_email_serializado_contem_pdf_para_download(http, db, cliente, cobranca,
     assert response.status_code == 200, response.text
     assert len(mensagens) == 1
     msg = mensagens[0]
-    assert msg['To'] == cliente.email
+    destinatarios = [cliente.email.lower(), 'financeiro@example.test', 'contabilidade@example.test']
+    assert [address.addr_spec for address in msg['To'].addresses] == destinatarios
+    if fechamento:
+        from app.models.closure_email_delivery import ClosureEmailDelivery
+        assert db.query(ClosureEmailDelivery).one().recipient == ', '.join(destinatarios)
     corpo = msg.get_body(preferencelist=('plain',)).get_content()
     assert 'PDF está anexado' in corpo
     assert '/public/boleto/' not in corpo
