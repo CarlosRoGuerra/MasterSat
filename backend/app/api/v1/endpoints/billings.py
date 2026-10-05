@@ -36,12 +36,14 @@ from app.models.vehicle import Vehicle
 from app.models.user import User
 from app.services import recebimento, titulo_bancario
 from app.services.ailos_boletos import resolver_pagador
+from app.services.reemissao import CorrecaoVencimentoError, corrigir_vencimento
 from app.schemas.billing import (
     BillingAdjustmentOut,
     BillingBatchMaintIn,
     BillingBatchStatusIn,
     BillingCancel,
     BillingChangeLogOut,
+    BillingCorrigirVencimento,
     BillingCreate,
     BillingOut,
     BillingReceive,
@@ -1162,6 +1164,33 @@ def cancel_billing(item_id: int, payload: BillingCancel, db: Session = Depends(g
     _commit_billing_write(db)
     db.refresh(billing)
     row = base_query(db).filter(Billing.id == billing.id).first()
+    return serialize_billing(row)
+
+
+@router.post('/{item_id}/corrigir-vencimento', response_model=BillingOut)
+def corrigir_vencimento_billing(
+    item_id: int,
+    payload: BillingCorrigirVencimento,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL)),
+):
+    """Boleto já registrado com a data errada: a cobrança é substituída por uma
+    nova, sem boleto, com o vencimento certo (a antiga vai para baixa pendente).
+    A emissão do boleto novo é o "Gerar boleto (Ailos)" de sempre."""
+    try:
+        nova = corrigir_vencimento(
+            db, item_id, due_date=payload.due_date, reason=payload.reason,
+            user_id=current_user.id, confirmado=payload.confirmar_boleto_ailos,
+        )
+        _encerrar_pendencia_resolvida_no_cancelamento(db, item_id, current_user.id)
+    except titulo_bancario.PoliticaBancariaError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=exc.detail()) from exc
+    except CorrecaoVencimentoError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _commit_billing_write(db)
+    row = base_query(db).filter(Billing.id == nova.id).first()
     return serialize_billing(row)
 
 

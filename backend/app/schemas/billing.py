@@ -149,6 +149,16 @@ class TituloBancarioOut(BaseModel):
     pendencia: str | None = None
 
 
+class BillingCorrigirVencimento(BaseModel):
+    """Reemissão com vencimento corrigido (ver app/services/reemissao.py)."""
+
+    due_date: date
+    reason: str
+    # Obrigatório quando há boleto registrado: ele continua pagável até a
+    # baixa manual no internet banking da Ailos.
+    confirmar_boleto_ailos: bool = False
+
+
 class BillingCancel(BaseModel):
     reason: str
     # Confirma o cancelamento mesmo havendo boleto registrado na Ailos (que

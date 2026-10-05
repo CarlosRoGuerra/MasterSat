@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from calendar import monthrange
 from datetime import date, datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
@@ -9,7 +9,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.core.timezone import hoje
-from app.models.billing import Billing, CONSOLIDATED_BILLING_TYPE
+from app.models.billing import CONSOLIDATED_BILLING_TYPE, RECURRING_BILLING_TYPES, Billing
 from app.models.client import Client
 from app.models.client_charge_item import ClientChargeItem
 from app.models.closure_job import ClosureJob
@@ -382,6 +382,27 @@ def simulate_closure(
     }
 
 
+def _vencimento_do_boleto_unico(components: list[Billing]) -> date:
+    """Vencimento do título único: o dia das mensalidades do pagador.
+
+    Antes era o MAIOR vencimento do grupo: uma taxa de instalação lançada com
+    data mais tarde (ex.: 28) empurrava o boleto inteiro do cliente que vence
+    dia 10 — 15 dos 71 boletos únicos de 09/2026. Mensalidades em dias
+    diferentes: vale o dia mais frequente (empate: o mais cedo). Pró-rata só
+    conta sem mensalidade cheia no grupo — a pró-rata final de um contrato
+    encerrado não decide o dia de quem continua. Sem mensalidade nenhuma (só
+    taxas/serviços): o maior, como antes.
+    """
+    mensais = [
+        b.due_date for b in components
+        if b.billing_type in RECURRING_BILLING_TYPES and b.billing_type != 'prorata'
+    ] or [b.due_date for b in components if b.billing_type == 'prorata']
+    if not mensais:
+        return max(b.due_date for b in components)
+    contagem = Counter(mensais)
+    return min(contagem, key=lambda venc: (-contagem[venc], venc))
+
+
 def execute_closure(
     db: Session,
     reference_month: date,
@@ -750,7 +771,7 @@ def execute_closure(
             continue
 
         total = sum((Decimal(str(b.amount)) for b in components), Decimal('0.00'))
-        due_date = max(b.due_date for b in components)
+        due_date = _vencimento_do_boleto_unico(components)
         owners = {b.client_id for b in components}
         # Competência do título único é a do serviço; o vencimento continua
         # no mês seguinte. As componentes conservam a competência técnica que

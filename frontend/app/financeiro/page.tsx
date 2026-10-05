@@ -25,6 +25,7 @@ import { podeEmitirNfse, precisaConsultarNfse } from '@/lib/nfse';
 import { enviarBoletoEmail, enviarBoletoWhats } from '@/lib/boleto-mensagem';
 import { processarBoletosSelecionados, separarBoletosPorRegistro, type AcaoLoteBoleto } from '@/lib/boleto-lote';
 import { cancelarComConfirmacoes, corpoCancelamento } from '@/lib/cancelamento-cobranca';
+import { CorrigirVencimentoAction } from './_components/corrigir-vencimento-action';
 import { camposDiferenca, diferencaRecebimento, pendenciaDoFormulario, ROTULO_TRATAMENTO, type TratamentoDiferenca } from '@/lib/recebimento';
 import { descreverTitulo, podeConsultarDesfecho, ROTULO_PENDENCIA, type TituloBancario } from '@/lib/titulo-bancario';
 import { useAuthGuard } from '@/lib/use-auth-guard';
@@ -1554,6 +1555,27 @@ export default function FinanceiroPage() {
     } catch (err) { setModalError(parseError(err)); } finally { setProcessing(false); }
   }
 
+  // Boleto registrado com a data errada: substitui por cobrança nova, sem
+  // boleto, na data certa; o antigo vai para a baixa pendente.
+  async function handleCorrigirVencimento(dueDate: string, justificativa: string) {
+    if (!token || !selectedBilling || !canEdit) return;
+    setProcessing(true);
+    try {
+      const nova = await apiFetch<Billing>(`/billings/${selectedBilling.id}/corrigir-vencimento`, {
+        method: 'POST',
+        body: JSON.stringify({ due_date: dueDate, reason: justificativa, confirmar_boleto_ailos: true }),
+      }, token);
+      setFeedback(`Cobrança #${nova.id} criada com vencimento ${formatDate(nova.due_date)}. Clique em “Gerar boleto (Ailos)” para emitir. O boleto antigo está na lista de baixa pendente.`);
+      await loadData(token);
+      loadPendenciasBancarias(token);
+      setSelectedBilling(nova);
+    } catch (err) {
+      throw new Error(parseError(err));
+    } finally {
+      setProcessing(false);
+    }
+  }
+
   async function handleCancel() {
     if (!token || !selectedBilling || !canEdit) return;
     const reason = window.prompt('Informe a justificativa para cancelamento:', '');
@@ -2464,6 +2486,16 @@ export default function FinanceiroPage() {
               {selectedBilling.titulo_bancario?.pendencia && (
                 <Button variant="secondary" disabled={!canEdit || processing} onClick={() => handleResolverPendencia(selectedBilling.id)}>Encerrar pendência</Button>
               )}
+              <CorrigirVencimentoAction
+                key={`corrigir-${selectedBilling.id}`}
+                billingId={selectedBilling.id}
+                billingStatus={selectedBilling.status}
+                dueDate={selectedBilling.due_date}
+                titulo={selectedBilling.titulo_bancario}
+                canEdit={canEdit}
+                disabled={!token || processing || boletoLoading}
+                onCorrigir={handleCorrigirVencimento}
+              />
               {/* Pago é a única condição: exigir receipt_number escondia o
                   recibo de cobranças pagas antes de o campo existir. */}
               {selectedBilling.status === 'paga' && (
