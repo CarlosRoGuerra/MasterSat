@@ -105,12 +105,24 @@ MENSAGENS_PADRAO = {
         '{LINK_BOLETO}'
     ),
     'msg_boleto_assunto': 'Boleto MasterSat — vencimento {VENCIMENTO}',
+    'msg_boleto_email': (
+        'Olá, {NOME}!\n\n'
+        'Seu boleto em PDF está anexado a este e-mail. '
+        'Baixe o arquivo para visualizar ou imprimir.\n\n'
+        'Referente: {REFERENTE}\n'
+        'Valor: R$ {VALOR}\n'
+        'Vencimento: {VENCIMENTO}\n\n'
+        'Linha digitável para pagamento:\n{CODIGO_BARRAS}\n\n'
+        'Atenciosamente,\n'
+        'MASTERSAT COMERCIO E SERVIÇOS DE RASTREAMENTO LTDA'
+    ),
 }
 
 
 class MensagensPayload(BaseModel):
     msg_boleto: str | None = None
     msg_boleto_assunto: str | None = None
+    msg_boleto_email: str | None = None
 
 
 def _load(db: Session) -> dict[str, str]:

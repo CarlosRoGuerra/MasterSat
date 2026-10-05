@@ -161,6 +161,73 @@ def test_envio_por_email_manda_pdf_anexado_pelo_smtp_configurado(http, db, clien
     assert content_type == 'application/pdf'
 
 
+@pytest.mark.parametrize('fechamento', [False, True])
+@pytest.mark.parametrize('incluir_nfse', [False, True])
+def test_email_serializado_contem_pdf_para_download(http, db, cliente, cobranca, monkeypatch, fechamento, incluir_nfse):
+    """Exercita PDF, template e MIME; só substitui a conexão SMTP externa."""
+    from email import policy
+    from email.parser import BytesParser
+    from app.api.v1.endpoints import nfse
+    from app.models.closure_job import ClosureJob
+    from app.services import email_smtp
+
+    _registrar(db, cobranca.id)
+    cliente.issue_invoice = 'sim' if incluir_nfse else 'nao'
+    if incluir_nfse:
+        db.add(NfseNota(billing_id=cobranca.id, status='emitida', numero_nfse='321', xml_retorno='<xml/>'))
+        monkeypatch.setattr(nfse, '_danfse_local_bytes', lambda *args: b'%PDF-nota-fiscal')
+    lote = ClosureJob(reference_month='2026-10', status='completed', result={'payment_billing_ids': [cobranca.id]})
+    db.add(lote)
+    db.commit()
+    # Uma mensagem de WhatsApp já salva não deve substituir a mensagem do anexo.
+    assert http.put('/api/v1/settings/mensagens', json={'msg_boleto': 'Abra o link: {LINK_BOLETO}'}).status_code == 200
+
+    mensagens = []
+
+    class Servidor:
+        def send_message(self, mensagem):
+            mensagens.append(BytesParser(policy=policy.default).parsebytes(mensagem.as_bytes()))
+
+        def quit(self):
+            pass
+
+    monkeypatch.setattr(email_smtp, 'load_config', lambda _: {
+        'host': 'smtp.example.test', 'from_email': 'financeiro@example.test', 'from_name': 'MasterSat',
+    })
+    monkeypatch.setattr(email_smtp, '_abrir_conexao', lambda _: Servidor())
+    url = (f'/api/v1/billing-closure/lotes/{lote.id}/enviar/{cobranca.id}' if fechamento
+           else f'/api/v1/boletos/{cobranca.id}/enviar-email?incluir_nfse={str(incluir_nfse).lower()}')
+    response = http.post(url)
+    assert response.status_code == 200, response.text
+    assert len(mensagens) == 1
+    msg = mensagens[0]
+    assert msg['To'] == cliente.email
+    corpo = msg.get_body(preferencelist=('plain',)).get_content()
+    assert 'PDF está anexado' in corpo
+    assert '/public/boleto/' not in corpo
+    anexos = list(msg.iter_attachments())
+    assert len(anexos) == (2 if incluir_nfse else 1)
+    for anexo in anexos:
+        assert anexo.get_content_type() == 'application/pdf'
+        assert anexo.get_content_disposition() == 'attachment'
+        assert anexo.get_filename().endswith('.pdf')
+        assert anexo.get_payload(decode=True).startswith(b'%PDF-')
+
+
+def test_email_nao_e_enviado_se_pdf_nao_for_gerado(http, db, cobranca, monkeypatch):
+    from unittest.mock import Mock
+    from app.api.v1.endpoints import boletos
+    from app.services import email_smtp
+
+    _registrar(db, cobranca.id)
+    monkeypatch.setattr(boletos, '_montar_pdf_boleto', lambda *args: (b'', 'boleto.pdf'))
+    enviar = Mock()
+    monkeypatch.setattr(email_smtp, 'enviar_email', enviar)
+    response = http.post(f'/api/v1/boletos/{cobranca.id}/enviar-email')
+    assert response.status_code == 502
+    enviar.assert_not_called()
+
+
 def test_envio_de_boleto_com_nfse_anexa_os_dois_pdfs_no_mesmo_email(http, db, cliente, cobranca, monkeypatch):
     _registrar(db, cobranca.id)
     db.add(NfseNota(billing_id=cobranca.id, status='emitida', numero_nfse='321', xml_retorno='<xml/>'))

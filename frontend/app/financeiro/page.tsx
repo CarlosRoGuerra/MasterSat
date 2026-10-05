@@ -1,6 +1,7 @@
 'use client';
 
 import { FormEvent, Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { TrendingUp, AlertTriangle, FileText, CheckCircle2, Clock, MoreHorizontal, ChevronDown, ChevronRight, Lock, PenSquare, ListChecks, Banknote, Layers, Mail, PieChart, Barcode, Wallet, Coins, FilePlus, Tags, BookText, Eye } from 'lucide-react';
 
 import { PageShell } from '@/components/page-shell';
@@ -394,11 +395,6 @@ function BillingTableSection({
   onBatchCancel,
   onBatchMaint,
   onBatchEmit,
-  onBatchEmail,
-  onBatchEmailComNfse,
-  onBatchNfseEmail,
-  onBatchNfse,
-  onBatchEmitAll,
   batchBusy,
   batchProgress,
   batchActions,
@@ -431,28 +427,13 @@ function BillingTableSection({
   onBatchCancel?: () => void;
   onBatchMaint?: () => void;
   onBatchEmit?: () => void;
-  onBatchEmail?: () => void;
-  onBatchEmailComNfse?: () => void;
-  onBatchNfseEmail?: () => void;
-  onBatchNfse?: () => void;
-  onBatchEmitAll?: () => void;
   batchBusy?: boolean;
   batchProgress?: string;
-  batchActions?: Array<'receive' | 'cancel' | 'maint' | 'emit' | 'emit_all' | 'email' | 'email_com_nfse' | 'nfse_email' | 'nfse'>;
+  batchActions?: Array<'receive' | 'cancel' | 'maint' | 'emit'>;
   rowActionLabel?: string;
 }) {
-  const acoesLote = batchActions ?? ['receive', 'cancel', 'maint', 'emit', 'emit_all', 'email', 'email_com_nfse', 'nfse_email', 'nfse'];
-  const [tipoEnvio, setTipoEnvio] = useState<'email' | 'email_com_nfse' | 'nfse_email' | ''>('');
-  const podeEnviarBoleto = !!onBatchEmail && acoesLote.includes('email');
-  const podeEnviarBoletoComNfse = !!onBatchEmailComNfse && acoesLote.includes('email_com_nfse');
-  const podeEnviarNfse = !!onBatchNfseEmail && acoesLote.includes('nfse_email');
-  const envioSelecionado =
-    (tipoEnvio === 'email' && podeEnviarBoleto) ||
-    (tipoEnvio === 'email_com_nfse' && podeEnviarBoletoComNfse) ||
-    (tipoEnvio === 'nfse_email' && podeEnviarNfse) ? tipoEnvio : '';
-  useEffect(() => {
-    if (!batchIds?.length) setTipoEnvio('');
-  }, [batchIds?.length]);
+  const router = useRouter();
+  const acoesLote = batchActions ?? ['receive', 'cancel', 'maint', 'emit'];
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const in7 = new Date(today); in7.setDate(in7.getDate() + 7);
 
@@ -470,11 +451,17 @@ function BillingTableSection({
     <Card id="billing-section">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <SectionHeader eyebrow="Cobranças" title={billingView === 'alert' ? 'Atenção imediata' : 'Carteira completa'} />
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           {onNewBilling && (
-            <Button onClick={onNewBilling} className="text-xs px-3 py-1.5">
-              Nova cobrança avulsa
-            </Button>
+            <>
+              <Button onClick={onNewBilling} className="text-xs px-3 py-1.5">
+                Nova cobrança avulsa
+              </Button>
+              <Button variant="secondary" onClick={() => router.push('/notas-fiscais?aba=gerar')} disabled={batchBusy} className="text-xs px-3 py-1.5">
+                <FileText aria-hidden="true" className="h-3.5 w-3.5" />
+                Emitir NFS-e
+              </Button>
+            </>
           )}
           <Button variant="secondary" onClick={onViewToggle} className="text-xs px-3 py-1.5">
             {billingView === 'alert' ? `Ver todas (${billings.length})` : 'Ver urgentes'}
@@ -528,28 +515,7 @@ function BillingTableSection({
       {batchIds && batchIds.length > 0 && (
         <div className="mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-brand-300 bg-brand-50 px-4 py-2.5 text-sm dark:border-brand-700 dark:bg-brand-950/30">
           <span className="font-bold text-brand-800 dark:text-brand-200">{batchIds.length} selecionada(s)</span>
-          {onBatchEmit && acoesLote.includes('emit') && <Button disabled={batchBusy} onClick={onBatchEmit} className="!py-1.5 text-xs">Emitir na Ailos</Button>}
-          {onBatchEmitAll && acoesLote.includes('emit_all') && <Button disabled={batchBusy} onClick={onBatchEmitAll} className="!py-1.5 text-xs">Emitir boletos + NFS-e</Button>}
-          {(podeEnviarBoleto || podeEnviarBoletoComNfse || podeEnviarNfse) && (
-            <label className="flex items-center gap-2 text-xs text-brand-800 dark:text-brand-200">
-              Tipo de envio
-              <select
-                className="rounded-lg border border-brand-300 bg-white px-2 py-1.5 text-xs text-slate-900 outline-none focus:ring-2 focus:ring-brand-500/20 disabled:opacity-50 dark:border-brand-700 dark:bg-slate-900 dark:text-white"
-                value={envioSelecionado}
-                disabled={batchBusy}
-                onChange={e => setTipoEnvio(e.target.value as typeof tipoEnvio)}
-              >
-                <option value="">Selecionar envio</option>
-                {podeEnviarBoleto && <option value="email">Só boleto</option>}
-                {podeEnviarBoletoComNfse && <option value="email_com_nfse">Boleto + NFS-e</option>}
-                {podeEnviarNfse && <option value="nfse_email">Só NFS-e</option>}
-              </select>
-            </label>
-          )}
-          {envioSelecionado === 'email' && onBatchEmail && <Button disabled={batchBusy} variant="secondary" onClick={onBatchEmail} className="!py-1.5 text-xs">Enviar só boleto</Button>}
-          {envioSelecionado === 'email_com_nfse' && onBatchEmailComNfse && <Button disabled={batchBusy} variant="secondary" onClick={onBatchEmailComNfse} className="!py-1.5 text-xs">Enviar boleto + NFS-e</Button>}
-          {envioSelecionado === 'nfse_email' && onBatchNfseEmail && <Button disabled={batchBusy} variant="secondary" onClick={onBatchNfseEmail} className="!py-1.5 text-xs">Enviar só NFS-e</Button>}
-          {onBatchNfse && acoesLote.includes('nfse') && <Button disabled={batchBusy} variant="secondary" onClick={onBatchNfse} className="!py-1.5 text-xs">Emitir NFS-e</Button>}
+          {onBatchEmit && acoesLote.includes('emit') && <Button disabled={batchBusy} onClick={onBatchEmit} className="!py-1.5 text-xs">Emitir boleto</Button>}
           {onBatchReceive && acoesLote.includes('receive') && <Button disabled={batchBusy} onClick={onBatchReceive} className="!py-1.5 text-xs">Receber em lote</Button>}
           {onBatchMaint && acoesLote.includes('maint') && <Button disabled={batchBusy} variant="secondary" onClick={onBatchMaint} className="!py-1.5 text-xs">Alterar venc./valor</Button>}
           {onBatchCancel && acoesLote.includes('cancel') && <Button disabled={batchBusy} variant="secondary" onClick={onBatchCancel} className="!py-1.5 text-xs">Cancelar em lote</Button>}
@@ -739,7 +705,6 @@ export default function FinanceiroPage() {
   const [selectedBillingIds, setSelectedBillingIds] = useState<number[]>([]);
   const [batchBoletoAction, setBatchBoletoAction] = useState<AcaoLoteBoleto | null>(null);
   const [batchBoletoProgress, setBatchBoletoProgress] = useState('');
-  const [batchNfseBusy, setBatchNfseBusy] = useState(false);
   const [gerandoCarne, setGerandoCarne] = useState(false);
   // Modal "Gerar carnê" (por cliente)
   const [carneModal, setCarneModal] = useState(false);
@@ -1385,7 +1350,7 @@ export default function FinanceiroPage() {
   }
 
   async function handleBatchBoletos(acao: AcaoLoteBoleto) {
-    if (!token || !canEdit || batchBoletoAction || batchNfseBusy || selectedBillingIds.length === 0) return;
+    if (!token || !canEdit || batchBoletoAction || selectedBillingIds.length === 0) return;
     const selecionados = [...new Set(selectedBillingIds)];
     const ids = acao === 'emitir'
       ? separarBoletosPorRegistro(selecionados, billings).ausentes
@@ -1430,131 +1395,6 @@ export default function FinanceiroPage() {
     } finally {
       setBatchBoletoAction(null);
       setBatchBoletoProgress('');
-    }
-  }
-
-  async function handleBatchEmitAll() {
-    if (!token || !canEdit || batchBoletoAction || batchNfseBusy || selectedBillingIds.length === 0) return;
-    const ids = [...new Set(selectedBillingIds)];
-    setBatchNfseBusy(true);
-    setError(''); setFeedback('');
-    try {
-      setBatchBoletoProgress('Conferindo notas fiscais…');
-      const previa = await apiFetch<{
-        elegiveis: number[];
-        nao_emitem: { billing_id: number; cliente: string }[];
-        outros_ignorados: number[];
-      }>('/nfse/lotes/selecionados/previa', {
-        method: 'POST', body: JSON.stringify({ billing_ids: ids }),
-      }, token);
-      const { existentes: boletosExistentes, ausentes: boletosAusentes } = separarBoletosPorRegistro(ids, billings);
-      const nomesSemNota = previa.nao_emitem.map(item => `${item.cliente} (#${item.billing_id})`);
-      if (!boletosAusentes.length && !previa.elegiveis.length) {
-        setFeedback(`Nada a emitir: ${boletosExistentes.length} boleto(s) já registrado(s) e nenhuma NFS-e elegível.`);
-        if (nomesSemNota.length) setError(`Não emitem nota fiscal: ${nomesSemNota.join(', ')}.`);
-        return;
-      }
-      const aviso = [
-        `Emitir ${boletosAusentes.length} boleto(s) e até ${previa.elegiveis.length} NFS-e?`,
-        `${boletosExistentes.length} boleto(s) já emitido(s) serão ignorados.`,
-        `${previa.outros_ignorados.length} NFS-e já emitida(s), em processamento ou inelegível(is) serão ignoradas.`,
-        nomesSemNota.length ? `Clientes selecionados que não emitem nota fiscal:\n${nomesSemNota.join('\n')}` : '',
-      ].filter(Boolean).join('\n\n');
-      if (!window.confirm(aviso)) return;
-
-      const boletos = await processarBoletosSelecionados(
-        boletosAusentes, 'emitir', token,
-        (concluidos, total) => setBatchBoletoProgress(`Boletos ${concluidos}/${total}`),
-      );
-      const prontos = new Set([...boletosExistentes, ...boletos.processados]);
-      const nfseIds = previa.elegiveis.filter(id => prontos.has(id));
-      let loteId: number | null = null;
-      let totalNotas = 0;
-      const erros: string[] = [];
-      if (nfseIds.length) {
-        setBatchBoletoProgress('Iniciando lote de NFS-e…');
-        try {
-          const resultado = await apiFetch<{
-            lote: { id: number; total_notas: number };
-            ignorados: number[];
-          }>('/nfse/lotes/selecionados', {
-            method: 'POST', body: JSON.stringify({ billing_ids: nfseIds }),
-          }, token);
-          loteId = resultado.lote.id;
-          totalNotas = resultado.lote.total_notas;
-        } catch (err) {
-          erros.push(`Boletos processados, mas o lote de NFS-e não iniciou: ${parseError(err)}`);
-        }
-      }
-      const falhas = boletos.falhas.map(f => `#${f.id}: ${f.mensagem}`);
-      if (falhas.length) {
-        erros.push(`${falhas.length} boleto(s) falharam: ${falhas.slice(0, 8).join(' · ')}${falhas.length > 8 ? ` · e mais ${falhas.length - 8}` : ''}`);
-      }
-      await loadData(token);
-      if (erros.length) setError(erros.join(' '));
-      setFeedback(
-        `${boletos.processados.length} boleto(s) emitido(s); ${boletosExistentes.length} já emitido(s) ignorado(s). ` +
-        `${totalNotas} NFS-e iniciada(s)${loteId ? ` no lote #${loteId}` : ''}; ` +
-        `${previa.nao_emitem.length} cliente(s) sem autorização para nota fiscal. ` +
-        'A emissão das NFS-e continua em segundo plano.',
-      );
-    } catch (err) {
-      setError(parseError(err));
-    } finally {
-      setBatchNfseBusy(false);
-      setBatchBoletoProgress('');
-    }
-  }
-
-  async function handleBatchNfse() {
-    if (!token || !canEdit || batchBoletoAction || batchNfseBusy || selectedBillingIds.length === 0) return;
-    const ids = [...new Set(selectedBillingIds)];
-    setBatchNfseBusy(true);
-    setError('');
-    setFeedback('');
-    try {
-      const previa = await apiFetch<{
-        elegiveis: number[];
-        nao_emitem: { billing_id: number; cliente: string }[];
-        outros_ignorados: number[];
-      }>('/nfse/lotes/selecionados/previa', {
-        method: 'POST', body: JSON.stringify({ billing_ids: ids }),
-      }, token);
-      const clientesSemNota = previa.nao_emitem.map(
-        item => `• ${item.cliente} (cobrança #${item.billing_id})`,
-      ).join('\n');
-      if (!previa.elegiveis.length) {
-        const nomes = previa.nao_emitem.map(item => `${item.cliente} (#${item.billing_id})`).join(', ');
-        setError(`Nenhuma cobrança elegível para NFS-e.${nomes ? ` Não emitem nota fiscal: ${nomes}.` : ''}`);
-        return;
-      }
-      const aviso = [
-        `Emitir ${previa.elegiveis.length} NFS-e da seleção?`,
-        clientesSemNota ? `Clientes marcados que NÃO emitem nota fiscal:\n${clientesSemNota}` : '',
-        previa.outros_ignorados.length
-          ? `${previa.outros_ignorados.length} cobrança(s) também serão ignoradas por já terem nota ou não estarem elegíveis.` : '',
-      ].filter(Boolean).join('\n\n');
-      if (!window.confirm(aviso)) return;
-      const resultado = await apiFetch<{
-        lote: { id: number; total_notas: number };
-        ignorados: number[];
-      }>('/nfse/lotes/selecionados', {
-        method: 'POST', body: JSON.stringify({ billing_ids: previa.elegiveis }),
-      }, token);
-      const ignorados = resultado.ignorados;
-      const detalhesIgnorados = ignorados.length
-        ? `: #${ignorados.slice(0, 8).join(', #')}${ignorados.length > 8 ? ` e mais ${ignorados.length - 8}` : ''}`
-        : '';
-      setFeedback(
-        `Lote fiscal #${resultado.lote.id} iniciado para ${resultado.lote.total_notas} NFS-e. ` +
-        `${ignorados.length} cobrança(s) ignorada(s)${detalhesIgnorados}. ` +
-        `${previa.nao_emitem.length} não emitem nota fiscal. ` +
-        'Acompanhe o resultado em Notas Fiscais.',
-      );
-    } catch (err) {
-      setError(parseError(err));
-    } finally {
-      setBatchNfseBusy(false);
     }
   }
 
@@ -2114,13 +1954,8 @@ export default function FinanceiroPage() {
               onBatchCancel={handleBatchCancel}
               onBatchMaint={() => { setModalError(''); setBatchMaintModal(true); }}
               onBatchEmit={() => handleBatchBoletos('emitir')}
-              onBatchEmitAll={handleBatchEmitAll}
-              onBatchEmail={() => handleBatchBoletos('email')}
-              onBatchEmailComNfse={() => handleBatchBoletos('email_com_nfse')}
-              onBatchNfseEmail={() => handleBatchBoletos('nfse_email')}
-              onBatchNfse={handleBatchNfse}
-              batchBusy={!!batchBoletoAction || batchNfseBusy}
-              batchProgress={batchNfseBusy ? 'Criando lote de NFS-e…' : batchBoletoProgress}
+              batchBusy={!!batchBoletoAction}
+              batchProgress={batchBoletoProgress}
             />
 
             {/* ── Indicadores + gráficos no rodapé ── */}
@@ -2494,13 +2329,8 @@ export default function FinanceiroPage() {
               onBatchCancel={handleBatchCancel}
               onBatchMaint={() => { setModalError(''); setBatchMaintModal(true); }}
               onBatchEmit={() => handleBatchBoletos('emitir')}
-              onBatchEmitAll={handleBatchEmitAll}
-              onBatchEmail={() => handleBatchBoletos('email')}
-              onBatchEmailComNfse={() => handleBatchBoletos('email_com_nfse')}
-              onBatchNfseEmail={() => handleBatchBoletos('nfse_email')}
-              onBatchNfse={handleBatchNfse}
-              batchBusy={!!batchBoletoAction || batchNfseBusy}
-              batchProgress={batchNfseBusy ? 'Criando lote de NFS-e…' : batchBoletoProgress}
+              batchBusy={!!batchBoletoAction}
+              batchProgress={batchBoletoProgress}
               batchActions={cfg?.lote}
               rowActionLabel={cfg?.rotulo}
             />

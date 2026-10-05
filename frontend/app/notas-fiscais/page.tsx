@@ -243,6 +243,13 @@ export default function NotasFiscaisPage() {
   const [consultandoNota, setConsultandoNota] = useState<number | null>(null);
   const [enviandoNota, setEnviandoNota] = useState<number | null>(null);
 
+  // Atalho do fechamento: abre a geração em lote sem iniciar uma emissão.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('aba') === 'gerar') {
+      setAba('gerar');
+    }
+  }, []);
+
   /* ── Carregamentos ── */
   const carregarResumo = useCallback(() => {
     if (!token) return;

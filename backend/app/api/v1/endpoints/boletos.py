@@ -541,6 +541,8 @@ def preparar_envio_boleto_email(db: Session, billing_id: int, incluir_nfse: bool
 
     dados = dados_boleto(b, c, db, ailos_boleto)
     pdf_bytes, filename = _montar_pdf_boleto(b, c, db, ailos_boleto)
+    if not pdf_bytes or not pdf_bytes.startswith(b'%PDF-'):
+        raise HTTPException(status_code=502, detail='Não foi possível gerar o PDF do boleto. O e-mail não foi enviado.')
     nfse_anexo = None
     if incluir_nfse:
         from app.api.v1.endpoints.nfse import anexo_nfse_emitida
@@ -556,7 +558,7 @@ def preparar_envio_boleto_email(db: Session, billing_id: int, incluir_nfse: bool
     }
     tpl = carregar_mensagens(db)
     assunto = render_template(tpl['msg_boleto_assunto'], variaveis)
-    corpo = render_template(tpl['msg_boleto'], variaveis)
+    corpo = render_template(tpl['msg_boleto_email'], variaveis)
     if nfse_anexo:
         corpo += '\n\nA NFS-e desta cobrança também está anexada a este e-mail.'
 

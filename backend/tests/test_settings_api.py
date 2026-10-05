@@ -10,6 +10,17 @@ def test_retorna_padrao_quando_nada_salvo(http):
     body = r.json()
     assert '{NOME}' in body['msg_boleto']
     assert '{VENCIMENTO}' in body['msg_boleto_assunto']
+    assert 'PDF está anexado' in body['msg_boleto_email']
+    assert '{LINK_BOLETO}' not in body['msg_boleto_email']
+
+
+def test_email_e_whatsapp_tem_mensagens_independentes(http):
+    whatsapp = 'WhatsApp: {LINK_BOLETO}'
+    email = 'Olá {NOME}, segue seu boleto em anexo.'
+    assert http.put(PREFIX, json={'msg_boleto': whatsapp, 'msg_boleto_email': email}).status_code == 200
+    body = http.get(PREFIX).json()
+    assert body['msg_boleto'] == whatsapp
+    assert body['msg_boleto_email'] == email
 
 
 def test_salva_e_devolve_template_customizado(http):

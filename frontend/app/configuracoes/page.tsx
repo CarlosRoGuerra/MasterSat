@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { FileSignature, MessageSquareText, Save, Send, Trash2, Upload } from 'lucide-react';
+import { FileSignature, Mail, MessageSquareText, Save, Send, Trash2, Upload } from 'lucide-react';
 
 import { PageShell } from '@/components/page-shell';
 import { Card } from '@/components/ui/card';
@@ -12,7 +12,7 @@ import { API_URL, apiFetch } from '@/lib/api';
 import { useAuthGuard } from '@/lib/use-auth-guard';
 import { ROUTE_ROLES } from '@/lib/route-roles';
 
-type Mensagens = { msg_boleto: string; msg_boleto_assunto: string };
+type Mensagens = { msg_boleto: string; msg_boleto_assunto: string; msg_boleto_email: string };
 type EmailConfig = {
   host: string; port: number; username: string; from_email: string;
   from_name: string; security: string; enabled: boolean; password_set: boolean;
@@ -48,7 +48,8 @@ const fieldClass = 'w-full rounded-xl border border-slate-200 bg-white px-3.5 py
 export default function ConfiguracoesPage() {
   const { token, loading: guardLoading, error: guardError } = useAuthGuard(ROUTE_ROLES['/configuracoes'], '/login/admin');
 
-  const [form, setForm] = useState<Mensagens>({ msg_boleto: '', msg_boleto_assunto: '' });
+  const [form, setForm] = useState<Mensagens>({ msg_boleto: '', msg_boleto_assunto: '', msg_boleto_email: '' });
+  const [canalMensagem, setCanalMensagem] = useState<'msg_boleto' | 'msg_boleto_email'>('msg_boleto_email');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -86,7 +87,7 @@ export default function ConfiguracoesPage() {
 
   useEffect(() => () => { if (signaturePreview) URL.revokeObjectURL(signaturePreview); }, [signaturePreview]);
 
-  const preview = useMemo(() => renderTemplate(form.msg_boleto, EXEMPLO), [form.msg_boleto]);
+  const preview = useMemo(() => renderTemplate(form[canalMensagem] || '', EXEMPLO), [form, canalMensagem]);
 
   async function save() {
     if (!token) return;
@@ -108,7 +109,10 @@ export default function ConfiguracoesPage() {
   }
 
   function inserirVariavel(tag: string) {
-    setForm((p) => ({ ...p, msg_boleto: `${p.msg_boleto}${p.msg_boleto.endsWith('\n') || p.msg_boleto === '' ? '' : ' '}${tag}` }));
+    setForm((p) => {
+      const texto = p[canalMensagem] || '';
+      return { ...p, [canalMensagem]: `${texto}${texto.endsWith('\n') || texto === '' ? '' : ' '}${tag}` };
+    });
   }
 
   async function saveEmail() {
@@ -198,17 +202,22 @@ export default function ConfiguracoesPage() {
                 />
               </div>
               <div>
-                <p className="mb-1.5 text-xs font-semibold uppercase tracking-widest text-slate-500">Mensagem (WhatsApp e corpo do e-mail)</p>
+                <label htmlFor="canal-mensagem" className="mb-1.5 block text-xs font-semibold uppercase tracking-widest text-slate-500">Mensagem de boleto</label>
+                <select id="canal-mensagem" className={`${fieldClass} mb-3`} value={canalMensagem} onChange={e => setCanalMensagem(e.target.value as typeof canalMensagem)}>
+                  <option value="msg_boleto_email">E-mail — PDF em anexo</option>
+                  <option value="msg_boleto">WhatsApp — link do boleto</option>
+                </select>
                 <textarea
+                  aria-label={canalMensagem === 'msg_boleto_email' ? 'Corpo do e-mail' : 'Mensagem do WhatsApp'}
                   className={`${fieldClass} min-h-[280px] font-mono text-body leading-relaxed`}
-                  value={form.msg_boleto}
-                  onChange={(e) => setForm((p) => ({ ...p, msg_boleto: e.target.value }))}
+                  value={form[canalMensagem] || ''}
+                  onChange={(e) => setForm((p) => ({ ...p, [canalMensagem]: e.target.value }))}
                 />
               </div>
               <div>
                 <p className="mb-2 text-xs font-semibold uppercase tracking-widest text-slate-500">Variáveis disponíveis (clique para inserir)</p>
                 <div className="flex flex-wrap gap-2">
-                  {VARIAVEIS.map(({ tag, desc }) => (
+                  {VARIAVEIS.filter(v => canalMensagem === 'msg_boleto' || v.tag !== '{LINK_BOLETO}').map(({ tag, desc }) => (
                     <button
                       key={tag}
                       type="button"
@@ -228,9 +237,11 @@ export default function ConfiguracoesPage() {
             <SectionHeader eyebrow="Pré-visualização" title="Como o cliente vai receber" />
             <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4 dark:border-emerald-900/40 dark:bg-emerald-950/20">
               <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-emerald-700 dark:text-emerald-400">
-                <MessageSquareText className="h-4 w-4" /> WhatsApp (dados de exemplo)
+                {canalMensagem === 'msg_boleto_email' ? <Mail className="h-4 w-4" /> : <MessageSquareText className="h-4 w-4" />}
+                {canalMensagem === 'msg_boleto_email' ? 'E-mail' : 'WhatsApp'} (dados de exemplo)
               </div>
               <pre className="whitespace-pre-wrap break-words font-sans text-sm text-slate-800 dark:text-slate-200">{preview}</pre>
+              {canalMensagem === 'msg_boleto_email' && <p className="mt-4 border-t border-emerald-200 pt-3 text-xs text-emerald-800 dark:border-emerald-900 dark:text-emerald-300">Anexo: boleto.pdf · A NFS-e também será anexada quando exigida no envio.</p>}
             </div>
             <p className="mt-3 text-xs text-slate-500">
               Assunto do e-mail: <span className="font-medium text-slate-600 dark:text-slate-300">{renderTemplate(form.msg_boleto_assunto, EXEMPLO)}</span>
