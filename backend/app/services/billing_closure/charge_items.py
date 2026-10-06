@@ -14,7 +14,7 @@ from app.models.client_charge_item import ClientChargeItem
 from app.models.contract import Contract
 from app.models.enums import BillingStatus
 from app.models.vehicle import Vehicle
-from app.services.billing_closure.shared import _apply_client_scope
+from app.services.billing_closure.shared import _apply_client_scope, clientes_da_forma
 from app.services.financial import InstallmentSplitError, charge_item_payer_client_id, split_amount_in_installments
 
 
@@ -77,6 +77,7 @@ def _pending_charge_items(
     filter_type: str = 'all',
     client_id: int | None = None,
     billing_month: date | None = None,
+    forma_cobranca: str | None = None,
 ) -> list[dict]:
     """
     Retorna ClientChargeItems ativos cujos billings ainda não foram totalmente gerados
@@ -111,6 +112,14 @@ def _pending_charge_items(
         )
     else:
         query = _apply_client_scope(query, ClientChargeItem.client_id, filter_type, client_id)
+    if forma_cobranca:
+        query = query.filter(ClientChargeItem.id.in_(
+            select(ClientChargeItem.id)
+            .outerjoin(Contract, Contract.id == ClientChargeItem.contract_id)
+            .where(func.coalesce(
+                Contract.interveniente_client_id, Contract.client_id, ClientChargeItem.client_id,
+            ).in_(clientes_da_forma(forma_cobranca)))
+        ))
     items = query.order_by(ClientChargeItem.id.asc()).all()
 
     candidate_items = [

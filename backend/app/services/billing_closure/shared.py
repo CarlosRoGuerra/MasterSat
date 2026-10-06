@@ -7,6 +7,18 @@ from sqlalchemy.orm import Session
 
 from app.models.client import Client
 
+# Filtro "forma de cobrança" do fechamento/relatórios: além das formas do
+# cadastro, permite achar quem ainda está sem forma informada.
+FORMA_NAO_INFORMADA = 'nao_informado'
+
+
+def clientes_da_forma(forma: str):
+    """Subconsulta com os ids dos clientes ativos de uma forma de cobrança."""
+    clientes = select(Client.id).where(Client.is_deleted.is_(False))
+    if forma == FORMA_NAO_INFORMADA:
+        return clientes.where(Client.forma_cobranca.is_(None))
+    return clientes.where(Client.forma_cobranca == forma)
+
 
 def _lock_competencia(db: Session, reference_month: date) -> None:
     """Serializa fechamentos concorrentes da MESMA competência.

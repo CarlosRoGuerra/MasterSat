@@ -8,6 +8,7 @@ import { Select } from '@/components/ui/select';
 import { FormField, FormGrid, FormSection, FormDivider } from '@/components/ui/form-field';
 import { BillingDayInput, erroDiaVencimento } from '@/components/ui/billing-day-input';
 import { formatPhone } from '@/lib/format';
+import { FORMAS_COBRANCA } from '@/lib/forma-cobranca';
 import { documentCategoryOptions, fileInputClass } from './helpers';
 import type { ClientFormState, ContactItem } from './types';
 
@@ -232,6 +233,12 @@ export function ClientFormModal({
                 placeholder="Ex.: 20"
                 className="max-w-[120px]"
               />
+            </FormField>
+            <FormField label="Forma de cobrança" hint="Usada nos filtros do relatório de cobranças e do fechamento.">
+              <Select value={form.forma_cobranca} onChange={(e) => onFieldChange('forma_cobranca', e.target.value)}>
+                <option value="">Não informada</option>
+                {FORMAS_COBRANCA.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
+              </Select>
             </FormField>
             <FormField label="Formato do Boleto" required>
               <Select value={form.boleto_format} onChange={(e) => onFieldChange('boleto_format', e.target.value)}>

@@ -18,6 +18,7 @@ import { ClientAutocomplete } from '@/components/ui/client-autocomplete';
 import { MetricCard } from '@/components/ui/metric-card';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { apiFetch, apiFetchList, API_URL } from '@/lib/api';
+import { FILTROS_FORMA_COBRANCA } from '@/lib/forma-cobranca';
 import { useAuthGuard } from '@/lib/use-auth-guard';
 import { ROUTE_ROLES } from '@/lib/route-roles';
 import type { ClientOption } from '@/lib/domain-types';
@@ -212,6 +213,7 @@ export default function FechamentoPage() {
   // Step 1
   const [referenceMonth, setReferenceMonth] = useState(previousYearMonth);
   const [filterType, setFilterType] = useState<FilterType>('all');
+  const [formaCobranca, setFormaCobranca] = useState('');
   const [selectedClientId, setSelectedClientId] = useState('');
   const [clients, setClients] = useState<ClientOption[]>([]);
   const searchClosureClients = useCallback(async (term: string) => {
@@ -269,11 +271,19 @@ export default function FechamentoPage() {
   useEffect(() => { pagDes.reset(); }, [desinstalacoes.length]);
   useEffect(() => { pagSvc.reset(); }, [chargeItems.length]);
 
+  // Mesmo escopo em simular, PDF, Excel e gerar: a geração precisa repetir
+  // exatamente o recorte que o operador conferiu na prévia.
+  function closureParams() {
+    const params = new URLSearchParams({ service_month: referenceMonth, filter_type: filterType });
+    if (filterType === 'client' && selectedClientId) params.set('client_id', selectedClientId);
+    if (formaCobranca) params.set('forma_cobranca', formaCobranca);
+    return params;
+  }
+
   async function refreshSimulation() {
     if (!token || !referenceMonth) return;
     try {
-      const params = new URLSearchParams({ service_month: referenceMonth, filter_type: filterType });
-      if (filterType === 'client' && selectedClientId) params.set('client_id', selectedClientId);
+      const params = closureParams();
       const data = await apiFetch<Simulation>(`/billing-closure/simulate?${params}`, {}, token);
       setSimulation(data);
       // Keep previously selected IDs that are still pending; add new ones
@@ -341,8 +351,7 @@ export default function FechamentoPage() {
     setError('');
     setSimulation(null);
     try {
-      const params = new URLSearchParams({ service_month: referenceMonth, filter_type: filterType });
-      if (filterType === 'client' && selectedClientId) params.set('client_id', selectedClientId);
+      const params = closureParams();
       const data = await apiFetch<Simulation>(`/billing-closure/simulate?${params}`, {}, token);
       setSimulation(data);
       // Pre-select all non-generated contracts
@@ -357,8 +366,7 @@ export default function FechamentoPage() {
 
   async function downloadPdf() {
     if (!token) return;
-    const params = new URLSearchParams({ service_month: referenceMonth, filter_type: filterType });
-    if (filterType === 'client' && selectedClientId) params.set('client_id', selectedClientId);
+    const params = closureParams();
     try {
       const resp = await fetch(`${API_URL}/billing-closure/simulate/pdf?${params}`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -378,8 +386,7 @@ export default function FechamentoPage() {
 
   async function downloadXlsx() {
     if (!token) return;
-    const params = new URLSearchParams({ service_month: referenceMonth, filter_type: filterType });
-    if (filterType === 'client' && selectedClientId) params.set('client_id', selectedClientId);
+    const params = closureParams();
     try {
       const resp = await fetch(`${API_URL}/billing-closure/simulate/xlsx?${params}`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -404,8 +411,7 @@ export default function FechamentoPage() {
     setGenerateResult(null);
     setStep(3);
     try {
-      const params = new URLSearchParams({ service_month: referenceMonth, filter_type: filterType });
-      if (filterType === 'client' && selectedClientId) params.set('client_id', selectedClientId);
+      const params = closureParams();
       // Manda SEMPRE a seleção exata das mensalidades, mesmo quando todas estão
       // marcadas. Ausência de contract_ids significa "estado atual do banco";
       // um contrato criado entre Simular e Gerar entraria sem ter aparecido na
@@ -555,6 +561,14 @@ export default function FechamentoPage() {
               </div>
             </div>
 
+            <div>
+              <p className="mb-1.5 text-xs font-semibold text-slate-500 dark:text-slate-400">Forma de cobrança</p>
+              <select className={fieldClass} value={formaCobranca} onChange={(e) => setFormaCobranca(e.target.value)}>
+                <option value="">Todas</option>
+                {FILTROS_FORMA_COBRANCA.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
+              </select>
+            </div>
+
             {filterType === 'client' && (
               <div className="min-w-[240px]">
                 <p className="mb-1.5 text-xs font-semibold text-slate-500 dark:text-slate-400">Responsável financeiro</p>
@@ -595,7 +609,7 @@ export default function FechamentoPage() {
             </p>
           )}
           <p className="mb-4 text-sm text-slate-600 dark:text-slate-300">
-            Para clientes com boleto único, o fechamento reúne mensalidades, pró-rata, taxas e serviços em um título por responsável financeiro. Quando há datas diferentes, usa o vencimento mais tardio. O PDF do boleto traz todos os itens discriminados em anexo.
+            Para clientes com boleto único, o fechamento reúne mensalidades, pró-rata, taxas e serviços em um título por responsável financeiro. O vencimento é o dia das mensalidades do responsável (taxas e serviços acompanham). O PDF do boleto traz todos os itens discriminados em anexo.
           </p>
           {/* KPIs */}
           <section className="mb-5 grid gap-5 sm:grid-cols-2 lg:grid-cols-5">

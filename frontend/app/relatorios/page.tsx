@@ -17,6 +17,7 @@ import { ExportButton } from '@/components/ui/export-button';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { RevenueChart } from '@/components/ui/revenue-chart';
 import { apiFetch, API_URL } from '@/lib/api';
+import { FILTROS_FORMA_COBRANCA } from '@/lib/forma-cobranca';
 import { useAuthGuard } from '@/lib/use-auth-guard';
 import { ROUTE_ROLES } from '@/lib/route-roles';
 
@@ -162,6 +163,7 @@ export default function RelatoriosPage() {
   /* ── Relatório de cobranças por período ── */
   const [relSituacao, setRelSituacao] = useState('paga');
   const [relPeriodoPor, setRelPeriodoPor] = useState('pagamento');
+  const [relForma, setRelForma] = useState('');
 
   const [error, setError] = useState('');
   const [feedback, setFeedback] = useState('');
@@ -437,6 +439,17 @@ export default function RelatoriosPage() {
               <option value="vencimento">Data de vencimento</option>
             </select>
           </label>
+          <label className="text-sm">
+            <span className="mb-1 block text-xs font-semibold text-slate-600 dark:text-slate-400">Forma de cobrança</span>
+            <select
+              value={relForma}
+              onChange={(e) => setRelForma(e.target.value)}
+              className="w-48 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900"
+            >
+              <option value="">Todas</option>
+              {FILTROS_FORMA_COBRANCA.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
+            </select>
+          </label>
           <p className="pb-2 text-xs text-slate-500">
             Período: {fmtDate(dateFrom)} – {fmtDate(dateTo)}
           </p>
@@ -445,7 +458,7 @@ export default function RelatoriosPage() {
               variant="secondary"
               onClick={() => token && abrirExport(
                 token,
-                `exports/billings-report?fmt=csv&situacao=${relSituacao}&periodo_por=${relPeriodoPor}&date_from=${dateFrom}&date_to=${dateTo}`,
+                `exports/billings-report?fmt=csv&situacao=${relSituacao}&periodo_por=${relPeriodoPor}&date_from=${dateFrom}&date_to=${dateTo}${relForma ? `&forma_cobranca=${relForma}` : ''}`,
                 'relatorio-cobrancas.csv',
               ).catch(e => setError(e instanceof Error ? e.message : 'Erro ao gerar o relatório'))}
             >
@@ -454,7 +467,7 @@ export default function RelatoriosPage() {
             <Button
               onClick={() => token && abrirExport(
                 token,
-                `exports/billings-report?fmt=pdf&situacao=${relSituacao}&periodo_por=${relPeriodoPor}&date_from=${dateFrom}&date_to=${dateTo}`,
+                `exports/billings-report?fmt=pdf&situacao=${relSituacao}&periodo_por=${relPeriodoPor}&date_from=${dateFrom}&date_to=${dateTo}${relForma ? `&forma_cobranca=${relForma}` : ''}`,
               ).catch(e => setError(e instanceof Error ? e.message : 'Erro ao gerar o relatório'))}
             >
               <FileText className="h-4 w-4" /> Gerar PDF

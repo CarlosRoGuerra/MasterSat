@@ -36,6 +36,7 @@ export type Client = {
   birth_date?: string | null;
   emergency_contacts?: { name?: string | null; phone?: string | null; mobile?: string | null }[] | null;
   boleto_format?: string | null;
+  forma_cobranca?: string | null;
   boleto_fee?: string | null;
   issue_invoice?: string | null;
   tributacao?: string | null;
@@ -180,6 +181,7 @@ export type ClientFormState = {
   em2_phone: string;
   em2_mobile: string;
   boleto_format: string;
+  forma_cobranca: string;
   boleto_fee: string;
   issue_invoice: string;
   tributacao: string;

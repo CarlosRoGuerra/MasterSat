@@ -121,9 +121,17 @@ def _resolve_months(reference_month: str | None, service_month: str | None):
     return _parse_reference_month(reference_month), None
 
 
-def _simulate_for_month(db, billing_month, activity_month, filter_type, client_id):
+_FORMA_COBRANCA = Query(
+    default=None, pattern='^(boleto_mensal|carne_ailos|carne_simples|cartao_credito|nao_informado)$',
+    description='Forma de cobrança do responsável financeiro (cadastro do cliente)',
+)
+
+
+def _simulate_for_month(db, billing_month, activity_month, filter_type, client_id, forma_cobranca=None):
     options = {'activity_month': activity_month} if activity_month else {}
-    simulation = simulate_closure(db, billing_month, filter_type, client_id, **options)
+    simulation = simulate_closure(
+        db, billing_month, filter_type, client_id, forma_cobranca=forma_cobranca, **options,
+    )
     if activity_month:
         simulation['billing_month'] = simulation['reference_month']
         simulation['reference_month'] = activity_month.strftime('%m/%Y')
@@ -138,6 +146,7 @@ def simulate(
     service_month: str | None = Query(default=None, description='Mês do serviço no formato YYYY-MM; vencimento no mês seguinte'),
     filter_type: str = Query(default='all', pattern='^(all|pf|pj|client)$'),
     client_id: int | None = None,
+    forma_cobranca: str | None = _FORMA_COBRANCA,
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*ALLOWED_ROLES)),
 ):
@@ -145,7 +154,7 @@ def simulate(
     if filter_type == 'client' and not client_id:
         raise HTTPException(status_code=422, detail='client_id obrigatório quando filter_type=client.')
     try:
-        return _simulate_for_month(db, ref, activity_month, filter_type, client_id)
+        return _simulate_for_month(db, ref, activity_month, filter_type, client_id, forma_cobranca)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -156,6 +165,7 @@ def simulate_pdf(
     service_month: str | None = Query(default=None, description='Mês do serviço no formato YYYY-MM; vencimento no mês seguinte'),
     filter_type: str = Query(default='all', pattern='^(all|pf|pj|client)$'),
     client_id: int | None = None,
+    forma_cobranca: str | None = _FORMA_COBRANCA,
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*ALLOWED_ROLES)),
 ):
@@ -163,7 +173,7 @@ def simulate_pdf(
     if filter_type == 'client' and not client_id:
         raise HTTPException(status_code=422, detail='client_id obrigatório quando filter_type=client.')
     try:
-        simulation = _simulate_for_month(db, ref, activity_month, filter_type, client_id)
+        simulation = _simulate_for_month(db, ref, activity_month, filter_type, client_id, forma_cobranca)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     pdf_buffer = generate_closure_pdf(simulation)
@@ -181,6 +191,7 @@ def simulate_xlsx(
     service_month: str | None = Query(default=None, description='Mês do serviço no formato YYYY-MM; vencimento no mês seguinte'),
     filter_type: str = Query(default='all', pattern='^(all|pf|pj|client)$'),
     client_id: int | None = None,
+    forma_cobranca: str | None = _FORMA_COBRANCA,
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*ALLOWED_ROLES)),
 ):
@@ -188,7 +199,7 @@ def simulate_xlsx(
     if filter_type == 'client' and not client_id:
         raise HTTPException(status_code=422, detail='client_id obrigatório quando filter_type=client.')
     try:
-        simulation = _simulate_for_month(db, ref, activity_month, filter_type, client_id)
+        simulation = _simulate_for_month(db, ref, activity_month, filter_type, client_id, forma_cobranca)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     xlsx_buffer = generate_closure_xlsx(simulation)
@@ -206,6 +217,7 @@ def generate(
     service_month: str | None = Query(default=None, description='Mês do serviço no formato YYYY-MM; vencimento no mês seguinte'),
     filter_type: str = Query(default='all', pattern='^(all|pf|pj|client)$'),
     client_id: int | None = None,
+    forma_cobranca: str | None = _FORMA_COBRANCA,
     contract_ids: list[int] | None = Query(default=None, description='Seleção exata de contratos recorrentes'),
     uninstall_event_ids: list[int] | None = Query(default=None, description='Seleção exata de eventos de desinstalação'),
     charge_item_ids: list[int] | None = Query(default=None, description='Seleção exata de serviços avulsos'),
@@ -227,6 +239,7 @@ def generate(
             contract_ids=contract_ids,
             uninstall_event_ids=uninstall_event_ids,
             charge_item_ids=charge_item_ids,
+            forma_cobranca=forma_cobranca,
             **options,
         )
     except ValueError as exc:

@@ -52,6 +52,7 @@ export const initialForm: ClientFormState = {
   em2_phone: '',
   em2_mobile: '',
   boleto_format: 'unico',
+  forma_cobranca: '',
   boleto_fee: 'nao',
   issue_invoice: 'sim',
   tributacao: 'dentro_municipio',

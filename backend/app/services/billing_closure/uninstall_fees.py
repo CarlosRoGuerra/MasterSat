@@ -4,14 +4,14 @@ from calendar import monthrange
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.client import Client
 from app.models.contract import Contract
 from app.models.service_product import ServiceProduct
 from app.models.uninstall_event import UninstallEvent
-from app.services.billing_closure.shared import _apply_client_scope
+from app.services.billing_closure.shared import _apply_client_scope, clientes_da_forma
 from app.services.financial import add_months, contract_payer_client_id
 
 
@@ -20,6 +20,7 @@ def _pending_uninstall_events_for_month(
     reference_month: date,
     filter_type: str = 'all',
     client_id: int | None = None,
+    forma_cobranca: str | None = None,
 ) -> list[UninstallEvent]:
     """Eventos vencidos até a competência, inclusive os esquecidos em meses anteriores.
 
@@ -50,6 +51,15 @@ def _pending_uninstall_events_for_month(
         )
     else:
         query = _apply_client_scope(query, UninstallEvent.client_id, filter_type, client_id)
+    if forma_cobranca:
+        # Pela forma do pagador (mesma resolução do processamento).
+        query = query.filter(UninstallEvent.id.in_(
+            select(UninstallEvent.id)
+            .outerjoin(Contract, Contract.id == UninstallEvent.contract_id)
+            .where(func.coalesce(
+                UninstallEvent.payer_client_id, Contract.interveniente_client_id, UninstallEvent.client_id,
+            ).in_(clientes_da_forma(forma_cobranca)))
+        ))
     return query.order_by(UninstallEvent.uninstall_date.asc(), UninstallEvent.id.asc()).all()
 
 

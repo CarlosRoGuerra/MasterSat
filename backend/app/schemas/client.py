@@ -1,5 +1,7 @@
 from datetime import date
 
+from typing import Literal
+
 from pydantic import BaseModel, Field, field_validator
 
 from app.models.enums import ClientStatus
@@ -58,6 +60,7 @@ class ClientBase(BaseModel):
     birth_date: date | None = None
     emergency_contacts: list[EmergencyContact] | None = None
     boleto_format: str | None = None
+    forma_cobranca: Literal['boleto_mensal', 'carne_ailos', 'carne_simples', 'cartao_credito'] | None = None
     boleto_fee: str | None = None
     issue_invoice: str | None = None
     tributacao: str | None = None
@@ -149,6 +152,7 @@ class ClientUpdate(BaseModel):
     birth_date: date | None = None
     emergency_contacts: list[EmergencyContact] | None = None
     boleto_format: str | None = None
+    forma_cobranca: Literal['boleto_mensal', 'carne_ailos', 'carne_simples', 'cartao_credito'] | None = None
     boleto_fee: str | None = None
     issue_invoice: str | None = None
     tributacao: str | None = None

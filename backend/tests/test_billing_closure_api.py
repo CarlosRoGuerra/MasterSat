@@ -441,6 +441,7 @@ class TestGenerate:
             'contract_ids': [10, 11],
             'uninstall_event_ids': [20, 21],
             'charge_item_ids': [30, 31],
+            'forma_cobranca': None,
         }
 
     def test_returns_200(self, http):

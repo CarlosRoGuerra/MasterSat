@@ -1,11 +1,15 @@
 from datetime import date
 
-from sqlalchemy import Boolean, Date, Enum, Index, Integer, JSON, String, Text, text
+from sqlalchemy import Boolean, CheckConstraint, Date, Enum, Index, Integer, JSON, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
 from app.models.base import SoftDeleteMixin, TimestampMixin, trigram_index
 from app.models.enums import ClientStatus
+
+
+# Como o cliente paga — filtro de relatórios e do fechamento. Nulo = não informado.
+FORMAS_COBRANCA = ('boleto_mensal', 'carne_ailos', 'carne_simples', 'cartao_credito')
 
 
 class Client(Base, TimestampMixin, SoftDeleteMixin):
@@ -20,6 +24,11 @@ class Client(Base, TimestampMixin, SoftDeleteMixin):
         ),
         trigram_index('ix_clients_name_trgm', 'name'),
         trigram_index('ix_clients_trade_name_trgm', 'trade_name'),
+        CheckConstraint(
+            "forma_cobranca IS NULL OR forma_cobranca IN "
+            "('boleto_mensal', 'carne_ailos', 'carne_simples', 'cartao_credito')",
+            name='ck_clients_forma_cobranca',
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
@@ -50,6 +59,7 @@ class Client(Base, TimestampMixin, SoftDeleteMixin):
     emergency_contacts: Mapped[list | None] = mapped_column(JSON, nullable=True)
     # ── Dados fiscais/financeiros do cliente (usados no fechamento / NFS-e) ──
     boleto_format: Mapped[str | None] = mapped_column(String(20), nullable=True)      # 'unico' | 'individual'
+    forma_cobranca: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)  # FORMAS_COBRANCA
     boleto_fee: Mapped[str | None] = mapped_column(String(3), nullable=True)          # Taxa de emissão: 'sim' | 'nao'
     issue_invoice: Mapped[str | None] = mapped_column(String(3), nullable=True)       # Emitir NF: 'sim' | 'nao'
     tributacao: Mapped[str | None] = mapped_column(String(30), nullable=True)         # 'dentro_municipio' | 'fora_municipio' | 'isento'

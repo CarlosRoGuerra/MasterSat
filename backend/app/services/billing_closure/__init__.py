@@ -5,7 +5,7 @@ from calendar import monthrange
 from datetime import date, datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.core.timezone import hoje
@@ -29,7 +29,7 @@ from app.services.billing_closure.recurring import (
     _validate_contract_relationships,
     _validate_locked_contract_for_closure,
 )
-from app.services.billing_closure.shared import _lock_competencia
+from app.services.billing_closure.shared import _lock_competencia, clientes_da_forma
 from app.services.billing_closure.uninstall_fees import (
     _due_date_for_uninstall_event,
     _pending_uninstall_events_for_month,
@@ -80,6 +80,7 @@ def simulate_closure(
     *,
     commit: bool = True,
     activity_month: date | None = None,
+    forma_cobranca: str | None = None,
 ) -> dict:
     # commit=False quando chamada de dentro de execute_closure: o refresh abaixo
     # comitava e, com isso, encerrava a transação que segura o lock da
@@ -123,6 +124,11 @@ def simulate_closure(
         query = query.filter(Client.type == 'pj')
     elif filter_type == 'client' and client_id:
         query = query.filter(individual_payer)
+    if forma_cobranca:
+        # Forma de cobrança do responsável financeiro (interveniente ou cliente).
+        query = query.filter(func.coalesce(
+            Contract.interveniente_client_id, Contract.client_id,
+        ).in_(clientes_da_forma(forma_cobranca)))
 
     items = []
     for contract, client, plan, vehicle, tracker, interveniente in query.all():
@@ -231,6 +237,11 @@ def simulate_closure(
         final_query = final_query.filter(Client.type == 'pj')
     elif filter_type == 'client' and client_id:
         final_query = final_query.filter(individual_payer)
+    if forma_cobranca:
+        # Forma de cobrança do responsável financeiro (interveniente ou cliente).
+        final_query = final_query.filter(func.coalesce(
+            Contract.interveniente_client_id, Contract.client_id,
+        ).in_(clientes_da_forma(forma_cobranca)))
 
     for contract, client, plan, vehicle, tracker, interveniente in final_query.all():
         _validate_contract_relationships(
@@ -297,7 +308,7 @@ def simulate_closure(
     # Eventos de desinstalação vencidos até esta competência. Valores pequenos
     # são acumulados por cliente; nunca mais viram perda terminal em ``skipped``.
     uninstall_events = _pending_uninstall_events_for_month(
-        db, activity_month, filter_type, client_id,
+        db, activity_month, filter_type, client_id, forma_cobranca=forma_cobranca,
     )
     uninstall_amounts = {
         event.id: uninstall_fee_for_event(db, event)[0]
@@ -348,7 +359,7 @@ def simulate_closure(
     charge_items = _pending_charge_items(
         db, activity_month, exclude_ids=embedded_ids,
         filter_type=filter_type, client_id=client_id,
-        billing_month=reference_month,
+        billing_month=reference_month, forma_cobranca=forma_cobranca,
     )
 
     to_generate = [i for i in items if not i['already_generated']]
@@ -413,6 +424,7 @@ def execute_closure(
     charge_item_ids: list[int] | None = None,
     *,
     activity_month: date | None = None,
+    forma_cobranca: str | None = None,
 ) -> dict:
     # Trava a competência ANTES de simular: simulação + geração ficam atômicas em
     # relação a outro fechamento do mesmo mês, fechando a corrida de duplicação.
@@ -422,7 +434,7 @@ def execute_closure(
     activity_month = activity_month or reference_month
     simulation = simulate_closure(
         db, reference_month, filter_type, client_id,
-        commit=False, activity_month=activity_month,
+        commit=False, activity_month=activity_month, forma_cobranca=forma_cobranca,
     )
     # Ao receber qualquer lista de seleção, opera em modo snapshot/fail-closed:
     # categorias omitidas significam seleção vazia, não "processar tudo". Sem
@@ -631,7 +643,7 @@ def execute_closure(
     allowed_event_ids = {item['event_id'] for item in selected_uninstall_items}
     uninstall_events = [
         event for event in _pending_uninstall_events_for_month(
-            db, activity_month, filter_type, client_id,
+            db, activity_month, filter_type, client_id, forma_cobranca=forma_cobranca,
         )
         if event.id in allowed_event_ids
     ]

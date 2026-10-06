@@ -287,11 +287,55 @@ def export_billings(
 
 _SITUACAO_LABEL = {
     'paga': 'Paga', 'pendente': 'Em aberto', 'vencida': 'Vencida', 'cancelada': 'Cancelada',
+    'parcial': 'Parcial',
+}
+_FORMA_COBRANCA_LABEL = {
+    'boleto_mensal': 'Boleto mensal', 'carne_ailos': 'Carnê Ailos',
+    'carne_simples': 'Carnê simples', 'cartao_credito': 'Cartão de crédito',
+    'nao_informado': 'Forma de cobrança não informada',
 }
 
 
+def _agrupar_boletos_sgr(linhas: list[dict]) -> list[dict]:
+    """Uma linha por boleto do SGR.
+
+    No SGR o boleto é consolidado por cliente (24 placas = 1 boleto); a
+    migração gravou uma cobrança por placa ("Boleto SGR 2976 - SXE7D98"). O
+    relatório volta a mostrar o boleto que o cliente recebeu e pagou, como o
+    histórico do cliente e o boleto único do fechamento.
+    """
+    grupos: dict[tuple, list[dict]] = {}
+    for ln in linhas:
+        if ln['cod_boleto']:
+            grupos.setdefault((ln['cliente'], ln['cod_boleto']), []).append(ln)
+    saida, vistos = [], set()
+    for ln in linhas:
+        chave = (ln['cliente'], ln['cod_boleto'])
+        grupo = grupos.get(chave) if ln['cod_boleto'] else None
+        if not grupo or len(grupo) < 2:
+            saida.append(ln)
+            continue
+        if chave in vistos:
+            continue
+        vistos.add(chave)
+        situacoes = {g['situacao'] for g in grupo}
+        pagamentos = [g['pagamento'] for g in grupo if g['pagamento']]
+        saida.append({
+            **ln,
+            'titulo': f'Boleto SGR {ln["cod_boleto"]} — {len(grupo)} placa(s)',
+            'vencimento': min((g['vencimento'] for g in grupo if g['vencimento']), default=None),
+            'pagamento': max(pagamentos) if len(pagamentos) == len(grupo) else None,
+            'valor': round(sum(g['valor'] for g in grupo), 2),
+            'valor_pago': round(sum(g['valor_pago'] for g in grupo), 2),
+            'situacao': situacoes.pop() if len(situacoes) == 1 else 'parcial',
+            'forma': ', '.join(sorted({g['forma'] for g in grupo if g['forma']})),
+        })
+    return saida
+
+
 def _billings_report_pdf(linhas, situacao: str, periodo_por: str,
-                         date_from: date | None, date_to: date | None) -> StreamingResponse:
+                         date_from: date | None, date_to: date | None,
+                         forma_cobranca: str | None = None) -> StreamingResponse:
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4, landscape
     from reportlab.lib.styles import getSampleStyleSheet
@@ -316,8 +360,13 @@ def _billings_report_pdf(linhas, situacao: str, periodo_por: str,
         Paragraph(f'MASTERSAT — Relatório de {titulo}', styles['Title']),
         Paragraph(f'Emitido em {date.today().strftime("%d/%m/%Y")}', styles['Normal']),
         Paragraph(f'<b>PERÍODO DE {de} ATÉ {ate}</b> (por data de {por})', styles['Normal']),
-        Spacer(1, 8),
     ]
+    if forma_cobranca:
+        elems.append(Paragraph(
+            f'Forma de cobrança: <b>{_FORMA_COBRANCA_LABEL.get(forma_cobranca, forma_cobranca)}</b>',
+            styles['Normal'],
+        ))
+    elems.append(Spacer(1, 8))
 
     header = ['Cliente', 'Título', 'Vencimento', 'Pagamento', 'Valor', 'Valor Pago', 'Situação']
     data = [header]
@@ -369,6 +418,10 @@ def export_billings_report(
     date_from: date | None = None,
     date_to: date | None = None,
     client_id: int | None = None,
+    forma_cobranca: str | None = Query(
+        default=None, pattern='^(boleto_mensal|carne_ailos|carne_simples|cartao_credito|nao_informado)$',
+        description='Forma de cobrança do responsável financeiro (cadastro do cliente)',
+    ),
     db: Session = Depends(get_db),
     _: object = Depends(require_capability(Capability.FINANCIAL_READ)),
 ):
@@ -395,6 +448,10 @@ def export_billings_report(
         query = query.filter(
             func.coalesce(Billing.payer_client_id, Billing.client_id) == client_id
         )
+    if forma_cobranca == 'nao_informado':
+        query = query.filter(Client.forma_cobranca.is_(None))
+    elif forma_cobranca:
+        query = query.filter(Client.forma_cobranca == forma_cobranca)
     if date_from:
         query = query.filter(campo >= date_from)
     if date_to:
@@ -410,15 +467,21 @@ def export_billings_report(
             'vencimento': b.due_date,
             'pagamento': b.payment_date,
             'valor': float(b.amount or 0),
-            'valor_pago': float(b.paid_amount or 0),
+            # Pagas pelo SGR (migração) não têm paid_amount: valeu o nominal.
+            'valor_pago': float(
+                b.paid_amount if b.paid_amount is not None
+                else (b.amount if b.status == BillingStatus.PAID else 0) or 0
+            ),
             'situacao': b.status.value if hasattr(b.status, 'value') else str(b.status),
             'forma': b.payment_method or '',
+            'cod_boleto': str((b.sgr_payload or {}).get('cod_boleto') or '') or None,
         }
         for b, cliente in query.order_by(campo.desc().nullslast(), Client.name).limit(5000).all()
     ]
+    linhas = _agrupar_boletos_sgr(linhas)
 
     if fmt == 'pdf':
-        return _billings_report_pdf(linhas, situacao, periodo_por, date_from, date_to)
+        return _billings_report_pdf(linhas, situacao, periodo_por, date_from, date_to, forma_cobranca)
 
     headers = ['Cliente', 'Título', 'Vencimento', 'Pagamento', 'Valor', 'Valor Pago',
                'Situação', 'Forma de Pagamento']
