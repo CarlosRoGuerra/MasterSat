@@ -10,20 +10,32 @@ seria conciliado. Por isso a correção é uma substituição, numa transação 
 * uma cobrança nova, com a data corrigida e o mesmo valor, assume a dívida e
   fica SEM boleto: a emissão é o botão "Gerar boleto (Ailos)" de sempre.
 
+A NFS-e já emitida acompanha a dívida: ela documenta o serviço (tomador,
+valor, período), não o boleto — emitir outra para a cobrança nova duplicaria a
+nota e o imposto. Emissão em andamento ou de resultado incerto bloqueia.
+
 Boleto único (ou negociação): as cobranças que ele agrupava passam a apontar
 para a nova; a antiga sai sem substituto, para que reverter a nova não reabra
 o título que já foi para o banco. Cobrança simples (mensalidade, parcela de
 serviço): a antiga fica substituída pela nova e continua ocupando o mês/a
-parcela — o fechamento não recobra.
+parcela — o fechamento não recobra; a nova é um título de pagamento como o
+boleto único, com o mês do SERVIÇO (a mensalidade carrega o mês técnico do
+vencimento, que só existe para o índice de competência).
+
+Se a antiga pertence a um lote de fechamento, a nova toma o lugar dela no lote:
+aparece no mesmo envio por e-mail e a recuperação de lotes não cria um lote
+avulso para ela.
 """
 from __future__ import annotations
 
 from datetime import date
 
 from app.core.timezone import hoje
-from app.models.billing import Billing
+from app.models.billing import CONSOLIDATED_BILLING_TYPE, Billing
 from app.models.billing_change_log import BillingChangeLog
+from app.models.closure_job import ClosureJob
 from app.models.enums import BillingStatus
+from app.models.nfse_nota import NfseNota
 from app.services import titulo_bancario
 from app.services.financial import (
     lock_billings_for_update,
@@ -37,6 +49,21 @@ from app.services.financial import (
 
 class CorrecaoVencimentoError(ValueError):
     pass
+
+
+def _lote_do_fechamento(db, billing_id: int) -> ClosureJob | None:
+    for job in db.query(ClosureJob).filter(ClosureJob.status == 'completed').with_for_update().all():
+        if billing_id in [int(b) for b in (job.result or {}).get('payment_billing_ids') or []]:
+            return job
+    return None
+
+
+def _rotulo_do_servico(lote: ClosureJob | None) -> str | None:
+    """'2026-09' do lote -> '09/2026' (formato do period_label)."""
+    if not lote or not lote.reference_month or len(lote.reference_month) != 7:
+        return None
+    ano, mes = lote.reference_month.split('-')
+    return f'{mes}/{ano}'
 
 
 def corrigir_vencimento(
@@ -67,6 +94,14 @@ def corrigir_vencimento(
         db, titulo_bancario.CANCELAR, [antiga.id], confirmado=confirmado,
     )[antiga.id]
 
+    nota = db.query(NfseNota).filter(NfseNota.billing_id == antiga.id).with_for_update().first()
+    if nota and nota.status in ('processing', 'desconhecido'):
+        raise CorrecaoVencimentoError(
+            'A NFS-e desta cobrança está em emissão ou com resultado incerto. '
+            'Consulte o resultado da nota antes de corrigir o vencimento.'
+        )
+
+    lote = _lote_do_fechamento(db, antiga.id)
     agrupadas = substituted_originals(db, antiga.id)
     if agrupadas:
         agrupadas = lock_billings_for_update(db, [b.id for b in agrupadas])
@@ -81,19 +116,24 @@ def corrigir_vencimento(
         tracker_id=antiga.tracker_id,
         # Mensalidade/parcela não pode ser copiada com o mesmo tipo: a antiga
         # continua ocupando o mês/a parcela (índices de competência e de
-        # parcela). A nova é o título que carrega a dívida, como na negociação.
-        billing_type=antiga.billing_type if agrupadas else 'avulsa',
+        # parcela). A nova é o título de pagamento, como o boleto único.
+        billing_type=antiga.billing_type if agrupadas else CONSOLIDATED_BILLING_TYPE,
         title=antiga.title,
         amount=antiga.amount,
         due_date=due_date,
         status=BillingStatus.PENDING if due_date >= hoje() else BillingStatus.OVERDUE,
-        period_label=antiga.period_label,
+        period_label=antiga.period_label if agrupadas else (_rotulo_do_servico(lote) or antiga.period_label),
         notes=f'Reemissão da cobrança #{antiga.id} com vencimento corrigido para {data_br}: {reason}',
     )
     db.add(nova)
     db.flush()
 
     transfer_charge_items_to_billing(db, [antiga], nova)
+    if nota:
+        nota.billing_id = nova.id
+    if lote:
+        ids = [int(b) for b in lote.result['payment_billing_ids']]
+        lote.result = {**lote.result, 'payment_billing_ids': [nova.id if b == antiga.id else b for b in ids]}
     marcador = f'Vencimento corrigido: reemitida como cobrança #{nova.id} ({data_br}).'
     if agrupadas:
         for original in agrupadas:
