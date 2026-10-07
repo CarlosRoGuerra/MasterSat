@@ -1,5 +1,5 @@
 """Contrato de leitura de cobranças para a integração de notificações."""
-from datetime import date
+from datetime import date, datetime
 
 from pydantic import BaseModel
 
@@ -12,6 +12,25 @@ class IntegrationPayerOut(BaseModel):
     cpf_cnpj: str | None
     telefone: str | None
     email: str | None
+
+
+class IntegrationNfseOut(BaseModel):
+    nota_id: int
+    billing_id: int
+    status: str
+    numero_nfse: str | None
+    serie_nfse: str | None
+    codigo_verificacao: str | None
+    chave_acesso: str | None
+    link_visualizacao: str | None
+    data_emissao: datetime | None
+    competencia: date | None
+    ambiente: str | None
+    pdf_disponivel: bool
+    xml_disponivel: bool
+    motivo_indisponibilidade: str | None
+    pdf_url: str | None
+    xml_url: str | None
 
 
 class IntegrationBillingOut(BaseModel):
@@ -37,6 +56,7 @@ class IntegrationBillingOut(BaseModel):
     boleto_pdf_url: str | None
     boleto_link_cliente: str | None
     valor_com_juros: float | None
+    nfse: IntegrationNfseOut | None = None
 
 
 class IntegrationBillingPage(BaseModel):

@@ -6,9 +6,9 @@
 
 **MasterSat | Documentação para a empresa integradora**
 
-Versão documental 1.1 | 7 de outubro de 2026
+Versão documental 1.2 | 7 de outubro de 2026
 
-Consulta de cobranças, dados de pagamento e acesso ao boleto em PDF.
+Consulta de cobranças, dados de pagamento, boleto em PDF e NFS-e em PDF/XML.
 
 Este manual descreve a implementação existente no projeto. O endereço de acesso, a chave de integração e a liberação do ambiente serão fornecidos pela MasterSat. Os exemplos são fictícios e não devem ser usados para pagamentos ou mensagens reais.
 
@@ -40,7 +40,7 @@ O modelo é de **consulta periódica pela integradora**: a empresa parceira inic
 | Dicionário: cobrança e pagador | 7 | Automação e mensagem | 13 |
 | Dicionário: boleto e status | 8 | Homologação e entrega | 14 |
 
-> **Escopo disponível:** três operações de leitura autenticadas e um link público protegido por token. Emissão de boleto, baixa financeira, alteração cadastral e envio pelo WhatsApp não fazem parte deste contrato de integração.
+> **Escopo disponível:** seis operações de leitura autenticadas e um link público de boleto protegido por token. A seção 14 descreve a consulta e o download da NFS-e. Emissão de boleto ou NFS-e, baixa financeira, alteração cadastral e envio pelo WhatsApp não fazem parte deste contrato de integração.
 
 <!-- pagebreak -->
 
@@ -54,10 +54,10 @@ O modelo é de **consulta periódica pela integradora**: a empresa parceira inic
 | Endereço previsto no projeto | `https://api.mastersat.com.br`, conforme a documentação de implantação. A MasterSat deve confirmar o ambiente disponibilizado ao parceiro. |
 | Prefixo das rotas | `/api/v1`, conforme a configuração padrão do projeto. |
 | Credencial | Chave de serviço fornecida pela MasterSat, enviada no cabeçalho `X-API-Key`. |
-| Respostas | JSON para consultas e `application/pdf` para boletos. |
+| Respostas | JSON para consultas, `application/pdf` para documentos e `application/xml` para XML fiscal. |
 | Homologação | Usar cobranças e destinatários de teste definidos entre as equipes. |
 
-Todas as três rotas de integração exigem o cabeçalho abaixo. A chave não utiliza o login do painel, não requer Bearer e não possui endpoint de renovação nesta integração.
+Todas as seis rotas de integração exigem o cabeçalho abaixo. A chave não utiliza o login do painel, não requer Bearer e não possui endpoint de renovação nesta integração.
 
 ```http
 GET /api/v1/integrations/cobrancas?forma_envio=whatsapp HTTP/1.1
@@ -203,7 +203,8 @@ Exemplo ilustrativo de listagem com um boleto registrado. Os códigos, contatos,
       "motivo_boleto_indisponivel": null,
       "boleto_pdf_url": "https://api.exemplo.invalid/api/v1/integrations/cobrancas/73/pdf",
       "boleto_link_cliente": "https://api.exemplo.invalid/api/v1/public/boleto/73/TOKEN_EXEMPLO",
-      "valor_com_juros": null
+      "valor_com_juros": null,
+      "nfse": null
     }
   ]
 }
@@ -242,6 +243,7 @@ Valores monetários são números em reais, com separador decimal de JSON. Prese
 | `forma_pagamento` | Texto ou `null` | Meio de pagamento registrado, quando disponível. |
 | `forma_envio` | Texto | Preferência do pagador: `email`, `whatsapp` ou `todos`. Quando o cadastro está vazio, a API retorna `email`. |
 | `enviar_boleto_whatsapp` | Booleano | Opção específica de envio por WhatsApp. Pode habilitar o canal mesmo se `forma_envio` for `email`. |
+| `nfse` | Objeto ou `null` | Nota fiscal vinculada à cobrança, com dados e URLs de PDF/XML descritos na seção 14. `null` quando não há nota. |
 
 ### Quem deve receber a mensagem
 
@@ -521,8 +523,53 @@ Ao relatar um problema, informar data/hora com fuso, método, rota, ID da cobran
 
 ### Base técnica e versão
 
-Versão 1.1 atualizada em 07/10/2026 com os filtros, a paginação e os dados de pagamento solicitados pela integradora nos áudios e vídeo. Referências principais: `backend/app/api/v1/endpoints/integrations.py`, `backend/app/schemas/integration_billing.py`, `backend/app/api/v1/endpoints/boletos.py`, `backend/app/api/deps.py` e `backend/tests/test_integrations_api.py`.
+Versão 1.2 atualizada em 07/10/2026 com consulta e download de NFS-e, além dos filtros, paginação e dados de pagamento entregues na versão 1.1. Referências principais: `backend/app/api/v1/endpoints/integrations.py`, `backend/app/schemas/integration_billing.py`, `backend/app/api/v1/endpoints/boletos.py`, `backend/app/api/deps.py`, `backend/tests/test_integrations_api.py` e `backend/tests/test_integrations_nfse_api.py`.
 
 Os 70 testes de integração passaram com dados sintéticos em banco SQLite isolado, incluindo leitura acima de 2000 registros e consulta de pagamentos. Essa verificação não certifica os registros da carteira de produção, a configuração do servidor publicado, a entrega pelo WhatsApp ou a homologação bancária. Consultas não alteram status, não conciliam pagamentos e não chamam o banco para emitir boletos.
 
-**Arquivos atualizados na versão 1.1:** fonte editável deste manual em Markdown e coleção Postman sem credenciais. PDFs distribuídos da versão 1.0 precisam ser regenerados a partir desta fonte antes da entrega. Versões futuras da API devem motivar revisão deste documento.
+**Arquivos atualizados na versão 1.2:** fonte editável deste manual em Markdown, guia de comandos e coleção Postman sem credenciais. PDFs distribuídos da versão 1.0 precisam ser regenerados a partir desta fonte antes da entrega. Versões futuras da API devem motivar revisão deste documento.
+
+<!-- pagebreak -->
+
+## 14. Consultar e baixar a nota fiscal de serviço
+
+A listagem e o detalhe da cobrança agora incluem `nfse`. Quando não existe nota vinculada, o campo é `null`. Quando existe, retorna os dados fiscais e a disponibilidade dos documentos, inclusive para cobranças pagas. Para obter notas dessas cobranças na listagem, usar `status=paga` ou `status=todos`; sem filtro, a lista continua mostrando somente cobranças abertas.
+
+Os filtros `vencimento_de`/`vencimento_ate` e `pagamento_de`/`pagamento_ate` continuam filtrando as datas da cobrança. Eles não filtram `nfse.data_emissao` ou `nfse.competencia`.
+
+### Dados da nota
+
+| Campo em `nfse` | Tipo | Descrição |
+| --- | --- | --- |
+| `nota_id`, `billing_id` | Inteiros | ID da nota e ID da cobrança vinculada. As rotas abaixo recebem `billing_id`. |
+| `status` | Texto | Situação fiscal armazenada: `emitida`, `pending`, `processing`, `erro`, `desconhecido` ou outra situação fiscal cadastrada. Independente do status financeiro. |
+| `numero_nfse`, `serie_nfse` | Texto ou `null` | Número e série da NFS-e. Preservar como texto. |
+| `codigo_verificacao`, `chave_acesso` | Texto ou `null` | Identificadores fiscais retornados pelo provedor. |
+| `link_visualizacao` | URL ou `null` | Endereço de consulta fornecido pelo provedor, quando registrado. |
+| `data_emissao` | Data/hora ISO ou `null` | Data de emissão registrada. |
+| `competencia` | Data ou `null` | Competência fiscal em `AAAA-MM-DD`. |
+| `ambiente` | Texto ou `null` | Ambiente fiscal registrado, por exemplo `producao`. |
+| `pdf_disponivel`, `xml_disponivel` | Booleanos | Nota com `status=emitida` e XML de retorno armazenado. O download do PDF ainda pode retornar `422` se o XML não puder ser interpretado. |
+| `motivo_indisponibilidade` | Texto ou `null` | `nfse_nao_emitida`, `xml_indisponivel` ou `null` quando disponível. |
+| `pdf_url`, `xml_url` | URL ou `null` | Downloads autenticados com a mesma `X-API-Key`. Nulos quando indisponíveis. |
+
+### Rotas
+
+| Método e rota | Resposta de sucesso |
+| --- | --- |
+| `GET /api/v1/integrations/cobrancas/{billing_id}/nfse` | `200`, objeto JSON da nota, sem envelope. |
+| `GET /api/v1/integrations/cobrancas/{billing_id}/nfse/pdf` | `200`, bytes `application/pdf`; arquivo `nfse_000073.pdf` para cobrança 73. |
+| `GET /api/v1/integrations/cobrancas/{billing_id}/nfse/xml` | `200`, XML fiscal armazenado em UTF-8, `application/xml`; arquivo `nfse_000073.xml`. |
+
+O PDF é o DANFSE gerado localmente a partir do XML fiscal salvo, usando o mesmo gerador do envio por e-mail. O download do XML entrega `xml_retorno`, sem substituir pelo RPS/DPS de envio nem reformatar o documento. As consultas não emitem notas, não consultam o governo e não alteram o registro fiscal.
+
+Antes de baixar, reconsultar a nota e verificar os indicadores. A integradora baixa os arquivos com a chave no próprio servidor e envia o anexo ao destinatário. `pdf_url` e `xml_url` exigem autenticação e não são links públicos para o cliente; nunca incluir a chave na mensagem ou na URL.
+
+### Erros e situações financeiras
+
+- `404`: cobrança, cliente ou nota inexistente/indisponível por remoção.
+- `409` no download: nota com status diferente de `emitida` ou XML ausente. `detail.code` identifica o motivo. Notas canceladas/substituídas não são distribuídas por estas rotas.
+- `422`: ID inválido ou XML que não permite gerar o PDF.
+- `401` e `503`: mesmas regras de chave da integração.
+
+Uma cobrança paga pode ter uma NFS-e emitida disponível mesmo com `boleto_disponivel=false`. Uma cobrança cancelada também pode manter nota emitida: cancelamento financeiro não cancela automaticamente o documento fiscal. A disponibilidade da nota não autoriza um lembrete de cobrança. Se a nota não existe ou ainda não foi emitida, a integração apenas informa essa situação.

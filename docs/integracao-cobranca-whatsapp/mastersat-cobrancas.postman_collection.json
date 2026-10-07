@@ -1,7 +1,7 @@
 {
   "info": {
-    "name": "MasterSat | Cobranças para WhatsApp",
-    "description": "Coleção de consulta, sem envio de mensagens. Manual v1.1, 07/10/2026. Configure em ambiente privado: base_url, api_key e IDs de homologação. Permite filtros de status/vencimento/pagamento e paginação por offset. total é o tamanho da página; total_registros é o conjunto filtrado. Percorra next_offset enquanto has_more for true. Antes de enviar cobrança: revalide status, canal, telefone e boleto_disponivel. status=paga permite confirmar pagamentos registrados no MasterSat. Não contém credenciais.",
+    "name": "MasterSat | Cobranças e NFS-e para WhatsApp",
+    "description": "Coleção de consulta, sem envio de mensagens. Manual v1.2, 07/10/2026. Configure em ambiente privado: base_url, api_key e IDs de homologação. Permite filtros de status/vencimento/pagamento e paginação por offset. total é o tamanho da página; total_registros é o conjunto filtrado. Percorra next_offset enquanto has_more for true. Antes de enviar cobrança: revalide status, canal, telefone e boleto_disponivel. status=paga permite confirmar pagamentos registrados no MasterSat. Não contém credenciais. A listagem/detalhe inclui nfse. Use status=paga ou todos para obter notas de cobranças pagas. Downloads fiscais exigem X-API-Key, status fiscal emitida e XML armazenado; não emitem nem sincronizam notas.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -195,6 +195,51 @@
         ],
         "url": "{{base_url}}/api/v1/integrations/cobrancas?forma_envio=whatsapp&status=todos&limit=500&offset={{offset}}",
         "description": "Inclui pendente, vencida, paga e cancelada. Avance offset para next_offset enquanto has_more for true; ausência de ID não comprova pagamento."
+      },
+      "response": []
+    },
+    {
+      "name": "09 | Consultar dados da NFS-e",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/v1/integrations/cobrancas/{{billing_id}}/nfse",
+        "description": "Retorna o objeto fiscal vinculado ao billing_id. Sem nota: 404. Verificar status, pdf_disponivel, xml_disponivel e motivo_indisponibilidade. O status fiscal é independente do pagamento."
+      },
+      "response": []
+    },
+    {
+      "name": "10 | Baixar PDF da NFS-e",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/pdf"
+          }
+        ],
+        "url": "{{base_url}}/api/v1/integrations/cobrancas/{{billing_id}}/nfse/pdf",
+        "description": "Salvar a resposta como arquivo. DANFSE gerado localmente do XML fiscal armazenado, sem chamada externa. Exige nota emitida com XML; 409 quando indisponível, 422 se não for possível interpretar o XML."
+      },
+      "response": []
+    },
+    {
+      "name": "11 | Baixar XML da NFS-e",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/xml"
+          }
+        ],
+        "url": "{{base_url}}/api/v1/integrations/cobrancas/{{billing_id}}/nfse/xml",
+        "description": "Salvar a resposta como arquivo. Entrega o XML fiscal de retorno armazenado, preservado em UTF-8. Exige nota emitida com XML; 409 quando indisponível. Não entrega RPS/DPS de envio."
       },
       "response": []
     }

@@ -1,8 +1,23 @@
-# Comandos da integração de cobranças — versão 1.1
+# Comandos da integração de cobranças e NFS-e — versão 1.2
 
-Estes comandos consultam a API MasterSat. As alterações precisam estar publicadas no backend para os novos filtros e a paginação funcionarem. A URL usada abaixo é `https://api.mastersat.com.br`; para homologação, substituir pelo domínio informado pela MasterSat. A chave é a mesma chave de integração enviada no cabeçalho `X-API-Key`.
+Estes comandos consultam a API MasterSat. As alterações precisam estar publicadas no backend para os filtros, a paginação e as rotas de NFS-e funcionarem. A URL usada abaixo é `https://api.mastersat.com.br`; para homologação, substituir pelo domínio informado pela MasterSat. A chave é a mesma chave de integração enviada no cabeçalho `X-API-Key`. O nome deste arquivo foi preservado para manter os links compartilhados.
 
 As datas dos exemplos são substituíveis e seguem `AAAA-MM-DD`. `paga` é o status do pagamento confirmado registrado no MasterSat. Não usar `confirmado` ou `pagamento_confirmado` como valor do parâmetro `status`.
+
+## Atualizar o backend na VPS
+
+Na VPS com o projeto e o ambiente de produção já configurados em `~/MasterSat`:
+
+```bash
+cd ~/MasterSat &&
+git fetch origin &&
+git switch fix/rastreador-dia-vencimento &&
+git pull --ff-only origin fix/rastreador-dia-vencimento &&
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build --no-deps backend &&
+docker compose -f docker-compose.yml -f docker-compose.prod.yml exec nginx nginx -s reload
+```
+
+Depois da atualização, a listagem passa a incluir `nfse` em cada cobrança e as três rotas fiscais ficam disponíveis. Resposta sem esse campo indica que o backend acessado ainda não está com esta versão. `nfse: null` indica que a versão está atualizada, mas a cobrança consultada não tem nota vinculada.
 
 ## PowerShell — comandos para copiar e executar
 
@@ -121,6 +136,24 @@ Invoke-WebRequest -UseBasicParsing -Headers $cabecalhos -Uri "$apiBase/integrati
 
 O PDF autenticado exige `X-API-Key`. Na mensagem ao cliente, utilizar o campo `boleto_link_cliente` devolvido pela API, que dispensa essa chave. `409` significa boleto indisponível e informa o motivo em `detail.code`.
 
+### 9. Consultar a NFS-e e baixar PDF/XML
+
+Usar o `$billingId` informado no passo 7. A listagem e o detalhe já retornam o objeto `nfse`; `null` significa ausência de nota. Para incluir notas de cobranças pagas na listagem, usar `status=paga` ou `status=todos`.
+
+```powershell
+$notaFiscal = Invoke-RestMethod -Method Get -Headers $cabecalhos -Uri "$apiBase/integrations/cobrancas/$billingId/nfse"
+$notaFiscal | ConvertTo-Json -Depth 10
+
+if (-not $notaFiscal.pdf_disponivel -or -not $notaFiscal.xml_disponivel) {
+    throw "NFS-e indisponível: $($notaFiscal.motivo_indisponibilidade)"
+}
+
+Invoke-WebRequest -UseBasicParsing -Headers $cabecalhos -Uri "$apiBase/integrations/cobrancas/$billingId/nfse/pdf" -OutFile "nfse_$billingId.pdf"
+Invoke-WebRequest -UseBasicParsing -Headers $cabecalhos -Uri "$apiBase/integrations/cobrancas/$billingId/nfse/xml" -OutFile "nfse_$billingId.xml"
+```
+
+O PDF é o DANFSE gerado do XML fiscal salvo. As rotas consultam documentos já emitidos; não emitem nem atualizam a nota. A NFS-e de uma cobrança paga permanece disponível quando a situação fiscal é `emitida` e existe XML. As URLs exigem a chave: baixar no servidor da integradora e enviar o arquivo como anexo.
+
 ## cURL — Linux, macOS ou Git Bash
 
 ### Configuração
@@ -193,8 +226,34 @@ curl --fail --silent --show-error \
   --output "boleto_$BILLING_ID.pdf"
 ```
 
+### NFS-e: dados, PDF e XML
+
+Após informar `BILLING_ID` no comando de detalhe acima:
+
+```bash
+curl --fail-with-body --silent --show-error \
+  --header "X-API-Key: $MASTERSAT_API_KEY" \
+  "$MASTERSAT_BASE_URL/integrations/cobrancas/$BILLING_ID/nfse"
+```
+
+Se `pdf_disponivel` e `xml_disponivel` forem `true`, baixar os documentos:
+
+```bash
+curl --fail --silent --show-error \
+  --header "X-API-Key: $MASTERSAT_API_KEY" \
+  "$MASTERSAT_BASE_URL/integrations/cobrancas/$BILLING_ID/nfse/pdf" \
+  --output "nfse_$BILLING_ID.pdf"
+
+curl --fail --silent --show-error \
+  --header "X-API-Key: $MASTERSAT_API_KEY" \
+  "$MASTERSAT_BASE_URL/integrations/cobrancas/$BILLING_ID/nfse/xml" \
+  --output "nfse_$BILLING_ID.xml"
+```
+
+`404`: sem nota ou cobrança/cliente removido. `409`: nota ainda não emitida ou XML ausente; verificar `detail.code`. `422` no PDF: XML inválido para renderização. Os filtros da lista continuam sendo por vencimento/pagamento da cobrança, não por emissão/competência fiscal.
+
 ## Postman
 
-Importar `mastersat-cobrancas.postman_collection.json`. Preencher `base_url=https://api.mastersat.com.br` (**sem `/api/v1`** na coleção), `api_key` e as datas de consulta. Existem exemplos para pendentes por vencimento, vencidas em intervalo, pagamentos confirmados e todas as situações. Atualizar `offset` com `next_offset` para avançar.
+Importar `mastersat-cobrancas.postman_collection.json`. Preencher `base_url=https://api.mastersat.com.br` (**sem `/api/v1`** na coleção), `api_key` e as datas de consulta. Existem exemplos para pendentes por vencimento, vencidas em intervalo, pagamentos confirmados, todas as situações e dados/PDF/XML da NFS-e. Atualizar `offset` com `next_offset` para avançar. Para PDFs/XML, usar a opção de salvar a resposta em arquivo.
 
 Datas inicial e final são inclusivas. `422` indica parâmetro inválido ou intervalo invertido; `401`, chave ausente/incorreta; `503`, integração sem chave configurada no backend ou indisponibilidade. Pagamentos confirmados devem encerrar os lembretes de cobrança; a mensagem de confirmação, quando utilizada, precisa de controle de duplicidade da integradora.

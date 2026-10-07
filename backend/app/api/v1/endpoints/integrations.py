@@ -8,6 +8,9 @@ login JWT do painel — é uma chave de serviço dedicada ao parceiro.
 GET /integrations/cobrancas                  → consulta paginada por status/datas (JSON)
 GET /integrations/cobrancas/{billing_id}     → detalhe de uma cobrança (JSON)
 GET /integrations/cobrancas/{billing_id}/pdf → PDF do boleto
+GET /integrations/cobrancas/{billing_id}/nfse → dados da NFS-e
+GET /integrations/cobrancas/{billing_id}/nfse/pdf → PDF da NFS-e (DANFSE local)
+GET /integrations/cobrancas/{billing_id}/nfse/xml → XML fiscal armazenado
 """
 from __future__ import annotations
 
@@ -17,11 +20,12 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
-from sqlalchemy import case
-from sqlalchemy.orm import Session, aliased
+from sqlalchemy import case, func
+from sqlalchemy.orm import Session, aliased, load_only
 
 from app.api.deps import require_api_key
 from app.api.v1.endpoints.boletos import public_boleto_url
+from app.api.v1.endpoints.nfse import _danfse_local_bytes
 from app.core.config import settings
 from app.db.session import get_db
 from app.models.ailos_boleto import AilosBoleto
@@ -29,7 +33,8 @@ from app.models.billing import Billing
 from app.models.client import Client
 from app.models.contract import Contract
 from app.models.enums import BillingStatus
-from app.schemas.integration_billing import IntegrationBillingOut, IntegrationBillingPage
+from app.models.nfse_nota import NfseNota
+from app.schemas.integration_billing import IntegrationBillingOut, IntegrationBillingPage, IntegrationNfseOut
 from app.services.ailos_boletos import aplicar_dados_oficiais_ailos, resolver_pagador
 from app.services.boleto_ailos import gerar_dados_boleto
 from app.services.boleto_pdf import gerar_boleto_pdf
@@ -65,7 +70,10 @@ def _dados_boleto(billing: Billing, client: Client, ailos_boleto: AilosBoleto | 
     return aplicar_dados_oficiais_ailos(dados, ailos_boleto)
 
 
-def _cobranca_payload(billing: Billing, client: Client, ailos_boleto: AilosBoleto | None) -> dict:
+def _cobranca_payload(
+    billing: Billing, client: Client, ailos_boleto: AilosBoleto | None,
+    nota: NfseNota | None = None, *, tem_xml: bool | None = None,
+) -> dict:
     base = (settings.backend_public_url or '').rstrip('/')
     registrado = bool(ailos_boleto and ailos_boleto.linha_digitavel and ailos_boleto.codigo_barras)
     motivo = _motivo_boleto_indisponivel(billing, ailos_boleto)
@@ -105,6 +113,7 @@ def _cobranca_payload(billing: Billing, client: Client, ailos_boleto: AilosBolet
         ),
         # Link SEM autenticação (token HMAC) — pode ir direto na mensagem ao cliente
         'boleto_link_cliente': public_boleto_url(billing.id) if motivo is None else None,
+        'nfse': _nfse_payload(nota, tem_xml=tem_xml) if nota is not None else None,
     }
     # Valor atualizado com multa/juros para cobranças vencidas (fonte: backend)
     payload['valor_com_juros'] = (
@@ -139,6 +148,36 @@ def _motivo_boleto_indisponivel(billing: Billing, boleto: AilosBoleto | None) ->
     if boleto.baixa_status is not None or boleto.status_ailos in ('3', '5'):
         return 'boleto_baixado'
     return None
+
+
+def _motivo_nfse_indisponivel(nota: NfseNota, tem_xml: bool) -> str | None:
+    if nota.status != 'emitida':
+        return 'nfse_nao_emitida'
+    if not tem_xml:
+        return 'xml_indisponivel'
+    return None
+
+
+def _nfse_payload(nota: NfseNota, *, tem_xml: bool | None = None) -> dict:
+    # A lista recebe o indicador calculado pelo SQL, sem carregar os XMLs
+    # completos ou fazer consultas adicionais para cada cobrança.
+    if tem_xml is None:
+        tem_xml = bool((nota.xml_retorno or '').strip())
+    motivo = _motivo_nfse_indisponivel(nota, tem_xml)
+    base = (settings.backend_public_url or '').rstrip('/')
+    rota = f'{base}{settings.api_v1_prefix}/integrations/cobrancas/{nota.billing_id}/nfse'
+    return {
+        'nota_id': nota.id, 'billing_id': nota.billing_id,
+        'status': nota.status, 'numero_nfse': nota.numero_nfse,
+        'serie_nfse': nota.serie_nfse, 'codigo_verificacao': nota.codigo_verificacao,
+        'chave_acesso': nota.chave_acesso, 'link_visualizacao': nota.link_visualizacao,
+        'data_emissao': nota.data_emissao, 'competencia': nota.competencia,
+        'ambiente': nota.ambiente,
+        'pdf_disponivel': motivo is None, 'xml_disponivel': motivo is None,
+        'motivo_indisponibilidade': motivo,
+        'pdf_url': f'{rota}/pdf' if motivo is None else None,
+        'xml_url': f'{rota}/xml' if motivo is None else None,
+    }
 
 
 @router.get('/cobrancas', response_model=IntegrationBillingPage)
@@ -184,12 +223,22 @@ def listar_cobrancas(
         else_=Billing.client_id,
     )
     query = (
-        db.query(Billing, Pagador, AilosBoleto)
+        db.query(
+            Billing, Pagador, AilosBoleto, NfseNota,
+            case((func.length(func.trim(NfseNota.xml_retorno, ' \t\r\n')) > 0, True), else_=False),
+        )
         .join(Client, Client.id == Billing.client_id)
         .outerjoin(Contract, Contract.id == Billing.contract_id)
         .outerjoin(Interveniente, Interveniente.id == Contract.interveniente_client_id)
         .join(Pagador, Pagador.id == pagador_id)
         .outerjoin(AilosBoleto, AilosBoleto.billing_id == Billing.id)
+        .outerjoin(NfseNota, NfseNota.billing_id == Billing.id)
+        .options(load_only(
+            NfseNota.id, NfseNota.billing_id, NfseNota.status, NfseNota.numero_nfse,
+            NfseNota.serie_nfse, NfseNota.codigo_verificacao, NfseNota.chave_acesso,
+            NfseNota.link_visualizacao, NfseNota.data_emissao, NfseNota.competencia,
+            NfseNota.ambiente, raiseload=True,
+        ))
         .filter(
             Billing.is_deleted.is_(False),
             Client.is_deleted.is_(False),
@@ -224,7 +273,10 @@ def listar_cobrancas(
 
     total_registros = query.count()
     rows = query.order_by(Billing.due_date.asc(), Billing.id.asc()).offset(offset).limit(limit).all()
-    cobrancas = [_cobranca_payload(billing, client, boleto) for billing, client, boleto in rows]
+    cobrancas = [
+        _cobranca_payload(billing, client, boleto, nota, tem_xml=tem_xml)
+        for billing, client, boleto, nota, tem_xml in rows
+    ]
     has_more = offset + len(cobrancas) < total_registros
     return {
         'total': len(cobrancas), 'total_registros': total_registros,
@@ -258,7 +310,8 @@ def detalhar_cobranca(
 ):
     """Detalhe de uma cobrança específica (mesmos campos da listagem)."""
     billing, client, ailos_boleto = _get_cobranca_or_404(billing_id, db)
-    return _cobranca_payload(billing, client, ailos_boleto)
+    nota = db.query(NfseNota).filter_by(billing_id=billing_id).first()
+    return _cobranca_payload(billing, client, ailos_boleto, nota)
 
 
 @router.get(
@@ -302,4 +355,85 @@ def baixar_boleto_pdf(
         content=pdf_bytes,
         media_type='application/pdf',
         headers={'Content-Disposition': f'inline; filename="boleto_{billing.id:06d}.pdf"'},
+    )
+
+
+def _get_nfse_or_404(billing_id: int, db: Session) -> NfseNota:
+    # Mesma elegibilidade de acesso da cobrança. Uma nota nunca permite
+    # contornar a remoção da cobrança/origem ou do pagador de snapshot.
+    _get_cobranca_or_404(billing_id, db)
+    nota = db.query(NfseNota).filter_by(billing_id=billing_id).first()
+    if nota is None:
+        raise HTTPException(status_code=404, detail='NFS-e não encontrada para esta cobrança')
+    return nota
+
+
+def _exigir_nfse_disponivel(nota: NfseNota) -> None:
+    motivo = _motivo_nfse_indisponivel(nota, bool((nota.xml_retorno or '').strip()))
+    if motivo is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={'code': motivo, 'message': 'A NFS-e emitida e seu XML ainda não estão disponíveis.'},
+        )
+
+
+@router.get('/cobrancas/{billing_id}/nfse', response_model=IntegrationNfseOut)
+def detalhar_nfse(
+    billing_id: int, db: Session = Depends(get_db), _: None = Depends(require_api_key),
+):
+    """Dados da nota fiscal vinculada à cobrança; consulta sem emissão fiscal."""
+    return _nfse_payload(_get_nfse_or_404(billing_id, db))
+
+
+@router.get(
+    '/cobrancas/{billing_id}/nfse/pdf', response_class=Response,
+    responses={
+        200: {
+            'description': 'DANFSE gerado localmente a partir do XML fiscal armazenado.',
+            'content': {'application/pdf': {'schema': {'type': 'string', 'format': 'binary'}}},
+        },
+        409: {
+            'description': 'Nota ainda não emitida ou XML indisponível.',
+            'content': {'application/json': {'schema': {}}},
+        },
+        422: {
+            'description': 'ID inválido ou XML fiscal inválido para a geração do PDF.',
+            'content': {'application/json': {'schema': {}}},
+        },
+    },
+)
+def baixar_nfse_pdf(
+    billing_id: int, db: Session = Depends(get_db), _: None = Depends(require_api_key),
+):
+    """PDF da NFS-e para anexar na mensagem; usa o XML autorizado armazenado."""
+    nota = _get_nfse_or_404(billing_id, db)
+    _exigir_nfse_disponivel(nota)
+    return Response(
+        content=_danfse_local_bytes(nota, db, billing_id), media_type='application/pdf',
+        headers={'Content-Disposition': f'attachment; filename="nfse_{billing_id:06d}.pdf"'},
+    )
+
+
+@router.get(
+    '/cobrancas/{billing_id}/nfse/xml', response_class=Response,
+    responses={
+        200: {
+            'description': 'XML de retorno da NFS-e emitida, preservado como armazenado.',
+            'content': {'application/xml': {'schema': {'type': 'string'}}},
+        },
+        409: {
+            'description': 'Nota ainda não emitida ou XML indisponível.',
+            'content': {'application/json': {'schema': {}}},
+        },
+    },
+)
+def baixar_nfse_xml(
+    billing_id: int, db: Session = Depends(get_db), _: None = Depends(require_api_key),
+):
+    """XML fiscal de retorno da NFS-e; não devolve XML de envio/RPS."""
+    nota = _get_nfse_or_404(billing_id, db)
+    _exigir_nfse_disponivel(nota)
+    return Response(
+        content=nota.xml_retorno, media_type='application/xml; charset=utf-8',
+        headers={'Content-Disposition': f'attachment; filename="nfse_{billing_id:06d}.xml"'},
     )
