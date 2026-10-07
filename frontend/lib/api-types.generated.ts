@@ -3268,6 +3268,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/public/nfse/{billing_id}/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Baixar Nfse Pdf Publico
+         * @description Abre o PDF sem JWT/X-API-Key; exige o token da nota emitida atual.
+         */
+        get: operations["baixar_nfse_pdf_publico_api_v1_public_nfse__billing_id___token__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -6536,9 +6556,20 @@ export interface components {
             xml_disponivel: boolean;
             /** Motivo Indisponibilidade */
             motivo_indisponibilidade: string | null;
-            /** Pdf Url */
+            /**
+             * Pdf Url
+             * @description Link do PDF para o cliente, protegido por token; abre sem X-API-Key.
+             */
             pdf_url: string | null;
-            /** Xml Url */
+            /**
+             * Pdf Api Url
+             * @description Download do PDF para a integradora, exige X-API-Key.
+             */
+            pdf_api_url: string | null;
+            /**
+             * Xml Url
+             * @description Download do XML fiscal para a integradora, exige X-API-Key.
+             */
             xml_url: string | null;
         };
     };
@@ -13185,6 +13216,47 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    baixar_nfse_pdf_publico_api_v1_public_nfse__billing_id___token__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                billing_id: number;
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description PDF da NFS-e para abrir no navegador, protegido por token. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pdf": string;
+                };
+            };
+            /** @description Token inválido ou documento indisponível. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description ID inválido ou XML fiscal inválido para gerar o PDF. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };

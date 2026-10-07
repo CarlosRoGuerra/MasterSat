@@ -52,7 +52,8 @@ def test_listagem_detalhe_e_nota_retornam_mesmo_objeto(http_unauth, api_key, not
     assert dados['ambiente'] == 'producao'
     assert dados['pdf_disponivel'] is dados['xml_disponivel'] is True
     assert dados['motivo_indisponibilidade'] is None
-    assert dados['pdf_url'] == f'https://api.example.invalid/api/v1/integrations/cobrancas/{nota_emitida.billing_id}/nfse/pdf'
+    assert dados['pdf_url'].startswith(f'https://api.example.invalid/api/v1/public/nfse/{nota_emitida.billing_id}/')
+    assert dados['pdf_api_url'] == f'https://api.example.invalid/api/v1/integrations/cobrancas/{nota_emitida.billing_id}/nfse/pdf'
     assert dados['xml_url'] == f'https://api.example.invalid/api/v1/integrations/cobrancas/{nota_emitida.billing_id}/nfse/xml'
     detalhe = http_unauth.get(
         f'/api/v1/integrations/cobrancas/{nota_emitida.billing_id}', headers=headers,
@@ -105,7 +106,7 @@ def test_nota_nao_emitida_nao_distribui_documentos(http_unauth, api_key, db, not
     assert dados['status'] == status
     assert dados['pdf_disponivel'] is dados['xml_disponivel'] is False
     assert dados['motivo_indisponibilidade'] == 'nfse_nao_emitida'
-    assert dados['pdf_url'] is dados['xml_url'] is None
+    assert dados['pdf_url'] is dados['pdf_api_url'] is dados['xml_url'] is None
     for suffix in ('/pdf', '/xml'):
         bloqueio = _get(http_unauth, api_key, nota_emitida.billing_id, suffix)
         assert bloqueio.status_code == 409
@@ -120,6 +121,7 @@ def test_emitida_sem_xml_informa_indisponibilidade(http_unauth, api_key, db, not
     assert dados['status'] == 'emitida'
     assert dados['motivo_indisponibilidade'] == 'xml_indisponivel'
     assert dados['pdf_disponivel'] is dados['xml_disponivel'] is False
+    assert dados['pdf_url'] is dados['pdf_api_url'] is dados['xml_url'] is None
     lista = http_unauth.get('/api/v1/integrations/cobrancas', headers={'X-API-Key': api_key}).json()
     assert lista['cobrancas'][0]['nfse'] == dados
     for suffix in ('/pdf', '/xml'):

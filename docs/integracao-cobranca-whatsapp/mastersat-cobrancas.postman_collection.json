@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "MasterSat | Cobranças e NFS-e para WhatsApp",
-    "description": "Coleção de consulta, sem envio de mensagens. Manual v1.2, 07/10/2026. Configure em ambiente privado: base_url, api_key e IDs de homologação. Permite filtros de status/vencimento/pagamento e paginação por offset. total é o tamanho da página; total_registros é o conjunto filtrado. Percorra next_offset enquanto has_more for true. Antes de enviar cobrança: revalide status, canal, telefone e boleto_disponivel. status=paga permite confirmar pagamentos registrados no MasterSat. Não contém credenciais. A listagem/detalhe inclui nfse. Use status=paga ou todos para obter notas de cobranças pagas. Downloads fiscais exigem X-API-Key, status fiscal emitida e XML armazenado; não emitem nem sincronizam notas.",
+    "description": "Coleção de consulta, sem envio de mensagens. Manual v1.3, 07/10/2026. Configure em ambiente privado: base_url, api_key e IDs de homologação. Permite filtros de status/vencimento/pagamento e paginação por offset. total é o tamanho da página; total_registros é o conjunto filtrado. Percorra next_offset enquanto has_more for true. Antes de enviar cobrança: revalide status, canal, telefone e boleto_disponivel. status=paga permite confirmar pagamentos registrados no MasterSat. Não contém credenciais. A listagem/detalhe inclui nfse. Use status=paga ou todos para obter notas de cobranças pagas. pdf_url é o link de PDF com token para abrir sem login/chave. pdf_api_url e xml_url exigem X-API-Key. Documentos exigem nota emitida e XML armazenado; não emitem nem sincronizam notas.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -72,6 +72,12 @@
       "value": "0",
       "type": "string",
       "description": "Começar em 0; usar next_offset para a próxima página."
+    },
+    {
+      "key": "nfse_pdf_url",
+      "value": "",
+      "type": "string",
+      "description": "Copiar nfse.pdf_url retornado pela API: link para o cliente com token, sem chave/login."
     }
   ],
   "item": [
@@ -209,7 +215,7 @@
           }
         ],
         "url": "{{base_url}}/api/v1/integrations/cobrancas/{{billing_id}}/nfse",
-        "description": "Retorna o objeto fiscal vinculado ao billing_id. Sem nota: 404. Verificar status, pdf_disponivel, xml_disponivel e motivo_indisponibilidade. O status fiscal é independente do pagamento."
+        "description": "Retorna o objeto fiscal vinculado ao billing_id. Sem nota: 404. Verificar status, pdf_disponivel, xml_disponivel e motivo_indisponibilidade. O status fiscal é independente do pagamento. pdf_url agora é o link com token para o cliente; pdf_api_url aponta para o download autenticado anterior."
       },
       "response": []
     },
@@ -240,6 +246,24 @@
         ],
         "url": "{{base_url}}/api/v1/integrations/cobrancas/{{billing_id}}/nfse/xml",
         "description": "Salvar a resposta como arquivo. Entrega o XML fiscal de retorno armazenado, preservado em UTF-8. Exige nota emitida com XML; 409 quando indisponível. Não entrega RPS/DPS de envio."
+      },
+      "response": []
+    },
+    {
+      "name": "12 | Abrir PDF da NFS-e para o cliente",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/pdf"
+          }
+        ],
+        "url": "{{nfse_pdf_url}}",
+        "description": "Copiar pdf_url dos dados da nota. Abre PDF inline sem X-API-Key/login. Token válido com nota emitida e XML disponível: 200. Token inválido, nota cancelada/substituída ou remoção: 404. Nenhuma chave de API é colocada na URL.",
+        "auth": {
+          "type": "noauth"
+        }
       },
       "response": []
     }

@@ -11,9 +11,13 @@ GET /integrations/cobrancas/{billing_id}/pdf → PDF do boleto
 GET /integrations/cobrancas/{billing_id}/nfse → dados da NFS-e
 GET /integrations/cobrancas/{billing_id}/nfse/pdf → PDF da NFS-e (DANFSE local)
 GET /integrations/cobrancas/{billing_id}/nfse/xml → XML fiscal armazenado
+GET /public/nfse/{billing_id}/{token} → PDF da NFS-e por link para o cliente
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import logging
 from datetime import date
 from typing import Literal
@@ -41,6 +45,7 @@ from app.services.boleto_pdf import gerar_boleto_pdf
 from app.services.financial import valor_com_juros
 
 router = APIRouter()
+public_router = APIRouter()
 logger = logging.getLogger(__name__)
 
 _OPEN_STATUSES = (BillingStatus.PENDING, BillingStatus.OVERDUE)
@@ -158,6 +163,23 @@ def _motivo_nfse_indisponivel(nota: NfseNota, tem_xml: bool) -> str | None:
     return None
 
 
+def _nfse_public_token(nota: NfseNota) -> str:
+    # Finalidade própria e identidade fiscal: o token de boleto ou de outra
+    # nota não abre este documento. Reemissão com novos dados invalida o link.
+    identidade = json.dumps(
+        [nota.billing_id, nota.id, nota.chave_acesso, nota.numero_nfse, nota.serie_nfse],
+        ensure_ascii=True, separators=(',', ':'),
+    )
+    return hmac.new(
+        settings.secret_key.encode(), f'nfse-pdf:v1:{identidade}'.encode(), hashlib.sha256,
+    ).hexdigest()
+
+
+def public_nfse_url(nota: NfseNota) -> str:
+    base = (settings.backend_public_url or '').rstrip('/')
+    return f'{base}{settings.api_v1_prefix}/public/nfse/{nota.billing_id}/{_nfse_public_token(nota)}'
+
+
 def _nfse_payload(nota: NfseNota, *, tem_xml: bool | None = None) -> dict:
     # A lista recebe o indicador calculado pelo SQL, sem carregar os XMLs
     # completos ou fazer consultas adicionais para cada cobrança.
@@ -175,7 +197,8 @@ def _nfse_payload(nota: NfseNota, *, tem_xml: bool | None = None) -> dict:
         'ambiente': nota.ambiente,
         'pdf_disponivel': motivo is None, 'xml_disponivel': motivo is None,
         'motivo_indisponibilidade': motivo,
-        'pdf_url': f'{rota}/pdf' if motivo is None else None,
+        'pdf_url': public_nfse_url(nota) if motivo is None else None,
+        'pdf_api_url': f'{rota}/pdf' if motivo is None else None,
         'xml_url': f'{rota}/xml' if motivo is None else None,
     }
 
@@ -436,4 +459,47 @@ def baixar_nfse_xml(
     return Response(
         content=nota.xml_retorno, media_type='application/xml; charset=utf-8',
         headers={'Content-Disposition': f'attachment; filename="nfse_{billing_id:06d}.xml"'},
+    )
+
+
+@public_router.get(
+    '/nfse/{billing_id}/{token}', response_class=Response,
+    responses={
+        200: {
+            'description': 'PDF da NFS-e para abrir no navegador, protegido por token.',
+            'content': {'application/pdf': {'schema': {'type': 'string', 'format': 'binary'}}},
+        },
+        404: {
+            'description': 'Token inválido ou documento indisponível.',
+            'content': {'application/json': {'schema': {}}},
+        },
+        422: {
+            'description': 'ID inválido ou XML fiscal inválido para gerar o PDF.',
+            'content': {'application/json': {'schema': {}}},
+        },
+    },
+)
+def baixar_nfse_pdf_publico(
+    billing_id: int, token: str, db: Session = Depends(get_db),
+):
+    """Abre o PDF sem JWT/X-API-Key; exige o token da nota emitida atual."""
+    nota = db.query(NfseNota).filter_by(billing_id=billing_id).first()
+    if nota is None or not hmac.compare_digest(token.encode(), _nfse_public_token(nota).encode()):
+        raise HTTPException(status_code=404, detail='NFS-e não disponível')
+    try:
+        _get_cobranca_or_404(billing_id, db)
+        _exigir_nfse_disponivel(nota)
+    except HTTPException as exc:
+        if exc.status_code in (404, 409):
+            raise HTTPException(status_code=404, detail='NFS-e não disponível') from exc
+        raise
+    return Response(
+        content=_danfse_local_bytes(nota, db, billing_id), media_type='application/pdf',
+        headers={
+            'Content-Disposition': f'inline; filename="nfse_{billing_id:06d}.pdf"',
+            'Cache-Control': 'private, no-store',
+            'Referrer-Policy': 'no-referrer',
+            'X-Content-Type-Options': 'nosniff',
+            'X-Robots-Tag': 'noindex, noarchive',
+        },
     )

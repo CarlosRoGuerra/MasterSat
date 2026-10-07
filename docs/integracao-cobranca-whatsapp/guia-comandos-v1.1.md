@@ -1,4 +1,4 @@
-# Comandos da integração de cobranças e NFS-e — versão 1.2
+# Comandos da integração de cobranças e NFS-e — versão 1.3
 
 Estes comandos consultam a API MasterSat. As alterações precisam estar publicadas no backend para os filtros, a paginação e as rotas de NFS-e funcionarem. A URL usada abaixo é `https://api.mastersat.com.br`; para homologação, substituir pelo domínio informado pela MasterSat. A chave é a mesma chave de integração enviada no cabeçalho `X-API-Key`. O nome deste arquivo foi preservado para manter os links compartilhados.
 
@@ -17,7 +17,7 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build --
 docker compose -f docker-compose.yml -f docker-compose.prod.yml exec nginx nginx -s reload
 ```
 
-Depois da atualização, a listagem passa a incluir `nfse` em cada cobrança e as três rotas fiscais ficam disponíveis. Resposta sem esse campo indica que o backend acessado ainda não está com esta versão. `nfse: null` indica que a versão está atualizada, mas a cobrança consultada não tem nota vinculada.
+Depois da atualização, `nfse.pdf_url` passa a começar com `https://api.mastersat.com.br/api/v1/public/nfse/`, seguido do ID e token. Esse é o link que abre diretamente no navegador. `nfse.pdf_api_url` mantém o download com chave. Se `pdf_url` ainda contém `/integrations/cobrancas/`, o backend acessado ainda está na versão anterior. `nfse: null` indica que a cobrança consultada não tem nota vinculada.
 
 ## PowerShell — comandos para copiar e executar
 
@@ -152,7 +152,19 @@ Invoke-WebRequest -UseBasicParsing -Headers $cabecalhos -Uri "$apiBase/integrati
 Invoke-WebRequest -UseBasicParsing -Headers $cabecalhos -Uri "$apiBase/integrations/cobrancas/$billingId/nfse/xml" -OutFile "nfse_$billingId.xml"
 ```
 
-O PDF é o DANFSE gerado do XML fiscal salvo. As rotas consultam documentos já emitidos; não emitem nem atualizam a nota. A NFS-e de uma cobrança paga permanece disponível quando a situação fiscal é `emitida` e existe XML. As URLs exigem a chave: baixar no servidor da integradora e enviar o arquivo como anexo.
+Para obter o link que abre no navegador e pode ser enviado ao cliente:
+
+```powershell
+$notaFiscal.pdf_url
+```
+
+Esse link também permite baixar o PDF sem cabeçalhos de autenticação:
+
+```powershell
+Invoke-WebRequest -UseBasicParsing -Uri $notaFiscal.pdf_url -OutFile "nfse_$billingId.pdf"
+```
+
+O PDF é o DANFSE gerado do XML fiscal salvo. As rotas consultam documentos já emitidos; não emitem nem atualizam a nota. A NFS-e de uma cobrança paga permanece disponível quando a situação fiscal é `emitida` e existe XML. `pdf_url` é o link para o cliente, protegido por token. `pdf_api_url` e `xml_url` exigem a chave para baixar os anexos no servidor da integradora.
 
 ## cURL — Linux, macOS ou Git Bash
 
@@ -251,6 +263,19 @@ curl --fail --silent --show-error \
 ```
 
 `404`: sem nota ou cobrança/cliente removido. `409`: nota ainda não emitida ou XML ausente; verificar `detail.code`. `422` no PDF: XML inválido para renderização. Os filtros da lista continuam sendo por vencimento/pagamento da cobrança, não por emissão/competência fiscal.
+
+### Link direto do PDF da NFS-e para abrir no navegador
+
+Com `MASTERSAT_API_KEY` configurada acima, o comando imprime o link para a cobrança de exemplo `38257`:
+
+```bash
+curl --fail-with-body --silent --show-error \
+  --header "X-API-Key: $MASTERSAT_API_KEY" \
+  "$MASTERSAT_BASE_URL/integrations/cobrancas/38257/nfse" \
+| python3 -c 'import json,sys; nota=json.load(sys.stdin); print(nota.get("pdf_url") or "NFS-e indisponível")'
+```
+
+Copiar a URL retornada e abrir no navegador. Ela contém `/api/v1/public/nfse/38257/` e um token; não exige chave nem login. Pode ser enviada por WhatsApp. Usar a URL completa retornada pela API. URLs antigas com `/integrations/cobrancas/38257/nfse/pdf` continuam protegidas por chave; consultar novamente para obter o novo link. O token inválido, nota cancelada/substituída, XML ausente ou remoção da cobrança/cliente retorna `404`.
 
 ## Postman
 

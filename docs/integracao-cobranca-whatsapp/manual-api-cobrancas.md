@@ -6,7 +6,7 @@
 
 **MasterSat | Documentação para a empresa integradora**
 
-Versão documental 1.2 | 7 de outubro de 2026
+Versão documental 1.3 | 7 de outubro de 2026
 
 Consulta de cobranças, dados de pagamento, boleto em PDF e NFS-e em PDF/XML.
 
@@ -40,7 +40,7 @@ O modelo é de **consulta periódica pela integradora**: a empresa parceira inic
 | Dicionário: cobrança e pagador | 7 | Automação e mensagem | 13 |
 | Dicionário: boleto e status | 8 | Homologação e entrega | 14 |
 
-> **Escopo disponível:** seis operações de leitura autenticadas e um link público de boleto protegido por token. A seção 14 descreve a consulta e o download da NFS-e. Emissão de boleto ou NFS-e, baixa financeira, alteração cadastral e envio pelo WhatsApp não fazem parte deste contrato de integração.
+> **Escopo disponível:** seis operações de leitura autenticadas e links de PDF de boleto/NFS-e protegidos por token, que abrem sem chave de API. A seção 14 descreve a consulta e o download da NFS-e. Emissão de boleto ou NFS-e, baixa financeira, alteração cadastral e envio pelo WhatsApp não fazem parte deste contrato de integração.
 
 <!-- pagebreak -->
 
@@ -523,11 +523,11 @@ Ao relatar um problema, informar data/hora com fuso, método, rota, ID da cobran
 
 ### Base técnica e versão
 
-Versão 1.2 atualizada em 07/10/2026 com consulta e download de NFS-e, além dos filtros, paginação e dados de pagamento entregues na versão 1.1. Referências principais: `backend/app/api/v1/endpoints/integrations.py`, `backend/app/schemas/integration_billing.py`, `backend/app/api/v1/endpoints/boletos.py`, `backend/app/api/deps.py`, `backend/tests/test_integrations_api.py` e `backend/tests/test_integrations_nfse_api.py`.
+Versão 1.3 atualizada em 07/10/2026 com link direto do PDF da NFS-e para o cliente, além da consulta fiscal, filtros, paginação e dados de pagamento anteriores. Referências principais: `backend/app/api/v1/endpoints/integrations.py`, `backend/app/schemas/integration_billing.py`, `backend/app/api/v1/endpoints/boletos.py`, `backend/app/api/deps.py`, `backend/tests/test_integrations_api.py`, `backend/tests/test_integrations_nfse_api.py` e `backend/tests/test_integrations_nfse_public.py`.
 
 Os 70 testes de integração passaram com dados sintéticos em banco SQLite isolado, incluindo leitura acima de 2000 registros e consulta de pagamentos. Essa verificação não certifica os registros da carteira de produção, a configuração do servidor publicado, a entrega pelo WhatsApp ou a homologação bancária. Consultas não alteram status, não conciliam pagamentos e não chamam o banco para emitir boletos.
 
-**Arquivos atualizados na versão 1.2:** fonte editável deste manual em Markdown, guia de comandos e coleção Postman sem credenciais. PDFs distribuídos da versão 1.0 precisam ser regenerados a partir desta fonte antes da entrega. Versões futuras da API devem motivar revisão deste documento.
+**Arquivos atualizados na versão 1.3:** fonte editável deste manual em Markdown, guia de comandos e coleção Postman sem credenciais. PDFs distribuídos da versão 1.0 precisam ser regenerados a partir desta fonte antes da entrega. Versões futuras da API devem motivar revisão deste documento.
 
 <!-- pagebreak -->
 
@@ -551,7 +551,9 @@ Os filtros `vencimento_de`/`vencimento_ate` e `pagamento_de`/`pagamento_ate` con
 | `ambiente` | Texto ou `null` | Ambiente fiscal registrado, por exemplo `producao`. |
 | `pdf_disponivel`, `xml_disponivel` | Booleanos | Nota com `status=emitida` e XML de retorno armazenado. O download do PDF ainda pode retornar `422` se o XML não puder ser interpretado. |
 | `motivo_indisponibilidade` | Texto ou `null` | `nfse_nao_emitida`, `xml_indisponivel` ou `null` quando disponível. |
-| `pdf_url`, `xml_url` | URL ou `null` | Downloads autenticados com a mesma `X-API-Key`. Nulos quando indisponíveis. |
+| `pdf_url` | URL ou `null` | Link direto do PDF com token, para abrir no navegador ou enviar ao cliente. Dispensa `X-API-Key` e login. Nulo quando indisponível. |
+| `pdf_api_url` | URL ou `null` | Download autenticado do PDF com a mesma `X-API-Key`. Nulo quando indisponível. |
+| `xml_url` | URL ou `null` | Download autenticado do XML com a mesma `X-API-Key`. Nulo quando indisponível. |
 
 ### Rotas
 
@@ -560,14 +562,24 @@ Os filtros `vencimento_de`/`vencimento_ate` e `pagamento_de`/`pagamento_ate` con
 | `GET /api/v1/integrations/cobrancas/{billing_id}/nfse` | `200`, objeto JSON da nota, sem envelope. |
 | `GET /api/v1/integrations/cobrancas/{billing_id}/nfse/pdf` | `200`, bytes `application/pdf`; arquivo `nfse_000073.pdf` para cobrança 73. |
 | `GET /api/v1/integrations/cobrancas/{billing_id}/nfse/xml` | `200`, XML fiscal armazenado em UTF-8, `application/xml`; arquivo `nfse_000073.xml`. |
+| `GET /api/v1/public/nfse/{billing_id}/{token}` | `200`, PDF para o cliente, sem chave/login e com token válido. Abre no navegador com `Content-Disposition: inline`. |
 
 O PDF é o DANFSE gerado localmente a partir do XML fiscal salvo, usando o mesmo gerador do envio por e-mail. O download do XML entrega `xml_retorno`, sem substituir pelo RPS/DPS de envio nem reformatar o documento. As consultas não emitem notas, não consultam o governo e não alteram o registro fiscal.
 
-Antes de baixar, reconsultar a nota e verificar os indicadores. A integradora baixa os arquivos com a chave no próprio servidor e envia o anexo ao destinatário. `pdf_url` e `xml_url` exigem autenticação e não são links públicos para o cliente; nunca incluir a chave na mensagem ou na URL.
+Antes de baixar ou enviar o link, reconsultar a nota e verificar os indicadores. Na versão 1.3, `pdf_url` passa a apontar para o PDF com token, que pode ser enviado ao cliente e aberto diretamente no navegador. O campo novo `pdf_api_url` aponta para a rota autenticada existente; `xml_url` também exige a chave. A integradora pode usar essas rotas para baixar anexos no próprio servidor. Nunca incluir a chave de integração na mensagem ou na URL.
+
+### Link do PDF para o cliente
+
+Copiar `nfse.pdf_url` da resposta atualizada. Não montar o token manualmente nem usar a URL `/integrations/cobrancas/{id}/nfse/pdf` como link de navegador: essa rota continua exigindo `X-API-Key`.
+
+O token HMAC-SHA256 usa `SECRET_KEY` e é vinculado à cobrança, ao registro da nota e aos identificadores fiscais (chave, número e série). Um token de boleto, de outra nota ou alterado não abre o documento. Substituir o registro ou mudar os identificadores fiscais invalida o link anterior. Nota não emitida, cancelada/substituída, sem XML ou vinculada a cobrança/cliente removido não é entregue por um link já enviado; retorna `404`.
+
+O link não tem expiração por tempo nesta versão. Alterar `SECRET_KEY` revoga os links anteriores; alterar apenas `INTEGRATION_API_KEY` não revoga os links dos clientes. Compartilhar a URL somente com o destinatário: quem possui o link pode abrir a nota enquanto disponível. O PDF é servido sem cache compartilhado ou armazenamento em cache, com `Referrer-Policy: no-referrer` e orientação de não indexação.
 
 ### Erros e situações financeiras
 
 - `404`: cobrança, cliente ou nota inexistente/indisponível por remoção.
+- `404` no link para o cliente: token inválido ou documento que deixou de estar disponível.
 - `409` no download: nota com status diferente de `emitida` ou XML ausente. `detail.code` identifica o motivo. Notas canceladas/substituídas não são distribuídas por estas rotas.
 - `422`: ID inválido ou XML que não permite gerar o PDF.
 - `401` e `503`: mesmas regras de chave da integração.

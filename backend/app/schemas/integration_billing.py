@@ -1,7 +1,7 @@
 """Contrato de leitura de cobranças para a integração de notificações."""
 from datetime import date, datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.models.enums import BillingStatus
 
@@ -29,8 +29,9 @@ class IntegrationNfseOut(BaseModel):
     pdf_disponivel: bool
     xml_disponivel: bool
     motivo_indisponibilidade: str | None
-    pdf_url: str | None
-    xml_url: str | None
+    pdf_url: str | None = Field(description='Link do PDF para o cliente, protegido por token; abre sem X-API-Key.')
+    pdf_api_url: str | None = Field(description='Download do PDF para a integradora, exige X-API-Key.')
+    xml_url: str | None = Field(description='Download do XML fiscal para a integradora, exige X-API-Key.')
 
 
 class IntegrationBillingOut(BaseModel):
