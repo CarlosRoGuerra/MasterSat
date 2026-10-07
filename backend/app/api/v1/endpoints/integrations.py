@@ -105,7 +105,9 @@ def _cobranca_payload(
         'forma_envio': client.delivery_method or 'email',
         # Atalho do cadastro: "Enviar boleto via Whats" marcado no cliente.
         'enviar_boleto_whatsapp': bool(client.send_boleto_whatsapp),
-        'nosso_numero': None,
+        # Referência do título bancário: permanece no histórico mesmo após
+        # pagamento/baixa. A disponibilidade dos códigos e links é separada.
+        'nosso_numero': ailos_boleto.nosso_numero if ailos_boleto is not None else None,
         'linha_digitavel': None,
         'codigo_barras': None,
         'pix_copia_cola': None,
@@ -135,7 +137,6 @@ def _cobranca_payload(
     # A consulta entrega os dados oficiais armazenados, sem calcular códigos
     # locais ou depender da geração de PDF para serializar um título antigo.
     payload.update({
-        'nosso_numero': ailos_boleto.nosso_numero,
         'linha_digitavel': ailos_boleto.linha_digitavel,
         'codigo_barras': ailos_boleto.codigo_barras,
         'pix_copia_cola': ailos_boleto.pix_emv,

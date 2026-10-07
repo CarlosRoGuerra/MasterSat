@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "MasterSat | Cobranças e NFS-e para WhatsApp",
-    "description": "Coleção de consulta, sem envio de mensagens. Manual v1.3, 07/10/2026. Configure em ambiente privado: base_url, api_key e IDs de homologação. Permite filtros de status/vencimento/pagamento e paginação por offset. total é o tamanho da página; total_registros é o conjunto filtrado. Percorra next_offset enquanto has_more for true. Antes de enviar cobrança: revalide status, canal, telefone e boleto_disponivel. status=paga permite confirmar pagamentos registrados no MasterSat. Não contém credenciais. A listagem/detalhe inclui nfse. Use status=paga ou todos para obter notas de cobranças pagas. pdf_url é o link de PDF com token para abrir sem login/chave. pdf_api_url e xml_url exigem X-API-Key. Documentos exigem nota emitida e XML armazenado; não emitem nem sincronizam notas.",
+    "description": "Coleção de consulta, sem envio de mensagens. Manual v1.4, 07/10/2026. Configure em ambiente privado: base_url, api_key e IDs de homologação. Permite filtros de status/vencimento/pagamento e paginação por offset. total é o tamanho da página; total_registros é o conjunto filtrado. Percorra next_offset enquanto has_more for true. Antes de enviar cobrança: revalide status, canal, telefone e boleto_disponivel. status=paga permite confirmar pagamentos registrados no MasterSat. Não contém credenciais. A listagem/detalhe inclui nfse. Use status=paga ou todos para obter notas de cobranças pagas. pdf_url é o link de PDF com token para abrir sem login/chave. pdf_api_url e xml_url exigem X-API-Key. Documentos exigem nota emitida e XML armazenado; não emitem nem sincronizam notas. nosso_numero preserva a referência oficial armazenada mesmo em cobranças pagas ou boletos indisponíveis; não habilita códigos ou links de pagamento.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -185,7 +185,7 @@
           }
         ],
         "url": "{{base_url}}/api/v1/integrations/cobrancas?forma_envio=whatsapp&status=paga&pagamento_de={{data_de}}&pagamento_ate={{data_ate}}&limit=500&offset={{offset}}",
-        "description": "Pagamentos registrados. pagamento_confirmado=true; data_pagamento, valor_pago e forma_pagamento podem ser nulos em legado. Não enviar boleto ou lembrete de cobrança."
+        "description": "Pagamentos registrados. pagamento_confirmado=true; data_pagamento, valor_pago e forma_pagamento podem ser nulos em legado. Não enviar boleto ou lembrete de cobrança. nosso_numero mantém o número oficial armazenado para identificar o boleto pago, inclusive zeros iniciais. Sem referência registrada, permanece null. O boleto continua indisponível para pagamento."
       },
       "response": []
     },

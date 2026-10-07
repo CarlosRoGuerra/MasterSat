@@ -1,4 +1,4 @@
-# Comandos da integração de cobranças e NFS-e — versão 1.3
+# Comandos da integração de cobranças e NFS-e — versão 1.4
 
 Estes comandos consultam a API MasterSat. As alterações precisam estar publicadas no backend para os filtros, a paginação e as rotas de NFS-e funcionarem. A URL usada abaixo é `https://api.mastersat.com.br`; para homologação, substituir pelo domínio informado pela MasterSat. A chave é a mesma chave de integração enviada no cabeçalho `X-API-Key`. O nome deste arquivo foi preservado para manter os links compartilhados.
 
@@ -77,10 +77,12 @@ Pagamentos entre 01/10/2026 e 07/10/2026, para clientes elegíveis ao WhatsApp:
 
 ```powershell
 $resposta = Invoke-RestMethod -Method Get -Headers $cabecalhos -Uri "$apiBase/integrations/cobrancas?forma_envio=whatsapp&status=paga&pagamento_de=2026-10-01&pagamento_ate=2026-10-07&limit=500&offset=0"
-$resposta.cobrancas | Select-Object id,status,pagamento_confirmado,data_pagamento,valor_pago,forma_pagamento
+$resposta.cobrancas | Select-Object id,nosso_numero,status,pagamento_confirmado,data_pagamento,valor_pago,forma_pagamento
 ```
 
 `pagamento_confirmado` será `true`. `data_pagamento`, `valor_pago` e `forma_pagamento` podem ser nulos em históricos legados. Registros sem data de pagamento não entram em um filtro de `pagamento_de`/`pagamento_ate`; consultá-los por `status=paga` sem esse intervalo.
+
+`nosso_numero` é a referência oficial do título bancário, mantida mesmo após pagamento/baixa quando armazenada. Preservar como texto, inclusive os zeros iniciais. O boleto pago continua com `boleto_disponivel=false` e códigos/links de pagamento nulos. Se não existe referência oficial no registro Ailos, `nosso_numero` permanece `null`.
 
 ### 6. Percorrer todas as páginas automaticamente
 

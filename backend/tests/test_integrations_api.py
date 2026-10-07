@@ -308,6 +308,59 @@ def test_pagamento_legado_nao_inventa_data_ou_valor(http_unauth, api_key, db, cl
     assert item['pagamento_confirmado'] is True
     assert item['data_pagamento'] is None
     assert item['valor_pago'] is None
+    assert item['nosso_numero'] is None
+
+
+@pytest.mark.parametrize('status_ailos,baixa_status', [
+    ('0', None), ('5', None), ('3', 'confirmada'), ('5', 'confirmada'),
+])
+def test_pagamento_recente_preserva_referencia_oficial_do_boleto_na_lista_e_detalhe(
+    http_unauth, api_key, db, cobranca, boleto_registrado, status_ailos, baixa_status,
+):
+    cobranca.status = BillingStatus.PAID
+    cobranca.payment_date = date(2026, 10, 6)
+    cobranca.paid_amount = cobranca.amount
+    cobranca.payment_method = 'boleto'
+    boleto_registrado.nosso_numero = '00000123000456789'
+    boleto_registrado.status_ailos = status_ailos
+    boleto_registrado.baixa_status = baixa_status
+    db.commit()
+
+    resposta = _consultar(
+        http_unauth, api_key, status='paga', pagamento_de='2026-10-01', pagamento_ate='2026-10-07',
+    )
+    assert resposta.status_code == 200
+    item = resposta.json()['cobrancas'][0]
+    assert item['id'] == cobranca.id
+    assert item['pagamento_confirmado'] is True
+    assert item['data_pagamento'] == '2026-10-06'
+    assert item['forma_pagamento'] == 'boleto'
+    assert item['nosso_numero'] == '00000123000456789'
+    assert item['boleto_disponivel'] is False
+    assert item['motivo_boleto_indisponivel'] == 'cobranca_paga'
+    for campo in ('linha_digitavel', 'codigo_barras', 'pix_copia_cola', 'boleto_pdf_url', 'boleto_link_cliente'):
+        assert item[campo] is None
+
+    detalhe = http_unauth.get(
+        f'/api/v1/integrations/cobrancas/{cobranca.id}', headers={'X-API-Key': api_key},
+    )
+    assert detalhe.status_code == 200
+    assert detalhe.json() == item
+    pdf = http_unauth.get(
+        f'/api/v1/integrations/cobrancas/{cobranca.id}/pdf', headers={'X-API-Key': api_key},
+    )
+    assert pdf.status_code == 409
+    assert pdf.json()['detail']['code'] == 'cobranca_paga'
+
+
+def test_pagamento_com_registro_sem_nosso_numero_nao_inventa_referencia(
+    http_unauth, api_key, db, cobranca, boleto_registrado,
+):
+    cobranca.status = BillingStatus.PAID
+    db.commit()
+    item = _consultar(http_unauth, api_key, status='paga').json()['cobrancas'][0]
+    assert item['boleto_registrado'] is True
+    assert item['nosso_numero'] is None
 
 
 @pytest.mark.parametrize('params,esperados', [
@@ -489,6 +542,7 @@ def test_lista_dados_oficiais_sem_gerar_boleto_local(http_unauth, api_key, db, c
 def test_boleto_indisponivel_nao_oferece_codigos_ou_pdf(
     http_unauth, api_key, db, cobranca, boleto_registrado, situacao, motivo,
 ):
+    boleto_registrado.nosso_numero = '00000123000456789'
     if situacao == 'sem_codigo':
         boleto_registrado.codigo_barras = None
     elif situacao == 'sem_linha':
@@ -506,6 +560,7 @@ def test_boleto_indisponivel_nao_oferece_codigos_ou_pdf(
     assert item['boleto_registrado'] is (situacao not in ('sem_codigo', 'sem_linha'))
     assert item['boleto_disponivel'] is False
     assert item['motivo_boleto_indisponivel'] == motivo
+    assert item['nosso_numero'] == '00000123000456789'
     assert item['boleto_link_cliente'] is None
     assert item['boleto_pdf_url'] is None
     assert item['linha_digitavel'] is None

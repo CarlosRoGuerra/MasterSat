@@ -6,7 +6,7 @@
 
 **MasterSat | Documentação para a empresa integradora**
 
-Versão documental 1.3 | 7 de outubro de 2026
+Versão documental 1.4 | 7 de outubro de 2026
 
 Consulta de cobranças, dados de pagamento, boleto em PDF e NFS-e em PDF/XML.
 
@@ -216,7 +216,7 @@ Exemplo ilustrativo de listagem com um boleto registrado. Os códigos, contatos,
 
 `boleto_pdf_url` exige a chave de integração. `boleto_link_cliente` foi preparado para ser aberto pelo destinatário sem login. O Pix pode ser `null` mesmo quando o boleto está registrado.
 
-Quando não há linha digitável e código de barras oficiais, a cobrança continua na resposta com `boleto_registrado = false`, `boleto_disponivel = false`, dados de boleto e URLs nulos. `motivo_boleto_indisponivel` explica a situação. A API não calcula códigos locais para preencher dados ausentes. O Pix permanece `null` quando não foi fornecido pelo banco.
+Quando não há linha digitável e código de barras oficiais, a cobrança continua na resposta com `boleto_registrado = false`, `boleto_disponivel = false`, códigos de pagamento e URLs de boleto nulos. `motivo_boleto_indisponivel` explica a situação. `nosso_numero` preserva a referência oficial armazenada, quando existente, mesmo que o boleto esteja indisponível. A API não calcula códigos ou referências locais para preencher dados ausentes. O Pix permanece `null` quando não foi fornecido pelo banco.
 
 <!-- pagebreak -->
 
@@ -257,7 +257,7 @@ O endpoint entrega o telefone principal. Contatos adicionais, contatos de emerg�
 
 | Campo | Tipo | Descrição e uso |
 | --- | --- | --- |
-| `nosso_numero` | Texto ou `null` | Identificador bancário para referência. Não substituir `id` por esse campo nas rotas. |
+| `nosso_numero` | Texto ou `null` | Número oficial salvo no registro Ailos, preservado como referência mesmo em cobranças pagas/canceladas ou boletos baixados/liquidados. Manter os zeros iniciais. Nulo se a referência não está armazenada. Não substituir `id` por esse campo nas rotas. |
 | `linha_digitavel` | Texto ou `null` | Linha de pagamento retornada pelo sistema. Preservar como texto, inclusive zeros iniciais. |
 | `codigo_barras` | Texto ou `null` | Representação numérica do código de barras. Não converter para número. |
 | `pix_copia_cola` | Texto ou `null` | Código Pix quando disponível. Enviar exatamente como recebido; omitir o bloco Pix quando nulo. |
@@ -282,6 +282,8 @@ O endpoint entrega o telefone principal. Contatos adicionais, contatos de emerg�
 O backend reclassifica vencimentos em rotina periódica, prevista a cada hora. O status e a data podem apresentar diferença temporária. A rotina financeira usa a data de Brasília (UTC-03:00 na implementação analisada).
 
 `boleto_registrado` verifica linha digitável e código de barras oficiais. `boleto_disponivel` acrescenta a situação financeira e bancária local. Os campos de boleto vêm diretamente do registro Ailos, sem depender da geração de PDF na listagem. Revalidar o detalhe e a abertura do link antes do envio.
+
+Desde a versão 1.4, `nosso_numero` permanece na listagem e no detalhe como referência histórica, independentemente de `boleto_disponivel`. Uma cobrança paga com referência armazenada retorna esse número; linha digitável, código de barras, Pix e URLs de boleto continuam nulos, e o PDF do boleto permanece bloqueado para pagamento. Sem número oficial armazenado, o campo permanece `null`.
 
 O valor do boleto continua nominal; `valor_com_juros` é uma informação separada. Não modificar PDF, linha digitável, código de barras ou Pix para embutir encargos.
 
@@ -523,11 +525,11 @@ Ao relatar um problema, informar data/hora com fuso, método, rota, ID da cobran
 
 ### Base técnica e versão
 
-Versão 1.3 atualizada em 07/10/2026 com link direto do PDF da NFS-e para o cliente, além da consulta fiscal, filtros, paginação e dados de pagamento anteriores. Referências principais: `backend/app/api/v1/endpoints/integrations.py`, `backend/app/schemas/integration_billing.py`, `backend/app/api/v1/endpoints/boletos.py`, `backend/app/api/deps.py`, `backend/tests/test_integrations_api.py`, `backend/tests/test_integrations_nfse_api.py` e `backend/tests/test_integrations_nfse_public.py`.
+Versão 1.4 atualizada em 07/10/2026 para preservar `nosso_numero` como referência dos boletos pagos/indisponíveis, mantendo o link direto do PDF da NFS-e, consulta fiscal, filtros, paginação e dados de pagamento anteriores. Referências principais: `backend/app/api/v1/endpoints/integrations.py`, `backend/app/schemas/integration_billing.py`, `backend/app/api/v1/endpoints/boletos.py`, `backend/app/api/deps.py`, `backend/tests/test_integrations_api.py`, `backend/tests/test_integrations_nfse_api.py` e `backend/tests/test_integrations_nfse_public.py`.
 
 Os 70 testes de integração passaram com dados sintéticos em banco SQLite isolado, incluindo leitura acima de 2000 registros e consulta de pagamentos. Essa verificação não certifica os registros da carteira de produção, a configuração do servidor publicado, a entrega pelo WhatsApp ou a homologação bancária. Consultas não alteram status, não conciliam pagamentos e não chamam o banco para emitir boletos.
 
-**Arquivos atualizados na versão 1.3:** fonte editável deste manual em Markdown, guia de comandos e coleção Postman sem credenciais. PDFs distribuídos da versão 1.0 precisam ser regenerados a partir desta fonte antes da entrega. Versões futuras da API devem motivar revisão deste documento.
+**Arquivos atualizados na versão 1.4:** fonte editável deste manual em Markdown, guia de comandos e coleção Postman sem credenciais. PDFs distribuídos da versão 1.0 precisam ser regenerados a partir desta fonte antes da entrega. Versões futuras da API devem motivar revisão deste documento.
 
 <!-- pagebreak -->
 
