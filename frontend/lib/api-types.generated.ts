@@ -1556,8 +1556,10 @@ export interface paths {
         };
         /**
          * Listar Cobrancas
-         * @description Lista as cobranças em aberto (pendentes/vencidas) com os dados de boleto/Pix
-         *     prontos para envio. Usado pelo CobraZap para puxar os boletos.
+         * @description Consulta paginada de cobranças e pagamentos registrados no MasterSat.
+         *
+         *     Sem status explícito, mantém a lista de cobranças abertas. Todos os
+         *     filtros se combinam; as datas inicial e final são inclusivas.
          */
         get: operations["listar_cobrancas_api_v1_integrations_cobrancas_get"];
         put?: never;
@@ -6368,6 +6370,81 @@ export interface components {
             /** Id */
             id: number;
         };
+        /** IntegrationBillingPage */
+        IntegrationBillingPage: {
+            /** Total */
+            total: number;
+            /** Total Registros */
+            total_registros: number;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Has More */
+            has_more: boolean;
+            /** Next Offset */
+            next_offset: number | null;
+            /** Cobrancas */
+            cobrancas: components["schemas"]["IntegrationBillingOut"][];
+        };
+        /** IntegrationBillingOut */
+        IntegrationBillingOut: {
+            /** Id */
+            id: number;
+            /** Titulo */
+            titulo: string | null;
+            cliente: components["schemas"]["IntegrationPayerOut"];
+            /** Valor */
+            valor: number;
+            /** Vencimento */
+            vencimento: string | null;
+            status: components["schemas"]["BillingStatus"];
+            /** Pagamento Confirmado */
+            pagamento_confirmado: boolean;
+            /** Data Pagamento */
+            data_pagamento: string | null;
+            /** Valor Pago */
+            valor_pago: number | null;
+            /** Forma Pagamento */
+            forma_pagamento: string | null;
+            /** Forma Envio */
+            forma_envio: string;
+            /** Enviar Boleto Whatsapp */
+            enviar_boleto_whatsapp: boolean;
+            /** Nosso Numero */
+            nosso_numero: string | null;
+            /** Linha Digitavel */
+            linha_digitavel: string | null;
+            /** Codigo Barras */
+            codigo_barras: string | null;
+            /** Pix Copia Cola */
+            pix_copia_cola: string | null;
+            /** Boleto Registrado */
+            boleto_registrado: boolean;
+            /** Boleto Disponivel */
+            boleto_disponivel: boolean;
+            /** Motivo Boleto Indisponivel */
+            motivo_boleto_indisponivel: string | null;
+            /** Boleto Pdf Url */
+            boleto_pdf_url: string | null;
+            /** Boleto Link Cliente */
+            boleto_link_cliente: string | null;
+            /** Valor Com Juros */
+            valor_com_juros: number | null;
+        };
+        /** IntegrationPayerOut */
+        IntegrationPayerOut: {
+            /** Id */
+            id: number;
+            /** Nome */
+            nome: string;
+            /** Cpf Cnpj */
+            cpf_cnpj: string | null;
+            /** Telefone */
+            telefone: string | null;
+            /** Email */
+            email: string | null;
+        };
     };
     responses: never;
     parameters: never;
@@ -9977,9 +10054,23 @@ export interface operations {
     listar_cobrancas_api_v1_integrations_cobrancas_get: {
         parameters: {
             query?: {
-                /** @description Filtra pela forma de envio do cliente: 'whatsapp' ou 'email' (inclui quem usa 'todos'). */
-                forma_envio?: string | null;
+                /** @description Filtra pela forma de envio do pagador: 'whatsapp' ou 'email' (inclui quem usa 'todos'). */
+                forma_envio?: ("whatsapp" | "email") | null;
+                /** @description Situação: pendente, vencida, paga, cancelada ou todos. Sem filtro, retorna pendentes/vencidas. */
+                status?: components["schemas"]["BillingStatus"] | "todos" | null;
+                /** @description Vencimento exato (AAAA-MM-DD). */
+                vencimento?: string | null;
+                /** @description Vencimento inicial, inclusive (AAAA-MM-DD). */
+                vencimento_de?: string | null;
+                /** @description Vencimento final, inclusive (AAAA-MM-DD). */
+                vencimento_ate?: string | null;
+                /** @description Data de pagamento inicial, inclusive (AAAA-MM-DD). */
+                pagamento_de?: string | null;
+                /** @description Data de pagamento final, inclusive (AAAA-MM-DD). */
+                pagamento_ate?: string | null;
                 limit?: number;
+                /** @description Quantidade de registros a pular na consulta filtrada. */
+                offset?: number;
             };
             header?: {
                 "X-API-Key"?: string | null;
@@ -9995,7 +10086,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["IntegrationBillingPage"];
                 };
             };
             /** @description Validation Error */
@@ -10028,7 +10119,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["IntegrationBillingOut"];
                 };
             };
             /** @description Validation Error */
@@ -10055,8 +10146,17 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description PDF do boleto registrado disponível para pagamento. */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pdf": string;
+                };
+            };
+            /** @description Boleto indisponível; detail.code informa o motivo. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10064,13 +10164,13 @@ export interface operations {
                     "application/json": unknown;
                 };
             };
-            /** @description Validation Error */
+            /** @description ID inválido ou falha ao montar o documento. */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": unknown;
                 };
             };
         };

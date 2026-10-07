@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "MasterSat | Cobranças para WhatsApp",
-    "description": "Coleção de consulta, sem envio de mensagens. Manual v1.0, 29/09/2026. Configure em ambiente privado: base_url (domínio HTTPS sem /api/v1), api_key, billing_id e boleto_link_cliente. Confirme o endereço com a MasterSat. Os arquivos distribuídos não contêm credenciais. Antes de enviar: revalide status, canal do pagador, telefone, registro e disponibilidade do link público. A lista não tem paginação; total é a quantidade retornada. Não confunda download autenticado com confirmação de elegibilidade.",
+    "description": "Coleção de consulta, sem envio de mensagens. Manual v1.1, 07/10/2026. Configure em ambiente privado: base_url, api_key e IDs de homologação. Permite filtros de status/vencimento/pagamento e paginação por offset. total é o tamanho da página; total_registros é o conjunto filtrado. Percorra next_offset enquanto has_more for true. Antes de enviar cobrança: revalide status, canal, telefone e boleto_disponivel. status=paga permite confirmar pagamentos registrados no MasterSat. Não contém credenciais.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -48,6 +48,30 @@
       "value": "",
       "type": "string",
       "description": "Copiar o campo boleto_link_cliente retornado para a cobrança validada."
+    },
+    {
+      "key": "vencimento",
+      "value": "2026-10-10",
+      "type": "string",
+      "description": "Vencimento exato de homologação, AAAA-MM-DD."
+    },
+    {
+      "key": "data_de",
+      "value": "2026-10-01",
+      "type": "string",
+      "description": "Início inclusivo do intervalo, AAAA-MM-DD."
+    },
+    {
+      "key": "data_ate",
+      "value": "2026-10-07",
+      "type": "string",
+      "description": "Fim inclusivo do intervalo, AAAA-MM-DD."
+    },
+    {
+      "key": "offset",
+      "value": "0",
+      "type": "string",
+      "description": "Começar em 0; usar next_offset para a próxima página."
     }
   ],
   "item": [
@@ -61,8 +85,8 @@
             "value": "application/json"
           }
         ],
-        "url": "{{base_url}}/api/v1/integrations/cobrancas?forma_envio=whatsapp&limit=500",
-        "description": "Retorna {total,cobrancas}. Inclui pendentes/vencidas. Limite 1..2000, padrão 500. total == limit indica possível truncamento. Revalidar canal do pagador retornado, especialmente com interveniente."
+        "url": "{{base_url}}/api/v1/integrations/cobrancas?forma_envio=whatsapp&limit=500&offset={{offset}}",
+        "description": "Sem status: pendentes/vencidas. Retorna total, total_registros, limit, offset, has_more, next_offset e cobrancas. A ordenação é por vencimento e ID. Filtro de canal usa o pagador retornado. total_registros inclui as páginas seguintes; preserve os filtros ao avançar next_offset."
       },
       "response": []
     },
@@ -92,7 +116,7 @@
           }
         ],
         "url": "{{base_url}}/api/v1/integrations/cobrancas/{{billing_id}}/pdf",
-        "description": "Retorna bytes application/pdf. Usar Save Response para salvar. A rota pode gerar PDF sem registro bancário ou para título não aberto: só distribuir após revalidar o detalhe e a disponibilidade do link público."
+        "description": "Retorna bytes application/pdf somente para cobrança aberta com dados oficiais e boleto disponível. Pago/cancelado/sem registro/baixado/somente sistema retorna 409 com detail.code. Revalidar detalhe antes de baixar e distribuir."
       },
       "response": []
     },
@@ -111,6 +135,66 @@
         "auth": {
           "type": "noauth"
         }
+      },
+      "response": []
+    },
+    {
+      "name": "05 | Pendentes por vencimento exato",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/v1/integrations/cobrancas?forma_envio=whatsapp&status=pendente&vencimento={{vencimento}}&limit=500&offset={{offset}}",
+        "description": "Cobranças pendentes com vencimento exato. Datas AAAA-MM-DD."
+      },
+      "response": []
+    },
+    {
+      "name": "06 | Vencidas em intervalo",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/v1/integrations/cobrancas?forma_envio=whatsapp&status=vencida&vencimento_de={{data_de}}&vencimento_ate={{data_ate}}&limit=500&offset={{offset}}",
+        "description": "Intervalo de vencimento inclusivo combinado com status vencida."
+      },
+      "response": []
+    },
+    {
+      "name": "07 | Pagamentos confirmados em intervalo",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/v1/integrations/cobrancas?forma_envio=whatsapp&status=paga&pagamento_de={{data_de}}&pagamento_ate={{data_ate}}&limit=500&offset={{offset}}",
+        "description": "Pagamentos registrados. pagamento_confirmado=true; data_pagamento, valor_pago e forma_pagamento podem ser nulos em legado. Não enviar boleto ou lembrete de cobrança."
+      },
+      "response": []
+    },
+    {
+      "name": "08 | Todas as situações e próxima página",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/v1/integrations/cobrancas?forma_envio=whatsapp&status=todos&limit=500&offset={{offset}}",
+        "description": "Inclui pendente, vencida, paga e cancelada. Avance offset para next_offset enquanto has_more for true; ausência de ID não comprova pagamento."
       },
       "response": []
     }

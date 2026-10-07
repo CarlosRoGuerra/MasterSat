@@ -6,7 +6,7 @@
 
 **MasterSat | Documentação para a empresa integradora**
 
-Versão documental 1.0 | 29 de setembro de 2026
+Versão documental 1.1 | 7 de outubro de 2026
 
 Consulta de cobranças, dados de pagamento e acesso ao boleto em PDF.
 
@@ -97,7 +97,7 @@ O Swagger pode estar desabilitado no ambiente publicado. A coleção Postman que
 | Situação financeira | Aceitar somente `pendente` ou `vencida`. Nunca disparar cobrança para `paga` ou `cancelada`. |
 | Canal do pagador | Exigir `forma_envio` igual a `whatsapp` ou `todos`, ou `enviar_boleto_whatsapp` igual a `true`. |
 | Destinatário | Utilizar `cliente.telefone`, após validação. Suspender o item se estiver vazio, ambíguo ou inválido. |
-| Documento | Exigir `boleto_registrado = true`, linha digitável e código de barras preenchidos. Conferir a abertura do link público antes de distribuir o boleto. |
+| Documento | Exigir `boleto_disponivel = true`, linha digitável e código de barras preenchidos. Conferir a abertura do link público antes de distribuir o boleto. |
 | Agenda | Aplicar dias, horários e frequência aprovados pela MasterSat. Não enviar a cada consulta. |
 | Duplicidade | Garantir uma única execução para a mesma cobrança, etapa da régua e ocorrência agendada. |
 
@@ -105,43 +105,60 @@ O Swagger pode estar desabilitado no ambiente publicado. A coleção Postman que
 
 <!-- pagebreak -->
 
-## 04. Listar cobranças em aberto
+## 04. Consultar cobranças e pagamentos
 
 ```http
 GET /api/v1/integrations/cobrancas
 X-API-Key: CHAVE_FORNECIDA_PELA_MASTERSAT
 ```
 
-Retorna cobranças com status `pendente` ou `vencida`, excluindo cobranças e clientes de origem excluídos. A ordenação é por vencimento crescente. A resposta é um objeto com `total` e `cobrancas`.
+Sem o parâmetro `status`, retorna cobranças com status `pendente` ou `vencida`, preservando o comportamento da versão 1.0. Para consultar pagamentos confirmados, informar `status=paga`; para todas as situações, `status=todos`. Cobranças, clientes de origem e pagadores de snapshot removidos são excluídos. A ordenação é por vencimento crescente, com desempate por ID.
 
 ### Parâmetros de consulta
 
 | Parâmetro | Tipo / padrão | Comportamento |
 | --- | --- | --- |
-| `forma_envio` | Texto opcional; sem filtro por padrão. | `whatsapp`: inclui cadastro com envio `whatsapp`, `todos` ou opção de boleto por WhatsApp marcada. `email`: inclui `email` ou `todos`. |
+| `forma_envio` | `whatsapp` ou `email`; opcional. | Usa o cadastro do pagador retornado. `whatsapp`: envio `whatsapp`, `todos` ou opção de boleto por WhatsApp marcada. `email`: envio `email`, `todos` ou preferência vazia (padrão `email`). |
+| `status` | `pendente`, `vencida`, `paga`, `cancelada` ou `todos`; opcional. | Sem o parâmetro, somente abertas. `paga` corresponde ao pagamento confirmado no MasterSat. |
+| `vencimento` | Data opcional `AAAA-MM-DD`. | Filtra o vencimento exato. |
+| `vencimento_de` | Data opcional `AAAA-MM-DD`. | Vencimento inicial, inclusive. |
+| `vencimento_ate` | Data opcional `AAAA-MM-DD`. | Vencimento final, inclusive. |
+| `pagamento_de` | Data opcional `AAAA-MM-DD`. | Data de pagamento inicial, inclusive. |
+| `pagamento_ate` | Data opcional `AAAA-MM-DD`. | Data de pagamento final, inclusive. Registros sem data de pagamento não entram nesse filtro. |
 | `limit` | Inteiro; padrão `500`. | Mínimo `1`, máximo `2000`. Limita a quantidade de registros retornados. |
+| `offset` | Inteiro; padrão `0`. | Mínimo `0`. Quantidade de registros a pular no conjunto filtrado. |
 
 ```http
-GET /api/v1/integrations/cobrancas?forma_envio=whatsapp&limit=500
+GET /api/v1/integrations/cobrancas?forma_envio=whatsapp&status=vencida&vencimento_de=2026-09-01&vencimento_ate=2026-09-30&limit=500&offset=0
+
+# Pendentes com vencimento em uma data
+GET /api/v1/integrations/cobrancas?status=pendente&vencimento=2026-10-10
+
+# Pagamentos confirmados entre duas datas
+GET /api/v1/integrations/cobrancas?status=paga&pagamento_de=2026-10-01&pagamento_ate=2026-10-07
 ```
 
 | Campo da resposta | Significado |
 | --- | --- |
 | `total` | Quantidade de itens **nesta resposta**, depois da aplicação do limite. |
+| `total_registros` | Quantidade de registros que atendem aos filtros, antes de `limit` e `offset`. |
+| `limit`, `offset` | Valores aplicados à página atual. |
+| `has_more` | Indica se há registros após a página atual. |
+| `next_offset` | Offset da próxima página; `null` quando terminou. |
 | `cobrancas` | Lista de objetos de cobrança. Pode ser vazia. |
 
 ```json
-{"total": 0, "cobrancas": []}
+{"total": 0, "total_registros": 0, "limit": 500, "offset": 0, "has_more": false, "next_offset": null, "cobrancas": []}
 ```
 
-### Limites que afetam a integração
+### Paginação e filtros
 
-- Não há `page`, `offset`, cursor, filtro por data, por status ou por alteração recente nesta rota. Não enviar parâmetros não documentados esperando esse comportamento.
-- Se `total` for igual ao `limit`, o conjunto pode estar incompleto. Aumentar o limite até `2000`, se necessário. Se o teto for atingido, combinar uma evolução da API com a MasterSat antes de considerar a consulta completa.
-- Repetir a mesma consulta não avança para os próximos registros. A ausência de um ID na lista não comprova pagamento nem cancelamento.
-- `forma_envio` é sensível ao valor informado: valores diferentes de `whatsapp` e `email` não aplicam filtro. Usar exatamente `whatsapp` para esta integração.
+- Enquanto `has_more` for `true`, repetir os mesmos filtros e `limit`, utilizando `offset=next_offset`. O teto de `2000` vale por página; a carteira pode ter mais registros.
+- Todos os filtros são combinados. Datas inicial e final são inclusivas; intervalos invertidos, datas inválidas, status/canais desconhecidos e limites inválidos retornam `422`.
+- A paginação por offset não congela a carteira entre consultas. Uma alteração concorrente pode deslocar registros; manter deduplicação por ID e revalidar o detalhe antes do envio.
+- Não há filtro por data de alteração recente nesta versão. A ausência de um ID em qualquer lista não comprova pagamento nem cancelamento.
 
-> **Pagador diferente do cliente de origem:** o filtro da lista usa o cadastro do cliente vinculado à cobrança, mas os dados retornados são do responsável financeiro resolvido pelo sistema. Revalidar a preferência retornada e homologar esse cenário; cobranças de um pagador elegível podem não entrar no filtro se o cadastro de origem não estiver habilitado.
+> **Pagador diferente do cliente de origem:** o filtro de canal e os contatos da resposta utilizam o mesmo responsável financeiro. O snapshot salvo na cobrança tem precedência; em cobranças legadas, utiliza-se o interveniente ativo do contrato e, na ausência dele, o cliente da cobrança.
 
 <!-- pagebreak -->
 
@@ -152,6 +169,11 @@ Exemplo ilustrativo de listagem com um boleto registrado. Os códigos, contatos,
 ```json
 {
   "total": 1,
+  "total_registros": 1,
+  "limit": 500,
+  "offset": 0,
+  "has_more": false,
+  "next_offset": null,
   "cobrancas": [
     {
       "id": 73,
@@ -166,6 +188,10 @@ Exemplo ilustrativo de listagem com um boleto registrado. Os códigos, contatos,
       "valor": 99.90,
       "vencimento": "2026-10-10",
       "status": "pendente",
+      "pagamento_confirmado": false,
+      "data_pagamento": null,
+      "valor_pago": null,
+      "forma_pagamento": null,
       "forma_envio": "whatsapp",
       "enviar_boleto_whatsapp": true,
       "nosso_numero": "EXEMPLO_NAO_PAGAVEL",
@@ -173,6 +199,8 @@ Exemplo ilustrativo de listagem com um boleto registrado. Os códigos, contatos,
       "codigo_barras": "CODIGO_FICTICIO_NAO_PAGAVEL",
       "pix_copia_cola": null,
       "boleto_registrado": true,
+      "boleto_disponivel": true,
+      "motivo_boleto_indisponivel": null,
       "boleto_pdf_url": "https://api.exemplo.invalid/api/v1/integrations/cobrancas/73/pdf",
       "boleto_link_cliente": "https://api.exemplo.invalid/api/v1/public/boleto/73/TOKEN_EXEMPLO",
       "valor_com_juros": null
@@ -187,7 +215,7 @@ Exemplo ilustrativo de listagem com um boleto registrado. Os códigos, contatos,
 
 `boleto_pdf_url` exige a chave de integração. `boleto_link_cliente` foi preparado para ser aberto pelo destinatário sem login. O Pix pode ser `null` mesmo quando o boleto está registrado.
 
-Quando não há registro identificado na integração, a cobrança continua na resposta com `boleto_registrado = false`, dados de pagamento nulos e `boleto_link_cliente = null`. Nesse caso, aguardar regularização pela MasterSat.
+Quando não há linha digitável e código de barras oficiais, a cobrança continua na resposta com `boleto_registrado = false`, `boleto_disponivel = false`, dados de boleto e URLs nulos. `motivo_boleto_indisponivel` explica a situação. A API não calcula códigos locais para preencher dados ausentes. O Pix permanece `null` quando não foi fornecido pelo banco.
 
 <!-- pagebreak -->
 
@@ -207,7 +235,11 @@ Valores monetários são números em reais, com separador decimal de JSON. Prese
 | `cliente.email` | Texto ou `null` | E-mail principal cadastrado. |
 | `valor` | Número | Valor nominal/original da cobrança, em reais. |
 | `vencimento` | Texto de data ou `null` | Vencimento. Não converter a data em timestamp UTC para montar a régua. Suspender itens sem data válida. |
-| `status` | Texto | `pendente`, `vencida`, `paga` ou `cancelada`. A lista inclui somente as duas primeiras situações. |
+| `status` | Texto | `pendente`, `vencida`, `paga` ou `cancelada`. A lista permite consultar todas; sem filtro, inclui somente as duas primeiras. |
+| `pagamento_confirmado` | Booleano | `true` somente quando `status = paga`, conforme o estado financeiro registrado no MasterSat. |
+| `data_pagamento` | Data ou `null` | Data registrada de pagamento. Pode faltar em históricos legados; a API não inventa uma data. |
+| `valor_pago` | Número ou `null` | Valor efetivamente recebido, quando registrado. Mantém-se separado do valor nominal. |
+| `forma_pagamento` | Texto ou `null` | Meio de pagamento registrado, quando disponível. |
 | `forma_envio` | Texto | Preferência do pagador: `email`, `whatsapp` ou `todos`. Quando o cadastro está vazio, a API retorna `email`. |
 | `enviar_boleto_whatsapp` | Booleano | Opção específica de envio por WhatsApp. Pode habilitar o canal mesmo se `forma_envio` for `email`. |
 
@@ -227,9 +259,11 @@ O endpoint entrega o telefone principal. Contatos adicionais, contatos de emerg�
 | `linha_digitavel` | Texto ou `null` | Linha de pagamento retornada pelo sistema. Preservar como texto, inclusive zeros iniciais. |
 | `codigo_barras` | Texto ou `null` | Representação numérica do código de barras. Não converter para número. |
 | `pix_copia_cola` | Texto ou `null` | Código Pix quando disponível. Enviar exatamente como recebido; omitir o bloco Pix quando nulo. |
-| `boleto_registrado` | Booleano | Indica que existe registro local Ailos com linha digitável. Não representa consulta bancária em tempo real. |
-| `boleto_pdf_url` | Texto / URL | Endpoint de download autenticado para a integradora. É retornado mesmo quando o registro do boleto ainda não foi identificado. |
-| `boleto_link_cliente` | Texto / URL ou `null` | Link do PDF com token para o cliente. Nulo quando `boleto_registrado` é falso. |
+| `boleto_registrado` | Booleano | Indica registro local Ailos com linha digitável **e** código de barras. Não representa consulta bancária em tempo real nem dívida em aberto. |
+| `boleto_disponivel` | Booleano | Cobrança aberta, com dados oficiais completos, sem baixa pendente/confirmada ou liquidação registrada no título, e não restrita ao sistema. |
+| `motivo_boleto_indisponivel` | Texto ou `null` | `sem_registro_bancario`, `cobranca_paga`, `cobranca_cancelada`, `boleto_baixado` ou `somente_sistema`. Nulo quando disponível. |
+| `boleto_pdf_url` | Texto / URL ou `null` | Endpoint de download autenticado para a integradora. Nulo quando `boleto_disponivel` é falso. |
+| `boleto_link_cliente` | Texto / URL ou `null` | Link do PDF com token para o cliente. Nulo quando `boleto_disponivel` é falso. |
 | `valor_com_juros` | Número ou `null` | Valor atualizado calculado pelo backend quando o status é `vencida` e há atraso. Não recalcular encargos na integradora. |
 
 ### Interpretação da situação financeira
@@ -238,14 +272,14 @@ O endpoint entrega o telefone principal. Contatos adicionais, contatos de emerg�
 | --- | --- |
 | `pendente` | Considerar para lembrete conforme vencimento e régua acordada. |
 | `vencida` | Considerar para aviso de atraso. Se houver valor atualizado, identificá-lo como tal na mensagem. |
-| `paga` | Suspender notificações de cobrança e retirar da fila. |
+| `paga` | Suspender notificações de cobrança e retirar da fila. Pode ser usada para uma mensagem de confirmação de pagamento, com controle de duplicidade na integradora. |
 | `cancelada` | Suspender notificações de cobrança e retirar da fila. |
 
 ### Particularidades da versão atual
 
 O backend reclassifica vencimentos em rotina periódica, prevista a cada hora. O status e a data podem apresentar diferença temporária. A rotina financeira usa a data de Brasília (UTC-03:00 na implementação analisada).
 
-O indicador `boleto_registrado` verifica a linha digitável, enquanto o link público exige linha digitável **e** código de barras oficiais. Uma falha ao montar os dados também pode manter campos nulos com o indicador verdadeiro. Confirmar a disponibilidade do link público antes de distribuir o documento.
+`boleto_registrado` verifica linha digitável e código de barras oficiais. `boleto_disponivel` acrescenta a situação financeira e bancária local. Os campos de boleto vêm diretamente do registro Ailos, sem depender da geração de PDF na listagem. Revalidar o detalhe e a abertura do link antes do envio.
 
 O valor do boleto continua nominal; `valor_com_juros` é uma informação separada. Não modificar PDF, linha digitável, código de barras ou Pix para embutir encargos.
 
@@ -283,7 +317,7 @@ Accept: application/pdf
 
 A integradora deve baixar os bytes no seu servidor e anexá-los pelo mecanismo de mídia da plataforma de mensagens. Se a plataforma não aceitar cabeçalhos customizados, ela não conseguirá baixar diretamente a URL autenticada sem intermediação.
 
-> **Verificação obrigatória no consumidor:** a rota de PDF autenticado não bloqueia automaticamente títulos pagos, cancelados ou sem registro bancário. Ela pode gerar um PDF local. Revalidar o detalhe, os critérios da seção 03 e a disponibilidade do link público antes de enviar qualquer documento ao cliente.
+> **PDF indisponível:** títulos pagos, cancelados, restritos ao sistema, sem dados oficiais completos ou com baixa/liquidação registrada retornam `409` com o código do motivo. A rota não entrega um boleto local calculado para cobrir a ausência de registro. Revalidar o detalhe e os critérios da seção 03 imediatamente antes do envio.
 
 Não encaminhar `boleto_pdf_url` como link de acesso do cliente: esse endereço exige a chave que pertence à integradora.
 
@@ -335,6 +369,7 @@ Erros tratados pela aplicação normalmente possuem o campo JSON `detail`. Falha
 | `200` | Consulta ou PDF obtido. | Validar os dados antes de utilizar. Lista vazia é uma resposta válida. |
 | `401` | Chave ausente ou incorreta. | Suspender as tentativas e conferir o cabeçalho com a MasterSat. |
 | `404` | Cobrança/cliente indisponível ou link público inválido/indisponível. | Suspender o item e reavaliar. Não interpretar automaticamente como pagamento. |
+| `409` | Boleto autenticado indisponível para pagamento. | Ler `detail.code`, suspender o envio do documento e reconsultar o detalhe. |
 | `422` | Parâmetro inválido ou falha ao gerar o PDF autenticado. | Corrigir a requisição ou encaminhar o ID à MasterSat. Não reenviar em sequência. |
 | `429` | Limite de requisições atingido. | Reduzir a frequência e reagendar a tentativa. |
 | `503` | Integração sem chave configurada; também pode haver indisponibilidade da infraestrutura. | Ler o erro. Se a chave estiver ausente no servidor, solicitar configuração à MasterSat. |
@@ -408,6 +443,8 @@ Importar `mastersat-cobrancas.postman_collection.json`. Criar um ambiente local 
 
 Executar a listagem, selecionar um ID, consultar o detalhe e testar os PDFs. A requisição de link público está configurada sem autenticação. A coleção não envia mensagens e não altera cobranças.
 
+O [guia de comandos da versão 1.1](guia-comandos-v1.1.md) contém exemplos completos para PowerShell e cURL, incluindo pagamentos confirmados e paginação automática.
+
 <!-- pagebreak -->
 
 ## 12. Automação e modelo de mensagem
@@ -418,22 +455,28 @@ Este fluxo é pseudocódigo para implementação pela integradora; não represen
 
 ```text
 a cada ciclo acordado:
-  lote = consultar_cobrancas(forma_envio="whatsapp", limit=500)
-  se lote.total == 500:
-    sinalizar_possivel_truncamento()
-  para cada candidato em lote.cobrancas:
-    se fora_da_regua(candidato): continuar
-    chave = (candidato.id, etapa_regua, ocorrencia_agendada)
-    se nao_reservar_atomicamente(chave): continuar
-    atual = consultar_detalhe(candidato.id)
-    se status_nao_aberto(atual): suspender(chave); continuar
-    se canal_ou_telefone_invalido(atual): suspender(chave); continuar
-    se boleto_incompleto(atual): suspender(chave); continuar
-    se link_publico_indisponivel(atual): suspender(chave); continuar
-    se fora_da_regua(atual): liberar(chave); continuar
-    resultado = enviar_mensagem_com_dados_atualizados(atual)
-    registrar_resultado(chave, resultado)
+  offset = 0
+  repetir:
+    lote = consultar_cobrancas(forma_envio="whatsapp", limit=500, offset=offset,
+                              status=etapa.status, vencimento_de=etapa.inicio,
+                              vencimento_ate=etapa.fim)
+    para cada candidato em lote.cobrancas:
+      se fora_da_regua(candidato): continuar
+      chave = (candidato.id, etapa_regua, ocorrencia_agendada)
+      se nao_reservar_atomicamente(chave): continuar
+      atual = consultar_detalhe(candidato.id)
+      se status_nao_aberto(atual): suspender(chave); continuar
+      se canal_ou_telefone_invalido(atual): suspender(chave); continuar
+      se nao atual.boleto_disponivel: suspender(chave); continuar
+      se link_publico_indisponivel(atual): suspender(chave); continuar
+      se fora_da_regua(atual): liberar(chave); continuar
+      resultado = enviar_mensagem_com_dados_atualizados(atual)
+      registrar_resultado(chave, resultado)
+    se nao lote.has_more: terminar
+    offset = lote.next_offset
 ```
+
+Para a etapa de confirmação de pagamento, consultar separadamente `status=paga` com intervalo de `pagamento_de`/`pagamento_ate`, revalidar `pagamento_confirmado` no detalhe e reservar uma única notificação por cobrança. Não enviar boleto nem lembrete de cobrança nessa etapa. Se o histórico não possui data de pagamento, consultar por status/vencimento; esse registro não entra no filtro de data de pagamento.
 
 ### Duplicidade e falhas de envio
 
@@ -465,7 +508,9 @@ O conteúdo, os horários, a periodicidade e os modelos utilizados na plataforma
 | Pago/cancelado depois da listagem | Reconsulta de detalhe impede o envio. Abertura do link não substitui a consulta de status. |
 | Pix ausente e telefone inválido | Omitir Pix nulo; suspender o item com destinatário inválido. |
 | Reexecução e timeout | Não duplicar mensagens; tratar resultado desconhecido de envio junto ao provedor. |
-| Volume no limite | Detectar possível truncamento; não assumir cobertura completa da carteira. |
+| Filtros de data/status | Combinar vencimento exato ou intervalo com `pendente`, `vencida`, `paga` e `todos`; parâmetros inválidos retornam `422`. |
+| Pagamentos confirmados | `status=paga` retorna confirmação, data e valor recebido quando registrados; nenhum pagamento é inferido pela ausência de um ID. |
+| Volume acima de 2000 | Percorrer `next_offset` até `has_more = false`, com ordenação por vencimento e ID. |
 | Falhas HTTP e indisponibilidade | Interromper/reagendar conforme a seção 10, sem enviar com verificação incompleta. |
 
 ### Informações para início da operação
@@ -476,8 +521,8 @@ Ao relatar um problema, informar data/hora com fuso, método, rota, ID da cobran
 
 ### Base técnica e versão
 
-Documento conferido contra o código do projeto na revisão `28af706`, em 29/09/2026. Referências principais: `backend/app/api/v1/endpoints/integrations.py`, `backend/app/api/v1/endpoints/boletos.py`, `backend/app/api/deps.py` e `backend/tests/test_integrations_api.py`.
+Versão 1.1 atualizada em 07/10/2026 com os filtros, a paginação e os dados de pagamento solicitados pela integradora nos áudios e vídeo. Referências principais: `backend/app/api/v1/endpoints/integrations.py`, `backend/app/schemas/integration_billing.py`, `backend/app/api/v1/endpoints/boletos.py`, `backend/app/api/deps.py` e `backend/tests/test_integrations_api.py`.
 
-Os 14 testes existentes de integração passaram em ambiente local isolado. Essa verificação não certifica a configuração do servidor publicado, a entrega pelo WhatsApp ou a homologação bancária. As limitações e particularidades descritas correspondem à implementação consultada.
+Os 70 testes de integração passaram com dados sintéticos em banco SQLite isolado, incluindo leitura acima de 2000 registros e consulta de pagamentos. Essa verificação não certifica os registros da carteira de produção, a configuração do servidor publicado, a entrega pelo WhatsApp ou a homologação bancária. Consultas não alteram status, não conciliam pagamentos e não chamam o banco para emitir boletos.
 
-**Arquivos entregues:** manual em PDF, fonte editável em Markdown, logo e coleção Postman sem credenciais. Versões futuras da API devem motivar revisão deste documento.
+**Arquivos atualizados na versão 1.1:** fonte editável deste manual em Markdown e coleção Postman sem credenciais. PDFs distribuídos da versão 1.0 precisam ser regenerados a partir desta fonte antes da entrega. Versões futuras da API devem motivar revisão deste documento.
