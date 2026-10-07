@@ -119,6 +119,11 @@ class Billing(Base, TimestampMixin, SoftDeleteMixin):
     competencia_liberada: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=false(), nullable=False,
     )
+    # Cobrança que vive só no sistema (carnê simples): nunca vai ao banco. A
+    # política de título bancário recusa emitir na Ailos ou em remessa CNAB.
+    somente_sistema: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false(), nullable=False,
+    )
     # Título que substituiu este: boleto único do fechamento ou negociação
     # (/billings/unificar). A original fica cancelada e continua ocupando o
     # mês/parcela, porque a dívida passou para o substituto.

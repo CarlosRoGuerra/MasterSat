@@ -12,7 +12,9 @@ from decimal import Decimal
 
 import pytest
 
+from app.models.ailos_boleto import AilosBoleto
 from app.models.billing import Billing
+from app.models.cnab_remessa import CnabRemessa, CnabRemessaItem
 from app.models.client import Client
 from app.models.contract import Contract
 from app.models.enums import BillingStatus, ClientStatus
@@ -54,9 +56,50 @@ def test_boleto_sgr_sai_em_uma_linha_com_total_e_valor_pago(http, db):
     assert r.status_code == 200
     linhas = _linhas(r)
     assert len(linhas) == 2
-    sgr = next(l for l in linhas if 'SGR 2976' in l)
-    assert '3 placa(s)' in sgr and '194.97' in sgr
+    sgr = next(l for l in linhas if l.split(';')[1] == '2976')
     assert sgr.count('194.97') == 2  # valor e valor pago (pago pelo SGR, sem paid_amount)
+
+
+def test_mensalidade_e_taxa_da_mesma_placa_ficam_no_mesmo_boleto(http, db):
+    c = _cliente(db, 'TRANSPORTADORA LINDOMAR LTDA', '11111111000111')
+    _cobranca(db, c, '64.99', 'Boleto SGR 2840 - QIN6737', cod='2840')
+    _cobranca(db, c, '199.99', 'Boleto SGR 2840 - QIN6737', cod='2840')
+    _cobranca(db, c, '64.99', 'Boleto SGR 2840 - MEY2E87', cod='2840')
+    r = http.get(REPORT, params={'fmt': 'csv', 'situacao': 'paga', 'periodo_por': 'pagamento'})
+    (linha,) = _linhas(r)
+    assert linha.split(';')[1] == '2840' and '329.97' in linha
+
+
+def test_numero_do_sgr_e_o_do_titulo_e_nao_o_codigo_interno(http, db):
+    c = _cliente(db, 'TRANSPORTADORA LINDOMAR LTDA', '11111111000111')
+    for placa in ('SXE7D98', 'RYT7E61'):
+        _cobranca(db, c, '64.99', f'Boleto SGR 2976 - {placa}', cod='19393')
+    r = http.get(REPORT, params={'fmt': 'csv', 'situacao': 'paga', 'periodo_por': 'pagamento'})
+    (linha,) = _linhas(r)
+    assert linha.split(';')[1] == '2976' and '19393' not in linha
+
+
+def test_coluna_mostra_o_numero_de_cada_boleto(http, db):
+    """Pedido de 06/10/2026: no lugar do título, o número que identifica o boleto."""
+    c = _cliente(db, 'CLIENTE', '66666666000166')
+    ailos = _cobranca(db, c, '64.99', 'Plano MENSALIDADE 64,99')
+    db.add(AilosBoleto(billing_id=ailos.id, numero_convenio='123', nosso_numero='00012345600000077'))
+    cnab = _cobranca(db, c, '64.99', 'Fechamento 09/2026 - boleto único')
+    remessa = CnabRemessa(layout='240', sequencial=1, arquivo_sha256='x' * 64, arquivo=b'',
+                          total_titulos=1, valor_total=64.99)
+    db.add(remessa)
+    db.flush()
+    db.add(CnabRemessaItem(remessa_id=remessa.id, billing_id=cnab.id, valor=64.99, nosso_numero='0000000042'))
+    sgr = _cobranca(db, c, '64.99', 'Boleto SGR 622 - RCT6B26', cod='19000')
+    sgr.sgr_payload = {'cod_boleto': '19000', 'nosso_numero': '622'}
+    sem_boleto = _cobranca(db, c, '64.99', 'Plano TESTE • parcela 2/12')
+    db.commit()
+
+    r = http.get(REPORT, params={'fmt': 'csv', 'situacao': 'paga', 'periodo_por': 'pagamento'})
+    assert r.text.splitlines()[0].split(';')[1].strip('"﻿') == 'Nº do Boleto'
+    numeros = {l.split(';')[1] for l in _linhas(r)}
+    assert numeros == {'00012345600000077', '0000000042', '622', f'#{sem_boleto.id}'}
+    assert not any('Plano' in l or 'Fechamento' in l for l in _linhas(r))
 
 
 def test_boleto_sgr_com_placas_em_situacoes_diferentes_fica_parcial(http, db):
@@ -65,7 +108,7 @@ def test_boleto_sgr_com_placas_em_situacoes_diferentes_fica_parcial(http, db):
     _cobranca(db, c, '64.99', 'Boleto SGR 9 - BBB2B22', cod='9', pago=False)
     r = http.get(REPORT, params={'fmt': 'csv', 'situacao': 'todas', 'periodo_por': 'vencimento'})
     (linha,) = _linhas(r)
-    assert 'Parcial' in linha and '2 placa(s)' in linha
+    assert 'Parcial' in linha and linha.split(';')[1] == '9'
 
 
 def test_pdf_do_relatorio_agrupado_gera(http, db):

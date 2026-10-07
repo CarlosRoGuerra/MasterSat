@@ -268,3 +268,43 @@ class TrackerLoteOut(BaseModel):
     criados: int
     ignorados: int
     itens: list[TrackerLoteItem] = []
+
+
+class TrackerAcaoLoteIn(BaseModel):
+    """Ação sobre vários rastreadores selecionados na listagem.
+
+    Com ``simular=True`` nada é gravado — devolve o relatório de quais serão
+    alterados e quais ficam de fora (e por quê), para conferir antes.
+    """
+
+    ids: list[int] = Field(..., min_length=1, max_length=2000)
+    simular: bool = False
+
+
+class TrackerStatusLoteIn(TrackerAcaoLoteIn):
+    status: TrackerStatus
+    notes: str | None = Field(default=None, max_length=500)
+
+    @field_validator('status')
+    @classmethod
+    def sem_instalado(cls, value: TrackerStatus) -> TrackerStatus:
+        if value == TrackerStatus.INSTALLED:
+            raise ValueError('"Instalado" só pela vinculação a um veículo, não em lote')
+        return value
+
+
+class TrackerAcaoLoteItem(BaseModel):
+    """situacao: 'aplicado' | 'ignorado'"""
+
+    tracker_id: int
+    imei: str | None = None
+    situacao: str
+    motivo: str | None = None
+
+
+class TrackerAcaoLoteOut(BaseModel):
+    simulacao: bool
+    total_enviados: int
+    aplicados: int
+    ignorados: int
+    itens: list[TrackerAcaoLoteItem] = []

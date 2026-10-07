@@ -97,6 +97,8 @@ export type BillingItem = {
   boleto_ailos?: boolean;
   /** Origem SGR: linhas com o mesmo cod_boleto são UM boleto consolidado lá. */
   sgr_payload?: { cod_boleto?: string | null } | null;
+  /** Carnê simples: vive só no sistema, nunca é emitido no banco. */
+  somente_sistema?: boolean;
 };
 
 export type CarneParcelaDetalhe = {

@@ -24,6 +24,7 @@ import { useAuthGuard } from '@/lib/use-auth-guard';
 import { ROUTE_ROLES } from '@/lib/route-roles';
 import { useAssistantContextActions } from '@/lib/assistant-context';
 import type { TrackerStatus, ClientOption, VehicleOption } from '@/lib/domain-types';
+import { AcoesEmLote, type AcaoLote, type AcaoLoteCorpo, type AcaoLoteResultado } from './_components/acoes-em-lote';
 
 type Tracker = {
   id: number;
@@ -188,6 +189,9 @@ function RastreadoresTableContent({
   canEdit,
   onDetails,
   onEdit,
+  selecionados,
+  onToggle,
+  onToggleTodos,
 }: {
   trackers: Tracker[];
   loading: boolean;
@@ -195,8 +199,13 @@ function RastreadoresTableContent({
   canEdit: boolean;
   onDetails: (t: Tracker) => void;
   onEdit: (t: Tracker) => void;
+  selecionados: Set<number>;
+  onToggle: (id: number) => void;
+  onToggleTodos: () => void;
 }) {
   const pg = usePagination(trackers, 20);
+  const todos = trackers.length > 0 && trackers.every((t) => selecionados.has(t.id));
+  const algum = !todos && trackers.some((t) => selecionados.has(t.id));
 
   if (loading) return <TableSkeleton rows={8} cols={5} />;
   if (error) return <EmptyState icon={AlertTriangle} tone="warning" title="Não foi possível carregar os rastreadores" description="Veja o erro acima e tente novamente." />;
@@ -206,6 +215,19 @@ function RastreadoresTableContent({
     <>
       <Table>
         <TableHead>
+          {canEdit && (
+            <Th className="w-10">
+              <input
+                type="checkbox"
+                checked={todos}
+                ref={(el) => { if (el) el.indeterminate = algum; }}
+                onChange={onToggleTodos}
+                aria-label={`Selecionar todos os ${trackers.length} rastreadores da lista`}
+                title="Selecionar todos da lista (todas as páginas)"
+                className="rounded border-slate-300"
+              />
+            </Th>
+          )}
           <Th>IMEI / ID</Th>
           <Th>Equipamento</Th>
           <Th>Cliente / Veículo</Th>
@@ -214,7 +236,18 @@ function RastreadoresTableContent({
         </TableHead>
         <TableBody>
           {pg.slice.map((tracker) => (
-            <Tr key={tracker.id}>
+            <Tr key={tracker.id} selected={selecionados.has(tracker.id)}>
+              {canEdit && (
+                <Td>
+                  <input
+                    type="checkbox"
+                    checked={selecionados.has(tracker.id)}
+                    onChange={() => onToggle(tracker.id)}
+                    aria-label={`Selecionar ${tracker.imei}`}
+                    className="rounded border-slate-300"
+                  />
+                </Td>
+              )}
               <Td className="font-mono text-sm">{tracker.imei}</Td>
               <Td>
                 <p>{[tracker.brand, tracker.model].filter(Boolean).join(' ') || '—'}</p>
@@ -253,6 +286,7 @@ function RastreadoresPageInner() {
   const canEditContract = user?.role === 'admin';
 
   const [trackers, setTrackers] = useState<Tracker[]>([]);
+  const [selecionados, setSelecionados] = useState<Set<number>>(new Set());
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [vehicles, setVehicles] = useState<VehicleOption[]>([]);
   const [manufacturers, setManufacturers] = useState<ManufacturerOption[]>([]);
@@ -301,14 +335,17 @@ function RastreadoresPageInner() {
       if (statusFilter) query.set('status', statusFilter);
       if (clientFilter) query.set('client_id', clientFilter);
       if (vehicleFilter) query.set('vehicle_id', vehicleFilter);
-      query.set('limit', '100');
+      // Lista inteira do filtro: "selecionar todos" precisa ser todos mesmo.
       const [trackerResponse, clientResponse, vehicleResponse, planResponse] = await Promise.all([
-        apiFetchList<Tracker>(`/trackers?${query.toString()}`, {}, currentToken),
+        apiFetchAll<Tracker>(`/trackers?${query.toString()}`, currentToken, 500),
         apiFetchAll<ClientOption>('/clients', currentToken, 300),
         apiFetchAll<VehicleOption>('/vehicles', currentToken, 500),
         apiFetch<PlanOption[]>('/plans?limit=100', {}, currentToken).catch(() => [] as PlanOption[]),
       ]);
       setTrackers(trackerResponse);
+      // A seleção acompanha a lista: o que saiu do filtro deixa de contar.
+      const visiveis = new Set(trackerResponse.map((t) => t.id));
+      setSelecionados((prev) => new Set([...prev].filter((id) => visiveis.has(id))));
       setClients(clientResponse);
       setVehicles(vehicleResponse);
       setPlans(planResponse);
@@ -719,6 +756,24 @@ function RastreadoresPageInner() {
     }
   }
 
+  function alternarSelecao(id: number) {
+    setSelecionados((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  function alternarTodos() {
+    setSelecionados((prev) => (
+      trackers.length > 0 && trackers.every((t) => prev.has(t.id)) ? new Set() : new Set(trackers.map((t) => t.id))
+    ));
+  }
+
+  function executarLote(acao: AcaoLote, corpo: AcaoLoteCorpo) {
+    return apiFetch<AcaoLoteResultado>(`/trackers/lote/${acao}`, { method: 'POST', body: JSON.stringify(corpo) }, token);
+  }
+
   async function deleteTracker() {
     if (!token || !selectedTracker || !canEdit) return;
     if (!window.confirm(`Deseja remover o rastreador ${selectedTracker.imei}?`)) return;
@@ -774,11 +829,27 @@ function RastreadoresPageInner() {
             </Button>
           </div>
           <div className="mt-4">
+            {canEdit && (
+              <AcoesEmLote
+                ids={[...selecionados]}
+                onLimpar={() => setSelecionados(new Set())}
+                onExecutar={executarLote}
+                onConcluido={(mensagem) => {
+                  setError('');
+                  setFeedback(mensagem);
+                  setSelecionados(new Set());
+                  if (token) loadBaseData(token);
+                }}
+              />
+            )}
             <RastreadoresTableContent
               trackers={trackers}
               loading={loading}
               error={error}
               canEdit={canEdit}
+              selecionados={selecionados}
+              onToggle={alternarSelecao}
+              onToggleTodos={alternarTodos}
               onDetails={(t) => { setSelectedTracker(t); setDetailsTab('dados'); setDetailsOpen(true); setVinculoConsulta({ loading: false, result: null, error: '' }); }}
               onEdit={openEditModal}
             />
@@ -803,7 +874,13 @@ function RastreadoresPageInner() {
         size="lg"
         footer={canEdit && selectedTracker ? (
           <div className="flex justify-end">
-            <Button variant="danger" onClick={() => { setDetailsOpen(false); deleteTracker(); }} className="text-xs">
+            <Button
+              variant="danger"
+              onClick={() => { setDetailsOpen(false); deleteTracker(); }}
+              className="text-xs"
+              disabled={!!selectedTracker.vehicle_id || !['extraviado', 'em_manutencao'].includes(selectedTracker.status)}
+              title="Só é possível excluir rastreador extraviado ou em manutenção, sem veículo"
+            >
               Excluir rastreador
             </Button>
           </div>

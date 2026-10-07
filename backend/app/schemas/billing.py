@@ -204,6 +204,8 @@ class BillingOut(BillingBase):
     # rótulo legado fora de formato.
     competencia: date | None = None
     competencia_liberada: bool = False
+    # Carnê simples: cobrança só no sistema, sem emissão no banco.
+    somente_sistema: bool = False
     # Cobrança que assumiu esta dívida (boleto único ou negociação).
     substituted_by_id: int | None = None
     # Situação do título no banco; None = nunca foi ao banco (Fase 03).

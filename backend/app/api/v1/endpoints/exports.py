@@ -12,11 +12,12 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 from datetime import date
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
 from app.core.limiter import limiter
@@ -24,7 +25,9 @@ from app.core.limiter import limiter
 from app.api.deps import require_roles
 from app.core.permissions import Capability, require_capability, roles_with
 from app.db.session import get_db
+from app.models.ailos_boleto import AilosBoleto
 from app.models.billing import Billing
+from app.models.cnab_remessa import CnabRemessaItem
 from app.models.client import Client
 from app.models.contract import Contract
 from app.models.enums import BillingStatus
@@ -322,7 +325,6 @@ def _agrupar_boletos_sgr(linhas: list[dict]) -> list[dict]:
         pagamentos = [g['pagamento'] for g in grupo if g['pagamento']]
         saida.append({
             **ln,
-            'titulo': f'Boleto SGR {ln["cod_boleto"]} — {len(grupo)} placa(s)',
             'vencimento': min((g['vencimento'] for g in grupo if g['vencimento']), default=None),
             'pagamento': max(pagamentos) if len(pagamentos) == len(grupo) else None,
             'valor': round(sum(g['valor'] for g in grupo), 2),
@@ -331,6 +333,27 @@ def _agrupar_boletos_sgr(linhas: list[dict]) -> list[dict]:
             'forma': ', '.join(sorted({g['forma'] for g in grupo if g['forma']})),
         })
     return saida
+
+
+_NUMERO_NO_TITULO_SGR = re.compile(r'^Boleto SGR (\S+)')
+
+
+def _numero_do_boleto(b: Billing, nosso_numero_ailos: str | None, nosso_numero_cnab: str | None) -> str:
+    """Número que identifica o boleto que o cliente recebeu.
+
+    Ailos (API) e CNAB guardam o nosso número do título registrado; a migração
+    guardou o do SGR no payload e no título ("Boleto SGR 2976 - placa"). Sem
+    boleto no banco (pago por PIX, baixa manual), fica o ID da cobrança.
+    """
+    if nosso_numero_ailos:
+        return nosso_numero_ailos
+    if nosso_numero_cnab:
+        return nosso_numero_cnab
+    numero = (b.sgr_payload or {}).get('nosso_numero')
+    if not numero:
+        achado = _NUMERO_NO_TITULO_SGR.match(b.title or '')
+        numero = achado.group(1) if achado else None
+    return str(numero) if numero else f'#{b.id}'
 
 
 def _billings_report_pdf(linhas, situacao: str, periodo_por: str,
@@ -368,14 +391,19 @@ def _billings_report_pdf(linhas, situacao: str, periodo_por: str,
         ))
     elems.append(Spacer(1, 8))
 
-    header = ['Cliente', 'Título', 'Vencimento', 'Pagamento', 'Valor', 'Valor Pago', 'Situação']
+    from reportlab.lib.styles import ParagraphStyle
+    from xml.sax.saxutils import escape
+
+    # Nome longo de cliente quebra dentro da célula em vez de invadir a vizinha.
+    celula = ParagraphStyle('celula', parent=styles['Normal'], fontSize=8, leading=9.5)
+    header = ['Cliente', 'Nº do Boleto', 'Vencimento', 'Pagamento', 'Valor', 'Valor Pago', 'Situação']
     data = [header]
     total, total_pago = 0.0, 0.0
     for ln in linhas:
         total += ln['valor']
         total_pago += ln['valor_pago']
         data.append([
-            ln['cliente'], ln['titulo'],
+            Paragraph(escape(ln['cliente'] or ''), celula), Paragraph(escape(ln['numero']), celula),
             ln['vencimento'].strftime('%d/%m/%Y') if ln['vencimento'] else '',
             ln['pagamento'].strftime('%d/%m/%Y') if ln['pagamento'] else '—',
             _brl(ln['valor']), _brl(ln['valor_pago']) if ln['valor_pago'] else '—',
@@ -435,11 +463,19 @@ def export_billings_report(
     campo = Billing.payment_date if periodo_por == 'pagamento' else Billing.due_date
 
     query = (
-        db.query(Billing, Client.name.label('cliente'))
+        db.query(
+            Billing, Client.name.label('cliente'),
+            AilosBoleto.nosso_numero.label('nn_ailos'), CnabRemessaItem.nosso_numero.label('nn_cnab'),
+        )
         .join(
             Client,
             Client.id == func.coalesce(Billing.payer_client_id, Billing.client_id),
         )
+        .outerjoin(AilosBoleto, AilosBoleto.billing_id == Billing.id)
+        # Só a remessa em que o título está reservado (no máximo uma por cobrança).
+        .outerjoin(CnabRemessaItem, and_(
+            CnabRemessaItem.billing_id == Billing.id, CnabRemessaItem.status == 'reservado',
+        ))
         .filter(Billing.is_deleted.is_(False), Client.is_deleted.is_(False))
     )
     if situacao != 'todas':
@@ -463,7 +499,7 @@ def export_billings_report(
     linhas = [
         {
             'cliente': cliente,
-            'titulo': b.title or b.notes or '',
+            'numero': _numero_do_boleto(b, nn_ailos, nn_cnab),
             'vencimento': b.due_date,
             'pagamento': b.payment_date,
             'valor': float(b.amount or 0),
@@ -476,18 +512,21 @@ def export_billings_report(
             'forma': b.payment_method or '',
             'cod_boleto': str((b.sgr_payload or {}).get('cod_boleto') or '') or None,
         }
-        for b, cliente in query.order_by(campo.desc().nullslast(), Client.name).limit(5000).all()
+        for b, cliente, nn_ailos, nn_cnab in
+        query.order_by(campo.desc().nullslast(), Client.name).limit(50000).all()
     ]
-    linhas = _agrupar_boletos_sgr(linhas)
+    # Agrupa antes de limitar: o limite antigo (5000 linhas por placa) cortava o
+    # período — 01/01 a 06/10/2026 parava em 16/01 — e podia partir um boleto.
+    linhas = _agrupar_boletos_sgr(linhas)[:5000]
 
     if fmt == 'pdf':
         return _billings_report_pdf(linhas, situacao, periodo_por, date_from, date_to, forma_cobranca)
 
-    headers = ['Cliente', 'Título', 'Vencimento', 'Pagamento', 'Valor', 'Valor Pago',
+    headers = ['Cliente', 'Nº do Boleto', 'Vencimento', 'Pagamento', 'Valor', 'Valor Pago',
                'Situação', 'Forma de Pagamento']
     rows = [
         [
-            ln['cliente'], ln['titulo'],
+            ln['cliente'], ln['numero'],
             ln['vencimento'].strftime('%d/%m/%Y') if ln['vencimento'] else '',
             ln['pagamento'].strftime('%d/%m/%Y') if ln['pagamento'] else '',
             ln['valor'], ln['valor_pago'],

@@ -11,7 +11,13 @@ describe('ações em lote dos boletos selecionados', () => {
   it('ignora boletos registrados e preserva a ordem dos ausentes sem duplicar IDs', () => {
     expect(separarBoletosPorRegistro([12, 8, 12, 5], [
       { id: 12, boleto_ailos: true }, { id: 8, boleto_ailos: false }, { id: 5, boleto_ailos: true },
-    ])).toEqual({ existentes: [12, 5], ausentes: [8] });
+    ])).toEqual({ existentes: [12, 5], ausentes: [8], somenteSistema: [] });
+  });
+
+  it('carnê simples (somente no sistema) nunca entra na emissão', () => {
+    expect(separarBoletosPorRegistro([3, 4, 5], [
+      { id: 3, somente_sistema: true }, { id: 4 }, { id: 5, boleto_ailos: true },
+    ])).toEqual({ existentes: [5], ausentes: [4], somenteSistema: [3] });
   });
 
   it('emite apenas os IDs selecionados, uma vez cada, e não envia e-mail', async () => {

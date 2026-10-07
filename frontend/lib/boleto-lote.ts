@@ -6,16 +6,19 @@ export type ResultadoLoteBoletos = {
   falhas: { id: number; mensagem: string }[];
 };
 
-/** Usa o estado bancário da carteira para não repetir o registro de boletos. */
+/** Usa o estado bancário da carteira para não repetir o registro de boletos.
+ *  Carnê simples (somente_sistema) nunca vai ao banco: sai de "ausentes". */
 export function separarBoletosPorRegistro(
   ids: number[],
-  billings: ReadonlyArray<{ id: number; boleto_ailos?: boolean }>,
-): { existentes: number[]; ausentes: number[] } {
+  billings: ReadonlyArray<{ id: number; boleto_ailos?: boolean; somente_sistema?: boolean }>,
+): { existentes: number[]; ausentes: number[]; somenteSistema: number[] } {
   const registrados = new Set(billings.filter(b => b.boleto_ailos).map(b => b.id));
+  const soSistema = new Set(billings.filter(b => b.somente_sistema).map(b => b.id));
   const selecionados = [...new Set(ids)];
   return {
     existentes: selecionados.filter(id => registrados.has(id)),
-    ausentes: selecionados.filter(id => !registrados.has(id)),
+    ausentes: selecionados.filter(id => !registrados.has(id) && !soSistema.has(id)),
+    somenteSistema: selecionados.filter(id => soSistema.has(id)),
   };
 }
 

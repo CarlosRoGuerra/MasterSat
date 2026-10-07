@@ -43,4 +43,28 @@ describe('BillingsModal', () => {
     expect(onLoadComponents).toHaveBeenCalledWith(56870);
     expect(screen.getByText('Mostrando 1 boleto(s)')).toBeInTheDocument();
   });
+
+  it('carnê simples aparece marcado e não pode virar carnê na Ailos', () => {
+    const parcela = (id: number, somente_sistema: boolean): BillingItem => ({
+      id, billing_type: 'carne', title: `Plano 64,99 • parcela ${id}/3`, due_date: '2099-01-15',
+      amount: 64.99, status: 'pendente', installment_number: id, installment_total: 3, somente_sistema,
+    });
+    const props = {
+      open: true, clientName: 'CLIENTE', loading: false, carnes: [], carneExpandido: null,
+      summaryExpanded: false, gerandoCarne: false,
+      onClose: vi.fn(), onToggleSummary: vi.fn(), onSelectedIdsChange: vi.fn(),
+      onToggleCarne: vi.fn(), onBaixarCarne: vi.fn(), onOpenUnify: vi.fn(),
+      onGerarCarne: vi.fn(), onEditBilling: vi.fn(), onBillingHistory: vi.fn(),
+      onReceiveBilling: vi.fn(), onSendEmail: vi.fn(), onSendWhats: vi.fn(),
+      onBaixarPdf: vi.fn(), onBaixarComprovante: vi.fn(), onLoadComponents: vi.fn(),
+    };
+    const { rerender } = render(<BillingsModal {...props} billings={[parcela(1, true), parcela(2, true)]} selectedIds={[1, 2]} />);
+    expect(screen.getAllByText('Carnê simples · só no sistema')).toHaveLength(2);
+    expect(screen.getByRole('button', { name: 'Gerar carnê' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Unificar em 1 boleto' })).toBeEnabled();
+
+    rerender(<BillingsModal {...props} billings={[parcela(1, false), parcela(2, false)]} selectedIds={[1, 2]} />);
+    expect(screen.queryByText('Carnê simples · só no sistema')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Gerar carnê' })).toBeEnabled();
+  });
 });

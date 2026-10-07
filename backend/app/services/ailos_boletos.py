@@ -329,6 +329,9 @@ def _lock_open_billings_for_ailos(
     """
     ids = [billing.id for billing in billings]
     locked_by_id = {billing.id: billing for billing in lock_billings_for_update(db, ids)}
+    # Antes de montar o payload: carnê simples não vai ao banco, e a recusa
+    # tem que dizer isso (não um erro de cadastro do pagador).
+    titulo_bancario.recusar_somente_sistema(db, ids)
     missing = [billing_id for billing_id in ids if billing_id not in locked_by_id]
     unavailable = [
         billing_id

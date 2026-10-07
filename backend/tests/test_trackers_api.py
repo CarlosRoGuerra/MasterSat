@@ -444,6 +444,14 @@ class TestUpdateRastreador:
 # ---------------------------------------------------------------------------
 
 class TestDeleteRastreador:
+    @pytest.fixture
+    def rastreador(self, db, rastreador):
+        # Só extraviado ou em manutenção pode ser excluído.
+        from app.models.enums import TrackerStatus
+        rastreador.status = TrackerStatus.MAINTENANCE
+        db.commit()
+        return rastreador
+
     def test_success_soft_delete(self, http, db, rastreador):
         r = http.delete(f"{PREFIX}/{rastreador.id}")
         assert r.status_code == 200
@@ -1107,7 +1115,10 @@ class TestRastreadorAuthorization:
         })
         assert r.status_code == 200
 
-    def test_operational_can_delete(self, http_op, rastreador):
+    def test_operational_can_delete(self, http_op, db, rastreador):
+        from app.models.enums import TrackerStatus
+        rastreador.status = TrackerStatus.LOST
+        db.commit()
         r = http_op.delete(f"{PREFIX}/{rastreador.id}")
         assert r.status_code == 200
 

@@ -33,6 +33,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.ailos_boleto import AilosBoleto
+from app.models.billing import Billing
 from app.models.cnab_remessa import CnabRemessaItem
 
 SEM_TITULO = 'sem_titulo'
@@ -70,6 +71,8 @@ _PERMITIDO: dict[str, frozenset[str]] = {
     EMITIR_CNAB: frozenset({SEM_TITULO}),
 }
 _EXIGE_CONFIRMACAO = {CANCELAR: frozenset({REGISTRADO, REMESSA_CNAB})}
+# Emissão em banco (qualquer canal) — recusada para cobrança só do sistema.
+_EMISSAO_BANCARIA = frozenset({EMITIR_AILOS, EMITIR_CNAB})
 
 
 @dataclass(frozen=True)
@@ -210,6 +213,24 @@ _MENSAGENS = {
 }
 
 
+def recusar_somente_sistema(db: Session, billing_ids: Iterable[int]) -> None:
+    """Cobrança marcada para não ir ao banco (carnê simples) não é emitida."""
+    ids = sorted({int(b) for b in billing_ids if b is not None})
+    if not ids:
+        return
+    so_sistema = list(db.scalars(
+        select(Billing.id).where(Billing.id.in_(ids), Billing.somente_sistema.is_(True)).order_by(Billing.id)
+    ).all())
+    if so_sistema:
+        raise PoliticaBancariaError(
+            'cobranca_somente_sistema',
+            'Esta cobrança foi gerada somente no sistema (carnê simples) e não é emitida '
+            'no banco. Receba pelo "Registrar pagamento"; para cobrar por boleto, '
+            'cancele e gere um carnê pela Ailos.',
+            so_sistema,
+        )
+
+
 def exigir(
     db: Session,
     operacao: str,
@@ -225,6 +246,9 @@ def exigir(
     ``permitir_em_registro``: retomada manual de uma reserva em andamento
     (retry individual da parcela de um lote).
     """
+    billing_ids = list(billing_ids)
+    if operacao in _EMISSAO_BANCARIA:
+        recusar_somente_sistema(db, billing_ids)
     titulos = titulos_bancarios(db, billing_ids)
     permitidos = _PERMITIDO[operacao]
     retomadas = set(permitir_em_registro)

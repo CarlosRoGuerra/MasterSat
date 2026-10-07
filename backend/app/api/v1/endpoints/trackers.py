@@ -25,6 +25,9 @@ from app.models.user import User
 from app.models.vehicle import Vehicle
 from app.schemas.contract import ContractOut
 from app.schemas.tracker import (
+    TrackerAcaoLoteIn,
+    TrackerAcaoLoteItem,
+    TrackerAcaoLoteOut,
     TrackerCreate,
     TrackerHistoryOut,
     TrackerLinkPayload,
@@ -32,6 +35,7 @@ from app.schemas.tracker import (
     TrackerLoteItem,
     TrackerLoteOut,
     TrackerOut,
+    TrackerStatusLoteIn,
     TrackerSwapPayload,
     TrackerUpdate,
 )
@@ -472,6 +476,163 @@ def create_lote(
     )
 
 
+# Excluir só equipamento que saiu de circulação. Estoque e descartado ficam:
+# o primeiro volta a ser instalado, o segundo é o registro da baixa.
+_EXCLUSAO_PERMITIDA = (TrackerStatus.MAINTENANCE, TrackerStatus.LOST)
+
+
+def _status_valor(tracker: Tracker) -> str:
+    return tracker.status.value if isinstance(tracker.status, TrackerStatus) else str(tracker.status)
+
+
+def _contratos_ativos(db: Session, tracker_ids: list[int]) -> dict[int, int]:
+    """tracker_id -> id do contrato ativo que ainda aponta para ele."""
+    if not tracker_ids:
+        return {}
+    rows = db.execute(
+        select(Contract.tracker_id, Contract.id).where(
+            Contract.tracker_id.in_(tracker_ids),
+            Contract.is_deleted.is_(False),
+            Contract.status == 'ativo',
+        )
+    ).all()
+    return {tracker_id: contract_id for tracker_id, contract_id in rows}
+
+
+def _motivo_em_uso(tracker: Tracker, contrato_id: int | None) -> str | None:
+    if tracker.vehicle_id is not None:
+        return 'Instalado em veículo — desinstale antes'
+    if contrato_id:
+        return f'Tem contrato ativo #{contrato_id}'
+    return None
+
+
+def _motivo_nao_excluir(tracker: Tracker, contrato_id: int | None) -> str | None:
+    motivo = _motivo_em_uso(tracker, contrato_id)
+    if motivo:
+        return motivo
+    if tracker.status not in _EXCLUSAO_PERMITIDA:
+        return 'Só é possível excluir rastreador extraviado ou em manutenção'
+    return None
+
+
+def _excluir(db: Session, tracker: Tracker, user_id: int | None, notes: str) -> None:
+    tracker.is_deleted = True
+    _register_history(
+        db,
+        tracker,
+        action='deleted',
+        previous_vehicle_id=tracker.vehicle_id,
+        new_vehicle_id=None,
+        previous_client_id=tracker.client_id,
+        new_client_id=None,
+        previous_status=_status_valor(tracker),
+        new_status='excluido',
+        created_by_user_id=user_id,
+        notes=notes,
+    )
+    tracker.vehicle_id = None
+    tracker.client_id = None
+
+
+def _acao_em_lote(db: Session, payload: TrackerAcaoLoteIn, motivo_de, aplicar) -> TrackerAcaoLoteOut:
+    """Classifica cada rastreador selecionado e aplica a ação nos liberados.
+
+    Um item bloqueado não derruba o lote: fica como 'ignorado' com o motivo.
+    """
+    ids = list(dict.fromkeys(payload.ids))
+    stmt = select(Tracker).where(Tracker.id.in_(ids), Tracker.is_deleted.is_(False))
+    if not payload.simular:
+        stmt = stmt.with_for_update()
+    por_id = {t.id: t for t in db.scalars(stmt).all()}
+    contratos = _contratos_ativos(db, list(por_id))
+
+    itens: list[TrackerAcaoLoteItem] = []
+    for tracker_id in ids:
+        tracker = por_id.get(tracker_id)
+        if tracker is None:
+            itens.append(TrackerAcaoLoteItem(
+                tracker_id=tracker_id, situacao='ignorado', motivo='Rastreador não encontrado',
+            ))
+            continue
+        motivo = motivo_de(tracker, contratos.get(tracker_id))
+        itens.append(TrackerAcaoLoteItem(
+            tracker_id=tracker_id, imei=tracker.imei,
+            situacao='ignorado' if motivo else 'aplicado', motivo=motivo,
+        ))
+
+    if not payload.simular:
+        try:
+            for item in itens:
+                if item.situacao == 'aplicado':
+                    aplicar(por_id[item.tracker_id])
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+
+    aplicados = sum(1 for item in itens if item.situacao == 'aplicado')
+    return TrackerAcaoLoteOut(
+        simulacao=payload.simular,
+        total_enviados=len(ids),
+        aplicados=aplicados,
+        ignorados=len(ids) - aplicados,
+        itens=itens,
+    )
+
+
+@router.post('/lote/status', response_model=TrackerAcaoLoteOut)
+def alterar_status_lote(
+    payload: TrackerStatusLoteIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(*EDIT_ROLES)),
+):
+    """Altera o status dos rastreadores selecionados.
+
+    Rastreador instalado (ou preso a contrato ativo) fica de fora: o status
+    dele acompanha o vínculo e só muda pela desinstalação/transferência.
+    """
+    novo = payload.status
+    observacao = (payload.notes or '').strip()
+
+    def motivo(tracker: Tracker, contrato_id: int | None) -> str | None:
+        return _motivo_em_uso(tracker, contrato_id) or (
+            'Já está com este status' if tracker.status == novo else None
+        )
+
+    def aplicar(tracker: Tracker) -> None:
+        anterior = _status_valor(tracker)
+        tracker.status = novo
+        _register_history(
+            db,
+            tracker,
+            action='status_changed',
+            previous_vehicle_id=None,
+            new_vehicle_id=None,
+            previous_client_id=tracker.client_id,
+            new_client_id=tracker.client_id,
+            previous_status=anterior,
+            new_status=novo.value,
+            created_by_user_id=current_user.id,
+            notes=f'Status alterado em lote — {observacao}' if observacao else 'Status alterado em lote',
+        )
+
+    return _acao_em_lote(db, payload, motivo, aplicar)
+
+
+@router.post('/lote/excluir', response_model=TrackerAcaoLoteOut)
+def excluir_lote(
+    payload: TrackerAcaoLoteIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(*EDIT_ROLES)),
+):
+    """Exclui (soft delete) os selecionados que estão extraviados ou em manutenção."""
+    return _acao_em_lote(
+        db, payload, _motivo_nao_excluir,
+        lambda tracker: _excluir(db, tracker, current_user.id, 'Rastreador removido em lote (soft delete)'),
+    )
+
+
 @router.get('/billing-day-suggestion')
 def billing_day_suggestion(
     vehicle_id: int,
@@ -607,22 +768,10 @@ def delete_item(
                 'Desinstale-o do veículo antes de remover o cadastro.'
             ),
         )
-    tracker.is_deleted = True
-    _register_history(
-        db,
-        tracker,
-        action='deleted',
-        previous_vehicle_id=tracker.vehicle_id,
-        new_vehicle_id=None,
-        previous_client_id=tracker.client_id,
-        new_client_id=None,
-        previous_status=tracker.status.value if isinstance(tracker.status, TrackerStatus) else str(tracker.status),
-        new_status='excluido',
-        created_by_user_id=current_user.id,
-        notes='Rastreador removido com soft delete',
-    )
-    tracker.vehicle_id = None
-    tracker.client_id = None
+    motivo = _motivo_nao_excluir(tracker, _contratos_ativos(db, [tracker.id]).get(tracker.id))
+    if motivo:
+        raise HTTPException(status_code=409, detail=f'{motivo}.')
+    _excluir(db, tracker, current_user.id, 'Rastreador removido com soft delete')
     db.commit()
     return {'message': 'Rastreador removido com soft delete'}
 

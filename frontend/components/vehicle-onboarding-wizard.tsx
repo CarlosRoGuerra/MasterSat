@@ -7,6 +7,7 @@ import { ClientAutocomplete } from '@/components/ui/client-autocomplete';
 import { TrackerAutocomplete } from '@/components/ui/tracker-autocomplete';
 import { BillingDayInput } from '@/components/ui/billing-day-input';
 import { CarneTrackingModal, useCarneTracking } from '@/components/carne-tracking-modal';
+import { CarneCanalChoice, type CarneCanal } from '@/components/carne-canal-choice';
 import { apiFetch, apiFetchList } from '@/lib/api';
 import { fetchAddressByCep } from '@/lib/cep';
 import { formatZipCode, intervalLabel, onlyDigits, pricePeriodSuffix } from '@/lib/format';
@@ -180,7 +181,7 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
   const [trackerImei, setTrackerImei] = useState('');
 
   // Step 3 — plan + billing
-  const [pf, setPf] = useState({ plan_id: '', payment_method: 'boleto', billing_day: '', billing_mode: 'recorrente' as 'recorrente' | 'carne', num_parcelas: '12' });
+  const [pf, setPf] = useState({ plan_id: '', payment_method: 'boleto', billing_day: '', billing_mode: 'recorrente' as 'recorrente' | 'carne', num_parcelas: '12', carne_canal: 'ailos' as CarneCanal });
   const [selectedProductIds, setSelectedProductIds] = useState<number[]>([]);
 
   // Ao escolher pagamento em carnê, a confirmação abre o acompanhamento de
@@ -225,7 +226,7 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
       setVehicle(null);
       setTf({ tracker_id: '', start_date: new Date().toISOString().slice(0, 10) });
       setTrackerImei('');
-      setPf({ plan_id: '', payment_method: 'boleto', billing_day: '', billing_mode: 'recorrente', num_parcelas: '12' });
+      setPf({ plan_id: '', payment_method: 'boleto', billing_day: '', billing_mode: 'recorrente', num_parcelas: '12', carne_canal: 'ailos' });
       setSelectedProductIds([]);
     }
   }, [open]);
@@ -383,6 +384,7 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
             body: JSON.stringify({
               contract_id: contract.id,
               num_parcelas: numParcelas,
+              somente_sistema: pf.carne_canal === 'sistema',
             }),
           },
           token,
@@ -421,7 +423,8 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
       // boleto real gerado até alguém lembrar de ir em Financeiro fazer isso
       // manualmente. onComplete() só é chamado quando o acompanhamento fechar
       // (ver o efeito que observa carne.track).
-      if (carneMode && parcelasCarne.length > 0) {
+      // Carnê simples (somente no sistema) não vai à Ailos: termina aqui.
+      if (carneMode && parcelasCarne.length > 0 && pf.carne_canal === 'ailos') {
         setCarneIniciado(true);
         setSaving(false);
         await carne.iniciar(parcelasCarne.map(b => b.id));
@@ -1042,6 +1045,12 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
                       </div>
 
                       {pf.billing_mode === 'carne' && (
+                        <div className="mt-3">
+                          <CarneCanalChoice value={pf.carne_canal} onChange={canal => setPf(prev => ({ ...prev, carne_canal: canal }))} />
+                        </div>
+                      )}
+
+                      {pf.billing_mode === 'carne' && (
                         <div className="mt-3 flex items-center gap-3">
                           <label className="text-sm">
                             <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Quantidade de parcelas</span>
@@ -1089,7 +1098,9 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
                         {Number(pf.num_parcelas) || 0} cobranças mensais de {selectedPlan ? `R$ ${Number(selectedPlan.price).toFixed(2)}` : 'valor do plano'} serão criadas junto com o contrato.
                       </p>
                       <p className="mt-1 text-xs text-amber-600 dark:text-amber-500">
-                        O registro dos boletos na Ailos e o PDF do carnê ficam em Financeiro → Gerar carnê.
+                        {pf.carne_canal === 'sistema'
+                          ? 'Carnê simples: as parcelas ficam somente no sistema, sem boleto na Ailos. O pagamento é registrado manualmente no Financeiro.'
+                          : 'Ao confirmar, as parcelas são registradas na Ailos (1 boleto por parcela) e o PDF do carnê fica disponível.'}
                       </p>
                     </div>
                   )}

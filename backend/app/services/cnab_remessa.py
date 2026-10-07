@@ -82,6 +82,8 @@ def validar_selecao(db: Session, billing_ids: list[int]) -> list[Billing]:
             motivos[bid] = 'nao_encontrada'
         elif billing.status not in _ABERTAS:
             motivos[bid] = f'status_{billing.status.value}'
+        elif billing.somente_sistema:
+            motivos[bid] = 'somente_sistema'
     validos = [bid for bid in billing_ids if bid not in motivos]
     for bid, titulo in titulo_bancario.titulos_bancarios(db, validos).items():
         if titulo.estado != titulo_bancario.SEM_TITULO:
@@ -100,7 +102,7 @@ def selecionar_por_status(db: Session, status: BillingStatus, limite: int = 500)
     """Seleção automática: em aberto, sem título em nenhum canal."""
     candidatas = db.scalars(
         select(Billing.id)
-        .where(Billing.status == status, Billing.is_deleted.is_(False))
+        .where(Billing.status == status, Billing.is_deleted.is_(False), Billing.somente_sistema.is_(False))
         .order_by(Billing.due_date.asc(), Billing.id.asc())
         .limit(limite * 2)
     ).all()

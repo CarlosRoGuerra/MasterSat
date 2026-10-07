@@ -46,6 +46,7 @@ function tipoLabel(billingType: string) {
   if (billingType === 'taxa_instalacao') return 'Taxa de instalação';
   if (billingType === 'boleto_unico') return 'Boleto MasterSat';
   if (billingType === 'item') return 'Serviço';
+  if (billingType === 'carne') return 'Carnê';
   return billingType.replace(/_/g, ' ');
 }
 
@@ -234,6 +235,7 @@ export function BillingsModal({
             {componentes[b.id].length} itens · {new Set(componentes[b.id].map(placaDa).filter(Boolean)).size} placa(s)
           </span>}
           {placaDa(b) && <span className="block font-mono text-2xs text-slate-500">{placaDa(b)}</span>}
+          {b.somente_sistema && <span className="block text-2xs font-medium text-amber-700 dark:text-amber-400">Carnê simples · só no sistema</span>}
         </Td>
         <Td className="text-xs">{b.created_at ? new Date(b.created_at).toLocaleDateString('pt-BR') : '—'}</Td>
         <Td className="text-sm font-medium">{formatDate(b.due_date)}</Td>
@@ -414,6 +416,8 @@ export function BillingsModal({
       {/* Soma dos boletos selecionados (pagamento em lote) */}
       {selectedIds.length > 0 && (() => {
         const sel = billings.filter((b) => selectedIds.includes(b.id));
+        // "Gerar carnê" registra na Ailos: carnê simples não pode ir junto.
+        const temSoSistema = sel.some((b) => b.somente_sistema);
         const total = sel.reduce((s, b) => s + b.amount, 0);
         const totalJuros = sel.reduce((s, b) => s + (valorComJuros(b) ?? b.amount), 0);
         return (
@@ -433,7 +437,13 @@ export function BillingsModal({
               </Button>
             )}
             {sel.length >= 2 && (
-              <Button variant="secondary" onClick={onGerarCarne} disabled={gerandoCarne} className="!py-1.5 text-xs">
+              <Button
+                variant="secondary"
+                onClick={onGerarCarne}
+                disabled={gerandoCarne || temSoSistema}
+                title={temSoSistema ? 'A seleção tem parcelas de carnê simples (somente no sistema), que não vão para a Ailos.' : undefined}
+                className="!py-1.5 text-xs"
+              >
                 {gerandoCarne ? 'Gerando carnê…' : 'Gerar carnê'}
               </Button>
             )}

@@ -266,6 +266,7 @@ def serialize_billing(row) -> BillingOut:
         period_label=billing.period_label,
         competencia=billing.competencia,
         competencia_liberada=bool(billing.competencia_liberada),
+        somente_sistema=bool(billing.somente_sistema),
         substituted_by_id=billing.substituted_by_id,
         client_name=client_name,
         payer_name=payer_name,
@@ -757,6 +758,8 @@ class ParcelarContratoIn(BaseModel):
     num_parcelas: int = Field(ge=2, le=60)
     valor_parcela: float | None = None       # padrão: valor do plano do contrato
     primeiro_vencimento: date | None = None  # padrão: próximo dia de vencimento do contrato
+    # Carnê simples: parcelas só no sistema, sem registro na Ailos (nem depois).
+    somente_sistema: bool = False
 
 
 @router.post('/parcelar', response_model=list[BillingOut])
@@ -764,7 +767,11 @@ def parcelar_contrato(payload: ParcelarContratoIn, db: Session = Depends(get_db)
                       _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
     """Cria N parcelas (boletos) de um contrato — vincula ao plano do veículo e à
     quantidade de parcelas — para depois virarem carnê. Cada parcela vale o valor
-    do plano (ou o valor informado), com vencimentos mensais."""
+    do plano (ou o valor informado), com vencimentos mensais.
+
+    Com ``somente_sistema`` é o carnê simples: as parcelas ficam só no sistema e
+    a política de título bancário recusa emiti-las na Ailos ou por CNAB.
+    """
     # Trava o contrato: fecha a corrida com um fechamento mensal concorrente
     # para o MESMO contrato (mesmo padrão de _locked_contracts em
     # billing_closure/recurring.py) — sem isto, um fechamento em andamento
@@ -831,9 +838,15 @@ def parcelar_contrato(payload: ParcelarContratoIn, db: Session = Depends(get_db)
             status=BillingStatus.PENDING if venc >= date.today() else BillingStatus.OVERDUE,
             period_label=period_labels[i],
             payment_method=getattr(contract, 'payment_method', None) or 'boleto',
+            somente_sistema=payload.somente_sistema,
         )
         db.add(b)
         criados.append(b)
+    # Forma de cobrança do responsável (filtro dos relatórios): preenche só se
+    # ainda não foi informada — escolha feita no cadastro não é sobrescrita.
+    pagador = db.get(Client, payer_client_id)
+    if pagador is not None and not pagador.forma_cobranca:
+        pagador.forma_cobranca = 'carne_simples' if payload.somente_sistema else 'carne_ailos'
     _commit_billing_write(db)
 
     ids = [b.id for b in criados]
@@ -1035,6 +1048,8 @@ def unify_billings(payload: BillingUnify, db: Session = Depends(get_db), _: obje
         status=(BillingStatus.PENDING if payload.due_date >= hoje() else BillingStatus.OVERDUE),
         period_label=payload.due_date.strftime('%m/%Y'),
         notes=payload.notes or f'Negociação: unifica {refs}. Soma original: R$ {total:.2f}.',
+        # Negociar parcelas do carnê simples não as leva ao banco.
+        somente_sistema=all(b.somente_sistema for b in billings),
     )
     db.add(nova)
     db.flush()

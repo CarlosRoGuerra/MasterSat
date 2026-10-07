@@ -18,6 +18,7 @@ import { usePagination, Pagination } from '@/components/ui/pagination';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { ClientAutocomplete } from '@/components/ui/client-autocomplete';
 import { CarneTrackingModal, useCarneTracking } from '@/components/carne-tracking-modal';
+import { CarneCanalChoice, type CarneCanal } from '@/components/carne-canal-choice';
 import { API_URL, apiFetch, apiFetchList } from '@/lib/api';
 import { loadChargeLinks, type ChargeLinks } from '@/lib/financeiro-charge-links';
 import { entregarArquivo, nomeArquivoCliente } from '@/lib/arquivo';
@@ -82,7 +83,7 @@ type SgrPayload = {
   discriminacao?: { valor?: string; produto?: string; placa?: string; mes_referente?: string }[] | null;
 };
 
-type Billing = { id: number; contract_id?: number | null; client_id: number; payer_client_id?: number | null; item_id?: number | null; vehicle_id?: number | null; tracker_id?: number | null; title?: string | null; billing_type: string; installment_number?: number | null; installment_total?: number | null; amount: number; due_date: string; status: BillingStatus; payment_date?: string | null; payment_method?: string | null; notes?: string | null; paid_amount?: number | null; receipt_number?: string | null; period_label?: string | null; competencia?: string | null; competencia_liberada?: boolean; substituted_by_id?: number | null; client_name?: string | null; payer_name?: string | null; vehicle_plate?: string | null; tracker_identifier?: string | null; plan_name?: string | null; contract_status?: string | null; overdue_days: number; boleto_ailos?: boolean; nfse_status?: string | null; sgr_payload?: SgrPayload | null; titulo_bancario?: TituloBancario | null; relacoes_removidas?: string[] };
+type Billing = { id: number; contract_id?: number | null; client_id: number; payer_client_id?: number | null; item_id?: number | null; vehicle_id?: number | null; tracker_id?: number | null; title?: string | null; billing_type: string; installment_number?: number | null; installment_total?: number | null; amount: number; due_date: string; status: BillingStatus; payment_date?: string | null; payment_method?: string | null; notes?: string | null; paid_amount?: number | null; receipt_number?: string | null; period_label?: string | null; competencia?: string | null; competencia_liberada?: boolean; somente_sistema?: boolean; substituted_by_id?: number | null; client_name?: string | null; payer_name?: string | null; vehicle_plate?: string | null; tracker_identifier?: string | null; plan_name?: string | null; contract_status?: string | null; overdue_days: number; boleto_ailos?: boolean; nfse_status?: string | null; sgr_payload?: SgrPayload | null; titulo_bancario?: TituloBancario | null; relacoes_removidas?: string[] };
 type Summary = { active_plans: number; active_contracts: number; pending_billings: number; overdue_billings: number; pending_amount: number; overdue_amount: number; paid_this_month: number };
 // Bases (PROD-01): total_billed/total_outstanding/total_received_by_due pelo
 // VENCIMENTO; total_received é CAIXA (data do pagamento). Canceladas fora.
@@ -731,6 +732,10 @@ export default function FinanceiroPage() {
   const [carneNumParcelas, setCarneNumParcelas] = useState('12');
   const [carnePrimeiroVenc, setCarnePrimeiroVenc] = useState('');
   const [carneValor, setCarneValor] = useState('');
+  const [carneCanal, setCarneCanal] = useState<CarneCanal>('ailos');
+  // Contratos ativos DO cliente escolhido, buscados na API: a lista da página
+  // traz só os 100 mais recentes e deixava o seletor vazio para os demais.
+  const [carneContratos, setCarneContratos] = useState<Contract[]>([]);
   type CarneGerado = {
     lote_id: number;
     ticket: string | null;
@@ -984,7 +989,8 @@ export default function FinanceiroPage() {
     canEdit && selectedBilling
       ? [
           { id: 'registrar-pagamento-contexto', label: 'Registrar pagamento', run: () => setReceiveModal(true) },
-          {
+          // Carnê simples não vai ao banco: sem atalho de emissão.
+          ...(selectedBilling.somente_sistema ? [] : [{
             id: 'gerar-boleto-contexto',
             label: 'Gerar boleto',
             run: handleGerarBoleto,
@@ -993,7 +999,7 @@ export default function FinanceiroPage() {
               description: `Registrar o boleto de ${formatCurrency(selectedBilling.amount)} de ${selectedBilling.payer_name ?? selectedBilling.client_name ?? 'cliente'} (venc. ${formatDate(selectedBilling.due_date)}) na Ailos?`,
               confirmLabel: 'Gerar boleto',
             },
-          },
+          }]),
           { id: 'ajustar-cobranca-contexto', label: 'Ajustar cobrança', run: () => setAdjustModal(true) },
           { id: 'cancelar-cobranca-contexto', label: 'Cancelar cobrança', run: handleCancel, manualFeedback: true },
         ]
@@ -1377,11 +1383,15 @@ export default function FinanceiroPage() {
   async function handleBatchBoletos(acao: AcaoLoteBoleto) {
     if (!token || !canEdit || batchBoletoAction || selectedBillingIds.length === 0) return;
     const selecionados = [...new Set(selectedBillingIds)];
-    const ids = acao === 'emitir'
-      ? separarBoletosPorRegistro(selecionados, billings).ausentes
-      : selecionados;
+    const separados = acao === 'emitir' ? separarBoletosPorRegistro(selecionados, billings) : null;
+    const ids = separados ? separados.ausentes : selecionados;
+    // Carnê simples fica de fora da emissão: vive só no sistema.
+    const ignoradosSistema = separados?.somenteSistema.length
+      ? `; ${separados.somenteSistema.length} carnê(s) simples (somente no sistema) ignorado(s)` : '';
     if (ids.length === 0) {
-      setFeedback('Todos os boletos selecionados já estão emitidos na Ailos. Nenhum novo boleto foi gerado.');
+      setFeedback(separados?.somenteSistema.length
+        ? `Nenhum boleto gerado: as cobranças selecionadas já estão emitidas na Ailos ou são carnê simples (somente no sistema)${ignoradosSistema}.`
+        : 'Todos os boletos selecionados já estão emitidos na Ailos. Nenhum novo boleto foi gerado.');
       return;
     }
     const mensagem = {
@@ -1405,7 +1415,7 @@ export default function FinanceiroPage() {
       const rotulo = acao === 'emitir' ? 'boleto(s) registrado(s) na Ailos'
         : acao === 'nfse_email' ? 'NFS-e enviada(s) por e-mail'
         : 'envio(s) por e-mail realizado(s)';
-      setFeedback(`${resultado.processados.length} ${rotulo}${acao === 'emitir' ? `; ${selecionados.length - ids.length} já emitido(s) ignorado(s)` : ''}.`);
+      setFeedback(`${resultado.processados.length} ${rotulo}${separados ? `; ${separados.existentes.length} já emitido(s) ignorado(s)${ignoradosSistema}` : ''}.`);
       if (resultado.falhas.length) {
         const detalhes = resultado.falhas.slice(0, 8).map(f => `#${f.id}: ${f.mensagem}`).join(' · ');
         setError(`${resultado.falhas.length} boleto(s) não processado(s): ${detalhes}${resultado.falhas.length > 8 ? ` · e mais ${resultado.falhas.length - 8} falha(s).` : ''}`);
@@ -1432,6 +1442,8 @@ export default function FinanceiroPage() {
     setCarneNumParcelas('12');
     setCarnePrimeiroVenc('');
     setCarneValor('');
+    setCarneCanal('ailos');
+    setCarneContratos([]);
     setCarnesGerados([]);
     setModalError('');
     setCarneModal(true);
@@ -1447,17 +1459,21 @@ export default function FinanceiroPage() {
     setCarneContractId('');
     setCarneValor('');
     setCarnesGerados([]);
+    setCarneContratos([]);
     if (!token || !clientId) return;
     setCarneLoading(true);
     try {
-      const [data, gerados] = await Promise.all([
+      const [data, gerados, contratos] = await Promise.all([
         apiFetch<Billing[]>(`/billings?client_id=${clientId}&limit=200`, {}, token),
         apiFetch<CarneGerado[]>(`/boletos/carne?client_id=${clientId}`, {}, token).catch(() => []),
+        apiFetch<Contract[]>(`/contracts?client_id=${clientId}&status=ativo&limit=300`, {}, token),
       ]);
-      const abertos = data.filter(b => b.status === 'pendente' || b.status === 'vencida');
+      // Viram carnê na Ailos: carnê simples (somente no sistema) fica de fora.
+      const abertos = data.filter(b => (b.status === 'pendente' || b.status === 'vencida') && !b.somente_sistema);
       setCarneBillings(abertos);
       setCarneSelected(abertos.map(b => b.id));
       setCarnesGerados(gerados);
+      setCarneContratos(contratos);
     } catch (err) { setModalError(parseError(err)); } finally { setCarneLoading(false); }
   }
 
@@ -1484,7 +1500,10 @@ export default function FinanceiroPage() {
     if (!token || !carneContractId) { alert('Selecione o contrato (plano do veículo).'); return; }
     const n = Number(carneNumParcelas);
     if (!n || n < 2) { alert('Informe ao menos 2 parcelas.'); return; }
-    if (!confirm(`Serão criadas ${n} parcelas do plano e registradas na Ailos como carnê. Continuar?`)) return;
+    const soSistema = carneCanal === 'sistema';
+    if (!confirm(soSistema
+      ? `Serão criadas ${n} parcelas do plano somente no sistema (carnê simples, sem boleto na Ailos). Continuar?`
+      : `Serão criadas ${n} parcelas do plano e registradas na Ailos como carnê. Continuar?`)) return;
     setGerandoCarne(true); setModalError('');
     try {
       const criados = await apiFetch<{ id: number }[]>('/billings/parcelar', {
@@ -1494,9 +1513,15 @@ export default function FinanceiroPage() {
           num_parcelas: n,
           valor_parcela: carneValor ? Number(carneValor.replace(',', '.')) : null,
           primeiro_vencimento: carnePrimeiroVenc || null,
+          somente_sistema: soSistema,
         }),
       }, token);
       setCarneModal(false);
+      if (soSistema) {
+        setFeedback(`Carnê simples criado com ${criados.length} parcela(s), somente no sistema (sem boleto na Ailos).`);
+        await loadData(token);
+        return;
+      }
       await carne.iniciar(criados.map(b => b.id));
     } catch (err) {
       setModalError(parseError(err));
@@ -2427,6 +2452,7 @@ export default function FinanceiroPage() {
                 ...(selectedBilling.substituted_by_id ? [['Substituída por', `Cobrança #${selectedBilling.substituted_by_id}`] as [string, string]] : []),
                 ...(selectedBilling.competencia_liberada ? [['Competência', 'Liberada para nova cobrança'] as [string, string]] : []),
                 ...(selectedBilling.installment_number ? [['Parcela', `${selectedBilling.installment_number}/${selectedBilling.installment_total}`] as [string, string]] : []),
+                ...(selectedBilling.somente_sistema ? [['Emissão', 'Somente no sistema (carnê simples) — sem boleto no banco'] as [string, string]] : []),
                 ...(selectedBilling.paid_amount != null ? [['Valor pago', formatCurrency(selectedBilling.paid_amount)] as [string, string]] : []),
                 ...(selectedBilling.titulo_bancario ? [['Título no banco', (() => {
                   const t = descreverTitulo(selectedBilling.titulo_bancario);
@@ -2461,12 +2487,13 @@ export default function FinanceiroPage() {
                 && !!selectedBilling.contract_id && TIPOS_MENSALIDADE.includes(selectedBilling.billing_type) && (
                 <Button variant="secondary" disabled={!canEdit || processing} onClick={handleLiberarCompetencia}>Liberar competência</Button>
               )}
-              {(selectedBilling.status === 'pendente' || selectedBilling.status === 'vencida') && token && (
+              {/* Carnê simples vive só no sistema: sem emissão nem consulta na Ailos. */}
+              {(selectedBilling.status === 'pendente' || selectedBilling.status === 'vencida') && token && !selectedBilling.somente_sistema && (
                 <Button variant="secondary" disabled={!canEdit || boletoLoading} onClick={handleGerarBoleto}>
                   {boletoLoading ? 'Gerando…' : '🔑 Gerar boleto (Ailos)'}
                 </Button>
               )}
-              {(selectedBilling.status === 'pendente' || selectedBilling.status === 'vencida') && token && (
+              {(selectedBilling.status === 'pendente' || selectedBilling.status === 'vencida') && token && !selectedBilling.somente_sistema && (
                 <Button variant="secondary" disabled={!canEdit || boletoLoading} onClick={handleVerificarPagamento}>
                   {boletoLoading ? 'Verificando…' : '🔄 Verificar pagamento'}
                 </Button>
@@ -2802,12 +2829,12 @@ export default function FinanceiroPage() {
                 <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Contrato (plano do veículo)</span>
                 <select className={fieldClass} value={carneContractId} onChange={e => {
                   const id = e.target.value;
-                  const ct = contracts.find(c => String(c.id) === id);
+                  const ct = carneContratos.find(c => String(c.id) === id);
                   setCarneContractId(id);
                   if (ct?.monthly_value != null) setCarneValor(String(ct.monthly_value));
                 }}>
-                  <option value="">Selecione o contrato</option>
-                  {contracts
+                  <option value="">{carneLoading ? 'Carregando contratos…' : carneContratos.length ? 'Selecione o contrato' : 'Nenhum contrato ativo deste cliente'}</option>
+                  {carneContratos
                     .filter(c => String(c.client_id) === carneClientId && c.status === 'ativo')
                     .map(c => (
                       <option key={c.id} value={c.id}>#{c.id} • {c.plan_name || 'Plano'}{c.vehicle_plate ? ` • ${c.vehicle_plate}` : ''}{c.monthly_value != null ? ` • ${formatCurrency(c.monthly_value)}` : ''}</option>
@@ -2826,7 +2853,14 @@ export default function FinanceiroPage() {
                 <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Primeiro vencimento <span className="font-normal text-slate-500">(opcional — padrão: próximo vencimento do contrato)</span></span>
                 <input type="date" className={fieldClass} value={carnePrimeiroVenc} onChange={e => setCarnePrimeiroVenc(e.target.value)} />
               </label>
-              <p className="sm:col-span-2 text-xs text-slate-500">Serão criadas {Number(carneNumParcelas) || 0} parcelas mensais do plano e registradas na Ailos como carnê (1 boleto por parcela).</p>
+              <div className="sm:col-span-2">
+                <CarneCanalChoice value={carneCanal} onChange={setCarneCanal} />
+              </div>
+              <p className="sm:col-span-2 text-xs text-slate-500">
+                {carneCanal === 'sistema'
+                  ? `Serão criadas ${Number(carneNumParcelas) || 0} parcelas mensais do plano somente no sistema. Elas não podem ser emitidas na Ailos; o pagamento é registrado manualmente.`
+                  : `Serão criadas ${Number(carneNumParcelas) || 0} parcelas mensais do plano e registradas na Ailos como carnê (1 boleto por parcela).`}
+              </p>
             </div>
           )}
         </div>
