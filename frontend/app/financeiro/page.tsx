@@ -26,6 +26,7 @@ import { podeEmitirNfse, precisaConsultarNfse } from '@/lib/nfse';
 import { enviarBoletoEmail, enviarBoletoWhats } from '@/lib/boleto-mensagem';
 import { processarBoletosSelecionados, separarBoletosPorRegistro, type AcaoLoteBoleto } from '@/lib/boleto-lote';
 import { cancelarComConfirmacoes, corpoCancelamento } from '@/lib/cancelamento-cobranca';
+import { excluirComConfirmacoes, mensagemConfirmacaoExclusao, motivoBloqueioExclusao } from '@/lib/exclusao-cobranca';
 import { CorrigirVencimentoAction } from './_components/corrigir-vencimento-action';
 import { camposDiferenca, diferencaRecebimento, pendenciaDoFormulario, ROTULO_TRATAMENTO, type TratamentoDiferenca } from '@/lib/recebimento';
 import { descreverTitulo, podeConsultarDesfecho, ROTULO_PENDENCIA, type TituloBancario } from '@/lib/titulo-bancario';
@@ -1656,6 +1657,30 @@ export default function FinanceiroPage() {
     } catch (err) { setError(parseError(err)); } finally { setProcessing(false); }
   }
 
+  // Exclusão lógica de cobrança cancelada (regras em lib/exclusao-cobranca).
+  async function handleExcluirCancelada() {
+    if (!token || !selectedBilling || !canEdit || motivoBloqueioExclusao(selectedBilling)) return;
+    if (!window.confirm(mensagemConfirmacaoExclusao(selectedBilling))) return;
+    const billingId = selectedBilling.id;
+    setProcessing(true);
+    try {
+      const { excluida, reabertas } = await excluirComConfirmacoes(
+        (reverter) => apiFetch<{ reabertas?: number[] }>(
+          `/billings/${billingId}${reverter ? '?reverter_substituicao=true' : ''}`,
+          { method: 'DELETE' },
+          token,
+        ),
+        (mensagem) => window.confirm(mensagem),
+      );
+      if (!excluida) return;
+      setSelectedBilling(null);
+      setFeedback(reabertas.length
+        ? `Cobrança #${billingId} excluída; ${reabertas.length} cobrança(s) original(is) reaberta(s).`
+        : `Cobrança #${billingId} excluída.`);
+      await loadData(token);
+    } catch (err) { setError(parseError(err)); } finally { setProcessing(false); }
+  }
+
   async function handleEmitirNfse() {
     if (!token || !selectedBilling || !canEdit || nfseLoading || !podeEmitirNfse(nfse)) return;
     setNfseLoading(true);
@@ -2486,6 +2511,16 @@ export default function FinanceiroPage() {
               {selectedBilling.status === 'cancelada' && !selectedBilling.competencia_liberada
                 && !!selectedBilling.contract_id && TIPOS_MENSALIDADE.includes(selectedBilling.billing_type) && (
                 <Button variant="secondary" disabled={!canEdit || processing} onClick={handleLiberarCompetencia}>Liberar competência</Button>
+              )}
+              {selectedBilling.status === 'cancelada' && (
+                <Button
+                  variant="danger"
+                  disabled={!canEdit || processing || !!motivoBloqueioExclusao(selectedBilling)}
+                  title={motivoBloqueioExclusao(selectedBilling) ?? 'Remove a cobrança cancelada da carteira (o histórico fica registrado)'}
+                  onClick={handleExcluirCancelada}
+                >
+                  Excluir
+                </Button>
               )}
               {/* Carnê simples vive só no sistema: sem emissão nem consulta na Ailos. */}
               {(selectedBilling.status === 'pendente' || selectedBilling.status === 'vencida') && token && !selectedBilling.somente_sistema && (
