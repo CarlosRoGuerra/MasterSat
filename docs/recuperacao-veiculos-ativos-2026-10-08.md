@@ -1,19 +1,19 @@
-# Recuperação dos veículos ativos e exclusão por seleção
+# Recuperação de TRATOR e BEY4J77 e exclusão por seleção
 
-Em 08/10/2026, a consulta completa ao SGR encontrou quatro veículos ATIVO
-entre os 30 identificadores ausentes do relatório antigo:
+Seleção solicitada em 08/10/2026: **TRATOR e BEY4J77**. A nova consulta ao SGR
+confirmou os dois veículos e seus responsáveis como ATIVO. BEY4J77 estava
+SUSPENSO na consulta inicial; seu cadastro já está ATIVO na consulta refeita.
 
 | Identificador | Cliente SGR | Situação do cliente na origem | Cadastro no MasterSat |
 |---|---:|---|---|
-| ISCARF16017741 | 127 | ATIVO | Equipamento sem placa oficial; identificador completo |
-| MOVEL3176 | 215 | ATIVO | Equipamento sem placa oficial; identificador completo |
 | TRATOR | 399 | ATIVO | Equipamento sem placa oficial |
-| MHW0459 | 192 | CANCELADO | Veículo ativo; responsável inativo, se precisar criá-lo |
+| BEY4J77 | 437 | ATIVO | Veículo ativo com placa oficial |
 
 A recuperação consulta novamente o SGR na execução. Um veículo que deixou de
-estar ATIVO bloqueia o lote. Os outros 26 registros ficam fora desta operação.
+estar ATIVO bloqueia o lote. Os comandos abaixo selecionam somente TRATOR e
+BEY4J77; os outros 28 identificadores do relatório ficam fora desta operação.
 
-O script cria somente clientes ausentes e os quatro cadastros de veículos.
+O script cria somente clientes ausentes e os dois cadastros de veículos.
 Preserva os clientes locais existentes, seus dados e situação. Não cria
 contratos, vincula rastreadores nem gera mensalidades ou cobranças antigas.
 Esses cadastros, isoladamente, não incluem novas mensalidades no fechamento;
@@ -63,10 +63,10 @@ com equipamentos sem placa existentes é recusada para preservar seus dados.
 docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T backend \
   python scripts/sgr_recuperar_veiculos_ativos.py \
   --operator administrator \
-  --identificadores ISCARF16017741 MOVEL3176 TRATOR MHW0459
+  --identificadores TRATOR BEY4J77
 ```
 
-O resultado deve conter `"modo": "SIMULACAO_SEM_GRAVACAO"`, os quatro
+O resultado deve conter `"modo": "SIMULACAO_SEM_GRAVACAO"`, os dois
 identificadores e `"situacao": "ativo"`. IDs mostrados na simulação são
 provisórios; sequências PostgreSQL podem avançar mesmo com rollback.
 
@@ -76,11 +76,11 @@ provisórios; sequências PostgreSQL podem avançar mesmo com rollback.
 docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T backend \
   python scripts/sgr_recuperar_veiculos_ativos.py \
   --operator administrator \
-  --identificadores ISCARF16017741 MOVEL3176 TRATOR MHW0459 \
+  --identificadores TRATOR BEY4J77 \
   --apply
 ```
 
-Sucesso retorna `"modo": "APLICADO"` depois do commit, com os quatro IDs
+Sucesso retorna `"modo": "APLICADO"` depois do commit, com os dois IDs
 persistidos. Erro retorna código de saída 1, sem aplicar parte do lote.
 Depois, no menu **Veículos**, limpe filtros de cliente/status e busque cada
 identificador. O menu exibe e permite editar máquina ou equipamento sem
@@ -97,17 +97,17 @@ from app.models.vehicle import Vehicle
 from app.models.client import Client
 from app.models.enums import VehicleStatus
 from app.schemas.vehicle import VehicleOut
-ids = {'ISCARF16017741', 'MOVEL3176', 'TRATOR', 'MHW0459'}
+ids = {'TRATOR', 'BEY4J77'}
 with SessionLocal() as db:
     rows = db.scalars(select(Vehicle).where(Vehicle.plate.in_(ids), Vehicle.is_deleted.is_(False))).all()
-    assert len(rows) == 4 and {v.plate for v in rows} == ids
+    assert len(rows) == 2 and {v.plate for v in rows} == ids
     for v in rows:
         assert v.status == VehicleStatus.ACTIVE
         VehicleOut.model_validate(v)
         client = db.get(Client, v.client_id)
         assert client and not client.is_deleted
         print(v.id, v.plate, v.status.value, 'cliente', client.id, client.status.value)
-print('OK: quatro cadastros ativos, vínculos e identificadores válidos.')
+print('OK: dois cadastros ativos, vínculos e identificadores válidos.')
 PY
 ```
 
@@ -132,11 +132,11 @@ inclui `aplicados`, `ignorados` e o resultado individual de cada veículo.
 
 A migração e a recuperação foram executadas em PostgreSQL 16 descartável,
 sem portas publicadas, usando o backup `mastersat_20261008_163712.dump`.
-A cópia passou de 686 para 690 veículos e de 347 para 348 clientes. Contratos
+A cópia passou de 686 para 688 veículos; os 347 clientes permaneceram. Contratos
 continuaram em 647, cobranças em 38.198 e rastreadores em 625. A simulação
 desfez alterações; repetir a inclusão não duplicou cadastros ou auditoria.
-O downgrade foi recusado com os identificadores novos existentes e manteve
-a revisão aplicada. Esses resultados são da cópia isolada, não da VPS.
+A seleção recuperou exclusivamente TRATOR e BEY4J77, reutilizando seus clientes
+locais. Esses resultados são da cópia isolada, não da VPS.
 
 Os testes cobrem recuperação atômica, conflitos, origem incompleta,
 idempotência, clientes cancelados, cadastro/edição sem truncamento, permissões,
