@@ -325,6 +325,10 @@ function RastreadoresPageInner() {
   const [loteResultado, setLoteResultado] = useState<LoteResultado | null>(null);
   const [loteBusy, setLoteBusy] = useState(false);
   const [loteError, setLoteError] = useState('');
+  // Multiportal ligada no servidor (GET /integrations/multiportal/status): só
+  // então o formulário oferece enviar logo após vincular à placa.
+  const [multiportalAtiva, setMultiportalAtiva] = useState(false);
+  const [enviarMultiportal, setEnviarMultiportal] = useState(true);
 
   async function loadBaseData(currentToken: string) {
     setLoading(true);
@@ -357,6 +361,9 @@ function RastreadoresPageInner() {
         setManufacturers([]);
         setManufacturerError(parseError(err));
       }
+      apiFetch<{ enabled: boolean }>('/integrations/multiportal/status', {}, currentToken)
+        .then((status) => setMultiportalAtiva(!!status.enabled))
+        .catch(() => setMultiportalAtiva(false));
       if (selectedTracker) setSelectedTracker(trackerResponse.find((item) => item.id === selectedTracker.id) || null);
     } catch (err) {
       setError(parseError(err));
@@ -538,6 +545,7 @@ function RastreadoresPageInner() {
   function resetForm() {
     setForm(initialForm);
     setIsEditing(false);
+    setEnviarMultiportal(true);
   }
 
   /* ── Cadastro em lote ────────────────────────────────────────────────── */
@@ -725,6 +733,9 @@ function RastreadoresPageInner() {
       };
 
       let saved: Tracker;
+      // Transferência já passa pela Multiportal no próprio vínculo
+      // (multiportal_synchronized); aí não há o que reenviar.
+      let multiportalJaSincronizado = false;
       if (isEditing && selectedTracker) {
         // O PUT genérico não pode alterar vínculos. Em uma vinculação/transferência,
         // salva somente dados técnicos e delega toda a relação ao endpoint seguro.
@@ -736,7 +747,7 @@ function RastreadoresPageInner() {
         saved = await apiFetch<Tracker>(`/trackers/${selectedTracker.id}`, { method: 'PUT', body: JSON.stringify(updatePayload) }, token);
 
         if (isLinkingVehicle || isAddingContract) {
-          const linkResult = await apiFetch<{ tracker: Tracker }>(`/trackers/${selectedTracker.id}/link-vehicle`, {
+          const linkResult = await apiFetch<{ tracker: Tracker; multiportal_synchronized?: boolean }>(`/trackers/${selectedTracker.id}/link-vehicle`, {
             method: 'POST',
             body: JSON.stringify({
               vehicle_id: Number(form.vehicle_id),
@@ -748,6 +759,7 @@ function RastreadoresPageInner() {
             }),
           }, token);
           saved = linkResult.tracker;
+          multiportalJaSincronizado = !!linkResult.multiportal_synchronized;
         }
       } else {
         saved = await apiFetch<Tracker>('/trackers', { method: 'POST', body: JSON.stringify(payload) }, token);
@@ -767,14 +779,37 @@ function RastreadoresPageInner() {
         }
       }
 
+      // Enviar à Multiportal logo após vincular à placa: o mesmo sync completo
+      // do botão "Sincronizar" dos detalhes. O vínculo já está salvo — falha
+      // aqui vira aviso, não desfaz nada.
+      const vinculouPlaca = isEditing ? isLinkingVehicle : !!form.vehicle_id;
+      let avisoMultiportal = '';
+      let erroMultiportal = '';
+      if (vinculouPlaca && enviarMultiportal && multiportalAtiva && !multiportalJaSincronizado) {
+        try {
+          const flow = await apiFetch<TrackerLinkFlow>(`/integrations/multiportal/trackers/${saved.id}/sync-flow`, { method: 'POST' }, token);
+          saved = { ...saved, integration_status: flow.overall_success ? 'sincronizado' : 'erro' };
+          if (flow.overall_success) {
+            avisoMultiportal = ' Enviado para a Multiportal.';
+          } else {
+            erroMultiportal = 'Rastreador salvo, mas o envio para a Multiportal terminou com erro. Veja as etapas em Detalhes → Sincronizar.';
+          }
+        } catch (err) {
+          erroMultiportal = `Rastreador salvo, mas não foi possível enviar para a Multiportal agora: ${parseError(err)} Tente em Detalhes → Sincronizar.`;
+        }
+      }
+
       setFeedback(
-        isEditing && isAddingContract ? 'Rastreador atualizado e contrato criado.'
-          : isEditing ? 'Rastreador atualizado com sucesso.' : 'Rastreador cadastrado com sucesso.',
+        (isEditing && isAddingContract ? 'Rastreador atualizado e contrato criado.'
+          : isEditing ? 'Rastreador atualizado com sucesso.' : 'Rastreador cadastrado com sucesso.')
+        + avisoMultiportal,
       );
       setModalOpen(false);
       resetForm();
       await loadBaseData(token);
       setSelectedTracker(saved);
+      // Depois do loadBaseData, que limpa o erro da página ao recarregar.
+      if (erroMultiportal) setError(erroMultiportal);
     } catch (err) {
       setModalError(parseError(err));
     } finally {
@@ -1324,6 +1359,25 @@ function RastreadoresPageInner() {
             </label>
             <textarea className={`${areaClass} md:col-span-3`} placeholder="Observações técnicas" value={form.notes} onChange={(e) => setForm((prev) => ({ ...prev, notes: e.target.value.slice(0, 500) }))} />
           </div>
+
+          {canEdit && multiportalAtiva && !!form.vehicle_id
+            && (!isEditing || selectedTracker?.vehicle_id !== Number(form.vehicle_id)) && (
+            <label className="flex items-start gap-3 rounded-2xl border border-brand-200 bg-brand-50/60 px-4 py-3 dark:border-brand-900/40 dark:bg-brand-950/30">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4 accent-brand-600"
+                checked={enviarMultiportal}
+                onChange={(e) => setEnviarMultiportal(e.target.checked)}
+              />
+              <span>
+                <span className="block text-sm font-semibold text-slate-900 dark:text-white">Enviar para a Multiportal logo após vincular</span>
+                <span className="block text-xs text-slate-500 dark:text-slate-400">
+                  Envia cliente, veículo e equipamento e cria o vínculo na hora — o mesmo do botão Sincronizar nos detalhes.
+                  Desmarcado, envie depois em Detalhes → Sincronizar.
+                </span>
+              </span>
+            </label>
+          )}
 
           <div className="flex justify-end gap-3">
             <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-700 dark:border-slate-700 dark:text-slate-200 dark:hover:border-cyan-400 dark:hover:text-cyan-300" onClick={() => { setModalOpen(false); resetForm(); }}>Cancelar</button>
