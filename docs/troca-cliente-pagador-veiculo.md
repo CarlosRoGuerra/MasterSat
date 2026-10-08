@@ -1,0 +1,64 @@
+# Troca rápida de cliente e pagador
+
+Solicitação do cliente de 08/10/2026: após a venda de um veículo, trocar seu cliente e/ou interveniente financeiro dentro do MasterSat, mantendo o equipamento instalado e sem consultar ou comparar vínculos com a API da Multiportal.
+
+## Como usar
+
+1. Cadastre o comprador em **Clientes**, se ainda não existir.
+2. Abra **Veículos**, encontre a placa e clique em **Detalhes**.
+3. Na aba **Dados**, clique em **Trocar cliente / pagador**.
+4. Escolha o cliente do veículo. Para trocar só o pagador, mantenha o cliente atual.
+5. Escolha **O próprio cliente** ou **Outro cliente como interveniente (pagador)** e selecione quem pagará.
+6. Clique em **Confirmar troca**.
+7. Simule o **Fechamento** para o novo responsável financeiro e confira a placa e o valor antes de gerar o título.
+
+A operação atualiza o veículo, todos os rastreadores instalados nessa placa e seus contratos ativos na mesma transação. O plano, a data de instalação, o início do contrato e o dia de vencimento permanecem. Serviços ativos vinculados aos contratos acompanham o novo cliente nas parcelas ainda a gerar. Contratos encerrados e outras placas do antigo cliente permanecem no histórico.
+
+Títulos já gerados, inclusive em aberto, mantêm seu cliente e pagador. Cobranças legadas sem o snapshot do pagador recebem o responsável anterior antes de o contrato mudar, preservando também a consulta pela API e os documentos fiscais. A troca não cancela nem reemite boletos e não cobra novamente uma competência que já possui título.
+
+O menu também corrige o caso em que o cadastro do veículo já aponta para o comprador, mas o rastreador e o contrato ainda estão no cliente anterior: mantenha o comprador selecionado e confirme o pagador desejado.
+
+Na edição comum do veículo, alterar o cliente usa a mesma operação e define o novo cliente como pagador das novas cobranças. Para escolher um interveniente diferente, use o menu dos detalhes. O financeiro pode mudar o pagador; a troca do cliente do veículo permanece disponível ao administrador e ao operacional.
+
+## Multiportal e busca por placa
+
+A troca e suas validações usam exclusivamente o banco do MasterSat. Não executam consulta, comparação ou desvínculo na Multiportal. A intenção de sincronizar os dados alterados fica na fila local existente, sem condicionar a conclusão da troca à plataforma externa.
+
+O controle **Consultar vínculo** foi removido dos detalhes do rastreador e da tela de integração. A busca do assistente abre somente o cadastro local. Permanecem o envio após vincular à placa e a ação **Sincronizar** nos detalhes do rastreador.
+
+A busca em **Rastreadores** agora encontra o equipamento pela placa do veículo, inclusive com letras minúsculas, espaço ou hífen. Continua aceitando IMEI, modelo e os demais identificadores já suportados.
+
+## API interna
+
+Endpoint autenticado com o JWT do usuário do sistema:
+
+```http
+POST /api/v1/vehicles/{vehicle_id}/change-client
+Authorization: Bearer <token_do_usuario>
+Content-Type: application/json
+
+{
+  "client_id": 123,
+  "interveniente_client_id": null,
+  "expected_client_id": 456
+}
+```
+
+`client_id` é o cliente desejado. `interveniente_client_id: null` faz esse cliente pagar; outro ID indica o interveniente. Ao mudar o cliente sem enviar `interveniente_client_id`, o novo cliente será o pagador. Quando o cliente permanece, omitir esse campo preserva os intervenientes atuais.
+
+`expected_client_id` é o cliente do veículo que a tela carregou. Se alguém já o tiver alterado, a API retorna 409 e exige atualizar a tela. A resposta de sucesso é o veículo atualizado. IDs inexistentes ou removidos retornam 404; o financeiro tentando trocar o proprietário recebe 403. Contrato ativo com rastreador fora da placa retorna 409 antes de qualquer alteração.
+
+## Atualização da VPS
+
+Depois do commit disponibilizado na branch, execute:
+
+```bash
+cd ~/MasterSat &&
+git fetch origin &&
+git switch fix/rastreador-dia-vencimento &&
+git pull --ff-only origin fix/rastreador-dia-vencimento &&
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build --no-deps backend frontend &&
+docker compose -f docker-compose.yml -f docker-compose.prod.yml exec nginx nginx -s reload
+```
+
+Não há migration nem alteração de banco a executar. Após atualizar, recarregue a página do sistema e use o menu indicado acima para concluir a troca da placa já alterada no cadastro.

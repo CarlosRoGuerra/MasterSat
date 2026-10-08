@@ -31,7 +31,7 @@ from app.models.user import User
 from app.models.vehicle import Vehicle
 from app.schemas.document import DocumentDeleteOut, DocumentOut, DocumentReviewUpdate
 from app.schemas.pagination import Page
-from app.schemas.vehicle import VehicleCreate, VehicleOut, VehicleUpdate
+from app.schemas.vehicle import VehicleClientChange, VehicleCreate, VehicleOut, VehicleUpdate
 from app.services import titulo_bancario
 from app.services.financial import (
     add_months,
@@ -56,6 +56,7 @@ from app.services.multiportal_sync_state import (
     invalidate_vehicle_trackers,
 )
 from app.services.storage import remove_object, upload_bytes
+from app.services.vehicle_client_change import change_vehicle_client
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -211,9 +212,13 @@ def update_item(
     item_id: int,
     payload: VehicleUpdate,
     db: Session = Depends(get_db),
-    _: object = Depends(require_roles(*EDIT_ROLES)),
+    current_user: User = Depends(require_roles(*EDIT_ROLES)),
 ):
-    obj = _get_vehicle_or_404(item_id, db)
+    obj = db.scalar(select(Vehicle).where(
+        Vehicle.id == item_id, Vehicle.is_deleted.is_(False),
+    ).with_for_update().execution_options(populate_existing=True))
+    if not obj:
+        raise HTTPException(status_code=404, detail='Veículo não encontrado')
     data = _normalize_vehicle_data(payload.model_dump(exclude_unset=True))
 
     if 'client_id' in data and data['client_id'] is not None:
@@ -224,9 +229,15 @@ def update_item(
         _ensure_chassis_available(data['chassis'], db, ignore_id=item_id)
 
     multiportal_changed = has_relevant_changes(obj, data, VEHICLE_MULTIPORTAL_FIELDS)
+    owner_changed = data.get('client_id') is not None and data['client_id'] != obj.client_id
+    if owner_changed:
+        change_vehicle_client(
+            db, obj, data['client_id'], current_user, change_payer=True,
+            method='PUT', path=f'{settings.api_v1_prefix}/vehicles/{item_id}',
+        )
     for key, value in data.items():
         setattr(obj, key, value)
-    if multiportal_changed:
+    if multiportal_changed and not owner_changed:
         invalidate_vehicle_trackers(db, obj.id)
     try:
         db.commit()
@@ -237,6 +248,34 @@ def update_item(
             _VEHICLE_INTEGRITY_MESSAGES,
             sqlite_columns=_VEHICLE_SQLITE_CONSTRAINTS,
         )
+    db.refresh(obj)
+    return obj
+
+
+@router.post('/{item_id}/change-client', response_model=VehicleOut)
+def change_client(
+    item_id: int,
+    payload: VehicleClientChange,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(*VIEW_ROLES)),
+):
+    obj = db.scalar(select(Vehicle).where(
+        Vehicle.id == item_id, Vehicle.is_deleted.is_(False),
+    ).with_for_update().execution_options(populate_existing=True))
+    if not obj:
+        raise HTTPException(status_code=404, detail='Veículo não encontrado')
+    if payload.expected_client_id is not None and payload.expected_client_id != obj.client_id:
+        raise HTTPException(status_code=409, detail='O cliente do veículo mudou. Atualize a tela antes de confirmar a troca.')
+    owner_changed = payload.client_id != obj.client_id
+    if owner_changed and current_user.role == UserRole.FINANCIAL:
+        raise HTTPException(status_code=403, detail='O financeiro pode trocar o pagador, mas não o cliente do veículo.')
+    change_payer = owner_changed or 'interveniente_client_id' in payload.model_fields_set
+    change_vehicle_client(
+        db, obj, payload.client_id, current_user,
+        change_payer=change_payer, interveniente_client_id=payload.interveniente_client_id,
+        path=f'{settings.api_v1_prefix}/vehicles/{item_id}/change-client',
+    )
+    db.commit()
     db.refresh(obj)
     return obj
 

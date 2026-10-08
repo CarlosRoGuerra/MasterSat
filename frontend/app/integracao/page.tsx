@@ -169,12 +169,6 @@ export default function IntegracaoPage() {
     );
   }
 
-  async function queryLink(trackerId: number) {
-    await doSync(`query-${trackerId}`, () =>
-      apiFetch<FlowOut>(`/integrations/multiportal/trackers/${trackerId}/query-link`, {}, token!),
-    );
-  }
-
   async function syncChip() {
     if (!chipTrackerId) { setError('Selecione um rastreador para alterar o status do chip.'); return; }
     await doSync('chip', () =>
@@ -258,14 +252,6 @@ export default function IntegracaoPage() {
                       className="rounded-2xl border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-700 dark:border-slate-700 dark:text-slate-200"
                     >
                       {syncing === `equip-${t.id}` ? 'Aguarde...' : 'Só equipamento'}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={!!syncing}
-                      onClick={() => queryLink(t.id)}
-                      className="rounded-2xl border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-700 dark:border-slate-700 dark:text-slate-200"
-                    >
-                      {syncing === `query-${t.id}` ? 'Consultando...' : 'Consultar vínculo'}
                     </button>
                   </div>
                 )}

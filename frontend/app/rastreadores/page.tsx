@@ -72,7 +72,7 @@ type LoteResultado = {
 type TrackerHistory = { id: number; action: string; previous_vehicle_id?: number | null; new_vehicle_id?: number | null; previous_client_id?: number | null; new_client_id?: number | null; new_status?: string | null; event_date?: string | null; notes?: string | null; created_at?: string | null };
 type ContractInfo = { id: number; tracker_id?: number | null; vehicle_id?: number | null; plan_id: number; plan_name?: string | null; status: string; monthly_value?: number | null; start_date?: string | null; next_due_date?: string | null; open_billings?: number };
 
-/** Resposta de GET /integrations/multiportal/trackers/{id}/query-link — mesmo formato usado em app/integracao/page.tsx (FlowOut). */
+/** Resposta do envio completo para a Multiportal. */
 type TrackerLinkFlow = {
   overall_success: boolean;
   steps: { friendly_title?: string | null; friendly_message?: string | null; success: boolean }[];
@@ -167,6 +167,7 @@ function friendlyAction(value: string) {
     created: 'Cadastro inicial',
     linked: 'Vínculo atualizado',
     contract_created: 'Contrato criado',
+    client_changed: 'Cliente alterado',
     unlinked: 'Desvínculo',
     swapped_out: 'Substituído (retornou ao estoque)',
     swapped_in: 'Instalado em substituição',
@@ -422,7 +423,6 @@ function RastreadoresPageInner() {
           setSelectedTracker(tracker);
           setDetailsTab('dados');
           setDetailsOpen(true);
-          if (assistantAction === 'consultar-rastreador') consultarVinculo(tracker);
         })
         .catch((err) => setError(parseError(err)));
       return;
@@ -440,35 +440,22 @@ function RastreadoresPageInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, searchParams]);
 
-  // Um painel para as duas ações da Multiportal: `acao` diz qual resultado
-  // está na tela (consulta do vínculo ou sincronização completa).
-  const [vinculoConsulta, setVinculoConsulta] = useState<{ loading: boolean; result: TrackerLinkFlow | null; error: string; acao?: 'consulta' | 'sync' }>({ loading: false, result: null, error: '' });
-
-  async function consultarVinculo(tracker: Tracker) {
-    if (!token) return;
-    setVinculoConsulta({ loading: true, result: null, error: '', acao: 'consulta' });
-    try {
-      const flow = await apiFetch<TrackerLinkFlow>(`/integrations/multiportal/trackers/${tracker.id}/query-link`, {}, token);
-      setVinculoConsulta({ loading: false, result: flow, error: '', acao: 'consulta' });
-    } catch (err) {
-      setVinculoConsulta({ loading: false, result: null, error: parseError(err), acao: 'consulta' });
-    }
-  }
+  const [multiportalSync, setMultiportalSync] = useState<{ loading: boolean; result: TrackerLinkFlow | null; error: string }>({ loading: false, result: null, error: '' });
 
   // Mesmo "Sync completo" da tela de Integração (cliente → veículo →
   // equipamento → vínculo). O backend grava o resultado em
   // integration_status; aqui o badge e a lista acompanham sem recarregar.
   async function sincronizarMultiportal(tracker: Tracker) {
     if (!token) return;
-    setVinculoConsulta({ loading: true, result: null, error: '', acao: 'sync' });
+    setMultiportalSync({ loading: true, result: null, error: '' });
     try {
       const flow = await apiFetch<TrackerLinkFlow>(`/integrations/multiportal/trackers/${tracker.id}/sync-flow`, { method: 'POST' }, token);
-      setVinculoConsulta({ loading: false, result: flow, error: '', acao: 'sync' });
+      setMultiportalSync({ loading: false, result: flow, error: '' });
       const integrationStatus = flow.overall_success ? 'sincronizado' : 'erro';
       setSelectedTracker((atual) => (atual && atual.id === tracker.id ? { ...atual, integration_status: integrationStatus } : atual));
       setTrackers((items) => items.map((item) => (item.id === tracker.id ? { ...item, integration_status: integrationStatus } : item)));
     } catch (err) {
-      setVinculoConsulta({ loading: false, result: null, error: parseError(err), acao: 'sync' });
+      setMultiportalSync({ loading: false, result: null, error: parseError(err) });
     }
   }
 
@@ -477,11 +464,6 @@ function RastreadoresPageInner() {
   useAssistantContextActions(
     detailsOpen && selectedTracker
       ? [
-          {
-            id: 'consultar-vinculo-contexto',
-            label: 'Consultar vínculo na Multiportal',
-            run: () => consultarVinculo(selectedTracker),
-          },
           ...(canEdit && selectedTracker.vehicle_id
             ? [{
                 id: 'sincronizar-multiportal-contexto',
@@ -911,7 +893,7 @@ function RastreadoresPageInner() {
               selecionados={selecionados}
               onToggle={alternarSelecao}
               onToggleTodos={alternarTodos}
-              onDetails={(t) => { setSelectedTracker(t); setDetailsTab('dados'); setDetailsOpen(true); setVinculoConsulta({ loading: false, result: null, error: '' }); }}
+              onDetails={(t) => { setSelectedTracker(t); setDetailsTab('dados'); setDetailsOpen(true); setMultiportalSync({ loading: false, result: null, error: '' }); }}
               onEdit={openEditModal}
             />
           </div>
@@ -982,43 +964,32 @@ function RastreadoresPageInner() {
                 ))}
                 <div className="col-span-2 rounded-xl border border-slate-100 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/50">
                   <div className="flex items-center justify-between gap-2">
-                    <p className="text-2xs font-semibold uppercase tracking-widest text-slate-500">Vínculo na Multiportal</p>
+                    <p className="text-2xs font-semibold uppercase tracking-widest text-slate-500">Envio para a Multiportal</p>
                     <div className="flex flex-wrap justify-end gap-2">
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        className="px-3 py-1.5 text-xs"
-                        disabled={vinculoConsulta.loading}
-                        onClick={() => consultarVinculo(selectedTracker)}
-                      >
-                        {vinculoConsulta.loading && vinculoConsulta.acao === 'consulta' ? 'Consultando…' : 'Consultar vínculo'}
-                      </Button>
                       {canEdit && (
                         <Button
                           type="button"
                           className="px-3 py-1.5 text-xs"
-                          disabled={vinculoConsulta.loading || !selectedTracker.vehicle_id}
+                          disabled={multiportalSync.loading || !selectedTracker.vehicle_id}
                           title={selectedTracker.vehicle_id
                             ? 'Envia cliente, veículo e equipamento para a Multiportal e refaz o vínculo'
                             : 'Vincule o rastreador a um veículo para sincronizar'}
                           onClick={() => sincronizarMultiportal(selectedTracker)}
                         >
-                          {vinculoConsulta.loading && vinculoConsulta.acao === 'sync' ? 'Sincronizando…' : 'Sincronizar'}
+                          {multiportalSync.loading ? 'Sincronizando…' : 'Sincronizar'}
                         </Button>
                       )}
                     </div>
                   </div>
-                  {vinculoConsulta.error && (
-                    <p className="mt-2 text-xs text-rose-600 dark:text-rose-400">{vinculoConsulta.error}</p>
+                  {multiportalSync.error && (
+                    <p className="mt-2 text-xs text-rose-600 dark:text-rose-400">{multiportalSync.error}</p>
                   )}
-                  {vinculoConsulta.result && (
+                  {multiportalSync.result && (
                     <div className="mt-2 space-y-1.5">
-                      <Badge variant={vinculoConsulta.result.overall_success ? 'success' : 'danger'}>
-                        {vinculoConsulta.acao === 'sync'
-                          ? (vinculoConsulta.result.overall_success ? 'Sincronização concluída' : 'Sincronização com erros')
-                          : (vinculoConsulta.result.overall_success ? 'Vínculo confirmado' : 'Divergência encontrada')}
+                      <Badge variant={multiportalSync.result.overall_success ? 'success' : 'danger'}>
+                        {multiportalSync.result.overall_success ? 'Sincronização concluída' : 'Sincronização com erros'}
                       </Badge>
-                      {vinculoConsulta.result.steps.map((step, i) => (
+                      {multiportalSync.result.steps.map((step, i) => (
                         <p key={i} className="text-xs text-slate-600 dark:text-slate-300">
                           {step.friendly_title ? `${step.friendly_title}: ` : ''}{step.friendly_message ?? (step.success ? 'OK' : 'Falhou')}
                         </p>

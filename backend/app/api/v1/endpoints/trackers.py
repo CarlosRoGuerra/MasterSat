@@ -250,6 +250,10 @@ def list_items(
     filtro = select(Tracker).where(Tracker.is_deleted.is_(False))
     if search:
         term = f'%{search.strip()}%'
+        plate_term = f"%{search.strip().replace('-', '').replace(' ', '')}%"
+        vehicle_ids = select(Vehicle.id).where(
+            Vehicle.is_deleted.is_(False), Vehicle.plate.ilike(plate_term),
+        )
         filtro = filtro.where(
             or_(
                 Tracker.imei.ilike(term),
@@ -258,6 +262,7 @@ def list_items(
                 Tracker.model.ilike(term),
                 Tracker.sim_number.ilike(term),
                 Tracker.sim_iccid.ilike(term),
+                Tracker.vehicle_id.in_(vehicle_ids),
             )
         )
     if status:

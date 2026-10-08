@@ -1,7 +1,7 @@
 import re
 from datetime import date
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.models.enums import VehicleStatus
 
@@ -25,6 +25,13 @@ def _plate_valida(value: str) -> bool:
             and any(c.isdigit() for c in value)
         )
     return False
+
+
+class VehicleClientChange(BaseModel):
+    client_id: int = Field(ge=1)
+    # Ausente preserva o pagador; null faz o próprio cliente pagar.
+    interveniente_client_id: int | None = Field(default=None, ge=1)
+    expected_client_id: int | None = Field(default=None, ge=1)
 
 
 class VehicleBase(BaseModel):

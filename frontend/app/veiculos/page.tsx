@@ -27,6 +27,7 @@ import { formatDate, formatZipCode, onlyDigits, pricePeriodSuffix } from '@/lib/
 import { useAuthGuard } from '@/lib/use-auth-guard';
 import { ROUTE_ROLES } from '@/lib/route-roles';
 import { VehicleOnboardingWizard } from '@/components/vehicle-onboarding-wizard';
+import { ChangeClientModal } from './_components/change-client-modal';
 import { useAssistantContextActions } from '@/lib/assistant-context';
 import type { ClientOption, TrackerOption, VehicleStatus } from '@/lib/domain-types';
 
@@ -616,6 +617,7 @@ function VeiculosPageInner() {
   const [clientFilter, setClientFilter] = useState('');
   const [form, setForm] = useState<VehicleFormState>(initialForm);
   const [modalOpen, setModalOpen] = useState(false);
+  const [changeClientOpen, setChangeClientOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -1401,7 +1403,7 @@ function VeiculosPageInner() {
 
       {/* Modal de detalhes */}
       <Modal
-        open={detailsOpen}
+        open={detailsOpen && !changeClientOpen}
         onClose={() => { setDetailsOpen(false); setSelectedVehicle(null); setLinkedTrackers([]); }}
         title={selectedVehicle?.plate ?? ''}
         subtitle="Detalhes do veículo"
@@ -1423,6 +1425,11 @@ function VeiculosPageInner() {
             {/* Aba Dados */}
             {detailsTab === 'dados' && (
               <div className="space-y-4">
+                {(canEdit || canEditInterveniente) && (
+                  <Button type="button" variant="secondary" disabled={contractsLoading || !!contractsError} onClick={() => setChangeClientOpen(true)}>
+                    Trocar cliente / pagador
+                  </Button>
+                )}
                 <div className="grid gap-3 sm:grid-cols-2">
                   {[
                     ['Cliente', clients.find((c) => c.id === selectedVehicle.client_id)?.name ?? '—'],
@@ -1798,6 +1805,24 @@ function VeiculosPageInner() {
         )}
       </Modal>
 
+      <ChangeClientModal
+        open={changeClientOpen}
+        onClose={() => setChangeClientOpen(false)}
+        vehicle={selectedVehicle}
+        clients={clients}
+        token={token ?? ''}
+        canChangeOwner={canEdit}
+        initialIntervenienteId={(() => {
+          const payers = new Set(vehicleContracts.filter((contract) => contract.status === 'ativo').map((contract) => contract.interveniente_client_id ?? null));
+          return payers.size > 1 ? 'mixed' : [...payers][0] ?? null;
+        })()}
+        onSaved={async (saved) => {
+          if (token) await loadVehicles(token);
+          await openDetails(saved);
+          setFeedback(`Cliente e pagador da placa ${saved.plate} atualizados. As novas cobranças seguirão o contrato atualizado.`);
+        }}
+      />
+
       <Modal open={modalOpen} onClose={() => { setModalOpen(false); resetForm(); setModalError(''); }} title={isEditing ? 'Editar veículo' : 'Novo veículo'} description="Mantenha o cadastro técnico e documental do veículo em um fluxo de preenchimento mais limpo." size="2xl">
         <form className="space-y-6" onSubmit={submitVehicle}>
           {modalError && <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{modalError}</p>}
@@ -1812,6 +1837,11 @@ function VeiculosPageInner() {
             <label className="flex items-center gap-2 rounded-2xl border border-slate-200 px-4 py-3 text-sm text-slate-700 dark:border-slate-700 dark:text-slate-200"><input type="checkbox" onChange={(e) => populateFromClient(form.client_id, e.target.checked)} /> Usar endereço do cliente</label>
             <select className={fieldClass} value={form.status} onChange={(e) => setForm((prev) => ({ ...prev, status: e.target.value as VehicleStatus }))}>{['ativo','sem_rastreador','retirado','cancelado','bloqueado','pendente_validacao','em_analise','aprovado','reprovado','correcao_solicitada'].map((option) => <option key={option} value={option}>{option.replace(/_/g, ' ')}</option>)}</select>
           </div>
+          {isEditing && selectedVehicle && form.client_id && Number(form.client_id) !== selectedVehicle.client_id && (
+            <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+              Ao salvar, o novo cliente será atualizado também nos rastreadores e contratos ativos desta placa e será o pagador das novas cobranças. Títulos já gerados serão preservados. Para escolher outro pagador, use Trocar cliente / pagador nos detalhes do veículo.
+            </p>
+          )}
           <div className="grid gap-4 md:grid-cols-3">
             <select className={fieldClass} value={form.sales_point} onChange={(e) => setForm((prev) => ({ ...prev, sales_point: e.target.value }))}>{salesPointOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select>
             <select className={fieldClass} value={form.vehicle_classification} onChange={(e) => setForm((prev) => ({ ...prev, vehicle_classification: e.target.value }))}>{classificationOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select>
