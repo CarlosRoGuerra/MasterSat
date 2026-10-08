@@ -340,6 +340,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/vehicles/lote/excluir": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Delete Batch */
+        post: operations["delete_batch_api_v1_vehicles_lote_excluir_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/vehicles/{item_id}": {
         parameters: {
             query?: never;
@@ -6297,6 +6314,11 @@ export interface components {
             city?: string | null;
             /** State */
             state?: string | null;
+            /**
+             * Is Non Road Asset
+             * @default false
+             */
+            is_non_road_asset: boolean;
             /** Plate */
             plate: string;
             /** Chassis */
@@ -6325,6 +6347,43 @@ export interface components {
             fipe_value?: number | null;
             /** @default ativo */
             status: components["schemas"]["VehicleStatus"];
+        };
+        /** VehicleDeleteBatch */
+        VehicleDeleteBatch: {
+            /** Ids */
+            ids: number[];
+            /**
+             * Simular
+             * @default false
+             */
+            simular: boolean;
+        };
+        /** VehicleDeleteBatchItem */
+        VehicleDeleteBatchItem: {
+            /** Vehicle Id */
+            vehicle_id: number;
+            /** Plate */
+            plate?: string | null;
+            /**
+             * Situacao
+             * @enum {string}
+             */
+            situacao: "aplicado" | "ignorado";
+            /** Motivo */
+            motivo?: string | null;
+        };
+        /** VehicleDeleteBatchOut */
+        VehicleDeleteBatchOut: {
+            /** Simulacao */
+            simulacao: boolean;
+            /** Total Enviados */
+            total_enviados: number;
+            /** Aplicados */
+            aplicados: number;
+            /** Ignorados */
+            ignorados: number;
+            /** Itens */
+            itens: components["schemas"]["VehicleDeleteBatchItem"][];
         };
         /** VehicleOut */
         VehicleOut: {
@@ -6358,6 +6417,11 @@ export interface components {
             city?: string | null;
             /** State */
             state?: string | null;
+            /**
+             * Is Non Road Asset
+             * @default false
+             */
+            is_non_road_asset: boolean;
             /** Plate */
             plate: string;
             /** Chassis */
@@ -6426,6 +6490,11 @@ export interface components {
             city?: string | null;
             /** State */
             state?: string | null;
+            /**
+             * Is Non Road Asset
+             * @default false
+             */
+            is_non_road_asset: boolean;
             /** Plate */
             plate?: string | null;
             /** Chassis */
@@ -13370,6 +13439,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TrackerOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_batch_api_v1_vehicles_lote_excluir_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VehicleDeleteBatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VehicleDeleteBatchOut"];
                 };
             };
             /** @description Validation Error */

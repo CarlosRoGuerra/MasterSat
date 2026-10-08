@@ -28,6 +28,7 @@ import { useAuthGuard } from '@/lib/use-auth-guard';
 import { ROUTE_ROLES } from '@/lib/route-roles';
 import { VehicleOnboardingWizard } from '@/components/vehicle-onboarding-wizard';
 import { ChangeClientModal } from './_components/change-client-modal';
+import { ExcluirVeiculosEmLote, type VehicleDeleteResult } from './_components/excluir-em-lote';
 import { useAssistantContextActions } from '@/lib/assistant-context';
 import type { ClientOption, TrackerOption, VehicleStatus } from '@/lib/domain-types';
 
@@ -52,6 +53,7 @@ type Vehicle = {
   neighborhood?: string | null;
   city?: string | null;
   state?: string | null;
+  is_non_road_asset?: boolean;
   plate: string;
   chassis?: string | null;
   renavam?: string | null;
@@ -91,6 +93,7 @@ type VehicleFormState = {
   neighborhood: string;
   city: string;
   state: string;
+  is_non_road_asset: boolean;
   plate: string;
   chassis: string;
   renavam: string;
@@ -120,6 +123,7 @@ const initialForm: VehicleFormState = {
   neighborhood: '',
   city: '',
   state: '',
+  is_non_road_asset: false,
   plate: '',
   chassis: '',
   renavam: '',
@@ -162,7 +166,7 @@ const PAYMENT_METHODS = [
 function parseError(error: unknown) {
   return error instanceof Error ? error.message : 'Ocorreu um erro inesperado.';
 }
-function formatPlate(value: string) { return value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 7); }
+function formatPlate(value: string, isNonRoadAsset = false) { return value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, isNonRoadAsset ? 40 : 7); }
 function formatRenavam(value: string) { return value.replace(/\D/g, '').slice(0, 11); }
 function formatChassis(value: string) { return value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 17); }
 
@@ -597,9 +601,11 @@ function LinkTrackerForm({
 function VeiculosPageInner() {
   const { token, user, loading: guardLoading, error: guardError } = useAuthGuard(ROUTE_ROLES['/veiculos'], '/login/admin');
   const canEdit = !!user && user.role !== 'financeiro';
+  const canDelete = user?.role === 'admin';
   const canEditInterveniente = !!user && (user.role === 'admin' || user.role === 'financeiro');
 
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [contracts, setContracts] = useState<ContractOption[]>([]);
   const [vehicleContracts, setVehicleContracts] = useState<ContractOption[]>([]);
@@ -684,6 +690,7 @@ function VeiculosPageInner() {
         apiFetch<ServiceProductOption[]>('/service-products', {}, currentToken).catch(() => []),
       ]);
       setVehicles(vehicleResponse);
+      setSelectedIds((previous) => new Set([...previous].filter((id) => vehicleResponse.some((item) => item.id === id))));
       setClients(clientResponse);
       setContracts(contractResponse.filter((item) => item.status === 'ativo'));
       setServiceProducts(serviceProductResponse);
@@ -806,7 +813,7 @@ function VeiculosPageInner() {
             label: 'Nova OS para este veículo',
             run: () => router.push(`/ordens-servico?assistantAction=new&prefillClientId=${selectedVehicle.client_id}&prefillVehicleId=${selectedVehicle.id}`),
           },
-          // Exclusão de veículo é hard delete restrito a admin no backend
+          // Exclusão lógica restrita a admin no backend.
           // (vehicles.py — mais estrito que o EDIT_ROLES geral) — só entra
           // na lista quando a role realmente pode.
           ...(user?.role === 'admin'
@@ -999,6 +1006,7 @@ function VeiculosPageInner() {
 
   // Busca/filtros dinâmicos (sem precisar clicar em "Filtrar")
   const searchDebounced = useDebouncedValue(search);
+  useEffect(() => { setSelectedIds(new Set()); }, [search, statusFilter, clientFilter]);
   useEffectSkipFirst(() => {
     pg.setPage(1);
     if (token) loadVehicles(token);
@@ -1076,6 +1084,7 @@ function VeiculosPageInner() {
       neighborhood: vehicle.neighborhood || '',
       city: vehicle.city || '',
       state: vehicle.state || '',
+      is_non_road_asset: vehicle.is_non_road_asset ?? false,
       plate: vehicle.plate || '',
       chassis: vehicle.chassis || '',
       renavam: vehicle.renavam || '',
@@ -1122,6 +1131,9 @@ function VeiculosPageInner() {
     setModalError('');
     setFeedback('');
     try {
+      if (!form.is_non_road_asset && form.plate.replace(/[^A-Z0-9]/gi, '').length > 7) {
+        throw new Error('Mantenha a opção de equipamento sem placa para preservar o identificador completo.');
+      }
       const payload = {
         client_id: Number(form.client_id),
         sales_point: form.sales_point || null,
@@ -1138,7 +1150,8 @@ function VeiculosPageInner() {
         neighborhood: form.neighborhood || null,
         city: form.city || null,
         state: form.state || null,
-        plate: formatPlate(form.plate),
+        is_non_road_asset: form.is_non_road_asset,
+        plate: formatPlate(form.plate, form.is_non_road_asset),
         chassis: formatChassis(form.chassis) || null,
         renavam: formatRenavam(form.renavam) || null,
         brand: form.brand || null,
@@ -1221,7 +1234,7 @@ function VeiculosPageInner() {
   }
 
   async function deleteVehicle(vehicleId: number) {
-    if (!token || !canEdit) return;
+    if (!token || !canDelete) return;
     if (!window.confirm('Deseja remover este veículo?')) return;
     try {
       await apiFetch(`/vehicles/${vehicleId}`, { method: 'DELETE' }, token);
@@ -1231,6 +1244,33 @@ function VeiculosPageInner() {
     } catch (err) {
       setError(parseError(err));
     }
+  }
+
+  function toggleVehicle(id: number) {
+    setSelectedIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAllVehicles() {
+    setSelectedIds((previous) => vehicles.every((item) => previous.has(item.id))
+      ? new Set() : new Set(vehicles.map((item) => item.id)));
+  }
+
+  async function executeVehicleDelete(body: { ids: number[]; simular: boolean }) {
+    return apiFetch<VehicleDeleteResult>('/vehicles/lote/excluir', { method: 'POST', body: JSON.stringify(body) }, token!);
+  }
+
+  function finishVehicleDelete(result: VehicleDeleteResult) {
+    setFeedback(`${result.aplicados} veículo(s) excluído(s). ${result.ignorados} ficaram de fora.`);
+    setSelectedIds(new Set());
+    if (selectedVehicle && result.itens.some((item) => item.vehicle_id === selectedVehicle.id && item.situacao === 'aplicado')) {
+      setSelectedVehicle(null);
+      setDetailsOpen(false);
+    }
+    if (token) void loadVehicles(token);
   }
 
   async function confirmUninstall() {
@@ -1312,6 +1352,8 @@ function VeiculosPageInner() {
           </div>
 
           <div className="mt-4">
+            {canDelete && <ExcluirVeiculosEmLote ids={[...selectedIds]} onLimpar={() => setSelectedIds(new Set())}
+              onExecutar={executeVehicleDelete} onConcluido={finishVehicleDelete} />}
             {loading ? (
               <TableSkeleton rows={7} cols={5} />
             ) : error ? (
@@ -1322,6 +1364,10 @@ function VeiculosPageInner() {
               <>
               <Table>
                 <TableHead>
+                  {canDelete && <Th className="w-10"><input type="checkbox" aria-label="Selecionar todos os veículos do filtro"
+                    ref={(node) => { if (node) node.indeterminate = selectedIds.size > 0 && !vehicles.every((item) => selectedIds.has(item.id)); }}
+                    checked={vehicles.length > 0 && vehicles.every((item) => selectedIds.has(item.id))}
+                    onChange={toggleAllVehicles} /></Th>}
                   <Th>Placa</Th>
                   <Th>Veículo</Th>
                   <Th>Cliente</Th>
@@ -1332,7 +1378,9 @@ function VeiculosPageInner() {
                   {pg.slice.map((vehicle) => {
                     const clientName = clientNameById.get(vehicle.client_id);
                     return (
-                      <Tr key={vehicle.id}>
+                      <Tr key={vehicle.id} selected={selectedIds.has(vehicle.id)}>
+                        {canDelete && <Td><input type="checkbox" aria-label={`Selecionar ${vehicle.plate}`}
+                          checked={selectedIds.has(vehicle.id)} onChange={() => toggleVehicle(vehicle.id)} /></Td>}
                         <Td className="font-mono font-semibold">{vehicle.plate}</Td>
                         <Td>
                           <p>{[vehicle.brand, vehicle.model].filter(Boolean).join(' ')}</p>
@@ -1851,7 +1899,13 @@ function VeiculosPageInner() {
             <div className="grid grid-cols-2 gap-4"><input type="date" className={fieldClass} value={form.contract_date} onChange={(e) => setForm((prev) => ({ ...prev, contract_date: e.target.value }))} /><input type="date" className={fieldClass} value={form.contract_end_date} onChange={(e) => setForm((prev) => ({ ...prev, contract_end_date: e.target.value }))} /></div>
           </div>
           <div className="grid gap-4 md:grid-cols-3">
-            <input className={fieldClass} placeholder="Placa" value={form.plate} onChange={(e) => setForm((prev) => ({ ...prev, plate: formatPlate(e.target.value) }))} required />
+            <label className="space-y-2">
+              <span className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+                <input type="checkbox" checked={form.is_non_road_asset} onChange={(e) => setForm((prev) => ({ ...prev, is_non_road_asset: e.target.checked }))} />
+                Máquina ou equipamento sem placa oficial
+              </span>
+              <input className={fieldClass} placeholder={form.is_non_road_asset ? 'Identificador do equipamento' : 'Placa'} value={form.plate} onChange={(e) => setForm((prev) => ({ ...prev, plate: formatPlate(e.target.value, prev.is_non_road_asset) }))} required />
+            </label>
             <input className={fieldClass} placeholder="Chassi" value={form.chassis} onChange={(e) => setForm((prev) => ({ ...prev, chassis: formatChassis(e.target.value) }))} />
             <input className={fieldClass} placeholder="Renavam" value={form.renavam} onChange={(e) => setForm((prev) => ({ ...prev, renavam: formatRenavam(e.target.value) }))} />
             <input className={fieldClass} placeholder="Marca" value={form.brand} onChange={(e) => setForm((prev) => ({ ...prev, brand: e.target.value }))} />

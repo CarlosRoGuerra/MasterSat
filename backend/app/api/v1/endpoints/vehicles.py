@@ -19,6 +19,7 @@ from app.core.security import create_file_access_token
 from app.core.uploads import read_limited, safe_object_name, validate_content_type
 from app.db.session import get_db
 from app.models.billing import Billing
+from app.models.audit_log import AuditLog
 from app.models.client import Client
 from app.models.contract import Contract
 from app.models.document import Document
@@ -31,7 +32,8 @@ from app.models.user import User
 from app.models.vehicle import Vehicle
 from app.schemas.document import DocumentDeleteOut, DocumentOut, DocumentReviewUpdate
 from app.schemas.pagination import Page
-from app.schemas.vehicle import VehicleClientChange, VehicleCreate, VehicleOut, VehicleUpdate
+from app.schemas.vehicle import (VehicleClientChange, VehicleCreate, VehicleOut, VehicleUpdate,
+                                VehicleDeleteBatch, VehicleDeleteBatchOut, identifier_is_valid)
 from app.services import titulo_bancario
 from app.services.financial import (
     add_months,
@@ -221,6 +223,12 @@ def update_item(
         raise HTTPException(status_code=404, detail='Veículo não encontrado')
     data = _normalize_vehicle_data(payload.model_dump(exclude_unset=True))
 
+    if 'plate' in data or 'is_non_road_asset' in data:
+        identifier = data.get('plate') or obj.plate
+        is_asset = data.get('is_non_road_asset', obj.is_non_road_asset)
+        if not identifier_is_valid(identifier, is_asset):
+            raise HTTPException(status_code=422, detail='Informe uma placa válida ou mantenha a opção de equipamento sem placa.')
+
     if 'client_id' in data and data['client_id'] is not None:
         _ensure_client_exists(data['client_id'], db)
     if 'plate' in data and data['plate'] is not None:
@@ -280,19 +288,58 @@ def change_client(
     return obj
 
 
+def _deletion_block(db: Session, vehicle_id: int) -> str | None:
+    if db.scalar(select(Tracker.id).where(Tracker.vehicle_id == vehicle_id, Tracker.is_deleted.is_(False)).limit(1)):
+        return 'Existe rastreador vinculado ao veículo; faça a desinstalação antes de excluir.'
+    if db.scalar(select(Contract.id).where(Contract.vehicle_id == vehicle_id, Contract.is_deleted.is_(False),
+                                          Contract.status == 'ativo').limit(1)):
+        return 'Existe contrato ativo; faça a desinstalação antes de excluir.'
+    return None
+
+
+def _delete_vehicle(db: Session, vehicle: Vehicle, user: User) -> None:
+    vehicle.is_deleted = True
+    db.add(AuditLog(user_id=user.id, user_name=user.name, user_role=user.role.value,
+                    method='DELETE', path=f'/vehicles/{vehicle.id}', entity_type='vehicle',
+                    entity_id=vehicle.id, status_code=200, description='Veículo removido com exclusão lógica.'))
+
+
+@router.post('/lote/excluir', response_model=VehicleDeleteBatchOut)
+def delete_batch(
+    payload: VehicleDeleteBatch,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.ADMIN)),
+):
+    ids = list(dict.fromkeys(payload.ids))
+    vehicles = {item.id: item for item in db.scalars(select(Vehicle).where(
+        Vehicle.id.in_(ids), Vehicle.is_deleted.is_(False),
+    ).order_by(Vehicle.id).with_for_update()).all()}
+    results = []
+    for vehicle_id in ids:
+        vehicle = vehicles.get(vehicle_id)
+        reason = _deletion_block(db, vehicle_id) if vehicle else 'Veículo não encontrado ou já excluído.'
+        if not reason and not payload.simular:
+            _delete_vehicle(db, vehicle, current_user)
+        results.append({'vehicle_id': vehicle_id, 'plate': vehicle.plate if vehicle else None,
+                        'situacao': 'ignorado' if reason else 'aplicado', 'motivo': reason})
+    applied = sum(item['situacao'] == 'aplicado' for item in results)
+    if not payload.simular:
+        db.commit()
+    return {'simulacao': payload.simular, 'total_enviados': len(ids), 'aplicados': applied,
+            'ignorados': len(ids) - applied, 'itens': results}
+
+
 @router.delete('/{item_id}')
 def delete_item(
     item_id: int,
     db: Session = Depends(get_db),
-    _: object = Depends(require_roles(UserRole.ADMIN)),
+    current_user: User = Depends(require_roles(UserRole.ADMIN)),
 ):
     obj = _get_vehicle_or_404(item_id, db)
-    linked_tracker = db.scalar(
-        select(Tracker).where(Tracker.vehicle_id == obj.id, Tracker.is_deleted.is_(False))
-    )
-    if linked_tracker:
-        raise HTTPException(status_code=400, detail='Não é possível excluir: existe rastreador vinculado ao veículo')
-    obj.is_deleted = True
+    reason = _deletion_block(db, obj.id)
+    if reason:
+        raise HTTPException(status_code=400, detail=f'Não é possível excluir: {reason}')
+    _delete_vehicle(db, obj, current_user)
     db.commit()
     return {'message': 'Veículo removido com soft delete'}
 

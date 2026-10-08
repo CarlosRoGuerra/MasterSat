@@ -1,4 +1,4 @@
-from sqlalchemy import Date, Enum, ForeignKey, Index, Integer, Numeric, String, Text, text
+from sqlalchemy import Boolean, Date, Enum, ForeignKey, Index, Integer, Numeric, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -48,7 +48,8 @@ class Vehicle(Base, TimestampMixin, SoftDeleteMixin):
     city: Mapped[str | None] = mapped_column(String(120), nullable=True)
     state: Mapped[str | None] = mapped_column(String(2), nullable=True)
 
-    plate: Mapped[str] = mapped_column(String(10))
+    is_non_road_asset: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text('false'))
+    plate: Mapped[str] = mapped_column(String(40))
     chassis: Mapped[str | None] = mapped_column(String(40), nullable=True)
     renavam: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
     brand: Mapped[str | None] = mapped_column(String(80), nullable=True)

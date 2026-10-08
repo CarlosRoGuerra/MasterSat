@@ -1,7 +1,8 @@
 import re
 from datetime import date
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 
 from app.models.enums import VehicleStatus
 
@@ -27,11 +28,37 @@ def _plate_valida(value: str) -> bool:
     return False
 
 
+def identifier_is_valid(value: str, is_non_road_asset: bool = False) -> bool:
+    if is_non_road_asset:
+        return bool(re.fullmatch(r'[A-Z0-9]{1,40}', value))
+    return _plate_valida(value)
+
+
 class VehicleClientChange(BaseModel):
     client_id: int = Field(ge=1)
     # Ausente preserva o pagador; null faz o próprio cliente pagar.
     interveniente_client_id: int | None = Field(default=None, ge=1)
     expected_client_id: int | None = Field(default=None, ge=1)
+
+
+class VehicleDeleteBatch(BaseModel):
+    ids: list[Annotated[int, Field(ge=1)]] = Field(min_length=1, max_length=2000)
+    simular: bool = False
+
+
+class VehicleDeleteBatchItem(BaseModel):
+    vehicle_id: int
+    plate: str | None = None
+    situacao: Literal['aplicado', 'ignorado']
+    motivo: str | None = None
+
+
+class VehicleDeleteBatchOut(BaseModel):
+    simulacao: bool
+    total_enviados: int
+    aplicados: int
+    ignorados: int
+    itens: list[VehicleDeleteBatchItem]
 
 
 class VehicleBase(BaseModel):
@@ -52,6 +79,7 @@ class VehicleBase(BaseModel):
     neighborhood: str | None = None
     city: str | None = None
     state: str | None = None
+    is_non_road_asset: bool = False
     plate: str
     chassis: str | None = None
     renavam: str | None = None
@@ -69,9 +97,9 @@ class VehicleBase(BaseModel):
 
     @field_validator('plate')
     @classmethod
-    def normalize_plate(cls, value: str) -> str:
+    def normalize_plate(cls, value: str, info: ValidationInfo) -> str:
         value = value.strip().upper().replace('-', '').replace(' ', '')
-        if not _plate_valida(value):
+        if not identifier_is_valid(value, info.data.get('is_non_road_asset', False)):
             raise ValueError('Placa inválida')
         return value
 
@@ -169,6 +197,7 @@ class VehicleUpdate(BaseModel):
     neighborhood: str | None = None
     city: str | None = None
     state: str | None = None
+    is_non_road_asset: bool = False
     plate: str | None = None
     chassis: str | None = None
     renavam: str | None = None
@@ -186,11 +215,11 @@ class VehicleUpdate(BaseModel):
 
     @field_validator('plate')
     @classmethod
-    def normalize_plate(cls, value: str | None) -> str | None:
+    def normalize_plate(cls, value: str | None, info: ValidationInfo) -> str | None:
         if value is None or value == '':
             return None
         value = value.strip().upper().replace('-', '').replace(' ', '')
-        if not _plate_valida(value):
+        if not identifier_is_valid(value, info.data.get('is_non_road_asset', False)):
             raise ValueError('Placa inválida')
         return value
 
