@@ -1556,8 +1556,10 @@ export interface paths {
         };
         /**
          * Listar Cobrancas
-         * @description Lista as cobranças em aberto (pendentes/vencidas) com os dados de boleto/Pix
-         *     prontos para envio. Usado pelo CobraZap para puxar os boletos.
+         * @description Consulta paginada de cobranças e pagamentos registrados no MasterSat.
+         *
+         *     Sem status explícito, mantém a lista de cobranças abertas. Todos os
+         *     filtros se combinam; as datas inicial e final são inclusivas.
          */
         get: operations["listar_cobrancas_api_v1_integrations_cobrancas_get"];
         put?: never;
@@ -3198,6 +3200,86 @@ export interface paths {
         };
         /** Healthcheck */
         get: operations["healthcheck__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/cobrancas/{billing_id}/nfse": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Detalhar Nfse
+         * @description Dados da nota fiscal vinculada à cobrança; consulta sem emissão fiscal.
+         */
+        get: operations["detalhar_nfse_api_v1_integrations_cobrancas__billing_id__nfse_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/cobrancas/{billing_id}/nfse/pdf": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Baixar Nfse Pdf
+         * @description PDF da NFS-e para anexar na mensagem; usa o XML autorizado armazenado.
+         */
+        get: operations["baixar_nfse_pdf_api_v1_integrations_cobrancas__billing_id__nfse_pdf_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/cobrancas/{billing_id}/nfse/xml": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Baixar Nfse Xml
+         * @description XML fiscal de retorno da NFS-e; não devolve XML de envio/RPS.
+         */
+        get: operations["baixar_nfse_xml_api_v1_integrations_cobrancas__billing_id__nfse_xml_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/nfse/{billing_id}/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Baixar Nfse Pdf Publico
+         * @description Abre o PDF sem JWT/X-API-Key; exige o token da nota emitida atual.
+         */
+        get: operations["baixar_nfse_pdf_publico_api_v1_public_nfse__billing_id___token__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -6367,6 +6449,128 @@ export interface components {
             client_id?: number | null;
             /** Id */
             id: number;
+        };
+        /** IntegrationBillingPage */
+        IntegrationBillingPage: {
+            /** Total */
+            total: number;
+            /** Total Registros */
+            total_registros: number;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Has More */
+            has_more: boolean;
+            /** Next Offset */
+            next_offset: number | null;
+            /** Cobrancas */
+            cobrancas: components["schemas"]["IntegrationBillingOut"][];
+        };
+        /** IntegrationBillingOut */
+        IntegrationBillingOut: {
+            /** Id */
+            id: number;
+            /** Titulo */
+            titulo: string | null;
+            cliente: components["schemas"]["IntegrationPayerOut"];
+            /** Valor */
+            valor: number;
+            /** Vencimento */
+            vencimento: string | null;
+            status: components["schemas"]["BillingStatus"];
+            /** Pagamento Confirmado */
+            pagamento_confirmado: boolean;
+            /** Data Pagamento */
+            data_pagamento: string | null;
+            /** Valor Pago */
+            valor_pago: number | null;
+            /** Forma Pagamento */
+            forma_pagamento: string | null;
+            /** Forma Envio */
+            forma_envio: string;
+            /** Enviar Boleto Whatsapp */
+            enviar_boleto_whatsapp: boolean;
+            /** Nosso Numero */
+            nosso_numero: string | null;
+            /** Linha Digitavel */
+            linha_digitavel: string | null;
+            /** Codigo Barras */
+            codigo_barras: string | null;
+            /** Pix Copia Cola */
+            pix_copia_cola: string | null;
+            /** Boleto Registrado */
+            boleto_registrado: boolean;
+            /** Boleto Disponivel */
+            boleto_disponivel: boolean;
+            /** Motivo Boleto Indisponivel */
+            motivo_boleto_indisponivel: string | null;
+            /** Boleto Pdf Url */
+            boleto_pdf_url: string | null;
+            /** Boleto Link Cliente */
+            boleto_link_cliente: string | null;
+            /** Valor Com Juros */
+            valor_com_juros: number | null;
+            nfse?: components["schemas"]["IntegrationNfseOut"] | null;
+        };
+        /** IntegrationPayerOut */
+        IntegrationPayerOut: {
+            /** Id */
+            id: number;
+            /** Nome */
+            nome: string;
+            /** Cpf Cnpj */
+            cpf_cnpj: string | null;
+            /** Telefone */
+            telefone: string | null;
+            /** Email */
+            email: string | null;
+        };
+        /** IntegrationNfseOut */
+        IntegrationNfseOut: {
+            /** Nota Id */
+            nota_id: number;
+            /** Billing Id */
+            billing_id: number;
+            /** Status */
+            status: string;
+            /** Numero Nfse */
+            numero_nfse: string | null;
+            /** Serie Nfse */
+            serie_nfse: string | null;
+            /** Codigo Verificacao */
+            codigo_verificacao: string | null;
+            /** Chave Acesso */
+            chave_acesso: string | null;
+            /** Link Visualizacao */
+            link_visualizacao: string | null;
+            /** Data Emissao */
+            data_emissao: string | null;
+            /** Competencia */
+            competencia: string | null;
+            /** Ambiente */
+            ambiente: string | null;
+            /** Pdf Disponivel */
+            pdf_disponivel: boolean;
+            /** Xml Disponivel */
+            xml_disponivel: boolean;
+            /** Motivo Indisponibilidade */
+            motivo_indisponibilidade: string | null;
+            /**
+             * Pdf Url
+             * @description Link do PDF para o cliente, protegido por token; abre sem X-API-Key.
+             */
+            pdf_url: string | null;
+            /**
+             * Pdf Api Url
+             * @description Download do PDF para a integradora, exige X-API-Key.
+             */
+            pdf_api_url: string | null;
+            /**
+             * Xml Url
+             * @description Download do XML fiscal para a integradora, exige X-API-Key.
+             */
+            xml_url: string | null;
         };
     };
     responses: never;
@@ -9977,9 +10181,23 @@ export interface operations {
     listar_cobrancas_api_v1_integrations_cobrancas_get: {
         parameters: {
             query?: {
-                /** @description Filtra pela forma de envio do cliente: 'whatsapp' ou 'email' (inclui quem usa 'todos'). */
-                forma_envio?: string | null;
+                /** @description Filtra pela forma de envio do pagador: 'whatsapp' ou 'email' (inclui quem usa 'todos'). */
+                forma_envio?: ("whatsapp" | "email") | null;
+                /** @description Situação: pendente, vencida, paga, cancelada ou todos. Sem filtro, retorna pendentes/vencidas. */
+                status?: components["schemas"]["BillingStatus"] | "todos" | null;
+                /** @description Vencimento exato (AAAA-MM-DD). */
+                vencimento?: string | null;
+                /** @description Vencimento inicial, inclusive (AAAA-MM-DD). */
+                vencimento_de?: string | null;
+                /** @description Vencimento final, inclusive (AAAA-MM-DD). */
+                vencimento_ate?: string | null;
+                /** @description Data de pagamento inicial, inclusive (AAAA-MM-DD). */
+                pagamento_de?: string | null;
+                /** @description Data de pagamento final, inclusive (AAAA-MM-DD). */
+                pagamento_ate?: string | null;
                 limit?: number;
+                /** @description Quantidade de registros a pular na consulta filtrada. */
+                offset?: number;
             };
             header?: {
                 "X-API-Key"?: string | null;
@@ -9995,7 +10213,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["IntegrationBillingPage"];
                 };
             };
             /** @description Validation Error */
@@ -10028,7 +10246,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["IntegrationBillingOut"];
                 };
             };
             /** @description Validation Error */
@@ -10055,8 +10273,17 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description PDF do boleto registrado disponível para pagamento. */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pdf": string;
+                };
+            };
+            /** @description Boleto indisponível; detail.code informa o motivo. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10064,13 +10291,13 @@ export interface operations {
                     "application/json": unknown;
                 };
             };
-            /** @description Validation Error */
+            /** @description ID inválido ou falha ao montar o documento. */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": unknown;
                 };
             };
         };
@@ -12867,6 +13094,164 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    detalhar_nfse_api_v1_integrations_cobrancas__billing_id__nfse_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-API-Key"?: string | null;
+            };
+            path: {
+                billing_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationNfseOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    baixar_nfse_pdf_api_v1_integrations_cobrancas__billing_id__nfse_pdf_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-API-Key"?: string | null;
+            };
+            path: {
+                billing_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description DANFSE gerado localmente a partir do XML fiscal armazenado. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pdf": string;
+                };
+            };
+            /** @description Nota ainda não emitida ou XML indisponível. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description ID inválido ou XML fiscal inválido para a geração do PDF. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    baixar_nfse_xml_api_v1_integrations_cobrancas__billing_id__nfse_xml_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-API-Key"?: string | null;
+            };
+            path: {
+                billing_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description XML de retorno da NFS-e emitida, preservado como armazenado. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/xml": string;
+                };
+            };
+            /** @description Nota ainda não emitida ou XML indisponível. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    baixar_nfse_pdf_publico_api_v1_public_nfse__billing_id___token__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                billing_id: number;
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description PDF da NFS-e para abrir no navegador, protegido por token. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pdf": string;
+                };
+            };
+            /** @description Token inválido ou documento indisponível. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description ID inválido ou XML fiscal inválido para gerar o PDF. */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

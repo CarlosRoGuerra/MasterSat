@@ -62,6 +62,7 @@ api_router.include_router(payables.router, prefix='/payables', tags=['contas-a-p
 api_router.include_router(settings_endpoints.router, prefix='/settings', tags=['configuracoes'])
 api_router.include_router(boletos.router, prefix='/boletos', tags=['boletos'])
 api_router.include_router(boletos.public_router, prefix='/public', tags=['public'])
+api_router.include_router(integrations.public_router, prefix='/public', tags=['public'])
 api_router.include_router(ailos_auth.router, prefix='/ailos', tags=['ailos'])
 api_router.include_router(ailos_boletos.router, prefix='/ailos', tags=['ailos'])
 api_router.include_router(ailos_pagadores.router, prefix='/ailos', tags=['ailos'])
