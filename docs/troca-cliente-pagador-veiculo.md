@@ -20,6 +20,10 @@ O menu também corrige o caso em que o cadastro do veículo já aponta para o co
 
 Na edição comum do veículo, alterar o cliente usa a mesma operação e define o novo cliente como pagador das novas cobranças. Para escolher um interveniente diferente, use o menu dos detalhes. O financeiro pode mudar o pagador; a troca do cliente do veículo permanece disponível ao administrador e ao operacional.
 
+Também é possível trocar pela tela **Rastreadores → Editar**: busque o novo cliente pelo nome ou CPF/CNPJ, mantenha a placa atual e clique em **Atualizar rastreador**. A placa continua selecionada durante a busca. O veículo, seus rastreadores, os contratos ativos e os dados técnicos editados são salvos na mesma transação. O novo cliente passa a ser o pagador das próximas cobranças; para outro interveniente, use o menu dos detalhes do veículo. Não há desinstalação nem consulta à Multiportal.
+
+A troca pela edição do rastreador mantém o status e a data da instalação. Para criar um contrato em um equipamento instalado sem contrato, salve a troca de cliente primeiro e depois escolha o plano. Identificadores importados como `DES000005` são preservados quando o campo ID não é alterado.
+
 ## Multiportal e busca por placa
 
 A troca e suas validações usam exclusivamente o banco do MasterSat. Não executam consulta, comparação ou desvínculo na Multiportal. A intenção de sincronizar os dados alterados fica na fila local existente, sem condicionar a conclusão da troca à plataforma externa.
@@ -48,6 +52,28 @@ Content-Type: application/json
 
 `expected_client_id` é o cliente do veículo que a tela carregou. Se alguém já o tiver alterado, a API retorna 409 e exige atualizar a tela. A resposta de sucesso é o veículo atualizado. IDs inexistentes ou removidos retornam 404; o financeiro tentando trocar o proprietário recebe 403. Contrato ativo com rastreador fora da placa retorna 409 antes de qualquer alteração.
 
+Para trocar o cliente pela edição de um rastreador e salvar seus dados técnicos na mesma transação:
+
+```http
+POST /api/v1/trackers/{tracker_id}/change-client
+Authorization: Bearer <token_do_usuario>
+Content-Type: application/json
+
+{
+  "client_id": 123,
+  "expected_vehicle_id": 7,
+  "expected_client_id": 456,
+  "tracker_update": {
+    "model": "ST 300",
+    "notes": "Cliente atualizado"
+  }
+}
+```
+
+Os três IDs são obrigatórios: cliente desejado, placa carregada pela tela e cliente atual dessa placa. A resposta é o rastreador atualizado. `tracker_update` é opcional; aceita os campos técnicos da edição e não pode conter `client_id` ou `vehicle_id`. O status e a data de instalação, se enviados, devem permanecer iguais aos cadastrados. Omita `imei` quando o identificador não mudar, especialmente para IDs importados alfanuméricos.
+
+Se a placa do rastreador ou seu cliente já tiverem mudado, a API retorna 409. Dados técnicos inválidos e conflitos de ID não deixam uma troca parcial. Esta operação permite administrador e operacional; o financeiro altera somente o pagador pelo endpoint do veículo.
+
 ## Atualização da VPS
 
 Depois do commit disponibilizado na branch, execute:
@@ -61,4 +87,4 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build --
 docker compose -f docker-compose.yml -f docker-compose.prod.yml exec nginx nginx -s reload
 ```
 
-Não há migration nem alteração de banco a executar. Após atualizar, recarregue a página do sistema e use o menu indicado acima para concluir a troca da placa já alterada no cadastro.
+Não há migration nem alteração de banco a executar. Após atualizar, recarregue a página do sistema. A troca fica disponível nos detalhes do veículo e na edição do rastreador, pelos caminhos indicados acima.

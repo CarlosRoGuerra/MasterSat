@@ -27,6 +27,7 @@ def change_vehicle_client(
     *,
     change_payer: bool = False,
     interveniente_client_id: int | None = None,
+    expected_tracker_id: int | None = None,
     method: str = 'POST',
     path: str,
 ) -> tuple[list[int], list[int]]:
@@ -60,6 +61,11 @@ def change_vehicle_client(
         ).order_by(Tracker.id).with_for_update().execution_options(populate_existing=True)
     ).all())
     tracker_ids = {tracker.id for tracker in trackers}
+    if expected_tracker_id is not None and expected_tracker_id not in tracker_ids:
+        raise HTTPException(
+            status_code=409,
+            detail='O vínculo do rastreador mudou. Atualize a tela antes de trocar o cliente.',
+        )
     if any(c.tracker_id and c.tracker_id not in tracker_ids for c in contracts):
         raise HTTPException(
             status_code=409,

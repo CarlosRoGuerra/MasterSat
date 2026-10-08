@@ -3305,6 +3305,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/trackers/{item_id}/change-client": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Change Client */
+        post: operations["change_client_api_v1_trackers__item_id__change_client_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -6597,6 +6614,15 @@ export interface components {
             interveniente_client_id?: number | null;
             /** Expected Client Id */
             expected_client_id?: number | null;
+        };
+        TrackerClientChange: {
+            /** Client Id */
+            client_id: number;
+            /** Expected Vehicle Id */
+            expected_vehicle_id: number;
+            /** Expected Client Id */
+            expected_client_id: number;
+            tracker_update?: components["schemas"]["TrackerUpdate"];
         };
     };
     responses: never;
@@ -13309,6 +13335,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VehicleOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    change_client_api_v1_trackers__item_id__change_client_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TrackerClientChange"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrackerOut"];
                 };
             };
             /** @description Validation Error */

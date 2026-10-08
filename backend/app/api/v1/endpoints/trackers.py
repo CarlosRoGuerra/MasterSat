@@ -29,6 +29,7 @@ from app.schemas.tracker import (
     TrackerAcaoLoteItem,
     TrackerAcaoLoteOut,
     TrackerCreate,
+    TrackerClientChange,
     TrackerHistoryOut,
     TrackerLinkPayload,
     TrackerLoteIn,
@@ -58,6 +59,7 @@ from app.services.multiportal_sync_state import (
 from app.services.multiportal_outbox import (
     enqueue_full_sync,
 )
+from app.services.vehicle_client_change import change_vehicle_client
 
 router = APIRouter()
 
@@ -754,6 +756,63 @@ def update_item(
             _TRACKER_INTEGRITY_MESSAGES,
             sqlite_columns=_TRACKER_SQLITE_CONSTRAINTS,
         )
+    db.refresh(tracker)
+    return _tracker_to_out(tracker, db)
+
+
+@router.post('/{item_id}/change-client', response_model=TrackerOut)
+def change_client(
+    item_id: int,
+    payload: TrackerClientChange,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(*EDIT_ROLES)),
+):
+    tracker = _get_tracker_or_404(item_id, db)
+    # Mesma ordem de locks da troca pelos veículos: placa, contratos, equipamentos.
+    vehicle = db.scalar(select(Vehicle).where(
+        Vehicle.id == payload.expected_vehicle_id, Vehicle.is_deleted.is_(False),
+    ).with_for_update().execution_options(populate_existing=True))
+    if not vehicle:
+        raise HTTPException(status_code=404, detail='Veículo não encontrado')
+    if vehicle.client_id != payload.expected_client_id:
+        raise HTTPException(status_code=409, detail='O cliente do veículo mudou. Atualize a tela antes de trocar o cliente.')
+
+    data = _normalize_payload(payload.tracker_update.model_dump(exclude_unset=True), db)
+    if data.get('imei') is not None:
+        _ensure_imei_available(data['imei'], db, ignore_id=item_id)
+    owner_changed = vehicle.client_id != payload.client_id
+    try:
+        _, changed_trackers = change_vehicle_client(
+            db, vehicle, payload.client_id, current_user,
+            change_payer=owner_changed,
+            expected_tracker_id=item_id,
+            path=f'/api/v1/trackers/{item_id}/change-client',
+        )
+        # O serviço recarrega e trava os rastreadores antes de alterar qualquer
+        # vínculo. Não permite mover a placa nem mudar a instalação nesta troca.
+        for field in ('status', 'install_date'):
+            if field in data and data[field] != getattr(tracker, field):
+                raise HTTPException(status_code=409, detail='Mantenha o status e a data de instalação ao trocar o cliente.')
+        multiportal_changed = has_relevant_changes(tracker, data, TRACKER_MULTIPORTAL_FIELDS)
+        for key, value in data.items():
+            setattr(tracker, key, value)
+        if multiportal_changed and not (owner_changed or changed_trackers):
+            invalidate_tracker(tracker, db)
+        if data:
+            _register_history(
+                db, tracker, action='updated',
+                previous_vehicle_id=vehicle.id, new_vehicle_id=vehicle.id,
+                previous_client_id=payload.client_id, new_client_id=payload.client_id,
+                previous_status=tracker.status.value, new_status=tracker.status.value,
+                created_by_user_id=current_user.id,
+                notes='Dados técnicos atualizados junto com a troca do cliente; instalação mantida',
+            )
+        db.commit()
+    except IntegrityError as exc:
+        raise_integrity_conflict(db, exc, _TRACKER_INTEGRITY_MESSAGES, sqlite_columns=_TRACKER_SQLITE_CONSTRAINTS)
+    except Exception:
+        db.rollback()
+        raise
     db.refresh(tracker)
     return _tracker_to_out(tracker, db)
 

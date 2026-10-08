@@ -42,3 +42,21 @@ Os seis testes abaixo falham da mesma forma em uma cópia de `a1b4bef`, sem as a
 - `test_contracts_api.py::TestGenerateBillings::test_default_12_months`
 
 O schema da nova operação foi extraído com as versões da imagem do backend. Apenas o novo endpoint, seu corpo e sua operação foram acrescentados aos tipos do frontend, preservando os tipos existentes das outras funcionalidades.
+
+## Correção adicional da edição do rastreador
+
+Base: `cb59d8015ebd535db63af4cce5dc50374a955213`.
+
+O formulário apagava o veículo ao selecionar outro cliente por nome ou CPF/CNPJ. Salvar era então interpretado como uma tentativa de desinstalação. A seleção agora mantém a placa e a edição usa `POST /trackers/{id}/change-client` para salvar a troca e os dados técnicos em uma transação. Identificadores alfanuméricos importados permanecem quando o campo ID não é alterado.
+
+| Verificação adicional | Resultado |
+| --- | --- |
+| Backend, cópia isolada da base com os quatro arquivos Python desta correção | 580 passaram; mesmos 6 testes legados deselecionados |
+| Versões Python / FastAPI / Pydantic / SQLAlchemy | 3.12.14 / 0.142.2 / 2.9.2 / 2.0.35 |
+| Frontend: tela de rastreadores, menu de troca, assistente e cliente HTTP | 27 passaram |
+| TypeScript sem escrita incremental | Sem erros |
+| ESLint da tela e novo teste | Sem erros; 3 avisos existentes na tela |
+
+Os 16 novos casos do backend cobrem a troca por essa operação, múltiplos equipamentos na mesma placa, contrato e títulos antigos preservados, ID `DES000005`, rejeição de tela desatualizada ou placa já alterada, permissões, validação e rollback completo de cliente, snapshot financeiro, histórico e fila quando a edição é inválida. Alterar também dados enviados à integração cria uma única intenção de sincronização por equipamento.
+
+Os cinco testes novos da interface exercitam o formulário real: busca por CPF/CNPJ e pelo nome mantendo placa e contrato, uma única requisição ao salvar, recusa da API preservando a seleção, desinstalação explícita ainda protegida e edição técnica comum preservando o ID importado. A operação não consulta nem desvincula na Multiportal.

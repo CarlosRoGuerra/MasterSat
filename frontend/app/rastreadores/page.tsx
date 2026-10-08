@@ -485,8 +485,18 @@ function RastreadoresPageInner() {
 
   const filteredVehicles = useMemo(() => {
     if (!form.client_id) return vehicles;
-    return vehicles.filter((item) => item.client_id === Number(form.client_id));
-  }, [vehicles, form.client_id]);
+    return vehicles.filter((item) => item.client_id === Number(form.client_id)
+      || (isEditing && item.id === selectedTracker?.vehicle_id));
+  }, [vehicles, form.client_id, isEditing, selectedTracker?.vehicle_id]);
+
+  const changingInstalledClient = Boolean(
+    isEditing && selectedTracker?.vehicle_id
+    && selectedTracker.vehicle_id === Number(form.vehicle_id)
+    && form.client_id && (
+      Number(form.client_id) !== selectedTracker.client_id
+      || vehicles.some((item) => item.id === selectedTracker.vehicle_id && item.client_id !== Number(form.client_id))
+    ),
+  );
 
   const contratoAtivoNoVeiculo = Boolean(
     isEditing && selectedTracker?.active_plan_name
@@ -652,6 +662,17 @@ function RastreadoresPageInner() {
     }
   }
 
+  function selectFormClient(clientId: string) {
+    setForm((prev) => ({
+      ...prev,
+      client_id: clientId,
+      // Trocar o dono mantém a instalação na placa atual. Novos cadastros
+      // continuam escolhendo apenas os veículos do cliente selecionado.
+      vehicle_id: isEditing && selectedTracker?.vehicle_id === Number(prev.vehicle_id) ? prev.vehicle_id : '',
+      link_plan_id: '',
+    }));
+  }
+
   function findClientByDocument() {
     const digits = onlyDigits(form.client_lookup_document);
     const match = clients.find((item) => onlyDigits(item.cpf_cnpj) === digits);
@@ -660,7 +681,7 @@ function RastreadoresPageInner() {
       return;
     }
     setError('');
-    setForm((prev) => ({ ...prev, client_id: String(match.id), vehicle_id: '' }));
+    selectFormClient(String(match.id));
   }
 
   async function submitTracker(event: FormEvent<HTMLFormElement>) {
@@ -685,6 +706,12 @@ function RastreadoresPageInner() {
       const isRemovingVehicle = Boolean(isEditing && selectedTracker?.vehicle_id && !form.vehicle_id);
       if (isRemovingVehicle) {
         throw new Error('Use a desinstalação do veículo para remover um vínculo existente.');
+      }
+      if (isEditing && selectedTracker?.vehicle_id === Number(form.vehicle_id) && !form.client_id) {
+        throw new Error('Selecione o cliente do veículo. A troca mantém a placa vinculada.');
+      }
+      if (changingInstalledClient && isAddingContract) {
+        throw new Error('Salve a troca de cliente antes de criar um novo contrato.');
       }
       if (form.vehicle_id && form.link_plan_id && !form.link_billing_day) {
         throw new Error('Informe o dia do vencimento do contrato.');
@@ -722,11 +749,30 @@ function RastreadoresPageInner() {
         // O PUT genérico não pode alterar vínculos. Em uma vinculação/transferência,
         // salva somente dados técnicos e delega toda a relação ao endpoint seguro.
         const updatePayload: Record<string, unknown> = { ...payload };
+        // IDs importados podem ser alfanuméricos (ex.: DES000005). A edição
+        // dos demais dados não deve normalizar ou substituir esse identificador.
+        if (form.imei === selectedTracker.imei) delete updatePayload.imei;
         if (isLinkingVehicle) {
           delete updatePayload.vehicle_id;
           delete updatePayload.client_id;
         }
-        saved = await apiFetch<Tracker>(`/trackers/${selectedTracker.id}`, { method: 'PUT', body: JSON.stringify(updatePayload) }, token);
+        if (changingInstalledClient) {
+          const linkedVehicle = vehicles.find((item) => item.id === selectedTracker.vehicle_id);
+          if (!linkedVehicle) throw new Error('Atualize a lista de veículos antes de trocar o cliente.');
+          delete updatePayload.client_id;
+          delete updatePayload.vehicle_id;
+          saved = await apiFetch<Tracker>(`/trackers/${selectedTracker.id}/change-client`, {
+            method: 'POST',
+            body: JSON.stringify({
+              client_id: Number(form.client_id),
+              expected_vehicle_id: linkedVehicle.id,
+              expected_client_id: linkedVehicle.client_id,
+              tracker_update: updatePayload,
+            }),
+          }, token);
+        } else {
+          saved = await apiFetch<Tracker>(`/trackers/${selectedTracker.id}`, { method: 'PUT', body: JSON.stringify(updatePayload) }, token);
+        }
 
         if (isLinkingVehicle || isAddingContract) {
           const linkResult = await apiFetch<{ tracker: Tracker; multiportal_synchronized?: boolean }>(`/trackers/${selectedTracker.id}/link-vehicle`, {
@@ -783,6 +829,7 @@ function RastreadoresPageInner() {
 
       setFeedback(
         (isEditing && isAddingContract ? 'Rastreador atualizado e contrato criado.'
+          : changingInstalledClient ? 'Cliente atualizado. Placa, instalação e contratos ativos mantidos.'
           : isEditing ? 'Rastreador atualizado com sucesso.' : 'Rastreador cadastrado com sucesso.')
         + avisoMultiportal,
       );
@@ -1196,14 +1243,21 @@ function RastreadoresPageInner() {
               <ClientAutocomplete
                 clients={clients}
                 value={form.client_id}
-                onChange={(id) => setForm((prev) => ({ ...prev, client_id: id, vehicle_id: '', link_plan_id: '' }))}
+                onChange={selectFormClient}
                 placeholder="Buscar cliente por nome…"
               />
-              <select className={fieldClass} value={form.vehicle_id} onChange={(e) => {
+              <select aria-label="Veículo vinculado" className={fieldClass} value={form.vehicle_id} onChange={(e) => {
                 const vid = e.target.value;
                 setForm((prev) => ({ ...prev, vehicle_id: vid, link_billing_day: '' }));
               }}><option value="">Sem veículo</option>{filteredVehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.plate} {vehicle.model ? `• ${vehicle.model}` : ''}</option>)}</select>
             </div>
+            {changingInstalledClient && (
+              <p className="mt-3 text-sm text-amber-700 dark:text-amber-300">
+                Ao salvar, o veículo e seus contratos ativos passarão para este cliente, mantendo a instalação.
+                O novo cliente será o pagador das próximas cobranças. Títulos já gerados mantêm o responsável anterior.
+                Para escolher outro pagador, use Veículos → Detalhes → Trocar cliente / pagador.
+              </p>
+            )}
           </div>
 
           {form.vehicle_id && (

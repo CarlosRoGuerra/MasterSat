@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.models.enums import TrackerStatus
 
@@ -128,6 +128,19 @@ class TrackerUpdate(BaseModel):
             return None
         digits = ''.join(filter(str.isdigit, value))
         return digits or None
+
+
+class TrackerClientChange(BaseModel):
+    client_id: int = Field(ge=1)
+    expected_vehicle_id: int = Field(ge=1)
+    expected_client_id: int = Field(ge=1)
+    tracker_update: TrackerUpdate = Field(default_factory=TrackerUpdate)
+
+    @model_validator(mode='after')
+    def keep_assignment(self):
+        if {'client_id', 'vehicle_id'} & self.tracker_update.model_fields_set:
+            raise ValueError('Informe o cliente no campo client_id; a placa deve permanecer vinculada.')
+        return self
 
 
 class TrackerOut(BaseModel):
