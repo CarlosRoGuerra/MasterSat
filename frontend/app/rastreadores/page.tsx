@@ -433,16 +433,35 @@ function RastreadoresPageInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, searchParams]);
 
-  const [vinculoConsulta, setVinculoConsulta] = useState<{ loading: boolean; result: TrackerLinkFlow | null; error: string }>({ loading: false, result: null, error: '' });
+  // Um painel para as duas ações da Multiportal: `acao` diz qual resultado
+  // está na tela (consulta do vínculo ou sincronização completa).
+  const [vinculoConsulta, setVinculoConsulta] = useState<{ loading: boolean; result: TrackerLinkFlow | null; error: string; acao?: 'consulta' | 'sync' }>({ loading: false, result: null, error: '' });
 
   async function consultarVinculo(tracker: Tracker) {
     if (!token) return;
-    setVinculoConsulta({ loading: true, result: null, error: '' });
+    setVinculoConsulta({ loading: true, result: null, error: '', acao: 'consulta' });
     try {
       const flow = await apiFetch<TrackerLinkFlow>(`/integrations/multiportal/trackers/${tracker.id}/query-link`, {}, token);
-      setVinculoConsulta({ loading: false, result: flow, error: '' });
+      setVinculoConsulta({ loading: false, result: flow, error: '', acao: 'consulta' });
     } catch (err) {
-      setVinculoConsulta({ loading: false, result: null, error: parseError(err) });
+      setVinculoConsulta({ loading: false, result: null, error: parseError(err), acao: 'consulta' });
+    }
+  }
+
+  // Mesmo "Sync completo" da tela de Integração (cliente → veículo →
+  // equipamento → vínculo). O backend grava o resultado em
+  // integration_status; aqui o badge e a lista acompanham sem recarregar.
+  async function sincronizarMultiportal(tracker: Tracker) {
+    if (!token) return;
+    setVinculoConsulta({ loading: true, result: null, error: '', acao: 'sync' });
+    try {
+      const flow = await apiFetch<TrackerLinkFlow>(`/integrations/multiportal/trackers/${tracker.id}/sync-flow`, { method: 'POST' }, token);
+      setVinculoConsulta({ loading: false, result: flow, error: '', acao: 'sync' });
+      const integrationStatus = flow.overall_success ? 'sincronizado' : 'erro';
+      setSelectedTracker((atual) => (atual && atual.id === tracker.id ? { ...atual, integration_status: integrationStatus } : atual));
+      setTrackers((items) => items.map((item) => (item.id === tracker.id ? { ...item, integration_status: integrationStatus } : item)));
+    } catch (err) {
+      setVinculoConsulta({ loading: false, result: null, error: parseError(err), acao: 'sync' });
     }
   }
 
@@ -456,6 +475,13 @@ function RastreadoresPageInner() {
             label: 'Consultar vínculo na Multiportal',
             run: () => consultarVinculo(selectedTracker),
           },
+          ...(canEdit && selectedTracker.vehicle_id
+            ? [{
+                id: 'sincronizar-multiportal-contexto',
+                label: 'Sincronizar com a Multiportal',
+                run: () => sincronizarMultiportal(selectedTracker),
+              }]
+            : []),
           ...(canEdit
             ? [{
                 id: 'excluir-rastreador-contexto',
@@ -922,15 +948,30 @@ function RastreadoresPageInner() {
                 <div className="col-span-2 rounded-xl border border-slate-100 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/50">
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-2xs font-semibold uppercase tracking-widest text-slate-500">Vínculo na Multiportal</p>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      className="px-3 py-1.5 text-xs"
-                      disabled={vinculoConsulta.loading}
-                      onClick={() => consultarVinculo(selectedTracker)}
-                    >
-                      {vinculoConsulta.loading ? 'Consultando…' : 'Consultar vínculo'}
-                    </Button>
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        className="px-3 py-1.5 text-xs"
+                        disabled={vinculoConsulta.loading}
+                        onClick={() => consultarVinculo(selectedTracker)}
+                      >
+                        {vinculoConsulta.loading && vinculoConsulta.acao === 'consulta' ? 'Consultando…' : 'Consultar vínculo'}
+                      </Button>
+                      {canEdit && (
+                        <Button
+                          type="button"
+                          className="px-3 py-1.5 text-xs"
+                          disabled={vinculoConsulta.loading || !selectedTracker.vehicle_id}
+                          title={selectedTracker.vehicle_id
+                            ? 'Envia cliente, veículo e equipamento para a Multiportal e refaz o vínculo'
+                            : 'Vincule o rastreador a um veículo para sincronizar'}
+                          onClick={() => sincronizarMultiportal(selectedTracker)}
+                        >
+                          {vinculoConsulta.loading && vinculoConsulta.acao === 'sync' ? 'Sincronizando…' : 'Sincronizar'}
+                        </Button>
+                      )}
+                    </div>
                   </div>
                   {vinculoConsulta.error && (
                     <p className="mt-2 text-xs text-rose-600 dark:text-rose-400">{vinculoConsulta.error}</p>
@@ -938,7 +979,9 @@ function RastreadoresPageInner() {
                   {vinculoConsulta.result && (
                     <div className="mt-2 space-y-1.5">
                       <Badge variant={vinculoConsulta.result.overall_success ? 'success' : 'danger'}>
-                        {vinculoConsulta.result.overall_success ? 'Vínculo confirmado' : 'Divergência encontrada'}
+                        {vinculoConsulta.acao === 'sync'
+                          ? (vinculoConsulta.result.overall_success ? 'Sincronização concluída' : 'Sincronização com erros')
+                          : (vinculoConsulta.result.overall_success ? 'Vínculo confirmado' : 'Divergência encontrada')}
                       </Badge>
                       {vinculoConsulta.result.steps.map((step, i) => (
                         <p key={i} className="text-xs text-slate-600 dark:text-slate-300">
