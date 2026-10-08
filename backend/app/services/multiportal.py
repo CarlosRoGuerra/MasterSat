@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import re
 import secrets
 import string
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -25,18 +27,36 @@ SUCCESS_CODES = {'0', '200'}
 IDEMPOTENT_CODES = {'11', '20', '21', '22', '40', '55', '56', '58', '59', '64'}
 SOFT_SUCCESS_CODES = SUCCESS_CODES | IDEMPOTENT_CODES
 
+# Chaves já normalizadas (sem acento, minúsculas, pontuação vira espaço —
+# ver _normalizar_tipo). A tela de Veículos grava "Automóvel" com acento e
+# só "automovel" sem acento era aceito: carro cadastrado pela tela não ia
+# para a Multiportal. Tipos sem código conhecido da Multiportal (Caminhonete,
+# Carreta, máquinas, barcos...) continuam recusados com mensagem clara —
+# chutar um código mandaria o veículo errado ao provedor.
 VEHICLE_TYPE_MAP = {
     'passeio': 1,
     'carro': 1,
     'automovel': 1,
     'caminhao': 2,
-    'caminhão': 2,
     'van': 3,
     'moto': 4,
     'motocicleta': 4,
+    'moto viatura': 4,
     'onibus': 5,
-    'ônibus': 5,
+    'micro onibus': 5,
 }
+# Variações de caminhão da tela/SGR ("Caminhão tanque", "Caminhão de lixo",
+# "Caminhão MUK", "Caminhão - Baú"...) são caminhão (2). "Caminhonete" não
+# começa com a palavra "caminhao" e fica de fora de propósito.
+_PREFIXOS_TIPO = {'caminhao': 2}
+TIPOS_ACEITOS_MULTIPORTAL = 'Automóvel/Carro, Caminhão, Van, Moto, Ônibus'
+
+
+def _normalizar_tipo(valor: str) -> str:
+    sem_acento = ''.join(
+        c for c in unicodedata.normalize('NFKD', valor) if not unicodedata.combining(c)
+    )
+    return ' '.join(re.sub(r'[^a-z0-9]+', ' ', sem_acento.lower()).split())
 
 SIM_STATUS_MAP = {
     'ativo': 1,
@@ -357,6 +377,14 @@ class MultiportalService:
         linked_user: LocalUser | None,
         sync_portal_user: bool = True,
     ) -> list[CallResult]:
+        # Confere veículo e equipamento ANTES de enviar qualquer coisa. Antes o
+        # cliente ia, o veículo era barrado na montagem (tipo sem mapeamento,
+        # sem chassi) e o fluxo parava no meio: cliente enviado sem log e, na
+        # fila automática, reenviado a cada nova tentativa. Lista tudo o que
+        # falta de uma vez, em vez de parar no primeiro problema.
+        problemas = self.problemas_para_sync(tracker=tracker, vehicle=vehicle)
+        if problemas:
+            raise MultiportalError(' '.join(problemas))
         results: list[CallResult] = []
         # Usuário é sincronizado numa chamada própria. Embuti-lo também em
         # sincronizaCliente duplicava o provisionamento e gerava outra senha.
@@ -370,6 +398,17 @@ class MultiportalService:
         if all(step.success for step in results):
             results.append(self.link_equipment_vehicle(tracker, vehicle))
         return results
+
+    def problemas_para_sync(self, *, tracker: LocalTracker, vehicle: LocalVehicle) -> list[str]:
+        """O que impede o envio completo (vazio = pode enviar). Usa as mesmas
+        montagens do envio, então a regra é uma só."""
+        problemas: list[str] = []
+        for montar in (lambda: self._build_vehicle_payload(vehicle), lambda: self._build_equipment_payload(tracker)):
+            try:
+                montar()
+            except MultiportalError as exc:
+                problemas.append(str(exc))
+        return problemas
 
     def _build_client_reference(self, local_client: LocalClient) -> dict[str, Any]:
         return {
@@ -401,10 +440,17 @@ class MultiportalService:
     def _build_vehicle_payload(self, vehicle: LocalVehicle) -> dict[str, Any]:
         vehicle_type = self._vehicle_type_to_code(vehicle.type)
         if vehicle_type is None:
-            raise MultiportalError('Tipo do veículo não pode ser enviado para a Multiportal sem mapeamento válido.')
+            tipo = (vehicle.type or '').strip()
+            raise MultiportalError(
+                (f'Tipo do veículo "{tipo}" não tem mapeamento para a Multiportal' if tipo
+                 else 'Veículo sem tipo informado não tem mapeamento para a Multiportal')
+                + f' — no cadastro do veículo, use um destes: {TIPOS_ACEITOS_MULTIPORTAL}.'
+            )
         chassis = (vehicle.chassis or '').strip().upper()
         if not chassis:
-            raise MultiportalError('Veículo sem chassi não pode ser sincronizado com a Multiportal.')
+            raise MultiportalError(
+                'Veículo sem chassi não pode ser sincronizado com a Multiportal — preencha o chassi no cadastro do veículo.'
+            )
         payload: dict[str, Any] = {
             'codigoIntegracao': vehicle.id,
             'chassi': chassis,
@@ -446,7 +492,10 @@ class MultiportalService:
     def _build_equipment_payload(self, tracker: LocalTracker) -> dict[str, Any]:
         manufacturer_id = tracker.external_manufacturer_id
         if not manufacturer_id:
-            raise MultiportalError('Rastreador sem fabricante externo configurado para a Multiportal.')
+            raise MultiportalError(
+                'Rastreador sem fabricante externo configurado para a Multiportal — '
+                'selecione o "Fabricante Multiportal" no cadastro do rastreador.'
+            )
         serial = (tracker.serial_number or tracker.imei).strip()
         if not serial:
             raise MultiportalError('Rastreador sem serialNumber válido para a Multiportal.')
@@ -562,8 +611,10 @@ class MultiportalService:
     def _vehicle_type_to_code(self, value: str | None) -> int | None:
         if not value:
             return None
-        normalized = value.strip().lower()
-        return VEHICLE_TYPE_MAP.get(normalized)
+        normalized = _normalizar_tipo(value)
+        if normalized in VEHICLE_TYPE_MAP:
+            return VEHICLE_TYPE_MAP[normalized]
+        return _PREFIXOS_TIPO.get(normalized.split(' ', 1)[0]) if normalized else None
 
     def _logradouro_code(self, line: str) -> str:
         if not line:

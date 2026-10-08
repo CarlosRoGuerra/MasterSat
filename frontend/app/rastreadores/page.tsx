@@ -965,7 +965,11 @@ function RastreadoresPageInner() {
                   ['Status', <Badge key="s" variant={statusVariant(selectedTracker.status)}>{statusLabel(selectedTracker.status)}</Badge>],
                   ['Integração', <Badge key="i" variant={integrationVariant(selectedTracker.integration_status)}>{integrationLabel(selectedTracker.integration_status)}</Badge>],
                   ['Marca / Modelo', [selectedTracker.brand, selectedTracker.model].filter(Boolean).join(' ') || '—'],
-                  ['Fabricante', selectedTracker.external_manufacturer_label ?? selectedTracker.brand ?? '—'],
+                  // Só o fabricante da Multiportal: antes caía na marca quando ele
+                  // estava vazio, e o rastreador parecia pronto para sincronizar.
+                  ['Fabricante Multiportal', selectedTracker.external_manufacturer_id
+                    ? (selectedTracker.external_manufacturer_label || `#${selectedTracker.external_manufacturer_id}`)
+                    : <span key="f" className="text-amber-700 dark:text-amber-400">Não configurado — necessário para a Multiportal</span>],
                   ['Cliente', selectedTracker.client_name ?? '—'],
                   ['Veículo', selectedTracker.vehicle_plate ?? '—'],
                   ['Linha SIM', selectedTracker.sim_number ?? '—'],
