@@ -21,6 +21,8 @@ import { ExportButton } from '@/components/ui/export-button';
 import { apiFetch, apiFetchList, API_URL } from '@/lib/api';
 import { entregarArquivo, nomeArquivoCliente } from '@/lib/arquivo';
 import { enviarBoletoEmail, enviarBoletoWhats } from '@/lib/boleto-mensagem';
+import { cancelarComConfirmacoes, corpoCancelamento } from '@/lib/cancelamento-cobranca';
+import { excluirComConfirmacoes, mensagemConfirmacaoExclusao, motivoBloqueioExclusao } from '@/lib/exclusao-cobranca';
 import { fetchAddressByCep } from '@/lib/cep';
 import { formatCpfCnpj, formatPhone, formatZipCode, onlyDigits } from '@/lib/format';
 import { useAuthGuard } from '@/lib/use-auth-guard';
@@ -54,7 +56,7 @@ import {
 import { ActionBtn } from './_components/action-btn';
 import { SortTh } from './_components/sort-th';
 import { UnifyBillingModal } from './_components/unify-billing-modal';
-import { EditBillingModal } from './_components/edit-billing-modal';
+import { EditBillingModal, type BillingAction } from './_components/edit-billing-modal';
 import { ReceiveBillingModal, type ReceiveBillingForm } from './_components/receive-billing-modal';
 import { BillingHistoryModal } from './_components/billing-history-modal';
 import { BillingsModal } from './_components/billings-modal';
@@ -182,7 +184,9 @@ function ClientesPageInner() {
   // Ações do modal de boletos (alterar / histórico / baixa manual)
   const [editBilling, setEditBilling] = useState<BillingItem | null>(null);
   const [editBillingForm, setEditBillingForm] = useState({ amount: '', due_date: '', justification: '' });
-  const [savingBilling, setSavingBilling] = useState(false);
+  const [billingAction, setBillingAction] = useState<BillingAction>(null);
+  const [editBillingError, setEditBillingError] = useState('');
+  const [editBillingNotice, setEditBillingNotice] = useState('');
   const [receiveBilling, setReceiveBilling] = useState<BillingItem | null>(null);
   const [receiveBillingForm, setReceiveBillingForm] = useState<ReceiveBillingForm>({
     paid_amount: '', payment_date: '', payment_method: 'pix', notes: '',
@@ -244,6 +248,8 @@ function ClientesPageInner() {
   );
 
   async function openBillingsModal(client: Client) {
+    setEditBillingError('');
+    setEditBillingNotice('');
     setBillingsModalClient(client);
     setBillingsModalOpen(true);
     setSelectedBillingIds([]);
@@ -262,7 +268,7 @@ function ClientesPageInner() {
 
   async function reloadCarnes() {
     if (!token || !billingsModalClient) return;
-    const cs = await apiFetch<CarneItem[]>(`/boletos/carne?client_id=${billingsModalClient.id}`, {}, token).catch(() => []);
+    const cs = await apiFetch<CarneItem[]>(`/boletos/carne?client_id=${billingsModalClient.id}`, {}, token);
     setCarnes(cs);
   }
 
@@ -289,8 +295,17 @@ function ClientesPageInner() {
     if (!token || !billingsModalClient) return;
     const data = await apiFetch<BillingItem[]>(
       `/billings?client_id=${billingsModalClient.id}&limit=1000`, {}, token
-    ).catch(() => []);
+    );
     setClientBillings(sortByDueDateAsc(data));
+    setSelectedBillingIds((ids) => ids.filter((id) => data.some((b) => b.id === id && ['pendente', 'vencida'].includes(b.status))));
+  }
+
+  async function refreshEditedBillings() {
+    const results = await Promise.allSettled([reloadClientBillings(), reloadCarnes()]);
+    const failed = results.find((result) => result.status === 'rejected');
+    if (failed?.status === 'rejected') {
+      setEditBillingError(`A operação foi concluída, mas não foi possível atualizar toda a carteira. Reabra a central financeira para atualizar. ${parseError(failed.reason)}`);
+    }
   }
 
   function openUnifyModal() {
@@ -381,28 +396,98 @@ function ClientesPageInner() {
   }
 
   function openEditBilling(b: BillingItem) {
+    if (!canFinance || billingAction) return;
+    setEditBillingError('');
+    setEditBillingNotice('');
     setEditBilling(b);
     setEditBillingForm({ amount: String(b.amount), due_date: b.due_date, justification: '' });
   }
 
   async function saveEditBilling() {
-    if (!token || !editBilling) return;
+    if (!token || !editBilling || !canFinance || billingAction || !['pendente', 'vencida'].includes(editBilling.status)) return;
+    setEditBillingError('');
     const payload: Record<string, unknown> = {};
     if (Number(editBillingForm.amount) !== editBilling.amount) payload.amount = Number(editBillingForm.amount);
     if (editBillingForm.due_date !== editBilling.due_date) payload.due_date = editBillingForm.due_date;
     if (Object.keys(payload).length === 0) { setEditBilling(null); return; }
     const justification = editBillingForm.justification.trim();
-    if (!justification) { alert('Informe a justificativa da alteração.'); return; }
+    if (!justification) { setEditBillingError('Informe a justificativa da alteração.'); return; }
+    if (!Number.isFinite(Number(editBillingForm.amount)) || Number(editBillingForm.amount) <= 0 || !editBillingForm.due_date) {
+      setEditBillingError('Informe um valor maior que zero e o vencimento.'); return;
+    }
     payload.justification = justification;
-    setSavingBilling(true);
+    setBillingAction('save');
     try {
-      await apiFetch(`/billings/${editBilling.id}`, { method: 'PUT', body: JSON.stringify(payload) }, token);
+      const updated = await apiFetch<BillingItem>(`/billings/${editBilling.id}`, { method: 'PUT', body: JSON.stringify(payload) }, token);
+      setClientBillings((items) => items.map((b) => b.id === updated.id ? updated : b));
+      setEditBillingNotice(`Boleto #${updated.id} alterado com sucesso.`);
+      await refreshEditedBillings();
       setEditBilling(null);
-      await reloadClientBillings();
     } catch (err) {
-      alert(parseError(err));
+      setEditBillingError(parseError(err));
     } finally {
-      setSavingBilling(false);
+      setBillingAction(null);
+    }
+  }
+
+  async function cancelEditBilling() {
+    if (!token || !editBilling || !canFinance || billingAction || !['pendente', 'vencida'].includes(editBilling.status)) return;
+    setEditBillingError('');
+    const reason = editBillingForm.justification.trim();
+    if (!reason) { setEditBillingError('Informe a justificativa do cancelamento.'); return; }
+    if (!window.confirm(`Cancelar o boleto #${editBilling.id} no sistema? A cobrança será mantida no histórico.`)) return;
+    const billingId = editBilling.id;
+    setBillingAction('cancel');
+    try {
+      const { cancelada, flags } = await cancelarComConfirmacoes(
+        async (confirmacoes) => {
+          const updated = await apiFetch<BillingItem>(
+            `/billings/${billingId}/cancel`,
+            { method: 'POST', body: JSON.stringify(corpoCancelamento(reason, false, confirmacoes)) }, token,
+          );
+          setEditBilling(updated);
+          setEditBillingForm({ amount: String(updated.amount), due_date: updated.due_date, justification: '' });
+          setClientBillings((items) => items.map((b) => b.id === billingId ? updated : b));
+          setSelectedBillingIds((ids) => ids.filter((id) => id !== billingId));
+        },
+        (message) => window.confirm(message),
+      );
+      if (!cancelada) return;
+      setEditBillingNotice(`Boleto #${billingId} cancelado no sistema.`
+        + (flags.reverter_substituicao ? ' As cobranças originais foram reabertas.' : '')
+        + (flags.confirmar_boleto_ailos ? ' O boleto continua ativo no banco até a baixa bancária.' : ''));
+      await refreshEditedBillings();
+    } catch (err) {
+      setEditBillingError(parseError(err));
+    } finally {
+      setBillingAction(null);
+    }
+  }
+
+  async function deleteEditBilling() {
+    if (!token || !editBilling || !canFinance || billingAction || motivoBloqueioExclusao(editBilling)) return;
+    setEditBillingError('');
+    if (!window.confirm(mensagemConfirmacaoExclusao(editBilling))) return;
+    const billingId = editBilling.id;
+    setBillingAction('delete');
+    try {
+      const { excluida, reabertas } = await excluirComConfirmacoes(
+        (reverter) => apiFetch<{ reabertas?: number[] }>(
+          `/billings/${billingId}${reverter ? '?reverter_substituicao=true' : ''}`, { method: 'DELETE' }, token,
+        ),
+        (message) => window.confirm(message),
+      );
+      if (!excluida) return;
+      setClientBillings((items) => items.filter((b) => b.id !== billingId));
+      setSelectedBillingIds((ids) => ids.filter((id) => id !== billingId));
+      setEditBillingNotice(`Boleto #${billingId} excluído da carteira; o histórico foi preservado.`
+        + (reabertas.length ? ` ${reabertas.length} cobrança(s) original(is) reaberta(s).` : ''));
+      await refreshEditedBillings();
+      setEditBilling(null);
+    } catch (err) {
+      setEditBillingError(parseError(err));
+    } finally {
+      setBillingAction(null);
     }
   }
 
@@ -1317,7 +1402,9 @@ function ClientesPageInner() {
       />
 
       <BillingsModal
-        open={billingsModalOpen}
+        open={billingsModalOpen && !editBilling}
+        error={editBillingError}
+        feedback={editBillingNotice}
         clientName={billingsModalClient?.name}
         loading={billingsLoading}
         billings={clientBillings}
@@ -1357,10 +1444,15 @@ function ClientesPageInner() {
       <EditBillingModal
         billing={editBilling}
         form={editBillingForm}
-        saving={savingBilling}
+        action={billingAction}
+        error={editBillingError}
+        notice={editBillingNotice}
+        canManage={canFinance}
         onFormChange={setEditBillingForm}
-        onClose={() => setEditBilling(null)}
+        onClose={() => { if (!billingAction) setEditBilling(null); }}
         onSave={saveEditBilling}
+        onCancel={cancelEditBilling}
+        onDelete={deleteEditBilling}
       />
 
       <ReceiveBillingModal

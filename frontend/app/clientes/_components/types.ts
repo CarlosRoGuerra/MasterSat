@@ -7,6 +7,7 @@
  * (ex.: BillingItem usa `valor_com_juros`, calculado no cliente).
  */
 import type { ClientStatus, DocumentReviewStatus as ReviewStatus } from '@/lib/domain-types';
+import type { TituloBancario } from '@/lib/titulo-bancario';
 
 export type ClientType = 'pf' | 'pj';
 
@@ -80,6 +81,9 @@ export type VehicleDetailed = {
 
 export type BillingItem = {
   id: number;
+  contract_id?: number | null;
+  competencia_liberada?: boolean;
+  titulo_bancario?: TituloBancario | null;
   title?: string | null;
   billing_type: string;
   due_date: string;

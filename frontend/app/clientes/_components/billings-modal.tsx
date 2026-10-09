@@ -101,6 +101,8 @@ function aplicarFiltros(billings: BillingItem[], f: Filtros): BillingItem[] {
 
 export function BillingsModal({
   open,
+  error,
+  feedback,
   clientName,
   loading,
   billings,
@@ -126,6 +128,8 @@ export function BillingsModal({
   onLoadComponents,
 }: {
   open: boolean;
+  error?: string;
+  feedback?: string;
   clientName?: string;
   loading: boolean;
   billings: BillingItem[];
@@ -165,6 +169,13 @@ export function BillingsModal({
     setComponentesCarregando(new Set());
     setComponentesErro(new Set());
   }, [clientName]);
+  // Cancelar uma negociação pode reabrir seus itens; não reutilize o
+  // detalhamento carregado antes de atualizar a carteira.
+  useEffect(() => {
+    setMastersAbertos(new Set());
+    setComponentes({});
+    setComponentesErro(new Set());
+  }, [billings]);
   const filtrando = Object.values(filtros).some(Boolean);
   // Parcela mais recente no topo (vencimento desc; empate pelo id mais novo).
   const visiveis = aplicarFiltros(billings, filtros)
@@ -387,6 +398,8 @@ export function BillingsModal({
       title={clientName ? `Boletos do cliente — ${clientName}` : 'Boletos do cliente'}
       size="2xl"
     >
+      {error && <p role="alert" className="mb-4 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950 dark:text-rose-300">{error}</p>}
+      {feedback && <p role="status" className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-300">{feedback}</p>}
       {/* Resumo financeiro */}
       <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-900/50">
         <div className="flex items-center justify-between px-4 py-3">
