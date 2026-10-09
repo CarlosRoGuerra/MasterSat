@@ -6179,6 +6179,10 @@ export interface components {
             new_tracker_id: number;
             /** Reason */
             reason: string;
+            /** Expected Vehicle Id */
+            expected_vehicle_id?: number | null;
+            /** Release Stale Contract Ids */
+            release_stale_contract_ids?: number[];
         };
         /** TrackerUpdate */
         TrackerUpdate: {
@@ -7784,6 +7788,7 @@ export interface operations {
                 client_id?: number | null;
                 vehicle_id?: number | null;
                 vehicle_client_id?: number | null;
+                available_for_swap?: boolean;
                 skip?: number;
                 limit?: number;
             };

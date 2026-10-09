@@ -224,6 +224,8 @@ class TrackerLinkPayload(BaseModel):
 class TrackerSwapPayload(BaseModel):
     new_tracker_id: int
     reason: str = Field(min_length=3, max_length=500)
+    expected_vehicle_id: int | None = Field(default=None, ge=1)
+    release_stale_contract_ids: list[int] = Field(default_factory=list, max_length=100)
 
 
 # ── Cadastro em lote ────────────────────────────────────────────────────────

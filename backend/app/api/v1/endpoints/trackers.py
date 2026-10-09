@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -15,6 +16,7 @@ from app.api.v1.endpoints.common import (
 from app.core.config import settings
 from app.core.integrity import integrity_conflict_detail, raise_integrity_conflict
 from app.db.session import get_db
+from app.models.audit_log import AuditLog
 from app.models.billing import Billing
 from app.models.client import Client
 from app.models.contract import Contract
@@ -246,6 +248,7 @@ def list_items(
     client_id: int | None = None,
     vehicle_id: int | None = None,
     vehicle_client_id: int | None = Query(default=None, ge=1),
+    available_for_swap: bool = False,
     skip: int = 0,
     limit: int = Query(default=100, le=500),
     db: Session = Depends(get_db),
@@ -282,6 +285,11 @@ def list_items(
             Vehicle.client_id == vehicle_client_id, Vehicle.is_deleted.is_(False),
         )
         filtro = filtro.where(Tracker.vehicle_id.in_(owned_vehicles))
+    if available_for_swap:
+        reserved = select(Contract.id).where(
+            Contract.tracker_id == Tracker.id, Contract.status == 'ativo', Contract.is_deleted.is_(False),
+        ).exists()
+        filtro = filtro.where(Tracker.status == TrackerStatus.STOCK, Tracker.vehicle_id.is_(None), ~reserved)
     total = db.scalar(select(func.count()).select_from(filtro.subquery())) or 0
     trackers = db.scalars(filtro.order_by(Tracker.id.desc()).offset(skip).limit(limit)).all()
 
@@ -1196,33 +1204,42 @@ def swap_tracker(
     if payload.new_tracker_id == item_id:
         raise HTTPException(status_code=400, detail='O novo rastreador precisa ser diferente do atual.')
 
-    old_tracker = db.scalar(
-        select(Tracker)
-        .where(Tracker.id == item_id, Tracker.is_deleted.is_(False))
-        .with_for_update()
-    )
-    if not old_tracker:
+    assignment = db.execute(select(Tracker.id, Tracker.vehicle_id).where(
+        Tracker.id == item_id, Tracker.is_deleted.is_(False),
+    )).first()
+    if not assignment:
         raise HTTPException(status_code=404, detail='Rastreador não encontrado')
-    if not old_tracker.vehicle_id:
+    if not assignment.vehicle_id:
         raise HTTPException(status_code=409, detail='Rastreador não está instalado em nenhum veículo.')
-
-    new_tracker = db.scalar(
-        select(Tracker)
-        .where(Tracker.id == payload.new_tracker_id, Tracker.is_deleted.is_(False))
+    vehicle = db.scalar(
+        select(Vehicle)
+        .where(Vehicle.id == assignment.vehicle_id, Vehicle.is_deleted.is_(False))
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
+    if not vehicle:
+        raise HTTPException(status_code=409, detail='Veículo do rastreador atual não está disponível.')
+    locked = {tracker.id: tracker for tracker in db.scalars(select(Tracker).where(
+        Tracker.id.in_([item_id, payload.new_tracker_id]), Tracker.is_deleted.is_(False),
+    ).order_by(Tracker.id).with_for_update().execution_options(populate_existing=True)).all()}
+    old_tracker, new_tracker = locked.get(item_id), locked.get(payload.new_tracker_id)
+    if not old_tracker or old_tracker.vehicle_id != vehicle.id or (
+        payload.expected_vehicle_id is not None and payload.expected_vehicle_id != vehicle.id
+    ):
+        raise HTTPException(status_code=409, detail='O vínculo do rastreador mudou. Atualize a tela antes de trocar.')
     if not new_tracker:
         raise HTTPException(status_code=404, detail='Novo rastreador não encontrado')
     if new_tracker.status != TrackerStatus.STOCK or new_tracker.vehicle_id is not None:
         raise HTTPException(status_code=409, detail='O novo rastreador precisa estar disponível em estoque.')
-
-    vehicle = db.scalar(
-        select(Vehicle)
-        .where(Vehicle.id == old_tracker.vehicle_id, Vehicle.is_deleted.is_(False))
-        .with_for_update()
-    )
-    if not vehicle:
-        raise HTTPException(status_code=409, detail='Veículo do rastreador atual não está disponível.')
+    new_contract_ids = list(db.scalars(select(Contract.id).where(
+        Contract.tracker_id == new_tracker.id, Contract.status == 'ativo', Contract.is_deleted.is_(False),
+    ).order_by(Contract.id).with_for_update()).all())
+    if new_contract_ids:
+        raise HTTPException(status_code=409, detail={
+            'code': 'replacement_has_active_contract',
+            'message': f'O novo rastreador ainda consta nos contratos ativos {new_contract_ids}. Regularize esse cadastro antes de usá-lo na troca.',
+            'contract_ids': new_contract_ids,
+        })
 
     active_contracts = list(db.scalars(
         select(Contract)
@@ -1233,27 +1250,54 @@ def swap_tracker(
         )
         .order_by(Contract.id.desc())
         .with_for_update()
+        .execution_options(populate_existing=True)
     ).all())
-    if not active_contracts:
-        raise HTTPException(status_code=409, detail='Rastreador não possui contrato vigente para trocar.')
-    inconsistent = [contract.id for contract in active_contracts if contract.vehicle_id != vehicle.id]
-    if inconsistent:
+    current_contracts = [contract for contract in active_contracts if contract.vehicle_id == vehicle.id]
+    stale_contracts = [contract for contract in active_contracts if contract.vehicle_id != vehicle.id]
+    if not current_contracts:
+        raise HTTPException(status_code=409, detail='Rastreador não possui contrato vigente nesta placa para trocar.')
+    stale_ids = {contract.id for contract in stale_contracts}
+    requested_ids = set(payload.release_stale_contract_ids)
+    if requested_ids and (requested_ids != stale_ids or len(requested_ids) != len(payload.release_stale_contract_ids)):
+        raise HTTPException(status_code=409, detail='Os contratos em conflito mudaram. Reabra a troca e confira novamente.')
+    if stale_ids and not requested_ids:
+        stale_vehicles = {v.id: v for v in db.scalars(select(Vehicle).where(
+            Vehicle.id.in_({c.vehicle_id for c in stale_contracts if c.vehicle_id}),
+        )).all()}
         raise HTTPException(
             status_code=409,
             detail={
                 'code': 'inconsistent_active_contract_assignment',
                 'message': (
-                    'Há contrato ativo deste rastreador apontando para outro veículo. '
-                    'Reconcilie os dados antes de trocar.'
+                    'O rastreador atual também consta em contratos de outras placas. '
+                    'Confira as referências abaixo antes de confirmar a troca.'
                 ),
-                'contract_ids': inconsistent,
+                'contract_ids': sorted(stale_ids),
+                'stale_contracts': [{'id': c.id, 'vehicle_id': c.vehicle_id,
+                                    'vehicle_plate': stale_vehicles[c.vehicle_id].plate if c.vehicle_id in stale_vehicles else None}
+                                   for c in stale_contracts],
             },
         )
 
     old_previous_status = old_tracker.status.value if isinstance(old_tracker.status, TrackerStatus) else str(old_tracker.status)
     new_previous_status = new_tracker.status.value if isinstance(new_tracker.status, TrackerStatus) else str(new_tracker.status)
 
-    for contract in active_contracts:
+    old_previous_client_id = old_tracker.client_id
+    new_previous_client_id = new_tracker.client_id
+    # Só libera referências que o operador conferiu expressamente. Não
+    # cancela contrato de outra placa nem altera seu cliente ou financeiro.
+    for contract in stale_contracts:
+        contract.tracker_id = None
+        db.add(AuditLog(
+            user_id=current_user.id, user_name=current_user.name, user_role=current_user.role.value,
+            method='POST', path=f'{settings.api_v1_prefix}/trackers/{item_id}/swap',
+            entity_type='contract', entity_id=contract.id, status_code=200,
+            description=json.dumps({'action': 'release_stale_tracker_reference',
+                                    'previous_tracker_id': old_tracker.id, 'tracker_id': None,
+                                    'vehicle_id': contract.vehicle_id, 'swap_vehicle_id': vehicle.id,
+                                    'reason': payload.reason}, ensure_ascii=False),
+        ))
+    for contract in current_contracts:
         contract.tracker_id = new_tracker.id
 
     new_tracker.vehicle_id = vehicle.id
@@ -1276,19 +1320,20 @@ def swap_tracker(
         action='swapped_out',
         previous_vehicle_id=vehicle.id,
         new_vehicle_id=None,
-        previous_client_id=vehicle.client_id,
+        previous_client_id=old_previous_client_id,
         new_client_id=None,
         previous_status=old_previous_status,
         new_status=TrackerStatus.STOCK.value,
         created_by_user_id=current_user.id,
-        notes=f'Trocado pelo rastreador #{new_tracker.id} no veículo {vehicle.plate}: {payload.reason}',
+        notes=(f'Trocado pelo rastreador #{new_tracker.id} no veículo {vehicle.plate}: {payload.reason}'
+               + (f'; referências antigas liberadas dos contratos {sorted(stale_ids)}.' if stale_ids else '')),
     )
     _register_history(
         db, new_tracker,
         action='swapped_in',
         previous_vehicle_id=None,
         new_vehicle_id=vehicle.id,
-        previous_client_id=None,
+        previous_client_id=new_previous_client_id,
         new_client_id=vehicle.client_id,
         previous_status=new_previous_status,
         new_status=TrackerStatus.INSTALLED.value,
@@ -1296,13 +1341,18 @@ def swap_tracker(
         notes=f'Substitui o rastreador #{old_tracker.id} no veículo {vehicle.plate}: {payload.reason}',
     )
 
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     db.refresh(old_tracker)
     db.refresh(new_tracker)
 
     return {
         'old_tracker': _tracker_to_out(old_tracker, db),
         'new_tracker': _tracker_to_out(new_tracker, db),
-        'contracts_updated': [contract.id for contract in active_contracts],
+        'contracts_updated': [contract.id for contract in current_contracts],
+        'contracts_reconciled': sorted(stale_ids),
         'message': f'Rastreador #{old_tracker.id} substituído por #{new_tracker.id} no veículo {vehicle.plate}.',
     }

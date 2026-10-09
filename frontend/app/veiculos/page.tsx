@@ -35,6 +35,8 @@ import type { ClientOption, TrackerOption, VehicleStatus } from '@/lib/domain-ty
 type ServiceProductOption = { id: number; name: string; default_price: number; auto_add_on_uninstall?: boolean };
 type ContractOption = { id: number; client_id: number; plan_name?: string | null; status: string; interveniente_client_id?: number | null; interveniente_name?: string | null };
 type PlanOption = { id: number; name: string; price: number; billing_interval_months?: number };
+type SwapConflict = { id: number; vehicle_id: number | null; vehicle_plate: string | null };
+type SwapResult = { old_tracker: TrackerOption; new_tracker: TrackerOption; contracts_updated: number[]; contracts_reconciled: number[] };
 
 type Vehicle = {
   id: number;
@@ -179,11 +181,13 @@ function TrackerAutocomplete({
   value,
   onChange,
   required,
+  disabled,
 }: {
   trackers: TrackerOption[];
   value: string;
   onChange: (id: string) => void;
   required?: boolean;
+  disabled?: boolean;
 }) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
@@ -240,6 +244,7 @@ function TrackerAutocomplete({
           <button
             type="button"
             onClick={clear}
+            disabled={disabled}
             className="shrink-0 rounded p-0.5 text-brand-500 hover:bg-brand-100 hover:text-brand-700 dark:hover:bg-brand-900/60"
             aria-label="Remover seleção"
           >
@@ -253,6 +258,7 @@ function TrackerAutocomplete({
             ref={inputRef}
             type="text"
             value={query}
+            disabled={disabled}
             required={required && !value}
             placeholder={selected ? selected.imei : 'Buscar por IMEI, marca ou modelo…'}
             autoComplete="off"
@@ -271,7 +277,7 @@ function TrackerAutocomplete({
       )}
 
       {/* Dropdown de resultados */}
-      {open && focused && (
+      {open && focused && !disabled && (
         <div className="absolute z-50 mt-1 max-h-64 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-900">
           {filtered.length === 0 ? (
             <div className="px-4 py-3 text-sm text-slate-500">
@@ -668,6 +674,9 @@ function VeiculosPageInner() {
   const [swapOldTracker, setSwapOldTracker] = useState<TrackerOption | null>(null);
   const [swapForm, setSwapForm] = useState({ new_tracker_id: '', reason: '' });
   const [swapping, setSwapping] = useState(false);
+  const [swapError, setSwapError] = useState('');
+  const [swapConflicts, setSwapConflicts] = useState<SwapConflict[]>([]);
+  const [swapReleaseIds, setSwapReleaseIds] = useState<number[]>([]);
   const [error, setError] = useState('');
   const [feedback, setFeedback] = useState('');
   const [modalError, setModalError] = useState('');
@@ -880,9 +889,12 @@ function VeiculosPageInner() {
   async function loadStockTrackers() {
     if (!token) return;
     try {
-      const trackers = await apiFetchList<TrackerOption>('/trackers?status=em_estoque&limit=200', {}, token);
+      const trackers = await apiFetchAll<TrackerOption>('/trackers?available_for_swap=true', token);
       setStockTrackers(trackers);
-    } catch { setStockTrackers([]); }
+    } catch (err) {
+      setStockTrackers([]);
+      setSwapError(`Não foi possível carregar os rastreadores disponíveis: ${parseError(err)}`);
+    }
   }
 
   async function linkTracker() {
@@ -960,34 +972,62 @@ function VeiculosPageInner() {
   function openSwapTracker(t: TrackerOption) {
     setSwapOldTracker(t);
     setSwapForm({ new_tracker_id: '', reason: '' });
+    setSwapError('');
+    setSwapConflicts([]);
+    setSwapReleaseIds([]);
     setTrackerViewOpen(false);
     loadStockTrackers();
     setSwapTrackerOpen(true);
   }
 
   async function swapTracker() {
-    if (!token || !selectedVehicle || !swapOldTracker || !swapForm.new_tracker_id) return;
+    if (!token || !selectedVehicle || !swapOldTracker || !swapForm.new_tracker_id || swapping) return;
+    const vehicleId = selectedVehicle.id;
+    setSwapError('');
     setSwapping(true);
     try {
-      await apiFetch(
+      const result = await apiFetch<SwapResult>(
         `/trackers/${swapOldTracker.id}/swap`,
         {
           method: 'POST',
           body: JSON.stringify({
             new_tracker_id: Number(swapForm.new_tracker_id),
-            reason: swapForm.reason,
+            reason: swapForm.reason.trim(),
+            expected_vehicle_id: vehicleId,
+            ...(swapReleaseIds.length ? { release_stale_contract_ids: swapReleaseIds } : {}),
           }),
         },
         token,
       );
-      setFeedback('Rastreador substituído com sucesso — o antigo voltou para o estoque.');
+      if (result.new_tracker?.id !== Number(swapForm.new_tracker_id)
+        || result.new_tracker.vehicle_id !== vehicleId
+        || result.old_tracker?.id !== swapOldTracker.id
+        || result.old_tracker.vehicle_id !== null
+        || result.new_tracker.status !== 'instalado' || result.old_tracker.status !== 'em_estoque') {
+        throw new Error('O servidor não confirmou os vínculos da troca. Atualize a tela e confira os equipamentos.');
+      }
+      setLinkedTrackers((previous) => [...previous.filter((t) => t.id !== swapOldTracker.id), result.new_tracker]);
+      setFeedback(`Rastreador ${swapOldTracker.imei} substituído por ${result.new_tracker.imei}. O antigo voltou para o estoque.`);
       setSwapTrackerOpen(false);
       setSwapOldTracker(null);
-      await loadVehicles(token);
-      const updated = await apiFetchList<TrackerOption>(`/trackers?vehicle_id=${selectedVehicle.id}`, {}, token).catch(() => []);
-      setLinkedTrackers(updated);
-    } catch (err) { setError(parseError(err)); }
+      setDetailsTab('rastreador');
+      if (!detailsOpen) setTrackerViewOpen(true);
+    } catch (err) {
+      setSwapError(parseError(err));
+      const detail = (err as { detail?: { code?: string; stale_contracts?: SwapConflict[] } })?.detail;
+      if (detail?.code === 'inconsistent_active_contract_assignment' && Array.isArray(detail.stale_contracts)) {
+        setSwapConflicts(detail.stale_contracts);
+        setSwapReleaseIds([]);
+      }
+    }
     finally { setSwapping(false); }
+  }
+
+  function closeSwapTracker() {
+    if (swapping) return;
+    setSwapTrackerOpen(false);
+    setSwapOldTracker(null);
+    if (!detailsOpen) setTrackerViewOpen(true);
   }
 
   async function loadDocuments(currentToken: string, vehicleId: number) {
@@ -1451,7 +1491,7 @@ function VeiculosPageInner() {
 
       {/* Modal de detalhes */}
       <Modal
-        open={detailsOpen && !changeClientOpen}
+        open={detailsOpen && !changeClientOpen && !swapTrackerOpen}
         onClose={() => { setDetailsOpen(false); setSelectedVehicle(null); setLinkedTrackers([]); }}
         title={selectedVehicle?.plate ?? ''}
         subtitle="Detalhes do veículo"
@@ -1654,12 +1694,22 @@ function VeiculosPageInner() {
       {/* Modal: Trocar rastreador instalado */}
       <Modal
         open={swapTrackerOpen}
-        onClose={() => { setSwapTrackerOpen(false); setSwapOldTracker(null); }}
+        onClose={closeSwapTracker}
         title="Trocar rastreador"
         subtitle={selectedVehicle ? `${selectedVehicle.plate} · ${[selectedVehicle.brand, selectedVehicle.model].filter(Boolean).join(' ') || 'Veículo'}` : 'Substituição de equipamento'}
         size="md"
       >
         <div className="space-y-6">
+          {swapError && <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{swapError}</p>}
+          {swapConflicts.length > 0 && <fieldset disabled={swapping} className="space-y-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            <legend className="px-1 font-semibold">Conferir referências antigas</legend>
+            <p>O equipamento está instalado nesta placa, mas também consta nos contratos abaixo. Marque apenas se ele não pertence mais a essas placas. Os contratos continuam ativos, com os mesmos clientes e cobranças.</p>
+            {swapConflicts.map((contract) => <label key={contract.id} className="flex items-start gap-2">
+              <input type="checkbox" className="mt-1" checked={swapReleaseIds.includes(contract.id)}
+                onChange={(e) => setSwapReleaseIds((ids) => e.target.checked ? [...ids, contract.id] : ids.filter((id) => id !== contract.id))} />
+              <span>Remover este equipamento do contrato #{contract.id} ({contract.vehicle_plate ?? 'sem placa'}), mantendo o contrato e as cobranças.</span>
+            </label>)}
+          </fieldset>}
           <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-700 dark:bg-slate-900/50">
             <p className="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-600">Rastreador atual</p>
             <p className="mt-1 font-mono font-semibold text-slate-900 dark:text-white">{swapOldTracker?.imei}</p>
@@ -1672,6 +1722,7 @@ function VeiculosPageInner() {
             <TrackerAutocomplete
               trackers={stockTrackers}
               value={swapForm.new_tracker_id}
+              disabled={swapping}
               onChange={(id) => setSwapForm((p) => ({ ...p, new_tracker_id: id }))}
               required
             />
@@ -1681,6 +1732,8 @@ function VeiculosPageInner() {
             <textarea
               className={fieldClass}
               rows={3}
+              disabled={swapping}
+              aria-label="Motivo da troca"
               placeholder="Ex.: equipamento com defeito, troca de tecnologia…"
               value={swapForm.reason}
               onChange={(e) => setSwapForm((p) => ({ ...p, reason: e.target.value }))}
@@ -1688,9 +1741,9 @@ function VeiculosPageInner() {
           </FormField>
 
           <div className="flex justify-end gap-2 border-t border-slate-100 pt-4 dark:border-slate-800">
-            <Button variant="secondary" onClick={() => { setSwapTrackerOpen(false); setSwapOldTracker(null); }}>Cancelar</Button>
+            <Button variant="secondary" disabled={swapping} onClick={closeSwapTracker}>Cancelar</Button>
             <Button
-              disabled={!swapForm.new_tracker_id || swapForm.reason.trim().length < 3 || swapping}
+              disabled={!swapForm.new_tracker_id || swapForm.reason.trim().length < 3 || swapping || swapReleaseIds.length !== swapConflicts.length}
               onClick={swapTracker}
             >
               {swapping ? 'Trocando…' : 'Confirmar troca'}
