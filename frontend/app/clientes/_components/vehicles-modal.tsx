@@ -1,4 +1,5 @@
-import { Car } from 'lucide-react';
+import Link from 'next/link';
+import { AlertTriangle, Car } from 'lucide-react';
 
 import { Modal } from '@/components/ui/modal';
 import { Badge, statusLabel, statusVariant } from '@/components/ui/badge';
@@ -11,12 +12,14 @@ export function VehiclesModal({
   clientName,
   loading,
   vehicles,
+  error,
   onClose,
 }: {
   open: boolean;
   clientName?: string;
   loading: boolean;
   vehicles: VehicleDetailed[];
+  error?: string;
   onClose: () => void;
 }) {
   return (
@@ -28,6 +31,8 @@ export function VehiclesModal({
     >
       {loading ? (
         <TableSkeleton rows={5} cols={7} />
+      ) : error ? (
+        <EmptyState icon={AlertTriangle} tone="warning" title="Não foi possível carregar os vínculos" description={error} />
       ) : vehicles.length === 0 ? (
         <EmptyState icon={Car} title="Nenhum veículo vinculado" description="Este cliente não possui veículos cadastrados." />
       ) : (
@@ -52,7 +57,13 @@ export function VehiclesModal({
                 <Td><Badge variant={statusVariant(v.status)}>{statusLabel(v.status)}</Badge></Td>
                 <Td className="text-xs text-slate-500">{v.tracker_plan ?? (v.tracker_imei ? 'BÁSICO' : '—')}</Td>
                 <Td className="text-xs text-slate-500">{v.tracker_model ? `${v.tracker_brand ?? ''} ${v.tracker_model}`.trim() : '—'}</Td>
-                <Td className="font-mono text-xs">{v.tracker_imei ?? '—'}</Td>
+                <Td className="font-mono text-xs">
+                  {v.tracker_imei ?? '—'}
+                  {v.tracker_client_mismatch && <p className="mt-1 font-sans text-amber-700 dark:text-amber-400">
+                    Cliente do rastreador diferente do proprietário.{' '}
+                    <Link className="underline" href={`/veiculos?focus=${v.id}`}>Conferir vínculo</Link>
+                  </p>}
+                </Td>
               </Tr>
             ))}
           </TableBody>

@@ -238,9 +238,11 @@ def update_item(
 
     multiportal_changed = has_relevant_changes(obj, data, VEHICLE_MULTIPORTAL_FIELDS)
     owner_changed = data.get('client_id') is not None and data['client_id'] != obj.client_id
-    if owner_changed:
+    if data.get('client_id') is not None:
+        # Reconciliar também cadastros em que uma versão antiga alterou só
+        # o proprietário do veículo, deixando equipamento/contrato para trás.
         change_vehicle_client(
-            db, obj, data['client_id'], current_user, change_payer=True,
+            db, obj, data['client_id'], current_user, change_payer=owner_changed,
             method='PUT', path=f'{settings.api_v1_prefix}/vehicles/{item_id}',
         )
     for key, value in data.items():

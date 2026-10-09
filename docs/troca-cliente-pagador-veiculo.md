@@ -18,6 +18,12 @@ Títulos já gerados, inclusive em aberto, mantêm seu cliente e pagador. Cobran
 
 O menu também corrige o caso em que o cadastro do veículo já aponta para o comprador, mas o rastreador e o contrato ainda estão no cliente anterior: mantenha o comprador selecionado e confirme o pagador desejado.
 
+Salvar novamente o proprietário atual na edição do veículo ou vincular o rastreador novamente à mesma placa, sem pedir outro plano, também reconcilia essa divergência. A consulta de veículos do cliente encontra o equipamento pela placa vinculada, mesmo que seu cliente ainda seja o anterior, e mostra um aviso para conferir o vínculo. Falhas da consulta aparecem como erro, em vez de ocultar o equipamento.
+
+Quando o cliente de um contrato ativo muda, a marcação de assinatura e a data da assinatura anterior são limpas, permitindo colher a assinatura do novo proprietário. Os documentos anexados continuam no cadastro original. Trocar somente o pagador, ou repetir uma operação já concluída, preserva a assinatura do proprietário atual.
+
+Para o caso específico da placa `OXD0A94` / IMEI `869671078139498`, veja o [guia de reconciliação e atualização de 09/10/2026](reconciliacao-proprietario-2026-10-09.md).
+
 Na edição comum do veículo, alterar o cliente usa a mesma operação e define o novo cliente como pagador das novas cobranças. Para escolher um interveniente diferente, use o menu dos detalhes. O financeiro pode mudar o pagador; a troca do cliente do veículo permanece disponível ao administrador e ao operacional.
 
 Também é possível trocar pela tela **Rastreadores → Editar**: busque o novo cliente pelo nome ou CPF/CNPJ, mantenha a placa atual e clique em **Atualizar rastreador**. A placa continua selecionada durante a busca. O veículo, seus rastreadores, os contratos ativos e os dados técnicos editados são salvos na mesma transação. O novo cliente passa a ser o pagador das próximas cobranças; para outro interveniente, use o menu dos detalhes do veículo. Não há desinstalação nem consulta à Multiportal.

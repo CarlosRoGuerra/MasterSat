@@ -75,6 +75,7 @@ export type VehicleDetailed = {
   tracker_brand?: string | null;
   tracker_model?: string | null;
   tracker_plan?: string | null;
+  tracker_client_mismatch?: boolean;
 };
 
 export type BillingItem = {

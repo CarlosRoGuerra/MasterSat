@@ -7783,6 +7783,7 @@ export interface operations {
                 status?: string | null;
                 client_id?: number | null;
                 vehicle_id?: number | null;
+                vehicle_client_id?: number | null;
                 skip?: number;
                 limit?: number;
             };

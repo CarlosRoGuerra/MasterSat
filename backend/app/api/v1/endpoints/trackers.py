@@ -12,6 +12,7 @@ from app.api.v1.endpoints.common import (
     get_client_or_404 as _get_client_or_404,
     get_vehicle_or_404 as _get_vehicle_or_404,
 )
+from app.core.config import settings
 from app.core.integrity import integrity_conflict_detail, raise_integrity_conflict
 from app.db.session import get_db
 from app.models.billing import Billing
@@ -244,6 +245,7 @@ def list_items(
     status: str | None = None,
     client_id: int | None = None,
     vehicle_id: int | None = None,
+    vehicle_client_id: int | None = Query(default=None, ge=1),
     skip: int = 0,
     limit: int = Query(default=100, le=500),
     db: Session = Depends(get_db),
@@ -273,6 +275,13 @@ def list_items(
         filtro = filtro.where(Tracker.client_id == client_id)
     if vehicle_id:
         filtro = filtro.where(Tracker.vehicle_id == vehicle_id)
+    if vehicle_client_id:
+        # O vínculo físico com a placa prevalece sobre um cliente legado no
+        # equipamento. Permite enxergar e corrigir transferências incompletas.
+        owned_vehicles = select(Vehicle.id).where(
+            Vehicle.client_id == vehicle_client_id, Vehicle.is_deleted.is_(False),
+        )
+        filtro = filtro.where(Tracker.vehicle_id.in_(owned_vehicles))
     total = db.scalar(select(func.count()).select_from(filtro.subquery())) or 0
     trackers = db.scalars(filtro.order_by(Tracker.id.desc()).offset(skip).limit(limit)).all()
 
@@ -895,13 +904,6 @@ def link_vehicle(
     current_user: User = Depends(require_roles(*EDIT_ROLES)),
 ):
     """Vincula ou transfere um rastreador e, opcionalmente, cria o contrato."""
-    tracker = db.scalar(
-        select(Tracker)
-        .where(Tracker.id == item_id, Tracker.is_deleted.is_(False))
-        .with_for_update()
-    )
-    if not tracker:
-        raise HTTPException(status_code=404, detail='Rastreador não encontrado')
     vehicle = db.scalar(
         select(Vehicle)
         .where(Vehicle.id == payload.vehicle_id, Vehicle.is_deleted.is_(False))
@@ -909,6 +911,14 @@ def link_vehicle(
     )
     if not vehicle:
         raise HTTPException(status_code=404, detail='Veículo não encontrado')
+    tracker = db.scalar(
+        select(Tracker)
+        .where(Tracker.id == item_id, Tracker.is_deleted.is_(False))
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if not tracker:
+        raise HTTPException(status_code=404, detail='Rastreador não encontrado')
 
     if not vehicle.client_id:
         raise HTTPException(status_code=400, detail='O veículo não possui cliente vinculado.')
@@ -1002,10 +1012,17 @@ def link_vehicle(
         raise HTTPException(status_code=422, detail='A transferência não pode ser anterior ao início do contrato atual.')
 
     if previous_vehicle_id == vehicle.id and not payload.plan_id:
+        changed_contracts, changed_trackers = change_vehicle_client(
+            db, vehicle, vehicle.client_id, current_user, expected_tracker_id=tracker.id,
+            path=f'{settings.api_v1_prefix}/trackers/{item_id}/link-vehicle',
+        )
+        db.commit()
+        db.refresh(tracker)
         return {
             'tracker': _tracker_to_out(tracker, db),
             'contract': None,
-            'message': f'Rastreador já está vinculado ao veículo {vehicle.plate}.',
+            'message': (f'Proprietário reconciliado no rastreador e nos contratos da placa {vehicle.plate}.'
+                        if changed_contracts or changed_trackers else f'Rastreador já está vinculado ao veículo {vehicle.plate}.'),
         }
     if previous_vehicle_id == vehicle.id and payload.plan_id and active_contracts:
         raise HTTPException(status_code=409, detail='Já existe contrato ativo para este rastreador e veículo.')

@@ -1270,6 +1270,7 @@ function ClientesPageInner() {
         clientName={vehiclesModalClient?.name}
         loading={vehiclesDetailedQuery.isLoading}
         vehicles={vehiclesDetailedQuery.data ?? []}
+        error={vehiclesDetailedQuery.error ? parseError(vehiclesDetailedQuery.error) : undefined}
         onClose={() => { setVehiclesModalOpen(false); setVehiclesModalClient(null); }}
       />
 

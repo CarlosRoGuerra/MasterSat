@@ -1,6 +1,6 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 
-import { apiFetch, apiFetchAll, apiFetchList, type Page } from '@/lib/api';
+import { apiFetch, apiFetchAll, type Page } from '@/lib/api';
 import type { Client, VehicleDetailed, VehicleSummary } from './types';
 
 type ClientFilters = { search: string; status: string; type: string };
@@ -64,16 +64,16 @@ export function useClientVehiclesSummaryQuery(token: string | null, clientId: nu
   });
 }
 
-type RawVehicle = { id: number; plate: string; type?: string | null; brand?: string | null; model?: string | null; status: string };
-type RawTracker = { id: number; vehicle_id?: number | null; imei: string; brand?: string | null; model?: string | null; active_plan_name?: string | null };
+type RawVehicle = { id: number; client_id: number; plate: string; type?: string | null; brand?: string | null; model?: string | null; status: string };
+type RawTracker = { id: number; client_id?: number | null; vehicle_id?: number | null; imei: string; brand?: string | null; model?: string | null; active_plan_name?: string | null };
 
 export function useClientVehiclesDetailedQuery(token: string | null, clientId: number | null) {
   return useQuery({
     queryKey: clientsKeys.vehiclesDetailed(clientId ?? -1),
     queryFn: async (): Promise<VehicleDetailed[]> => {
       const [vehs, trackers] = await Promise.all([
-        apiFetchList<RawVehicle>(`/vehicles?client_id=${clientId}&limit=100`, {}, token!).catch(() => []),
-        apiFetchList<RawTracker>(`/trackers?client_id=${clientId}&limit=100`, {}, token!).catch(() => []),
+        apiFetchAll<RawVehicle>(`/vehicles?client_id=${clientId}`, token!),
+        apiFetchAll<RawTracker>(`/trackers?vehicle_client_id=${clientId}`, token!),
       ]);
       const trackerByVehicle = new Map(trackers.map((tracker) => [tracker.vehicle_id, tracker]));
       return vehs.map((v) => {
@@ -84,6 +84,7 @@ export function useClientVehiclesDetailedQuery(token: string | null, clientId: n
           tracker_brand: t?.brand ?? null,
           tracker_model: t?.model ?? null,
           tracker_plan: t?.active_plan_name ?? null,
+          tracker_client_mismatch: !!t && t.client_id !== v.client_id,
         };
       });
     },

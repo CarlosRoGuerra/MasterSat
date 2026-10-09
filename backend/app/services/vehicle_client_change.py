@@ -79,7 +79,8 @@ def change_vehicle_client(
     )]
     changed_ids = [c.id for c in changed_contracts]
     previous_contracts = {
-        c.id: {'client_id': c.client_id, 'interveniente_client_id': c.interveniente_client_id}
+        c.id: {'client_id': c.client_id, 'interveniente_client_id': c.interveniente_client_id,
+               'signed': c.signed, 'signed_at': c.signed_at.isoformat() if c.signed_at else None}
         for c in changed_contracts
     }
     if changed_ids:
@@ -112,6 +113,11 @@ def change_vehicle_client(
 
     vehicle.client_id = client_id
     for contract in contracts:
+        if contract.client_id != client_id:
+            # A assinatura do proprietário anterior não vale pelo novo.
+            # O documento anexado permanece no cadastro de origem.
+            contract.signed = False
+            contract.signed_at = None
         contract.client_id = client_id
         if change_payer:
             contract.interveniente_client_id = interveniente_client_id
