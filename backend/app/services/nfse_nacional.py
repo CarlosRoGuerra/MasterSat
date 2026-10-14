@@ -291,12 +291,15 @@ def validar_cadastro_tomador(client: Client) -> None:
 
 def montar_dps(billing: Billing, client: Client, numero_dps: str,
                cod_trib_nacional: str | None = None, *,
-               competencia: dt.date | None = None,
                discriminacao: str | None = None) -> etree._Element:
     """Monta o <DPS> completo (sem assinatura) para um Billing/Client.
 
     ``cod_trib_nacional`` permite escolher o código de tributação por emissão
     (conforme o serviço); vazio usa o default do .env.
+
+    A competência (dCompet) é sempre a data da emissão (dhEmi), por decisão
+    da empresa em 10/2026: o mês escolhido na tela de Notas Fiscais só
+    seleciona o fechamento; não vai para a nota.
     """
     tp_amb, _ = _ambiente()
     validar_cadastro_tomador(client)
@@ -312,7 +315,7 @@ def montar_dps(billing: Billing, client: Client, numero_dps: str,
     _sub(inf, 'verAplic', settings.nfse_nac_ver_aplic)
     _sub(inf, 'serie', settings.nfse_nac_serie)
     _sub(inf, 'nDPS', str(numero_dps))
-    _sub(inf, 'dCompet', (competencia or agora.date()).isoformat())
+    _sub(inf, 'dCompet', agora.date().isoformat())
     # tpEmit: 1=Prestador, 2=Tomador, 3=Intermediário
     _sub(inf, 'tpEmit', '1')
     _sub(inf, 'cLocEmi', settings.nfse_codigo_municipio)
@@ -551,7 +554,9 @@ def emitir_nfse(db: Session, billing: Billing, client: Client,
         raise NfseError('Emissão em PRODUÇÃO bloqueada: defina NFSE_NAC_PRODUCAO_CONFIRMADA=true.')
     if (client.issue_invoice or 'sim') == 'nao':
         raise NfseError('Cliente configurado para NÃO emitir nota fiscal.')
-    competencia = competencia or dt.datetime.now(_TZ_BRASILIA).date()
+    # ``competencia`` segue na assinatura (interface comum com o provedor
+    # municipal e lotes antigos), mas a nota usa sempre a data da emissão.
+    competencia = dt.datetime.now(_TZ_BRASILIA).date()
     descricao = _norm(discriminacao if discriminacao is not None else
                       billing.title or settings.nfse_discriminacao_padrao, 2000)
     codigo = _only_digits(cod_trib_nacional) or settings.nfse_nac_cod_trib_nacional
@@ -573,7 +578,7 @@ def emitir_nfse(db: Session, billing: Billing, client: Client,
         except ValueError as exc:
             raise NfseError(str(exc)) from exc
         dps = montar_dps(billing, client, nota.numero_rps, nota.codigo_servico,
-                         competencia=nota.competencia, discriminacao=nota.discriminacao)
+                         discriminacao=nota.discriminacao)
         validar_dps(dps)
         xml_bytes = _serializar_dps(assinar_dps(dps))
     except Exception as exc:
@@ -581,7 +586,8 @@ def emitir_nfse(db: Session, billing: Billing, client: Client,
                               erro_mensagem=str(exc)[:2000])
         raise
     if not nfse_emissao.marcar_envio(db, nota_id, token, xml_bytes.decode('utf-8'),
-                                   discriminacao=_texto(dps, 'xDescServ'), codigo_servico=_texto(dps, 'cTribNac')):
+                                   discriminacao=_texto(dps, 'xDescServ'), codigo_servico=_texto(dps, 'cTribNac'),
+                                   competencia=dt.date.fromisoformat(_texto(dps, 'dCompet'))):
         db.refresh(nota)
         return nota
     try:

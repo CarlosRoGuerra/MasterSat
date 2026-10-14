@@ -242,10 +242,11 @@ def test_dps_nao_usa_prefixo_de_namespace():
     assert b'xmlns=' in etree.tostring(dps), 'namespace deve ser o default, não prefixado'
 
 
-def test_data_de_competencia_nao_passa_da_emissao():
-    """E0015: dCompet deve ser anterior ou igual a dhEmi."""
+def test_data_de_competencia_e_a_data_da_emissao():
+    """Competência = data da emissão (decisão da empresa, 10/2026); também
+    atende à E0015 (dCompet não pode passar de dhEmi)."""
     inf = _q(montar_dps(_billing(), _client(), '19'), 'infDPS')
-    assert _q(inf, 'dCompet').text <= _q(inf, 'dhEmi').text[:10]
+    assert _q(inf, 'dCompet').text == _q(inf, 'dhEmi').text[:10]
 
 
 def test_ambiente_invalido_da_erro_de_configuracao(monkeypatch):

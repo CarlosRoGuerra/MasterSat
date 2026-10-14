@@ -411,6 +411,17 @@ class TestBuildVehiclePayload:
         with pytest.raises(MultiportalError, match="mapeamento"):
             svc._build_vehicle_payload(v)
 
+    def test_unknown_type_message_names_the_type_and_the_accepted_ones(self):
+        svc = MultiportalService()
+        with pytest.raises(MultiportalError) as exc:
+            svc._build_vehicle_payload(FakeVehicle(type="Caminhonete"))
+        assert '"Caminhonete"' in str(exc.value)
+        assert "Automóvel/Carro, Caminhão, Van, Moto, Ônibus" in str(exc.value)
+
+    def test_automovel_from_the_vehicle_screen_is_sent_as_passeio(self):
+        payload = MultiportalService()._build_vehicle_payload(FakeVehicle(type="Automóvel"))
+        assert payload["tipoVeiculo"] == 1
+
     def test_plate_uppercased(self):
         svc = MultiportalService()
         v = FakeVehicle(plate="abc1d23")
@@ -514,6 +525,24 @@ class TestVehicleTypeToCode:
         ("PASSEIO", 1),
         ("  Caminhão  ", 2),
         (None, None),
+        # Opções da tela de Veículos: "Automóvel" (com acento) não era aceito
+        # e todo carro cadastrado pela tela ficava fora da Multiportal.
+        ("Automóvel", 1),
+        ("AUTOMÓVEL", 1),
+        ("Caminhão tanque", 2),
+        ("Caminhão de lixo", 2),
+        ("Caminhão MUK", 2),
+        ("Caminhão Bomba de Concreto", 2),
+        ("Caminhão - Baú", 2),        # grafia do SGR
+        ("Moto - Viatura", 4),
+        ("moto-viatura", 4),          # grafia do SGR
+        ("Micro ônibus", 5),
+        # Sem código conhecido na Multiportal: continuam recusados.
+        ("Caminhonete", None),
+        ("Carreta", None),
+        ("Escavadeira", None),
+        ("car/caminhao/c. aberta", None),
+        ("", None),
     ])
     def test_mapping(self, value, expected):
         svc = MultiportalService()
@@ -850,6 +879,46 @@ class TestFullSyncForTracker:
         # The link operations are conditional on all previous steps succeeding
         # so total calls should be fewer than a full success
         assert call_count["n"] < 5  # not all 5 possible operations were called
+
+    def test_dados_incompletos_barram_antes_de_enviar_o_cliente(self):
+        """Caso real (QIV3234): veículo "Automóvel" passava a ser recusado só
+        depois de o cliente já ter ido. Agora nada sai e a mensagem lista
+        tudo o que falta (tipo sem mapeamento + fabricante vazio)."""
+        svc = MultiportalService()
+        chamadas: list[str] = []
+        svc._call = lambda operation, **params: chamadas.append(operation) or _ok_result(operation)
+
+        with patch("app.services.multiportal.settings") as s:
+            s.multiportal_id = "ID"
+            s.multiportal_password = "PW"
+            s.multiportal_group_codes = ""
+            with pytest.raises(MultiportalError) as exc:
+                svc.full_sync_for_tracker(
+                    tracker=FakeTracker(external_manufacturer_id=None),
+                    vehicle=FakeVehicle(type="Caminhonete"),
+                    local_client=FakeClient(),
+                    linked_user=None,
+                )
+
+        assert chamadas == []
+        assert "Caminhonete" in str(exc.value) and "Fabricante Multiportal" in str(exc.value)
+
+    def test_automovel_com_fabricante_segue_o_fluxo_completo(self):
+        svc = MultiportalService()
+        chamadas: list[str] = []
+        svc._call = lambda operation, **params: chamadas.append(operation) or _ok_result(operation)
+
+        with patch("app.services.multiportal.settings") as s:
+            s.multiportal_id = "ID"
+            s.multiportal_password = "PW"
+            s.multiportal_group_codes = ""
+            results = svc.full_sync_for_tracker(
+                tracker=FakeTracker(), vehicle=FakeVehicle(type="Automóvel"),
+                local_client=FakeClient(), linked_user=None,
+            )
+
+        assert all(r.success for r in results)
+        assert chamadas[:3] == ["sincronizaCliente", "sincronizaVeiculo", "sincronizaEquipamento"]
 
 
 # ---------------------------------------------------------------------------

@@ -36,7 +36,9 @@ def descricao_fechamento(db, billing) -> str | None:
             'Itens do fechamento divergem do valor do título. Corrija antes de emitir a NFS-e.'
         )
     period = _periodo_servico_fechamento(billing) or billing.period_label or ''
-    description = f'Serviços de rastreamento - competência {period}. ' + ' | '.join(
+    # "Período de serviço", não "competência": a competência oficial da
+    # nota é a data da emissão (nfse_nacional.montar_dps).
+    description = f'Serviços de rastreamento - período de serviço {period}. ' + ' | '.join(
         f'{label}: R$ {format(Decimal(str(value)), ".2f").replace(".", ",")}'
         for label, value in items
     )

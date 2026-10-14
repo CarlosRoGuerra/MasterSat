@@ -138,7 +138,7 @@ def test_recibo_e_nfse_do_boleto_unico_discriminam_servicos_de_setembro(
     assert {item['substituted_by_id'] for item in components.json()} == {parent.id}
 
     description = nfse_provider.descricao_fechamento(db, parent)
-    assert 'competência 09/2026' in description
+    assert 'período de serviço 09/2026' in description
     assert description.count('PLACA:') == 4
     assert description.count('R$ 99,90') == 4
     captured = {}
