@@ -135,7 +135,9 @@ def test_dois_processos_um_post_e_restart_parcial_preserva_lease(postgres_api):
             nota = db.query(NfseNota).one()
             assert nota.status == 'emitida'
             assert nota.tentativa_numero == 1
-            assert nota.competencia == date(2024, 2, 1)
+            # Competência informada (02/2024) é ignorada: vale a data da emissão.
+            assert f'<dCompet>{nota.competencia.isoformat()}</dCompet>' in nota.xml_envio
+            assert '<dCompet>2024-02-01</dCompet>' not in nota.xml_envio
             assert 'Descrição exclusiva — fevereiro 2024' in nota.xml_envio
     finally:
         release.set()

@@ -44,6 +44,8 @@ class LoteEmitirIn(BaseModel):
 
     period_label: str = Field(..., description="Lote de fechamento, ex.: '07/2026'")
     billing_ids: list[int] = Field(..., min_length=1, description='Cobranças selecionadas')
+    # Ignorado: a competência da NFS-e é sempre a data da emissão. Mantido
+    # para não rejeitar telas antigas que ainda o enviam.
     competencia: date | None = None
     codigo_servico: str | None = None
     discriminacao: str | None = None

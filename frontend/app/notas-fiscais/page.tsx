@@ -307,7 +307,7 @@ export default function NotasFiscaisPage() {
   /* ── Ações ── */
   async function buscarBoletos() {
     const period = monthToPeriod(month);
-    if (!period) { setError('Informe a data de competência.'); return; }
+    if (!period) { setError('Informe o mês do fechamento.'); return; }
     setError(''); setFeedback(''); setBuscando(true); setElegiveis(null);
     try {
       const p = new URLSearchParams({ period_label: period });
@@ -342,7 +342,6 @@ export default function NotasFiscaisPage() {
         body: JSON.stringify({
           period_label: elegiveis.period_label,
           billing_ids: [...selecionados],
-          competencia: month ? `${month}-01` : null,
           codigo_servico: codigoServico || null,
           discriminacao: discriminacao || null,
         }),
@@ -811,8 +810,11 @@ export default function NotasFiscaisPage() {
           <Card className="p-5">
             <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-200">Identificação dos serviços</h2>
             <div className="mt-4 grid gap-4 sm:grid-cols-2">
-              <Campo label="Data de competência *">
+              <Campo label="Fechamento (mês do serviço) *">
                 <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className={inputCls} />
+                <span className="mt-1 block text-xs text-slate-500">
+                  Seleciona os boletos do fechamento. A competência da nota é sempre a data da emissão.
+                </span>
               </Campo>
               <Campo label="Serviço do município *">
                 <select value={codigoServico} onChange={(e) => setCodigoServico(e.target.value)} className={inputCls}>

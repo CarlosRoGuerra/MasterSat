@@ -22,7 +22,6 @@ from __future__ import annotations
 import smtplib
 import re
 import unicodedata
-from datetime import date
 from typing import NoReturn
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
@@ -141,7 +140,6 @@ def emitir(
     billing_id: int,
     cod_trib_nacional: str | None = Query(
         default=None, description='Código de tributação nacional (ex.: 110201); vazio usa o padrão'),
-    competencia: date | None = Query(default=None),
     discriminacao: str | None = Query(default=None),
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*ALLOWED_ROLES)),
@@ -161,8 +159,9 @@ def emitir(
     if client.issue_invoice != 'sim':
         raise HTTPException(status_code=409, detail='O responsável financeiro não está configurado com Emitir Nota Fiscal = Sim.')
     try:
+        # Competência = data da emissão (decidido no provedor, não aqui).
         return nfse_provider.emitir_nfse(db, billing, client, cod_trib_nacional=cod_trib_nacional,
-                                       competencia=competencia, discriminacao=discriminacao)
+                                       discriminacao=discriminacao)
     except (*_ERROS_CONFIG, *_ERROS_API) as exc:
         _raise_nfse_error(exc)
 
@@ -267,7 +266,6 @@ def lote_emitir(
             db,
             payload.period_label,
             payload.billing_ids,
-            competencia=payload.competencia,
             codigo_servico=payload.codigo_servico,
             discriminacao=payload.discriminacao,
             criado_por=user.id,
