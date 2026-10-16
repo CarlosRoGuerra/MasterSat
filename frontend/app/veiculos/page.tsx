@@ -641,6 +641,10 @@ function VeiculosPageInner() {
   const [uninstallDate, setUninstallDate] = useState(new Date().toISOString().slice(0, 10));
   const [uninstallServiceProductId, setUninstallServiceProductId] = useState('');
   const [uninstallFee, setUninstallFee] = useState('');
+  const [closeUninstallContracts, setCloseUninstallContracts] = useState(false);
+  const [confirmUninstallContracts, setConfirmUninstallContracts] = useState(false);
+  const [uninstalling, setUninstalling] = useState(false);
+  const uninstallInFlight = useRef(false);
   // Detalhes (abas)
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [detailsTab, setDetailsTab] = useState<'dados' | 'documentos' | 'rastreador'>('dados');
@@ -1313,23 +1317,61 @@ function VeiculosPageInner() {
     if (token) void loadVehicles(token);
   }
 
+  function openUninstall() {
+    setCloseUninstallContracts(false);
+    setConfirmUninstallContracts(false);
+    setModalError('');
+    setUninstallOpen(true);
+  }
+
+  function closeUninstall() {
+    if (uninstallInFlight.current) return;
+    setUninstallOpen(false);
+    setModalError('');
+    setUninstallFee('');
+    setUninstallServiceProductId('');
+    setCloseUninstallContracts(false);
+    setConfirmUninstallContracts(false);
+  }
+
   async function confirmUninstall() {
-    if (!token || !selectedVehicle || !canEdit) return;
+    if (!token || !selectedVehicle || !canEdit || uninstallInFlight.current) return;
+    if (closeUninstallContracts && !confirmUninstallContracts) {
+      setModalError('Confirme novamente que deseja encerrar os contratos.');
+      return;
+    }
+    uninstallInFlight.current = true;
+    setUninstalling(true);
     setModalError('');
     try {
       const params = new URLSearchParams();
       if (uninstallDate) params.set('uninstall_date', uninstallDate);
       if (uninstallServiceProductId) params.set('uninstall_service_product_id', uninstallServiceProductId);
       if (uninstallFee && parseFloat(uninstallFee) > 0) params.set('uninstall_fee', uninstallFee);
-      await apiFetch(`/vehicles/${selectedVehicle.id}/uninstall?${params.toString()}`, { method: 'POST' }, token);
-      setFeedback('Desinstalação registrada com sucesso.');
+      params.set('encerrar_contratos', String(closeUninstallContracts));
+      params.set('confirmar_encerramento_contratos', String(closeUninstallContracts && confirmUninstallContracts));
+      const result = await apiFetch<{ contracts_closed: number; contracts_kept_active: number }>(`/vehicles/${selectedVehicle.id}/uninstall?${params.toString()}`, { method: 'POST' }, token);
+      setFeedback(`Desinstalação registrada. ${closeUninstallContracts
+        ? `${result.contracts_closed} contrato(s) encerrado(s).`
+        : `${result.contracts_kept_active} contrato(s) mantido(s) ativo(s). As mensalidades continuam normalmente.`}`);
       setUninstallFee('');
+      setUninstallServiceProductId('');
+      setCloseUninstallContracts(false);
+      setConfirmUninstallContracts(false);
       setUninstallOpen(false);
-      await loadVehicles(token);
-      const updated = await apiFetch<Vehicle>(`/vehicles/${selectedVehicle.id}`, {}, token);
-      setSelectedVehicle(updated);
+      setLinkedTrackers([]);
+      try {
+        await loadVehicles(token);
+        const updated = await apiFetch<Vehicle>(`/vehicles/${selectedVehicle.id}`, {}, token);
+        await openDetails(updated);
+      } catch (err) {
+        setError(`Desinstalação registrada. Falha ao atualizar os dados: ${parseError(err)}`);
+      }
     } catch (err) {
       setModalError(parseError(err));
+    } finally {
+      uninstallInFlight.current = false;
+      setUninstalling(false);
     }
   }
 
@@ -1491,7 +1533,7 @@ function VeiculosPageInner() {
 
       {/* Modal de detalhes */}
       <Modal
-        open={detailsOpen && !changeClientOpen && !swapTrackerOpen}
+        open={detailsOpen && !changeClientOpen && !swapTrackerOpen && !uninstallOpen}
         onClose={() => { setDetailsOpen(false); setSelectedVehicle(null); setLinkedTrackers([]); }}
         title={selectedVehicle?.plate ?? ''}
         subtitle="Detalhes do veículo"
@@ -1601,7 +1643,7 @@ function VeiculosPageInner() {
                             <Badge variant={statusVariant(t.status)} className="mt-1">{statusLabel(t.status)}</Badge>
                           </div>
                           {canEdit && (
-                            <Button variant="danger" onClick={() => { setSelectedVehicle(selectedVehicle); setUninstallOpen(true); }} className="text-xs px-3 py-1.5 shrink-0">
+                            <Button variant="danger" onClick={openUninstall} className="text-xs px-3 py-1.5 shrink-0">
                               Desinstalar
                             </Button>
                           )}
@@ -1814,7 +1856,7 @@ function VeiculosPageInner() {
                                 setUninstallFee(recommended ? '' : '');
                                 setUninstallDate(new Date().toISOString().slice(0, 10));
                                 setTrackerViewOpen(false);
-                                setUninstallOpen(true);
+                                openUninstall();
                               }}
                               className="flex h-7 items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 text-xs font-medium text-rose-600 hover:bg-rose-100 dark:border-rose-900/40 dark:bg-rose-950/30 dark:text-rose-400 dark:hover:bg-rose-950/50"
                               title="Desvincular rastreador"
@@ -2015,13 +2057,13 @@ function VeiculosPageInner() {
         />
       )}
 
-      <Modal open={uninstallOpen} onClose={() => { setUninstallOpen(false); setModalError(''); setUninstallFee(''); setUninstallServiceProductId(''); }} title="Registrar desinstalação" description="Registre a retirada do rastreador. A taxa de desinstalação (se houver) será incluída no próximo fechamento." size="lg">
+      <Modal open={uninstallOpen} onClose={closeUninstall} title="Registrar desinstalação" description="Registre a retirada do rastreador. A taxa de desinstalação (se houver) será incluída no próximo fechamento." size="lg">
         <div className="space-y-5">
-          {modalError && <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{modalError}</p>}
-          <div className="grid gap-4 md:grid-cols-2">
+          {modalError && <p role="alert" className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{modalError}</p>}
+          <fieldset disabled={uninstalling} className="grid gap-4 md:grid-cols-2">
             <label className="block">
               <span className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-200">Data da desinstalação</span>
-              <input type="date" className={`${fieldClass} w-full`} value={uninstallDate} onChange={(e) => setUninstallDate(e.target.value)} />
+              <input type="date" className={`${fieldClass} w-full`} value={uninstallDate} onChange={(e) => { setUninstallDate(e.target.value); setConfirmUninstallContracts(false); }} />
             </label>
             <label className="block">
               <span className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-200">Valor a cobrar (R$) <span className="font-normal text-slate-500">opcional</span></span>
@@ -2059,10 +2101,27 @@ function VeiculosPageInner() {
                 {uninstallServiceProductId && ' O serviço define o que é cobrado; o valor acima é o que vale — ajuste-o para registrar um desconto.'}
               </div>
             )}
-          </div>
-          <div className="flex justify-end gap-3">
-            <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:border-brand-500 hover:text-brand-700 dark:border-slate-700 dark:text-slate-200 dark:hover:border-cyan-400 dark:hover:text-cyan-300" onClick={() => { setUninstallOpen(false); setUninstallFee(''); }}>Cancelar</button>
-            <Button type="button" onClick={confirmUninstall}>Confirmar desinstalação</Button>
+            <div className="space-y-3 rounded-xl border border-slate-200 p-4 text-sm dark:border-slate-700 md:col-span-2">
+              <label className="flex items-start gap-3">
+                <input type="checkbox" className="mt-0.5 h-4 w-4 shrink-0 accent-brand-700" checked={closeUninstallContracts}
+                  onChange={(event) => { setCloseUninstallContracts(event.target.checked); setConfirmUninstallContracts(false); }} />
+                Deseja encerrar os contratos ativos deste veículo?
+              </label>
+              {closeUninstallContracts ? <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+                <p>Os contratos ativos deste veículo serão encerrados na data da desinstalação. Os valores devidos até essa data e a taxa informada continuam no fechamento.</p>
+                <label className="flex items-start gap-3">
+                  <input type="checkbox" className="mt-0.5 h-4 w-4 shrink-0 accent-brand-700" checked={confirmUninstallContracts}
+                    onChange={(event) => setConfirmUninstallContracts(event.target.checked)} />
+                  Tenho certeza de que desejo encerrar os contratos e interromper as mensalidades futuras.
+                </label>
+              </div> : <p className="text-slate-600 dark:text-slate-300">Os contratos serão mantidos ativos e as mensalidades continuarão normalmente nos próximos fechamentos.</p>}
+            </div>
+          </fieldset>
+          <div className="flex flex-wrap justify-end gap-3">
+            <Button variant="secondary" disabled={uninstalling} onClick={closeUninstall}>Cancelar</Button>
+            <Button type="button" disabled={uninstalling || (closeUninstallContracts && !confirmUninstallContracts)} onClick={confirmUninstall}>
+              {uninstalling ? 'Registrando…' : 'Confirmar desinstalação'}
+            </Button>
           </div>
         </div>
       </Modal>

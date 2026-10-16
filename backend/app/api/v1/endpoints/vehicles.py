@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from calendar import monthrange as _monthrange
 from datetime import date, datetime, timedelta
@@ -347,6 +348,8 @@ def uninstall_vehicle(
     uninstall_date: date,
     uninstall_service_product_id: int | None = None,
     uninstall_fee: float | None = Query(default=None, ge=0, le=1_000_000),
+    encerrar_contratos: bool = Query(default=False, description='Encerra os contratos ativos do veículo somente com confirmação adicional.'),
+    confirmar_encerramento_contratos: bool = Query(default=False, description='Segunda confirmação obrigatória para encerrar os contratos na desinstalação.'),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(*EDIT_ROLES)),
 ):
@@ -361,6 +364,11 @@ def uninstall_vehicle(
     # cada re-clique cria outra taxa de desinstalação e cancela outro contrato.
     if vehicle.status == VehicleStatus.REMOVED:
         raise HTTPException(status_code=400, detail='Este veículo já está desinstalado.')
+    if encerrar_contratos and not confirmar_encerramento_contratos:
+        raise HTTPException(status_code=409, detail={
+            'code': 'contract_closure_confirmation_required',
+            'message': 'Confirme novamente que deseja encerrar os contratos e interromper as mensalidades futuras.',
+        })
 
     from app.core.timezone import hoje
     if uninstall_date > hoje():
@@ -442,7 +450,8 @@ def uninstall_vehicle(
 
     source_prorated_total = Decimal('0')
     ajustes_pro_rata_pendentes: list[dict] = []
-    for contract in contracts:
+    contracts_to_close = contracts if encerrar_contratos else []
+    for contract in contracts_to_close:
         plan = db.get(Plan, contract.plan_id)
         if plan and plan.active:
             interval = getattr(plan, 'billing_interval_months', 1) or 1
@@ -576,12 +585,36 @@ def uninstall_vehicle(
         tracker.integration_last_description = 'Desinstalação registrada no sistema; vínculo externo não consultado ou alterado.'
     vehicle.status = VehicleStatus.REMOVED
     vehicle.uninstalled_at = uninstall_date
-    for contract in contracts:
+    for contract in contracts_to_close:
         contract.status = 'cancelado'
         contract.end_date = uninstall_date
         contract.uninstalled_at = uninstall_date
         transfer_note = f'Desinstalado em {uninstall_date.strftime("%d/%m/%Y")}'
         contract.notes = f'{contract.notes}\n{transfer_note}'.strip() if contract.notes else transfer_note
+
+    # O contrato mantido ativo continua pertencendo ao veículo/cliente e
+    # faturando normalmente. Libera apenas a referência ao equipamento retirado,
+    # para que ele possa ser utilizado em outra instalação sem contrato órfão.
+    released_contract_ids = []
+    if not encerrar_contratos:
+        removed_tracker_ids = {tracker.id for tracker in trackers}
+        for contract in contracts:
+            if contract.tracker_id in removed_tracker_ids:
+                contract.tracker_id = None
+                released_contract_ids.append(contract.id)
+    db.add(AuditLog(
+        user_id=current_user.id, user_name=current_user.name, user_role=current_user.role.value,
+        method='POST', path=f'/vehicles/{vehicle.id}/uninstall', entity_type='vehicle',
+        entity_id=vehicle.id, status_code=200,
+        description=json.dumps({
+            'action': 'uninstall_vehicle', 'uninstall_date': uninstall_date.isoformat(),
+            'encerrar_contratos': encerrar_contratos,
+            'confirmar_encerramento_contratos': confirmar_encerramento_contratos,
+            'contracts_closed': [contract.id for contract in contracts_to_close],
+            'contracts_kept_active': [] if encerrar_contratos else [contract.id for contract in contracts],
+            'contract_tracker_references_released': released_contract_ids,
+        }, ensure_ascii=False),
+    ))
 
     try:
         db.commit()
@@ -598,6 +631,8 @@ def uninstall_vehicle(
         'tracker_returned_to_stock': bool(trackers),
         'trackers_returned_to_stock': len(trackers),
         'multiportal_unlinked': False,
+        'contracts_closed': len(contracts_to_close),
+        'contracts_kept_active': 0 if encerrar_contratos else len(contracts),
     }
 
 @router.get('/{item_id}/documents', response_model=list[DocumentOut])

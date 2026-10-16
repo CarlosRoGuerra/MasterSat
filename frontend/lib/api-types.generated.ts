@@ -7717,6 +7717,10 @@ export interface operations {
                 uninstall_date: string;
                 uninstall_service_product_id?: number | null;
                 uninstall_fee?: number | null;
+                /** @description Encerra os contratos ativos do veículo somente com confirmação adicional. */
+                encerrar_contratos?: boolean;
+                /** @description Segunda confirmação obrigatória para encerrar os contratos na desinstalação. */
+                confirmar_encerramento_contratos?: boolean;
             };
             header?: never;
             path: {

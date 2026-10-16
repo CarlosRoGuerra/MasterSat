@@ -334,7 +334,7 @@ class TestUninstallVehicle:
         assert veiculo.uninstalled_at == date(2025, 5, 15)
 
     def test_uninstall_contract_gets_cancelled(self, http, db, veiculo, rastreador_instalado, contrato):
-        r = self._uninstall(http, veiculo.id)
+        r = self._uninstall(http, veiculo.id, encerrar_contratos=True, confirmar_encerramento_contratos=True)
         assert r.status_code == 200
         db.refresh(contrato)
         assert contrato.status == "cancelado"
@@ -360,7 +360,7 @@ class TestUninstallVehicle:
         db.add_all([previous, final])
         db.commit()
 
-        response = self._uninstall(http, veiculo.id)
+        response = self._uninstall(http, veiculo.id, encerrar_contratos=True, confirmar_encerramento_contratos=True)
 
         assert response.status_code == 200, response.text
         db.refresh(previous)
@@ -410,7 +410,7 @@ class TestUninstallVehicle:
         db.commit()
         db.refresh(contrato_b)
 
-        r = self._uninstall(http, veiculo.id)
+        r = self._uninstall(http, veiculo.id, encerrar_contratos=True, confirmar_encerramento_contratos=True)
         assert r.status_code == 200
         db.refresh(contrato)
         db.refresh(contrato_b)
@@ -437,11 +437,12 @@ class TestUninstallVehicle:
         r = self._uninstall(http_fin, veiculo.id)
         assert r.status_code == 403
 
+    @pytest.mark.parametrize('close_contracts', [False, True])
     @pytest.mark.parametrize('integration_state', ['sincronizado', 'erro', 'pendente', None])
     @pytest.mark.parametrize('provider_state', ['enabled', 'disabled', 'insecure'])
     def test_uninstall_is_local_regardless_of_multiportal_state(
         self, http, db, veiculo, rastreador_instalado, contrato, monkeypatch,
-        integration_state, provider_state,
+        integration_state, provider_state, close_contracts,
     ):
         from app.core.config import settings
         from app.models.integration_log import IntegrationLog
@@ -459,7 +460,8 @@ class TestUninstallVehicle:
         previous_client_id = rastreador_instalado.client_id
         db.commit()
 
-        response = self._uninstall(http, veiculo.id, uninstall_fee=160)
+        response = self._uninstall(http, veiculo.id, uninstall_fee=160,
+            encerrar_contratos=close_contracts, confirmar_encerramento_contratos=close_contracts)
         assert response.status_code == 200, response.text
         assert response.json()['multiportal_unlinked'] is False
         assert response.json()['trackers_returned_to_stock'] == 1
@@ -471,8 +473,12 @@ class TestUninstallVehicle:
         assert rastreador_instalado.integration_status == 'desinstalado_localmente'
         assert rastreador_instalado.integration_last_code is None
         assert rastreador_instalado.integration_last_transaction_id is None
-        assert contrato.status == 'cancelado'
-        assert contrato.uninstalled_at == contrato.end_date == date(2025, 5, 15)
+        assert contrato.status == ('cancelado' if close_contracts else 'ativo')
+        if close_contracts:
+            assert contrato.uninstalled_at == contrato.end_date == date(2025, 5, 15)
+        else:
+            assert contrato.uninstalled_at is None and contrato.end_date is None
+            assert contrato.tracker_id is None
         assert veiculo.status == VehicleStatus.REMOVED
         event = db.query(UninstallEvent).filter_by(vehicle_id=veiculo.id).one()
         assert event.fee_amount == Decimal('160.00')
@@ -561,8 +567,9 @@ class TestUninstallVehicle:
         assert float(event.fee_amount) == 80.0
         assert 'Desconto autorizado por' in (event.notes or '')
 
+    @pytest.mark.parametrize('close_contracts', [False, True])
     def test_uninstall_processes_all_trackers_and_contracts(
-        self, http, db, cliente, veiculo, rastreador_instalado, contrato, plan,
+        self, http, db, cliente, veiculo, rastreador_instalado, contrato, plan, close_contracts,
     ):
         from app.models.contract import Contract
         from app.models.tracker import Tracker
@@ -590,7 +597,7 @@ class TestUninstallVehicle:
         db.add(second_contract)
         db.commit()
 
-        r = self._uninstall(http, veiculo.id)
+        r = self._uninstall(http, veiculo.id, encerrar_contratos=close_contracts, confirmar_encerramento_contratos=close_contracts)
         assert r.status_code == 200
         assert r.json()['trackers_returned_to_stock'] == 2
         db.refresh(rastreador_instalado)
@@ -599,8 +606,9 @@ class TestUninstallVehicle:
         db.refresh(second_contract)
         assert rastreador_instalado.vehicle_id is None
         assert second.vehicle_id is None
-        assert contrato.status == 'cancelado'
-        assert second_contract.status == 'cancelado'
+        assert contrato.status == second_contract.status == ('cancelado' if close_contracts else 'ativo')
+        if not close_contracts:
+            assert contrato.tracker_id is None and second_contract.tracker_id is None
 
     def test_multiple_assignments_do_not_attribute_fee_to_arbitrary_first_row(
         self, http, db, cliente, veiculo, rastreador_instalado, contrato, plan,

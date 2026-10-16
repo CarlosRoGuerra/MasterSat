@@ -303,7 +303,8 @@ class TestDesinstalacaoNaoMudaValorDeTitulo:
         registrar_titulo(db, mensalidade)
 
         r = http.post(f'/api/v1/vehicles/{veiculo.id}/uninstall',
-                      params={'uninstall_date': date.today().isoformat()})
+                      params={'uninstall_date': date.today().isoformat(), 'encerrar_contratos': True,
+                              'confirmar_encerramento_contratos': True})
         assert r.status_code == 200, r.text
         pendentes = r.json()['ajustes_pro_rata_pendentes']
         assert [p['billing_id'] for p in pendentes] == [mensalidade.id]
@@ -315,7 +316,8 @@ class TestDesinstalacaoNaoMudaValorDeTitulo:
     def test_pro_rata_aplica_quando_nao_ha_titulo(self, http, db, contrato, plan, veiculo):
         mensalidade = self._mensalidade_do_ciclo(db, contrato, plan)
         r = http.post(f'/api/v1/vehicles/{veiculo.id}/uninstall',
-                      params={'uninstall_date': date.today().isoformat()})
+                      params={'uninstall_date': date.today().isoformat(), 'encerrar_contratos': True,
+                              'confirmar_encerramento_contratos': True})
         assert r.status_code == 200, r.text
         assert r.json()['ajustes_pro_rata_pendentes'] == []
         db.refresh(mensalidade)
