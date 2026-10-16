@@ -8,6 +8,8 @@ import { Users, AlertTriangle, Building2, CheckCircle2, Plus, Trash2, Car, Coins
 import { PageShell } from '@/components/page-shell';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { BillingBatchModal } from '@/components/billing-batch-modal';
+import { billingBatchSummary, canSelectBilling, type BillingBatchAction, type BillingBatchResult } from '@/lib/billing-batch';
 import { StatCard } from '@/components/ui/stat-card';
 import { SectionHeader } from '@/components/ui/section-header';
 import { Input } from '@/components/ui/input';
@@ -187,6 +189,8 @@ function ClientesPageInner() {
   const [billingAction, setBillingAction] = useState<BillingAction>(null);
   const [editBillingError, setEditBillingError] = useState('');
   const [editBillingNotice, setEditBillingNotice] = useState('');
+  const [batchBillingAction, setBatchBillingAction] = useState<BillingBatchAction | null>(null);
+  const [batchBillingIds, setBatchBillingIds] = useState<number[]>([]);
   const [receiveBilling, setReceiveBilling] = useState<BillingItem | null>(null);
   const [receiveBillingForm, setReceiveBillingForm] = useState<ReceiveBillingForm>({
     paid_amount: '', payment_date: '', payment_method: 'pix', notes: '',
@@ -297,7 +301,25 @@ function ClientesPageInner() {
       `/billings?client_id=${billingsModalClient.id}&limit=1000`, {}, token
     );
     setClientBillings(sortByDueDateAsc(data));
-    setSelectedBillingIds((ids) => ids.filter((id) => data.some((b) => b.id === id && ['pendente', 'vencida'].includes(b.status))));
+    setSelectedBillingIds((ids) => ids.filter((id) => data.some((b) => b.id === id && canSelectBilling(b))));
+  }
+
+  function openBillingBatch(action: BillingBatchAction) {
+    if (!canFinance || !token || !selectedBillingIds.length || billingAction) return;
+    setEditBillingError('');
+    setEditBillingNotice('');
+    setBatchBillingIds([...selectedBillingIds]);
+    setBatchBillingAction(action);
+  }
+
+  async function completeBillingBatch(result: BillingBatchResult) {
+    const applied = new Set(result.itens.filter((item) => item.situacao === 'aplicado').map((item) => item.billing_id));
+    setClientBillings((items) => result.action === 'excluir'
+      ? items.filter((item) => !applied.has(item.id))
+      : items.map((item) => applied.has(item.id) ? { ...item, status: 'cancelada' } : item));
+    setSelectedBillingIds((ids) => ids.filter((id) => !applied.has(id)));
+    setEditBillingNotice(billingBatchSummary(result));
+    await refreshEditedBillings();
   }
 
   async function refreshEditedBillings() {
@@ -1402,7 +1424,7 @@ function ClientesPageInner() {
       />
 
       <BillingsModal
-        open={billingsModalOpen && !editBilling}
+        open={billingsModalOpen && !editBilling && !batchBillingAction}
         error={editBillingError}
         feedback={editBillingNotice}
         clientName={billingsModalClient?.name}
@@ -1419,6 +1441,8 @@ function ClientesPageInner() {
         onToggleCarne={(loteId) => setCarneExpandido((prev) => (prev === loteId ? null : loteId))}
         onBaixarCarne={baixarCarne}
         onOpenUnify={openUnifyModal}
+        onBatchCancel={canFinance ? () => openBillingBatch('cancelar') : undefined}
+        onBatchDelete={canFinance ? () => openBillingBatch('excluir') : undefined}
         onGerarCarne={gerarCarne}
         onEditBilling={openEditBilling}
         onBillingHistory={openBillingHistory}
@@ -1454,6 +1478,9 @@ function ClientesPageInner() {
         onCancel={cancelEditBilling}
         onDelete={deleteEditBilling}
       />
+
+      <BillingBatchModal action={batchBillingAction} ids={batchBillingIds} token={token}
+        onClose={() => setBatchBillingAction(null)} onCompleted={completeBillingBatch} />
 
       <ReceiveBillingModal
         billing={receiveBilling}

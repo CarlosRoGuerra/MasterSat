@@ -1105,6 +1105,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/billings/lote/acoes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Batch Actions
+         * @description Confere e aplica cancelamento/exclusão aos itens permitidos da seleção.
+         *
+         *     A revisão vincula a confirmação à situação lida sob trava. Negociações
+         *     que precisam reabrir originais continuam no fluxo individual.
+         */
+        post: operations["batch_actions_api_v1_billings_lote_acoes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/billings/lote/situacao": {
         parameters: {
             query?: never;
@@ -3671,6 +3694,83 @@ export interface components {
             reversed_at?: string | null;
             /** Created At */
             created_at?: string | null;
+        };
+        /** BillingBatchActionIn */
+        BillingBatchActionIn: {
+            /** Billing Ids */
+            billing_ids: number[];
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "cancelar" | "excluir";
+            /**
+             * Simular
+             * @default true
+             */
+            simular: boolean;
+            /** Reason */
+            reason?: string | null;
+            /** Revisao */
+            revisao?: string | null;
+            /**
+             * Confirmar Boleto Ailos
+             * @default false
+             */
+            confirmar_boleto_ailos: boolean;
+            /**
+             * Confirmar Liberacao Competencia
+             * @default false
+             */
+            confirmar_liberacao_competencia: boolean;
+        };
+        /** BillingBatchActionItem */
+        BillingBatchActionItem: {
+            /** Billing Id */
+            billing_id: number;
+            /** Title */
+            title?: string | null;
+            /** Status */
+            status?: string | null;
+            /**
+             * Situacao
+             * @enum {string}
+             */
+            situacao: "aplicavel" | "aplicado" | "ignorado";
+            /** Motivo */
+            motivo?: string | null;
+            /** Nosso Numero */
+            nosso_numero?: string | null;
+            /**
+             * Baixa Bancaria Pendente
+             * @default false
+             */
+            baixa_bancaria_pendente: boolean;
+            /**
+             * Libera Competencia
+             * @default false
+             */
+            libera_competencia: boolean;
+        };
+        /** BillingBatchActionOut */
+        BillingBatchActionOut: {
+            /** Simulacao */
+            simulacao: boolean;
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "cancelar" | "excluir";
+            /** Total Enviados */
+            total_enviados: number;
+            /** Aplicados */
+            aplicados: number;
+            /** Ignorados */
+            ignorados: number;
+            /** Revisao */
+            revisao: string;
+            /** Itens */
+            itens: components["schemas"]["BillingBatchActionItem"][];
         };
         /**
          * BillingBatchMaintIn
@@ -9444,6 +9544,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BillingOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    batch_actions_api_v1_billings_lote_acoes_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BillingBatchActionIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingBatchActionOut"];
                 };
             };
             /** @description Validation Error */

@@ -250,6 +250,17 @@ def exigir(
     if operacao in _EMISSAO_BANCARIA:
         recusar_somente_sistema(db, billing_ids)
     titulos = titulos_bancarios(db, billing_ids)
+    return validar_titulos(operacao, titulos, confirmado=confirmado, permitir_em_registro=permitir_em_registro)
+
+
+def validar_titulos(
+    operacao: str,
+    titulos: dict[int, TituloBancario],
+    *,
+    confirmado: bool = False,
+    permitir_em_registro: Iterable[int] = (),
+) -> dict[int, TituloBancario]:
+    """Mesma política para uma situação já carregada sob trava da cobrança."""
     permitidos = _PERMITIDO[operacao]
     retomadas = set(permitir_em_registro)
     bloqueados: dict[str, list[int]] = {}

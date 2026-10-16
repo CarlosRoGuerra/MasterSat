@@ -1,10 +1,11 @@
 import type { ReactNode } from 'react';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ClientesPage from './page';
 import type { BillingItem } from './_components/types';
+import type { BillingBatchResult } from '@/lib/billing-batch';
 
 const api = vi.hoisted(() => ({ fetch: vi.fn(), list: vi.fn() }));
 const auth = vi.hoisted(() => ({ role: 'admin' }));
@@ -71,6 +72,117 @@ async function openEditor(select = false) {
   return { user, dialog };
 }
 const writes = (method: string) => api.fetch.mock.calls.filter(([, options]) => options?.method === method);
+
+function mockBatchApi(fail = false) {
+  const original = api.fetch.getMockImplementation()!;
+  api.fetch.mockImplementation(async (path: string, options: RequestInit = {}) => {
+    if (path !== '/billings/lote/acoes') return original(path, options);
+    const body = JSON.parse(String(options.body));
+    const items: BillingBatchResult['itens'] = body.billing_ids.map((id: number) => {
+      const item = wallet.find((b) => b.id === id)!;
+      const blocked = body.action === 'excluir' && item.titulo_bancario?.estado === 'registrado';
+      return { billing_id: id, status: item.status, situacao: blocked ? 'ignorado' : body.simular ? 'aplicavel' : 'aplicado',
+        motivo: blocked ? 'Cobrança com histórico bancário.' : null,
+        baixa_bancaria_pendente: false, libera_competencia: !blocked && body.action === 'excluir' && !!item.contract_id };
+    });
+    const result: BillingBatchResult = { action: body.action, simulacao: body.simular, total_enviados: items.length,
+      aplicados: items.filter((i) => i.situacao !== 'ignorado').length,
+      ignorados: items.filter((i) => i.situacao === 'ignorado').length, revisao: 'a'.repeat(64), itens: items };
+    if (!body.simular) {
+      if (fail) throw new Error('Falha ao aplicar o lote.');
+      const applied = new Set(items.filter((i) => i.situacao === 'aplicado').map((i) => i.billing_id));
+      wallet = body.action === 'excluir' ? wallet.filter((b) => !applied.has(b.id))
+        : wallet.map((b) => applied.has(b.id) ? { ...b, status: 'cancelada' } : b);
+    }
+    return result;
+  });
+}
+
+async function openBatchWallet() {
+  const user = userEvent.setup();
+  renderPage();
+  await user.click(await screen.findByTitle('Central financeira / boletos do cliente'));
+  await screen.findAllByTitle('Alterar boleto');
+  return user;
+}
+
+describe('ações em lote na central financeira do cliente', () => {
+  it.each(['admin', 'financeiro'])('perfil %s cancela os selecionados e atualiza a carteira', async (role) => {
+    auth.role = role;
+    wallet = [billing, { ...billing, id: 38513, status: 'vencida' }];
+    mockBatchApi();
+    const user = await openBatchWallet();
+    await user.click(screen.getByRole('checkbox', { name: 'Selecionar todos os boletos visíveis' }));
+    await user.click(screen.getByRole('button', { name: 'Cancelar selecionados' }));
+    expect(await screen.findByRole('dialog', { name: 'Cancelar boletos em lote' })).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: /Boletos do cliente/ })).not.toBeInTheDocument();
+    await screen.findByText('2 apto(s) · 0 ignorado(s) · 2 selecionado(s)');
+    await user.type(screen.getByRole('textbox', { name: /Justificativa/ }), 'Dispensa das mensalidades');
+    await user.click(screen.getByRole('button', { name: 'Cancelar 2 boleto(s)' }));
+    await user.click(await screen.findByRole('button', { name: 'Fechar resultado' }));
+    const list = within(screen.getByRole('dialog', { name: /Boletos do cliente/ }));
+    expect(list.getAllByText('Cancelada')).toHaveLength(2);
+    expect(list.queryByText('2 boleto(s) selecionado(s)')).not.toBeInTheDocument();
+    const calls = writes('POST').filter(([path]) => path === '/billings/lote/acoes');
+    expect(calls).toHaveLength(2);
+    expect(JSON.parse(calls[1][1].body)).toMatchObject({ billing_ids: [38513, 38512], simular: false,
+      reason: 'Dispensa das mensalidades', revisao: 'a'.repeat(64) });
+  });
+
+  it('seleciona canceladas, exclui as permitidas e mantém o bloqueio bancário visível', async () => {
+    wallet = [{ ...billing, status: 'cancelada' }, { ...billing, id: 38513, status: 'cancelada', titulo_bancario: { estado: 'registrado' } }];
+    mockBatchApi();
+    const user = await openBatchWallet();
+    await user.click(screen.getByRole('checkbox', { name: 'Selecionar todos os boletos visíveis' }));
+    expect(screen.queryByRole('button', { name: 'Gerar carnê' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Unificar em 1 boleto' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Excluir selecionados' }));
+    await screen.findByText('1 apto(s) · 1 ignorado(s) · 2 selecionado(s)');
+    await user.type(screen.getByRole('textbox', { name: /Justificativa/ }), 'Correção do cadastro');
+    await user.click(screen.getByRole('checkbox', { name: /Confirmo a liberação dos meses/ }));
+    await user.click(screen.getByRole('button', { name: 'Excluir 1 boleto(s)' }));
+    expect(await screen.findByText(/Ignorado: Cobrança com histórico bancário/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Fechar resultado' }));
+    const list = within(screen.getByRole('dialog', { name: /Boletos do cliente/ }));
+    expect(list.getAllByTitle('Alterar boleto')).toHaveLength(1);
+    expect(list.getByRole('checkbox', { name: 'Selecionar boleto #38513' })).toBeChecked();
+    expect(list.getByRole('status')).toHaveTextContent('1 boleto(s) excluído(s) · 1 ignorado(s)');
+  });
+
+  it('selecionar e desmarcar um filtro mantém a seleção de outro mês', async () => {
+    wallet = [{ ...billing, status: 'cancelada' }, { ...billing, id: 38513, period_label: '11/2026', due_date: '2026-11-15' }];
+    const user = await openBatchWallet();
+    await user.click(screen.getByRole('checkbox', { name: 'Selecionar boleto #38512' }));
+    fireEvent.change(screen.getByLabelText('Mês referente de'), { target: { value: '2026-11' } });
+    await user.click(screen.getByRole('checkbox', { name: 'Selecionar todos os boletos visíveis' }));
+    expect(screen.getByText('2 boleto(s) selecionado(s)')).toBeInTheDocument();
+    await user.click(screen.getByRole('checkbox', { name: 'Selecionar todos os boletos visíveis' }));
+    expect(screen.getByText('1 boleto(s) selecionado(s)')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Selecionar boleto #38513' })).not.toBeChecked();
+  });
+
+  it('não oferece seleção para boletos pagos', async () => {
+    wallet = [{ ...billing, status: 'paga' }];
+    await openBatchWallet();
+    expect(screen.queryByRole('checkbox', { name: 'Selecionar boleto #38512' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Excluir selecionados' })).not.toBeInTheDocument();
+  });
+
+  it('preserva a seleção e os dados se a aplicação falhar', async () => {
+    mockBatchApi(true);
+    const user = await openBatchWallet();
+    await user.click(screen.getByRole('checkbox', { name: 'Selecionar boleto #38512' }));
+    await user.click(screen.getByRole('button', { name: 'Cancelar selecionados' }));
+    await screen.findByText('1 apto(s) · 0 ignorado(s) · 1 selecionado(s)');
+    await user.type(screen.getByRole('textbox', { name: /Justificativa/ }), 'Negociação');
+    await user.click(screen.getByRole('button', { name: 'Cancelar 1 boleto(s)' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Falha ao aplicar o lote.');
+    expect(wallet[0].status).toBe('pendente');
+    expect(screen.getByRole('textbox', { name: /Justificativa/ })).toHaveValue('Negociação');
+    await user.click(screen.getByRole('button', { name: 'Voltar' }));
+    expect(screen.getByRole('checkbox', { name: 'Selecionar boleto #38512' })).toBeChecked();
+  });
+});
 
 describe('cancelar e excluir pelo ícone Alterar boleto', () => {
   it.each(['admin', 'financeiro'])('perfil %s cancela com justificativa e permite excluir na mesma janela', async (role) => {

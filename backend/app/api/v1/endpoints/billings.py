@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import csv
+import hashlib
+import json
+import secrets
 from collections import defaultdict
 from datetime import date, datetime
 from decimal import Decimal
@@ -21,6 +24,7 @@ from app.core.integrity import raise_integrity_conflict
 from app.core.timezone import hoje
 from app.db.session import get_db
 from app.models.ailos_boleto import AilosBoleto
+from app.models.audit_log import AuditLog
 from app.models.nfse_nota import NfseNota
 from app.models.billing import RECURRING_BILLING_TYPES, Billing
 from app.models.billing_change_log import BillingChangeLog
@@ -39,6 +43,8 @@ from app.services.ailos_boletos import resolver_pagador
 from app.services.reemissao import CorrecaoVencimentoError, corrigir_vencimento
 from app.schemas.billing import (
     BillingAdjustmentOut,
+    BillingBatchActionIn,
+    BillingBatchActionOut,
     BillingBatchMaintIn,
     BillingBatchStatusIn,
     BillingCancel,
@@ -854,6 +860,109 @@ def parcelar_contrato(payload: ParcelarContratoIn, db: Session = Depends(get_db)
     return [serialize_billing(r) for r in rows]
 
 
+@router.post('/lote/acoes', response_model=BillingBatchActionOut)
+def batch_actions(
+    payload: BillingBatchActionIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL)),
+):
+    """Confere e aplica cancelamento/exclusão aos itens permitidos da seleção.
+
+    A revisão vincula a confirmação à situação lida sob trava. Negociações
+    que precisam reabrir originais continuam no fluxo individual.
+    """
+    ids = list(dict.fromkeys(payload.billing_ids))
+    related_ids = list(db.scalars(select(Billing.id).where(or_(
+        Billing.substituted_by_id.in_(ids),
+        Billing.id.in_(select(Billing.substituted_by_id).where(Billing.id.in_(ids))),
+    ))).all())
+    locked = lock_billings_for_update(db, sorted(set(ids + related_ids)))
+    by_id = {billing.id: billing for billing in locked}
+    titulos = titulo_bancario.titulos_bancarios(db, ids)
+    itens = []
+    eligible = []
+    for bid in ids:
+        billing = by_id.get(bid)
+        titulo = titulos[bid]
+        reason = None
+        if billing is None or billing.is_deleted:
+            reason = 'Cobrança não encontrada ou já excluída.'
+        elif billing.status == BillingStatus.PAID:
+            reason = 'Cobrança paga: o histórico financeiro deve ser preservado.'
+        elif payload.action == 'cancelar' and billing.status not in (BillingStatus.PENDING, BillingStatus.OVERDUE):
+            reason = 'Cobrança já cancelada.'
+        elif payload.action == 'excluir' and billing.status != BillingStatus.CANCELED:
+            reason = 'Cancele a cobrança antes de excluir.'
+        else:
+            try:
+                titulo_bancario.validar_titulos(payload.action, {bid: titulo}, confirmado=True)
+                ensure_substitution_allows_removal(db, billing, revert_substitution=False)
+            except (titulo_bancario.PoliticaBancariaError, BillingSubstitutionError) as exc:
+                reason = str(exc)
+                if isinstance(exc, BillingSubstitutionError):
+                    reason += ' Use o detalhe do boleto para conferir a reversão individual.'
+        if reason is None:
+            eligible.append(billing)
+        itens.append({
+            'billing_id': bid, 'title': billing.title if billing else None,
+            'status': billing.status.value if billing else None,
+            'situacao': 'ignorado' if reason else 'aplicavel', 'motivo': reason,
+            'nosso_numero': titulo.nosso_numero,
+            'baixa_bancaria_pendente': not reason and payload.action == 'cancelar' and titulo.ativo_no_banco,
+            'libera_competencia': bool(not reason and payload.action == 'excluir'
+                and billing.contract_id and billing.billing_type in RECURRING_BILLING_TYPES
+                and not billing.competencia_liberada),
+        })
+    fingerprint = {
+        'action': payload.action, 'ids': sorted(ids),
+        'billings': [{column.name: getattr(b, column.name) for column in Billing.__table__.columns} for b in locked],
+        'banco': {bid: titulos[bid].as_dict() for bid in sorted(ids)},
+        'itens': sorted(itens, key=lambda item: item['billing_id']),
+    }
+    revisao = hashlib.sha256(json.dumps(fingerprint, sort_keys=True, default=str).encode()).hexdigest()
+    if not payload.simular:
+        if not payload.revisao.isascii() or not secrets.compare_digest(payload.revisao, revisao):
+            raise HTTPException(409, {'code': 'revisao_desatualizada',
+                'message': 'A seleção mudou desde a conferência. Confira novamente antes de aplicar.'})
+        if any(item['baixa_bancaria_pendente'] for item in itens) and not payload.confirmar_boleto_ailos:
+            raise HTTPException(409, {'code': 'confirmacao_bancaria_necessaria',
+                'message': 'Confirme que os boletos ativos continuam pagáveis no banco até a baixa bancária.'})
+        if any(item['libera_competencia'] for item in itens) and not payload.confirmar_liberacao_competencia:
+            raise HTTPException(409, {'code': 'confirmacao_competencia_necessaria',
+                'message': 'Confirme que excluir estas mensalidades libera os meses para nova cobrança.'})
+        try:
+            lock_charge_items_for_billings(db, eligible)
+            for billing in eligible:
+                previous_status = billing.status.value
+                reason = payload.reason.strip()
+                if payload.action == 'cancelar':
+                    _cancel_billing_locked(billing, BillingCancel(reason=reason,
+                        confirmar_boleto_ailos=payload.confirmar_boleto_ailos), db, current_user)
+                else:
+                    _delete_billing_locked(billing, db, current_user)
+                    billing.notes = f'{billing.notes or ""}\nExcluída em lote: {reason}'.strip()
+                db.add(BillingChangeLog(billing_id=billing.id, changed_by_user_id=current_user.id,
+                    field_name='status' if payload.action == 'cancelar' else 'is_deleted',
+                    previous_value=previous_status if payload.action == 'cancelar' else 'false',
+                    new_value='cancelada' if payload.action == 'cancelar' else 'true', justification=reason))
+                db.add(AuditLog(user_id=current_user.id, user_name=current_user.name,
+                    user_role=current_user.role.value, method='POST', path='/billings/lote/acoes',
+                    entity_type='billing', entity_id=billing.id, status_code=200,
+                    description=json.dumps({'action': payload.action, 'justificativa': reason,
+                        'status_anterior': previous_status, 'revisao': revisao}, ensure_ascii=False)))
+            _commit_billing_write(db)
+        except Exception:
+            db.rollback()
+            raise
+        for item in itens:
+            if item['situacao'] == 'aplicavel':
+                item['situacao'] = 'aplicado'
+                if payload.action == 'cancelar':
+                    item['status'] = BillingStatus.CANCELED.value
+    return {'simulacao': payload.simular, 'action': payload.action, 'total_enviados': len(ids),
+            'aplicados': len(eligible), 'ignorados': len(ids) - len(eligible), 'revisao': revisao, 'itens': itens}
+
+
 @router.post('/lote/situacao')
 def batch_status(payload: BillingBatchStatusIn, db: Session = Depends(get_db), current_user: User = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
     """Alterar situação de boletos EM LOTE: 'receber' (marca como pagas) ou
@@ -1128,9 +1237,7 @@ def billing_adjustments(item_id: int, db: Session = Depends(get_db), _: object =
     return recebimento.ajustes_da_cobranca(db, item_id)
 
 
-@router.post('/{item_id}/cancel', response_model=BillingOut)
-def cancel_billing(item_id: int, payload: BillingCancel, db: Session = Depends(get_db), current_user: User = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
-    billing = _lock_billing_or_404(db, item_id)
+def _cancel_billing_locked(billing: Billing, payload: BillingCancel, db: Session, current_user: User):
     if billing.status == BillingStatus.CANCELED:
         raise HTTPException(status_code=400, detail='Cobrança já está cancelada.')
     if billing.status == BillingStatus.PAID:
@@ -1176,6 +1283,12 @@ def cancel_billing(item_id: int, payload: BillingCancel, db: Session = Depends(g
         db.rollback()
         raise _substitution_conflict(exc) from exc
     refresh_charge_items_for_billing(db, billing, commit=False)
+
+
+@router.post('/{item_id}/cancel', response_model=BillingOut)
+def cancel_billing(item_id: int, payload: BillingCancel, db: Session = Depends(get_db), current_user: User = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
+    billing = _lock_billing_or_404(db, item_id)
+    _cancel_billing_locked(billing, payload, db, current_user)
     _commit_billing_write(db)
     db.refresh(billing)
     row = base_query(db).filter(Billing.id == billing.id).first()
@@ -1271,17 +1384,7 @@ def update_item(item_id: int, payload: BillingUpdate, db: Session = Depends(get_
     return serialize_billing(row)
 
 
-@router.delete('/{item_id}')
-def delete_item(
-    item_id: int,
-    reverter_substituicao: bool = Query(
-        default=False,
-        description='Obrigatório para remover boleto único/negociação: reabre as cobranças que ele substituiu.',
-    ),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL)),
-):
-    obj = _lock_billing_or_404(db, item_id)
+def _delete_billing_locked(obj: Billing, db: Session, current_user: User, *, reverter_substituicao: bool = False):
     if obj.status == BillingStatus.PAID:
         raise HTTPException(
             status_code=400,
@@ -1307,6 +1410,21 @@ def delete_item(
     lock_charge_items_for_billings(db, [obj])
     obj.is_deleted = True
     refresh_charge_items_for_billing(db, obj, commit=False)
+    return restored
+
+
+@router.delete('/{item_id}')
+def delete_item(
+    item_id: int,
+    reverter_substituicao: bool = Query(
+        default=False,
+        description='Obrigatório para remover boleto único/negociação: reabre as cobranças que ele substituiu.',
+    ),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL)),
+):
+    obj = _lock_billing_or_404(db, item_id)
+    restored = _delete_billing_locked(obj, db, current_user, reverter_substituicao=reverter_substituicao)
     _commit_billing_write(db)
     return {'message': 'Cobrança removida com sucesso', 'reabertas': restored}
 

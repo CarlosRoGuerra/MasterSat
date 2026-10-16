@@ -8,6 +8,8 @@ import { PageShell } from '@/components/page-shell';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Modal } from '@/components/ui/modal';
+import { BillingBatchModal } from '@/components/billing-batch-modal';
+import { billingBatchSummary, canSelectBilling, toggleVisibleBillings, type BillingBatchAction, type BillingBatchResult } from '@/lib/billing-batch';
 import { StatCard } from '@/components/ui/stat-card';
 import { SectionHeader } from '@/components/ui/section-header';
 import { BarChart } from '@/components/ui/bar-chart';
@@ -398,6 +400,7 @@ function BillingTableSection({
   onBatchIdsChange,
   onBatchReceive,
   onBatchCancel,
+  onBatchDelete,
   onBatchMaint,
   onBatchEmit,
   batchBusy,
@@ -432,15 +435,16 @@ function BillingTableSection({
   onBatchIdsChange?: (ids: number[]) => void;
   onBatchReceive?: () => void;
   onBatchCancel?: () => void;
+  onBatchDelete?: () => void;
   onBatchMaint?: () => void;
   onBatchEmit?: () => void;
   batchBusy?: boolean;
   batchProgress?: string;
-  batchActions?: Array<'receive' | 'cancel' | 'maint' | 'emit'>;
+  batchActions?: Array<'receive' | 'cancel' | 'delete' | 'maint' | 'emit'>;
   rowActionLabel?: string;
 }) {
   const router = useRouter();
-  const acoesLote = batchActions ?? ['receive', 'cancel', 'maint', 'emit'];
+  const acoesLote = batchActions ?? ['receive', 'cancel', 'delete', 'maint', 'emit'];
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const in7 = new Date(today); in7.setDate(in7.getDate() + 7);
 
@@ -451,6 +455,7 @@ function BillingTableSection({
     : billings;
 
   const pg = usePagination(list, 25);
+  const batchHasClosed = billings.some((billing) => (batchIds ?? []).includes(billing.id) && !['pendente', 'vencida'].includes(billing.status));
 
   const fc = 'w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-white';
 
@@ -527,10 +532,11 @@ function BillingTableSection({
       {batchIds && batchIds.length > 0 && (
         <div className="mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-brand-300 bg-brand-50 px-4 py-2.5 text-sm dark:border-brand-700 dark:bg-brand-950/30">
           <span className="font-bold text-brand-800 dark:text-brand-200">{batchIds.length} selecionada(s)</span>
-          {onBatchEmit && acoesLote.includes('emit') && <Button disabled={batchBusy} onClick={onBatchEmit} className="!py-1.5 text-xs">Emitir boleto</Button>}
-          {onBatchReceive && acoesLote.includes('receive') && <Button disabled={batchBusy} onClick={onBatchReceive} className="!py-1.5 text-xs">Receber em lote</Button>}
-          {onBatchMaint && acoesLote.includes('maint') && <Button disabled={batchBusy} variant="secondary" onClick={onBatchMaint} className="!py-1.5 text-xs">Alterar venc./valor</Button>}
+          {onBatchEmit && acoesLote.includes('emit') && <Button disabled={batchBusy || batchHasClosed} onClick={onBatchEmit} className="!py-1.5 text-xs">Emitir boleto</Button>}
+          {onBatchReceive && acoesLote.includes('receive') && <Button disabled={batchBusy || batchHasClosed} onClick={onBatchReceive} className="!py-1.5 text-xs">Receber em lote</Button>}
+          {onBatchMaint && acoesLote.includes('maint') && <Button disabled={batchBusy || batchHasClosed} variant="secondary" onClick={onBatchMaint} className="!py-1.5 text-xs">Alterar venc./valor</Button>}
           {onBatchCancel && acoesLote.includes('cancel') && <Button disabled={batchBusy} variant="secondary" onClick={onBatchCancel} className="!py-1.5 text-xs">Cancelar em lote</Button>}
+          {onBatchDelete && acoesLote.includes('delete') && <Button disabled={batchBusy} variant="danger" onClick={onBatchDelete} className="text-xs">Excluir em lote</Button>}
           {batchBusy && <span role="status" className="text-xs text-brand-800 dark:text-brand-200">{batchProgress}</span>}
           <button type="button" disabled={batchBusy} onClick={() => onBatchIdsChange?.([])} className="ml-auto text-xs text-slate-500 underline hover:text-slate-600 disabled:opacity-50 dark:hover:text-slate-200">
             Limpar seleção
@@ -554,16 +560,15 @@ function BillingTableSection({
                       type="checkbox"
                       disabled={batchBusy}
                       className="h-4 w-4 rounded accent-brand-700"
-                      title="Selecionar todas em aberto (desta página)"
+                      title="Selecionar boletos desta página"
+                      aria-label="Selecionar boletos desta página"
                       checked={
-                        pg.slice.some(b => b.status === 'pendente' || b.status === 'vencida') &&
-                        pg.slice.filter(b => b.status === 'pendente' || b.status === 'vencida').every(b => (batchIds ?? []).includes(b.id))
+                        pg.slice.some(canSelectBilling) &&
+                        pg.slice.filter(canSelectBilling).every(b => (batchIds ?? []).includes(b.id))
                       }
-                      onChange={e => onBatchIdsChange(
-                        e.target.checked
-                          ? Array.from(new Set([...(batchIds ?? []), ...pg.slice.filter(b => b.status === 'pendente' || b.status === 'vencida').map(b => b.id)]))
-                          : []
-                      )}
+                      ref={(node) => { if (node) node.indeterminate = pg.slice.filter(canSelectBilling).some(b => (batchIds ?? []).includes(b.id))
+                        && !pg.slice.filter(canSelectBilling).every(b => (batchIds ?? []).includes(b.id)); }}
+                      onChange={e => onBatchIdsChange(toggleVisibleBillings(batchIds ?? [], pg.slice, e.target.checked))}
                     />
                   </Th>
                 )}
@@ -581,11 +586,12 @@ function BillingTableSection({
                   <Tr key={b.id} selected={b.id === selectedId}>
                     {onBatchIdsChange && (
                       <Td>
-                        {(b.status === 'pendente' || b.status === 'vencida') ? (
+                        {canSelectBilling(b) ? (
                           <input
                             type="checkbox"
                             disabled={batchBusy}
                             className="h-4 w-4 rounded accent-brand-700"
+                            aria-label={`Selecionar boleto #${b.id}`}
                             checked={(batchIds ?? []).includes(b.id)}
                             onChange={() => {
                               const cur = batchIds ?? [];
@@ -719,6 +725,8 @@ export default function FinanceiroPage() {
 
   // Operações em lote na carteira de cobranças
   const [selectedBillingIds, setSelectedBillingIds] = useState<number[]>([]);
+  const [batchBillingAction, setBatchBillingAction] = useState<BillingBatchAction | null>(null);
+  const [batchBillingIds, setBatchBillingIds] = useState<number[]>([]);
   const [batchBoletoAction, setBatchBoletoAction] = useState<AcaoLoteBoleto | null>(null);
   const [batchBoletoProgress, setBatchBoletoProgress] = useState('');
   const [gerandoCarne, setGerandoCarne] = useState(false);
@@ -1333,29 +1341,24 @@ export default function FinanceiroPage() {
     } catch (err) { setError(parseError(err)); } finally { setProcessing(false); }
   }
 
-  async function handleBatchCancel() {
-    if (!token || selectedBillingIds.length === 0) return;
-    const reason = window.prompt(`Justificativa para cancelar ${selectedBillingIds.length} cobrança(s):`, '');
-    if (!reason) return;
-    setProcessing(true);
-    try {
-      const r = await apiFetch<{ processados: number[]; ignorados: number[]; boletos_ativos?: { billing_id: number; nosso_numero: string | null }[] }>('/billings/lote/situacao', {
-        method: 'POST',
-        body: JSON.stringify({ billing_ids: selectedBillingIds, action: 'cancelar', reason }),
-      }, token);
-      setSelectedBillingIds([]);
-      setFeedback(`${r.processados.length} cobrança(s) cancelada(s)${r.ignorados.length ? ` · ${r.ignorados.length} ignorada(s)` : ''}.`);
+  function openBillingBatch(action: BillingBatchAction) {
+    if (!token || !canEdit || !selectedBillingIds.length || processing || batchBoletoAction) return;
+    setBatchBillingIds([...selectedBillingIds]);
+    setBatchBillingAction(action);
+  }
+
+  async function completeBillingBatch(result: BillingBatchResult) {
+    const applied = new Set(result.itens.filter(item => item.situacao === 'aplicado').map(item => item.billing_id));
+    setBillings(items => result.action === 'excluir'
+      ? items.filter(item => !applied.has(item.id))
+      : items.map(item => applied.has(item.id) ? { ...item, status: 'cancelada' } : item));
+    setSelectedBillingIds(ids => ids.filter(id => !applied.has(id)));
+    if (selectedBilling && applied.has(selectedBilling.id)) setSelectedBilling(null);
+    setFeedback(billingBatchSummary(result));
+    if (token) {
       await loadData(token);
-      // Cancelamento não baixa o título na Ailos — avisa para baixa manual.
-      const ativos = r.boletos_ativos ?? [];
-      if (ativos.length > 0) {
-        const nums = ativos.map(x => x.nosso_numero || `#${x.billing_id}`).join(', ');
-        window.alert(
-          `Atenção: ${ativos.length} boleto(s) cancelado(s) continuam registrados na Ailos e ainda podem ser pagos. ` +
-          `O convênio não tem baixa automática — dê baixa manualmente na Ailos. Nossos números: ${nums}.`,
-        );
-      }
-    } catch (err) { setError(parseError(err)); } finally { setProcessing(false); }
+      await loadPendenciasBancarias(token);
+    }
   }
 
   async function handleBatchMaint() {
@@ -2071,10 +2074,11 @@ export default function FinanceiroPage() {
               batchIds={selectedBillingIds}
               onBatchIdsChange={canEdit ? setSelectedBillingIds : undefined}
               onBatchReceive={() => setBatchReceiveModal(true)}
-              onBatchCancel={handleBatchCancel}
+              onBatchCancel={() => openBillingBatch('cancelar')}
+              onBatchDelete={() => openBillingBatch('excluir')}
               onBatchMaint={() => { setModalError(''); setBatchMaintModal(true); }}
               onBatchEmit={() => handleBatchBoletos('emitir')}
-              batchBusy={!!batchBoletoAction}
+              batchBusy={!!batchBoletoAction || processing}
               batchProgress={batchBoletoProgress}
             />
 
@@ -2405,17 +2409,17 @@ export default function FinanceiroPage() {
           IMPORTANTE: renderizado ANTES dos modais de detalhe/receber/ajustar
           para que eles empilhem POR CIMA desta carteira (ordem do DOM). */}
       {(() => {
-        const titulos: Record<CarteiraMode, { t: string; s: string; rotulo?: string; lote?: Array<'receive' | 'cancel' | 'maint'> }> = {
+        const titulos: Record<CarteiraMode, { t: string; s: string; rotulo?: string; lote?: Array<'receive' | 'cancel' | 'delete' | 'maint'> }> = {
           'full':            { t: 'Contas a Receber',                s: 'Carteira completa de cobranças' },
           'situacao':        { t: 'Alterar situação boleto',        s: 'Clique em "Alterar situação" para registrar o pagamento (ou cancelar pelo detalhe)', rotulo: 'Alterar situação' },
-          'situacao-lote':   { t: 'Alterar situação em lote',       s: 'Marque os boletos e use Receber/Cancelar em lote', lote: ['receive', 'cancel'] },
+          'situacao-lote':   { t: 'Alterar situação em lote',       s: 'Selecione os boletos para receber, cancelar ou excluir em lote', lote: ['receive', 'cancel', 'delete'] },
           'manutencao':      { t: 'Manutenção de título',           s: 'Clique em "Manutenção" para alterar valor/vencimento com justificativa', rotulo: 'Manutenção' },
           'manutencao-lote': { t: 'Manutenção de título em lote',   s: 'Marque os títulos e use "Alterar venc./valor"', lote: ['maint'] },
         };
         const cfg = carteiraMode ? titulos[carteiraMode] : null;
         return (
           <Modal
-            open={!!carteiraMode}
+            open={!!carteiraMode && !batchBillingAction}
             onClose={() => { setCarteiraMode(null); setSelectedBillingIds([]); }}
             title={cfg?.t ?? 'Carteira de cobranças'}
             subtitle={cfg?.s}
@@ -2448,10 +2452,11 @@ export default function FinanceiroPage() {
               batchIds={selectedBillingIds}
               onBatchIdsChange={canEdit && (carteiraMode === 'full' || carteiraMode?.endsWith('-lote')) ? setSelectedBillingIds : undefined}
               onBatchReceive={() => setBatchReceiveModal(true)}
-              onBatchCancel={handleBatchCancel}
+              onBatchCancel={() => openBillingBatch('cancelar')}
+              onBatchDelete={() => openBillingBatch('excluir')}
               onBatchMaint={() => { setModalError(''); setBatchMaintModal(true); }}
               onBatchEmit={() => handleBatchBoletos('emitir')}
-              batchBusy={!!batchBoletoAction}
+              batchBusy={!!batchBoletoAction || processing}
               batchProgress={batchBoletoProgress}
               batchActions={cfg?.lote}
               rowActionLabel={cfg?.rotulo}
@@ -2459,6 +2464,9 @@ export default function FinanceiroPage() {
           </Modal>
         );
       })()}
+
+      <BillingBatchModal action={batchBillingAction} ids={batchBillingIds} token={token}
+        onClose={() => setBatchBillingAction(null)} onCompleted={completeBillingBatch} />
 
       {/* ── Modals (unchanged) ── */}
 

@@ -11,6 +11,7 @@ import { Table, TableHead, Th, TableBody, Tr, Td } from '@/components/ui/table';
 import { ActionBtn } from './action-btn';
 import { formatDate } from '@/lib/format';
 import { valorComJuros } from './helpers';
+import { canSelectBilling, toggleVisibleBillings } from '@/lib/billing-batch';
 import type { BillingItem, CarneItem } from './types';
 
 type Linha = { tipo: 'avulso'; billing: BillingItem } | { tipo: 'sgr'; cod: string; itens: BillingItem[] };
@@ -117,6 +118,8 @@ export function BillingsModal({
   onToggleCarne,
   onBaixarCarne,
   onOpenUnify,
+  onBatchCancel,
+  onBatchDelete,
   onGerarCarne,
   onEditBilling,
   onBillingHistory,
@@ -144,6 +147,8 @@ export function BillingsModal({
   onToggleCarne: (loteId: number) => void;
   onBaixarCarne: (loteId: number) => void;
   onOpenUnify: () => void;
+  onBatchCancel?: () => void;
+  onBatchDelete?: () => void;
   onGerarCarne: () => void;
   onEditBilling: (b: BillingItem) => void;
   onBillingHistory: (b: BillingItem) => void;
@@ -221,9 +226,10 @@ export function BillingsModal({
     return (
       <Tr key={b.id} className={dentroDeBoleto ? 'bg-slate-50/70 dark:bg-slate-900/40' : undefined}>
         <Td>
-          {isAberto ? (
+          {canSelectBilling(b) ? (
             <input
               type="checkbox"
+              aria-label={`Selecionar boleto #${b.id}`}
               className="h-4 w-4 rounded accent-brand-700"
               checked={selectedIds.includes(b.id)}
               onChange={() => onSelectedIdsChange((prev) =>
@@ -325,7 +331,7 @@ export function BillingsModal({
   function linhaBoletoSgr(cod: string, itens: BillingItem[]) {
     const aberto = boletosAbertos.has(cod);
     const primeiro = itens[0];
-    const abertos = itens.filter(emAberto);
+    const abertos = itens.filter(canSelectBilling);
     const todosSelecionados = abertos.length > 0 && abertos.every((b) => selectedIds.includes(b.id));
     const juros = itens.map((b) => valorComJuros(b));
     const totalJuros = juros.some((j) => j != null)
@@ -342,7 +348,8 @@ export function BillingsModal({
               <input
                 type="checkbox"
                 className="h-4 w-4 rounded accent-brand-700"
-                title="Selecionar todas as linhas em aberto deste boleto"
+                title="Selecionar cobranças deste boleto"
+                aria-label={`Selecionar cobranças do boleto SGR ${cod}`}
                 checked={todosSelecionados}
                 onChange={() => onSelectedIdsChange((prev) => {
                   const ids = abertos.map((b) => b.id);
@@ -431,6 +438,7 @@ export function BillingsModal({
         const sel = billings.filter((b) => selectedIds.includes(b.id));
         // "Gerar carnê" registra na Ailos: carnê simples não pode ir junto.
         const temSoSistema = sel.some((b) => b.somente_sistema);
+        const todasEmAberto = sel.every(emAberto);
         const total = sel.reduce((s, b) => s + b.amount, 0);
         const totalJuros = sel.reduce((s, b) => s + (valorComJuros(b) ?? b.amount), 0);
         return (
@@ -444,12 +452,12 @@ export function BillingsModal({
             <span className="text-slate-600 dark:text-slate-300">
               Total com juros: <strong className="font-mono text-rose-600 dark:text-rose-400">{fmt(totalJuros)}</strong>
             </span>
-            {sel.length >= 2 && (
+            {sel.length >= 2 && todasEmAberto && (
               <Button onClick={onOpenUnify} className="!py-1.5 text-xs">
                 Unificar em 1 boleto
               </Button>
             )}
-            {sel.length >= 2 && (
+            {sel.length >= 2 && todasEmAberto && (
               <Button
                 variant="secondary"
                 onClick={onGerarCarne}
@@ -460,6 +468,8 @@ export function BillingsModal({
                 {gerandoCarne ? 'Gerando carnê…' : 'Gerar carnê'}
               </Button>
             )}
+            {onBatchCancel && <Button variant="secondary" onClick={onBatchCancel} className="text-xs">Cancelar selecionados</Button>}
+            {onBatchDelete && <Button variant="danger" onClick={onBatchDelete} className="text-xs">Excluir selecionados</Button>}
             <button
               type="button"
               onClick={() => onSelectedIdsChange([])}
@@ -604,16 +614,18 @@ export function BillingsModal({
               <input
                 type="checkbox"
                 className="h-4 w-4 rounded accent-brand-700"
-                title="Selecionar todos os boletos em aberto"
+                title="Selecionar todos os boletos visíveis"
+                aria-label="Selecionar todos os boletos visíveis"
                 checked={
-                  visiveis.some(emAberto) &&
-                  visiveis.filter(emAberto).every((b) => selectedIds.includes(b.id))
+                  visiveis.some(canSelectBilling) &&
+                  visiveis.filter(canSelectBilling).every((b) => selectedIds.includes(b.id))
                 }
-                onChange={(e) => onSelectedIdsChange(
-                  e.target.checked
-                    ? visiveis.filter(emAberto).map((b) => b.id)
-                    : []
-                )}
+                ref={(node) => { if (node) node.indeterminate = visiveis.filter(canSelectBilling).some((b) => selectedIds.includes(b.id))
+                  && !visiveis.filter(canSelectBilling).every((b) => selectedIds.includes(b.id)); }}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  onSelectedIdsChange((previous) => toggleVisibleBillings(previous, visiveis, checked));
+                }}
               />
             </Th>
             <Th>Nº</Th>

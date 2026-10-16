@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, PositiveInt, model_validator
 
 from app.models.billing import BILLING_TYPES, RECURRING_BILLING_TYPES
 from app.models.enums import BillingStatus
@@ -82,6 +82,46 @@ class BillingBatchStatusIn(BaseModel):
     payment_method: str | None = None
     # para action='cancelar'
     reason: str | None = None
+
+
+class BillingBatchActionIn(BaseModel):
+    billing_ids: list[PositiveInt] = Field(min_length=1, max_length=1000)
+    action: Literal['cancelar', 'excluir']
+    simular: bool = True
+    reason: str | None = Field(default=None, max_length=500)
+    revisao: str | None = Field(default=None, max_length=64)
+    confirmar_boleto_ailos: bool = False
+    confirmar_liberacao_competencia: bool = False
+
+    @model_validator(mode='after')
+    def require_review(self):
+        if not self.simular:
+            if not self.reason or len(self.reason.strip()) < 3:
+                raise ValueError('Informe uma justificativa com pelo menos 3 caracteres.')
+            if not self.revisao:
+                raise ValueError('Confira a simulação antes de aplicar o lote.')
+        return self
+
+
+class BillingBatchActionItem(BaseModel):
+    billing_id: int
+    title: str | None = None
+    status: str | None = None
+    situacao: Literal['aplicavel', 'aplicado', 'ignorado']
+    motivo: str | None = None
+    nosso_numero: str | None = None
+    baixa_bancaria_pendente: bool = False
+    libera_competencia: bool = False
+
+
+class BillingBatchActionOut(BaseModel):
+    simulacao: bool
+    action: Literal['cancelar', 'excluir']
+    total_enviados: int
+    aplicados: int
+    ignorados: int
+    revisao: str
+    itens: list[BillingBatchActionItem]
 
 
 class BillingBatchMaintIn(BaseModel):
