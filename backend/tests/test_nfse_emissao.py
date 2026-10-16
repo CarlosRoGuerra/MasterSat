@@ -110,15 +110,30 @@ def test_erro_local_antes_do_envio_e_retentativa_preservam_historico(db, monkeyp
 
 def test_payload_lote_historico_e_discriminacao_chegam_ao_xml(db, monkeypatch, fiscal):
     b, c = fiscal
+    # Lote antigo com competência escolhida na tela: ela não vai mais para a
+    # nota — a competência é a data da emissão.
     lote = lotes.criar_lote(db, b.period_label, [b.id], emitir_async=False,
                           competencia=date(2024, 2, 1), discriminacao='Exclusivo — manutenção 2024',
                           codigo_servico='110201')
     monkeypatch.setattr(nacional, '_post', lambda *args, **kwargs: resposta(nfseXmlGZipB64=nacional._compactar(xml_nota())))
     nota = nacional.emitir_nfse(db, b, c, lote_id=lote.id)
     root = etree.fromstring(nota.xml_envio.encode())
-    assert root.findtext(f'.//{{{nacional.NS_NFSE}}}dCompet') == '2024-02-01'
+    emissao = root.findtext(f'.//{{{nacional.NS_NFSE}}}dhEmi')[:10]
+    assert root.findtext(f'.//{{{nacional.NS_NFSE}}}dCompet') == emissao
+    assert nota.competencia.isoformat() == emissao
     assert root.findtext(f'.//{{{nacional.NS_NFSE}}}xDescServ') == nota.discriminacao == 'Exclusivo — manutenção 2024'
     assert root.findtext(f'.//{{{nacional.NS_NFSE}}}cTribNac') == nota.codigo_servico == '110201'
+
+
+def test_emissao_avulsa_ignora_competencia_informada(db, monkeypatch, fiscal):
+    b, c = fiscal
+    monkeypatch.setattr(nacional, '_post', lambda *args, **kwargs: resposta(nfseXmlGZipB64=nacional._compactar(xml_nota())))
+    nota = nfse_provider.emitir_nfse(db, b, c, competencia=date(2026, 9, 1))
+    root = etree.fromstring(nota.xml_envio.encode())
+    emissao = root.findtext(f'.//{{{nacional.NS_NFSE}}}dhEmi')[:10]
+    assert emissao != '2026-09-01'
+    assert root.findtext(f'.//{{{nacional.NS_NFSE}}}dCompet') == emissao
+    assert nota.competencia.isoformat() == emissao
 
 
 @pytest.mark.parametrize('estado', ['processing', 'desconhecido', 'pending', 'erro'])
