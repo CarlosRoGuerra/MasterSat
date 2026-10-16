@@ -158,6 +158,7 @@ function integrationLabel(status?: string | null): string {
     erro: 'Erro de sync',
     pendente: 'Sync pendente',
     sem_vinculo_externo: 'Sem vínculo externo',
+    desinstalado_localmente: 'Desinstalado no sistema',
   };
   return (status && map[status]) || 'Sem sync';
 }

@@ -25,18 +25,6 @@ from app.models.uninstall_event import UninstallEvent
 PREFIX = "/api/v1/vehicles"
 
 
-def _multiportal_result(operation: str, *, success: bool = True):
-    from app.services.multiportal import CallResult
-    return CallResult(
-        operation=operation,
-        transaction_id='1234567890123456789',
-        status_code='200' if success else '99',
-        status_description='OK' if success else 'Falha simulada',
-        success=success,
-        response_payload={},
-    )
-
-
 def _enable_multiportal(monkeypatch):
     from app.core.config import settings
     monkeypatch.setattr(settings, 'multiportal_enabled', True)
@@ -295,17 +283,16 @@ class TestDeleteVehicle:
 
 class TestUninstallVehicle:
     @pytest.fixture(autouse=True)
-    def _multiportal_disabled_by_default(self, monkeypatch):
-        # Sem isso, o MULTIPORTAL_ENABLED real do .env do ambiente (o
-        # setdefault do conftest não sobrescreve uma env var que o container
-        # já definiu) vaza pros testes: rastreador_instalado tem
-        # external_manufacturer_id/serial_number preenchidos, então
-        # _requires_external_cleanup vira True e a desinstalação é bloqueada
-        # com 503 mesmo nos testes que não têm nada a ver com Multiportal.
-        # Quem quiser testar o caminho com Multiportal habilitado chama
-        # _enable_multiportal(monkeypatch) explicitamente, que sobrescreve.
+    def _multiportal_calls_are_forbidden(self, monkeypatch):
         from app.core.config import settings
+        from app.services.multiportal import multiportal_service
+
         monkeypatch.setattr(settings, 'multiportal_enabled', False)
+        def forbidden(*args, **kwargs):
+            pytest.fail('Desinstalação local não pode chamar a Multiportal')
+        for operation in ('query_equipment_link', 'unlink_equipment_vehicle', 'unlink_vehicle_client',
+                          'link_equipment_vehicle', 'link_vehicle_client', 'full_sync_for_tracker'):
+            monkeypatch.setattr(multiportal_service, operation, forbidden)
 
     def _uninstall(self, client, vehicle_id: int, **kwargs):
         params = {"uninstall_date": "2025-05-15", **kwargs}
@@ -450,108 +437,91 @@ class TestUninstallVehicle:
         r = self._uninstall(http_fin, veiculo.id)
         assert r.status_code == 403
 
-    def test_synced_uninstall_unlinks_multiportal_before_local_change(
+    @pytest.mark.parametrize('integration_state', ['sincronizado', 'erro', 'pendente', None])
+    @pytest.mark.parametrize('provider_state', ['enabled', 'disabled', 'insecure'])
+    def test_uninstall_is_local_regardless_of_multiportal_state(
         self, http, db, veiculo, rastreador_instalado, contrato, monkeypatch,
-    ):
-        from app.services.multiportal import multiportal_service
-
-        _enable_multiportal(monkeypatch)
-        rastreador_instalado.integration_status = 'sincronizado'
-        db.commit()
-        calls = []
-
-        def unlink_equipment(tracker, vehicle, when=None):
-            calls.append(('equipment', tracker.id, vehicle.id, tracker.vehicle_id))
-            return _multiportal_result('vinculoEquipamentoVeiculo')
-
-        def unlink_client(vehicle, client, when=None):
-            calls.append(('client', vehicle.id, client.id))
-            return _multiportal_result('vinculoVeiculoCliente')
-
-        monkeypatch.setattr(multiportal_service, 'unlink_equipment_vehicle', unlink_equipment)
-        monkeypatch.setattr(multiportal_service, 'unlink_vehicle_client', unlink_client)
-
-        r = self._uninstall(http, veiculo.id)
-        assert r.status_code == 200
-        assert r.json()['multiportal_unlinked'] is True
-        assert calls[0][0] == 'equipment'
-        assert calls[0][3] == veiculo.id  # o vínculo local ainda existia durante a chamada externa
-        assert calls[1][0] == 'client'
-        db.refresh(rastreador_instalado)
-        assert rastreador_instalado.vehicle_id is None
-        assert rastreador_instalado.integration_status == 'desvinculado'
-
-    def test_multiportal_failure_keeps_local_assignment_and_contract(
-        self, http, db, veiculo, rastreador_instalado, contrato, monkeypatch,
-    ):
-        from app.services.multiportal import multiportal_service
-
-        _enable_multiportal(monkeypatch)
-        rastreador_instalado.integration_status = 'sincronizado'
-        db.commit()
-        calls = []
-
-        def unlink_equipment(tracker, vehicle, when=None):
-            calls.append(('unlink_equipment', tracker.id, vehicle.id))
-            return _multiportal_result('vinculoEquipamentoVeiculo', success=False)
-
-        def relink_equipment(tracker, vehicle, when=None):
-            calls.append(('relink_equipment', tracker.id, vehicle.id))
-            return _multiportal_result('vinculoEquipamentoVeiculo')
-
-        def relink_client(vehicle, client, when=None):
-            calls.append(('relink_client', vehicle.id, client.id))
-            return _multiportal_result('vinculoVeiculoCliente')
-
-        monkeypatch.setattr(multiportal_service, 'unlink_equipment_vehicle', unlink_equipment)
-        monkeypatch.setattr(multiportal_service, 'link_equipment_vehicle', relink_equipment)
-        monkeypatch.setattr(multiportal_service, 'link_vehicle_client', relink_client)
-
-        r = self._uninstall(http, veiculo.id)
-        assert r.status_code == 502
-        assert r.json()['detail']['code'] == 'multiportal_unlink_failed'
-        assert r.json()['detail']['reconciliation_required'] is False
-        assert [call[0] for call in calls] == [
-            'unlink_equipment', 'relink_client', 'relink_equipment',
-        ]
-        db.refresh(rastreador_instalado)
-        db.refresh(contrato)
-        db.refresh(veiculo)
-        assert rastreador_instalado.vehicle_id == veiculo.id
-        assert contrato.status == 'ativo'
-        assert veiculo.status != VehicleStatus.REMOVED
-
-    def test_synced_uninstall_is_blocked_when_integration_is_disabled(
-        self, http, db, veiculo, rastreador_instalado, contrato,
-    ):
-        rastreador_instalado.integration_status = 'sincronizado'
-        db.commit()
-
-        r = self._uninstall(http, veiculo.id)
-        assert r.status_code == 503
-        db.refresh(rastreador_instalado)
-        db.refresh(contrato)
-        assert rastreador_instalado.vehicle_id == veiculo.id
-        assert contrato.status == 'ativo'
-
-    def test_synced_uninstall_blocks_insecure_multiportal_transport(
-        self, http, db, veiculo, rastreador_instalado, contrato, monkeypatch,
+        integration_state, provider_state,
     ):
         from app.core.config import settings
+        from app.models.integration_log import IntegrationLog
+        from app.models.multiportal_outbox import MultiportalOutbox
+        from app.models.tracker_history import TrackerHistory
 
-        _enable_multiportal(monkeypatch)
-        monkeypatch.setattr(settings, 'multiportal_wsdl_url', 'http://multiportal.invalid/wsdl')
-        monkeypatch.setattr(settings, 'multiportal_allow_insecure_http', False)
-        rastreador_instalado.integration_status = 'sincronizado'
+        if provider_state != 'disabled':
+            _enable_multiportal(monkeypatch)
+        if provider_state == 'insecure':
+            monkeypatch.setattr(settings, 'multiportal_wsdl_url', 'http://multiportal.invalid/wsdl')
+            monkeypatch.setattr(settings, 'multiportal_allow_insecure_http', False)
+        rastreador_instalado.integration_status = integration_state
+        rastreador_instalado.integration_last_code = '99'
+        rastreador_instalado.integration_last_transaction_id = 'old-external-transaction'
+        previous_client_id = rastreador_instalado.client_id
         db.commit()
 
-        r = self._uninstall(http, veiculo.id)
-        assert r.status_code == 503
-        assert 'sem TLS' in r.json()['detail']['message']
+        response = self._uninstall(http, veiculo.id, uninstall_fee=160)
+        assert response.status_code == 200, response.text
+        assert response.json()['multiportal_unlinked'] is False
+        assert response.json()['trackers_returned_to_stock'] == 1
+        for row in (rastreador_instalado, contrato, veiculo):
+            db.refresh(row)
+        assert rastreador_instalado.vehicle_id is None
+        assert rastreador_instalado.client_id is None
+        assert rastreador_instalado.status == TrackerStatus.STOCK
+        assert rastreador_instalado.integration_status == 'desinstalado_localmente'
+        assert rastreador_instalado.integration_last_code is None
+        assert rastreador_instalado.integration_last_transaction_id is None
+        assert contrato.status == 'cancelado'
+        assert contrato.uninstalled_at == contrato.end_date == date(2025, 5, 15)
+        assert veiculo.status == VehicleStatus.REMOVED
+        event = db.query(UninstallEvent).filter_by(vehicle_id=veiculo.id).one()
+        assert event.fee_amount == Decimal('160.00')
+        assert event.status == 'pending'
+        history = db.query(TrackerHistory).filter_by(tracker_id=rastreador_instalado.id, action='unlinked').one()
+        assert history.previous_vehicle_id == veiculo.id and history.new_vehicle_id is None
+        assert history.previous_client_id == previous_client_id and history.new_client_id is None
+        assert history.previous_status == TrackerStatus.INSTALLED.value
+        assert history.new_status == TrackerStatus.STOCK.value
+        assert history.created_by_user_id is not None
+        assert history.event_date == date(2025, 5, 15)
+        assert db.query(IntegrationLog).count() == 0
+        assert db.query(MultiportalOutbox).count() == 0
+
+    def test_uninstall_discards_an_old_pending_sync_without_calling_multiportal(
+        self, http, db, veiculo, rastreador_instalado, contrato, monkeypatch,
+    ):
+        from app.services import multiportal_outbox
+
+        _enable_multiportal(monkeypatch)
+        pending = multiportal_outbox.enqueue_full_sync(db, rastreador_instalado.id)
+        db.commit()
+        response = self._uninstall(http, veiculo.id)
+        assert response.status_code == 200, response.text
+        assert multiportal_outbox.process_item(db, pending) is True
+        db.refresh(pending)
         db.refresh(rastreador_instalado)
-        db.refresh(contrato)
+        assert pending.status == 'done'
+        assert rastreador_instalado.vehicle_id is None
+        assert rastreador_instalado.integration_status == 'desinstalado_localmente'
+
+    def test_failed_local_commit_rolls_back_uninstall_fee_history_and_bindings(
+        self, http, db, veiculo, rastreador_instalado, contrato, monkeypatch,
+    ):
+        from app.models.tracker_history import TrackerHistory
+
+        def fail_commit():
+            raise RuntimeError('simulated local commit failure')
+        monkeypatch.setattr(db, 'commit', fail_commit)
+        response = self._uninstall(http, veiculo.id, uninstall_fee=160)
+        assert response.status_code == 500
+        for row in (rastreador_instalado, contrato, veiculo):
+            db.refresh(row)
         assert rastreador_instalado.vehicle_id == veiculo.id
+        assert rastreador_instalado.status == TrackerStatus.INSTALLED
         assert contrato.status == 'ativo'
+        assert veiculo.status != VehicleStatus.REMOVED
+        assert db.query(UninstallEvent).count() == 0
+        assert db.query(TrackerHistory).count() == 0
 
     def test_operacional_nao_pode_cobrar_abaixo_da_tabela(
         self, http_op, db, veiculo, rastreador_instalado, contrato, produto_desinstalacao,

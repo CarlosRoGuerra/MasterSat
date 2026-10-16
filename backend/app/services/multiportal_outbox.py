@@ -282,8 +282,8 @@ def process_item(db: Session, item: MultiportalOutbox) -> bool:
         return True
 
     if not tracker.vehicle_id:
-        # Desvinculado depois de enfileirado: o fluxo completo exige veículo, e
-        # a remoção do vínculo externo é tratada pelo caminho de desinstalação.
+        # Desvinculado depois de enfileirado: o fluxo completo exige veículo.
+        # A desinstalação local não deve ser desfeita por uma sincronização antiga.
         item.status = 'done'
         item.completed_at = _now()
         item.last_error = 'Rastreador sem veículo no momento do processamento.'

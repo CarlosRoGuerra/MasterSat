@@ -27,6 +27,7 @@ from app.models.enums import BillingStatus, DocumentReviewStatus, TrackerStatus,
 from app.models.plan import Plan
 from app.models.service_product import ServiceProduct
 from app.models.tracker import Tracker
+from app.models.tracker_history import TrackerHistory
 from app.models.uninstall_event import UninstallEvent
 from app.models.user import User
 from app.models.vehicle import Vehicle
@@ -43,14 +44,6 @@ from app.services.financial import (
     lock_billings_for_update,
     period_label_for_date,
     prorated_amount,
-)
-from app.services.multiportal_lifecycle import (
-    LifecycleSyncError,
-    add_lifecycle_logs,
-    apply_tracker_integration_result,
-    commit_with_compensation,
-    compensate_successful_uninstall,
-    unlink_vehicle_assignments,
 )
 from app.services.multiportal_sync_state import (
     VEHICLE_MULTIPORTAL_FIELDS,
@@ -444,31 +437,6 @@ def uninstall_vehicle(
         next(iter(contract_payer_ids)) if contract_payer_ids else vehicle.client_id
     )
 
-    client = db.scalar(
-        select(Client).where(Client.id == vehicle.client_id, Client.is_deleted.is_(False))
-    )
-    if not client:
-        raise HTTPException(status_code=409, detail='O cliente do veículo não está disponível para desfazer o vínculo externo.')
-
-    try:
-        lifecycle = unlink_vehicle_assignments(trackers=trackers, vehicle=vehicle, client=client)
-    except LifecycleSyncError as exc:
-        add_lifecycle_logs(db, exc.calls)
-        if exc.compensation_failed:
-            affected_ids = {call.tracker_id for call in exc.calls if call.tracker_id}
-            for tracker in trackers:
-                if tracker.id in affected_ids:
-                    apply_tracker_integration_result(tracker, exc.calls, status='erro')
-        db.commit()
-        raise HTTPException(
-            status_code=exc.http_status,
-            detail={
-                'code': 'multiportal_unlink_failed',
-                'message': str(exc),
-                'reconciliation_required': exc.compensation_failed,
-            },
-        ) from exc
-
     source_prorated = None
     uninstall_fee_billing_id = None
 
@@ -582,16 +550,30 @@ def uninstall_vehicle(
         uninstall_fee_billing_id = None  # será preenchido no fechamento
 
     for tracker in trackers:
+        db.add(TrackerHistory(
+            tracker_id=tracker.id,
+            action='unlinked',
+            previous_vehicle_id=tracker.vehicle_id,
+            new_vehicle_id=None,
+            previous_client_id=tracker.client_id,
+            new_client_id=None,
+            previous_status=tracker.status.value,
+            new_status=TrackerStatus.STOCK.value,
+            event_date=uninstall_date,
+            created_by_user_id=current_user.id,
+            notes=f'Desinstalado da placa {vehicle.plate} no sistema, sem consultar ou alterar a Multiportal.',
+        ))
         tracker.vehicle_id = None
         tracker.client_id = None
         tracker.status = TrackerStatus.STOCK
         tracker.install_date = None
         tracker.uninstall_date = uninstall_date
-        apply_tracker_integration_result(
-            tracker,
-            lifecycle.calls,
-            status='desvinculado' if lifecycle.managed_externally else 'sem_vinculo_externo',
-        )
+        # Estado local não confirma remoção no provedor. Não chamamos a
+        # Multiportal nem enfileiramos um full_sync para um equipamento em estoque.
+        tracker.integration_status = 'desinstalado_localmente'
+        tracker.integration_last_code = None
+        tracker.integration_last_transaction_id = None
+        tracker.integration_last_description = 'Desinstalação registrada no sistema; vínculo externo não consultado ou alterado.'
     vehicle.status = VehicleStatus.REMOVED
     vehicle.uninstalled_at = uninstall_date
     for contract in contracts:
@@ -601,20 +583,11 @@ def uninstall_vehicle(
         transfer_note = f'Desinstalado em {uninstall_date.strftime("%d/%m/%Y")}'
         contract.notes = f'{contract.notes}\n{transfer_note}'.strip() if contract.notes else transfer_note
 
-    managed_trackers = [
-        tracker for tracker in trackers
-        if any(call.tracker_id == tracker.id and call.phase == 'unlink_equipment' for call in lifecycle.calls)
-    ]
-    commit_with_compensation(
-        db,
-        lifecycle_calls=lifecycle.calls,
-        should_compensate=lifecycle.managed_externally,
-        run_compensation=lambda: compensate_successful_uninstall(
-            trackers=managed_trackers,
-            vehicle=vehicle,
-            client=client,
-        ),
-    )
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
     return {
         'message': 'Desinstalação registrada com sucesso.',
@@ -624,7 +597,7 @@ def uninstall_vehicle(
         'ajustes_pro_rata_pendentes': ajustes_pro_rata_pendentes,
         'tracker_returned_to_stock': bool(trackers),
         'trackers_returned_to_stock': len(trackers),
-        'multiportal_unlinked': lifecycle.managed_externally,
+        'multiportal_unlinked': False,
     }
 
 @router.get('/{item_id}/documents', response_model=list[DocumentOut])
