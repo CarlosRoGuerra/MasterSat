@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+import json
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from sqlalchemy import select
 from sqlalchemy.orm import Session
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.api.deps import require_roles
 from app.db.session import get_db
 from app.models.enums import UserRole
+from app.models.audit_log import AuditLog
+from app.models.uninstall_event import UninstallEvent
+from app.models.user import User
 from app.services.billing_closure import (
     execute_closure,
     generate_closure_pdf,
@@ -23,6 +30,64 @@ from app.services.closure_delivery import (
 router = APIRouter()
 
 ALLOWED_ROLES = (UserRole.ADMIN, UserRole.FINANCIAL)
+
+
+class UninstallFeeExcludeIn(BaseModel):
+    reason: str = Field(min_length=3, max_length=500)
+
+    @field_validator('reason', mode='before')
+    @classmethod
+    def trim_reason(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+
+class UninstallFeeExcludeOut(BaseModel):
+    event_id: int
+    status: Literal['canceled']
+    message: str
+    already_excluded: bool = False
+
+
+@router.post('/uninstall-events/{event_id}/exclude', response_model=UninstallFeeExcludeOut)
+def exclude_uninstall_fee(
+    event_id: int,
+    payload: UninstallFeeExcludeIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(*ALLOWED_ROLES)),
+):
+    event = db.scalar(select(UninstallEvent).where(UninstallEvent.id == event_id)
+        .with_for_update().execution_options(populate_existing=True))
+    if not event:
+        raise HTTPException(404, 'Taxa de desinstalação não encontrada.')
+    if event.billing_id is not None or event.status == 'processed':
+        raise HTTPException(409, {
+            'code': 'uninstall_fee_already_billed',
+            'message': 'Esta taxa já foi faturada. Confira a cobrança no Financeiro antes de cancelar ou excluir.',
+        })
+    if event.status == 'canceled':
+        return {'event_id': event.id, 'status': 'canceled', 'already_excluded': True,
+                'message': 'Esta taxa já foi excluída do fechamento.'}
+    if event.status not in ('pending', 'skipped'):
+        raise HTTPException(409, 'A situação desta taxa mudou. Atualize a prévia do fechamento.')
+    previous_status = event.status
+    event.status = 'canceled'
+    event.notes = f'{event.notes or ""}\nTaxa excluída do fechamento por {current_user.name} (#{current_user.id}): {payload.reason}'.strip()
+    db.add(AuditLog(
+        user_id=current_user.id, user_name=current_user.name, user_role=current_user.role.value,
+        method='POST', path=f'/billing-closure/uninstall-events/{event.id}/exclude',
+        entity_type='uninstall_event', entity_id=event.id, status_code=200,
+        description=json.dumps({'action': 'exclude_uninstall_fee', 'reason': payload.reason,
+            'previous_status': previous_status, 'client_id': event.client_id,
+            'payer_client_id': event.payer_client_id, 'vehicle_id': event.vehicle_id,
+            'fee_amount': str(event.fee_amount) if event.fee_amount is not None else None}, ensure_ascii=False),
+    ))
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return {'event_id': event.id, 'status': 'canceled',
+            'message': 'Taxa excluída deste fechamento e dos próximos. O histórico foi preservado.'}
 
 
 @router.get('/meses')

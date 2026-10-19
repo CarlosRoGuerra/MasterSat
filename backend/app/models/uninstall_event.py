@@ -31,6 +31,7 @@ class UninstallEvent(Base, TimestampMixin):
     service_product_id: Mapped[int | None] = mapped_column(ForeignKey('service_products.id'), nullable=True)
     # pending → processed (billing gerado). ``skipped`` é legado e é recuperado
     # pelo fechamento para voltar à acumulação; valores pequenos não são perdidos.
+    # canceled = taxa retirada manualmente do fechamento, com motivo e auditoria.
     status: Mapped[str] = mapped_column(String(20), default='pending', index=True)
     billing_id: Mapped[int | None] = mapped_column(ForeignKey('billings.id'), nullable=True)
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

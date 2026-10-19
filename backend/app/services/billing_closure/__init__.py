@@ -530,8 +530,22 @@ def execute_closure(
 
     # Somente depois dos locks e da revalidação começam as mutações. Assim,
     # um contrato removido durante a simulação falha antes de criar cobranças.
+    # A mesma taxa pode aparecer em meses diferentes e ser excluída pela prévia.
+    # Trava e atualiza o estado antes de qualquer escrita, compartilhando a
+    # exclusão mútua com a ação de excluir a taxa e os outros fechamentos.
+    reviewed_event_ids = deferred_item_ids | {item['event_id'] for item in selected_uninstall_items}
+    locked_events = {event.id: event for event in db.scalars(
+        select(UninstallEvent).where(UninstallEvent.id.in_(reviewed_event_ids))
+        .order_by(UninstallEvent.id).with_for_update().execution_options(populate_existing=True)
+    ).all()} if reviewed_event_ids else {}
+    for event_id in sorted(reviewed_event_ids):
+        event = locked_events.get(event_id)
+        if event is None or event.status not in ('pending', 'skipped') or event.billing_id is not None:
+            raise ValueError(
+                f'Taxa de desinstalação #{event_id} foi excluída ou faturada durante o fechamento. Refaça a simulação.'
+            )
     for event_id in deferred_item_ids:
-        deferred_event = db.get(UninstallEvent, event_id)
+        deferred_event = locked_events.get(event_id)
         if deferred_event and deferred_event.status == 'skipped':
             deferred_event.status = 'pending'
             deferred_event.processed_at = None

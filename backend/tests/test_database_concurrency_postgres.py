@@ -11,7 +11,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event as sqlalchemy_event, text
 from sqlalchemy.orm import sessionmaker
 
 from app.api.deps import get_current_user
@@ -23,6 +23,8 @@ from app.models.contract import Contract
 from app.models.enums import BillingStatus, ClientStatus, UserRole
 from app.models.plan import Plan
 from app.models.user import User
+from app.models.uninstall_event import UninstallEvent
+from app.models.vehicle import Vehicle
 
 
 pytestmark = pytest.mark.postgres
@@ -696,3 +698,103 @@ def test_contract_delete_wins_race_before_closure_mutates(postgres_api):
     assert f"Contrato #{contract_id} foi removido durante o fechamento" in closure.json()["detail"]
     with sessions() as db:
         assert db.query(Billing).filter(Billing.contract_id == contract_id).count() == 0
+
+
+def _create_pending_uninstall_fee(sessions):
+    with sessions() as db:
+        client = Client(name='Cliente taxa concorrente', cpf_cnpj='39053344705',
+            type='pf', status=ClientStatus.ACTIVE)
+        db.add(client)
+        db.flush()
+        vehicle = Vehicle(client_id=client.id, plate='ABC1D23', type='passeio')
+        db.add(vehicle)
+        db.flush()
+        fee = UninstallEvent(client_id=client.id, payer_client_id=client.id,
+            vehicle_id=vehicle.id, uninstall_date=date(2099, 10, 16),
+            fee_amount=Decimal('160.00'), status='pending')
+        db.add(fee)
+        db.commit()
+        return fee.id
+
+
+def _generate_only_fee(http, fee_id):
+    return http.post('/api/v1/billing-closure/generate', params={
+        'reference_month': '2099-10', 'contract_ids': [-1],
+        'uninstall_event_ids': [fee_id], 'charge_item_ids': [-1],
+    })
+
+
+def test_fee_exclusion_wins_before_generation_locks_snapshot(postgres_api):
+    import app.services.billing_closure as closure
+    http, sessions, engine = postgres_api
+    fee_id = _create_pending_uninstall_fee(sessions)
+    snapshot_ready, resume = Event(), Event()
+    original_simulate = closure.simulate_closure
+    def pause_after_simulation(*args, **kwargs):
+        preview = original_simulate(*args, **kwargs)
+        snapshot_ready.set()
+        assert resume.wait(10), 'Geração não foi liberada pelo teste'
+        return preview
+    with patch.object(closure, 'simulate_closure', side_effect=pause_after_simulation):
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            generation = executor.submit(_generate_only_fee, http, fee_id)
+            try:
+                assert snapshot_ready.wait(10), 'A geração não alcançou a simulação'
+                excluded = http.post(f'/api/v1/billing-closure/uninstall-events/{fee_id}/exclude',
+                    json={'reason': 'Já recebida pelo boleto simples'})
+                assert excluded.status_code == 200, excluded.text
+            finally:
+                resume.set()
+            generated = generation.result(timeout=10)
+    assert generated.status_code == 409, generated.text
+    with sessions() as db:
+        assert db.get(UninstallEvent, fee_id).status == 'canceled'
+        assert db.query(Billing).count() == 0
+
+
+def test_generation_lock_prevents_excluding_an_already_billed_fee(postgres_api):
+    http, sessions, engine = postgres_api
+    fee_id = _create_pending_uninstall_fee(sessions)
+    locked, resume = Event(), Event()
+    def pause_with_event_lock(connection, cursor, statement, parameters, context, executemany):
+        if 'uninstall_events' in statement and 'FOR UPDATE' in statement and not locked.is_set():
+            locked.set()
+            assert resume.wait(10), 'Geração com trava não foi liberada'
+    sqlalchemy_event.listen(engine, 'after_cursor_execute', pause_with_event_lock)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            generation = executor.submit(_generate_only_fee, http, fee_id)
+            try:
+                assert locked.wait(10), 'A geração não travou o evento'
+                exclusion = executor.submit(http.post,
+                    f'/api/v1/billing-closure/uninstall-events/{fee_id}/exclude',
+                    json={'reason': 'Já recebida pelo boleto simples'})
+                deadline = time.monotonic() + 5
+                with engine.connect().execution_options(isolation_level='AUTOCOMMIT') as observer:
+                    application_name = observer.execute(text("SELECT current_setting('application_name')")).scalar_one()
+                    waiting = False
+                    while time.monotonic() < deadline:
+                        waiting = observer.execute(text("""
+                            SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+                                WHERE application_name = :application_name
+                                  AND pid <> pg_backend_pid()
+                                  AND wait_event_type = 'Lock'
+                                  AND query ILIKE 'SELECT%uninstall_events%FOR UPDATE%')
+                        """), {'application_name': application_name}).scalar_one()
+                        if waiting:
+                            break
+                        time.sleep(0.01)
+                    assert waiting, 'A exclusão não aguardou a trava da geração'
+            finally:
+                resume.set()
+            generated = generation.result(timeout=10)
+            excluded = exclusion.result(timeout=10)
+        assert generated.status_code == 200, generated.text
+        assert excluded.status_code == 409, excluded.text
+        assert excluded.json()['detail']['code'] == 'uninstall_fee_already_billed'
+        with sessions() as db:
+            fee = db.get(UninstallEvent, fee_id)
+            assert fee.status == 'processed' and fee.billing_id is not None
+            assert db.query(Billing).filter_by(billing_type='taxa_desinstalacao').count() == 1
+    finally:
+        sqlalchemy_event.remove(engine, 'after_cursor_execute', pause_with_event_lock)

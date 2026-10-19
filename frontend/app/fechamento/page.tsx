@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   CalendarCheck, RefreshCw, Download, CheckCircle2, AlertTriangle,
   FileText, DollarSign, ChevronRight, Loader2, Wrench, ClipboardList, Package, Trash2, FileSpreadsheet, Pencil,
@@ -8,7 +8,8 @@ import {
 
 import { PageShell } from '@/components/page-shell';
 import { Card } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
+import { Input, Textarea } from '@/components/ui/input';
+import { FormField } from '@/components/ui/form-field';
 import { Modal } from '@/components/ui/modal';
 import { Button } from '@/components/ui/button';
 import { Table, TableHead, Th, TableBody, Tr, Td } from '@/components/ui/table';
@@ -241,6 +242,12 @@ export default function FechamentoPage() {
   const [generating, setGenerating] = useState(false);
 
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [excludingFee, setExcludingFee] = useState<UninstallEventItem | null>(null);
+  const [excludeReason, setExcludeReason] = useState('');
+  const [excludeError, setExcludeError] = useState('');
+  const [excludeSaving, setExcludeSaving] = useState(false);
+  const excludeInFlight = useRef(false);
 
   // Edição de serviço/cobrança avulsa
   const [editingItem, setEditingItem] = useState<ChargeItem | null>(null);
@@ -342,6 +349,56 @@ export default function FechamentoPage() {
       await refreshSimulation();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Erro ao excluir o lançamento.');
+    }
+  }
+
+  function openExcludeFee(item: UninstallEventItem) {
+    setExcludingFee(item);
+    setExcludeReason('');
+    setExcludeError('');
+  }
+
+  function closeExcludeFee() {
+    if (excludeInFlight.current) return;
+    setExcludingFee(null);
+    setExcludeReason('');
+    setExcludeError('');
+  }
+
+  async function excludeUninstallFee() {
+    if (!token || !excludingFee || excludeReason.trim().length < 3 || excludeInFlight.current) return;
+    excludeInFlight.current = true;
+    setExcludeSaving(true);
+    setExcludeError('');
+    try {
+      const result = await apiFetch<{ event_id: number; status: string; message: string }>(
+        `/billing-closure/uninstall-events/${excludingFee.event_id}/exclude`,
+        { method: 'POST', body: JSON.stringify({ reason: excludeReason.trim() }) }, token,
+      );
+      if (result.event_id !== excludingFee.event_id || result.status !== 'canceled') {
+        throw new Error('O servidor não confirmou a exclusão da taxa. Atualize a prévia antes de repetir.');
+      }
+      setNotice(result.message);
+      // A exclusão pode mudar a acumulação de outras taxas do pagador. Recalcula
+      // toda a prévia; se falhar, volta ao escopo para impedir geração desatualizada.
+      try {
+        const data = await apiFetch<Simulation>(`/billing-closure/simulate?${closureParams()}`, {}, token);
+        setSimulation(data);
+        setSelectedContractIds(previous => new Set([...previous].filter(id =>
+          data.items.some(item => item.contract_id === id && !item.already_generated))));
+        setError('');
+      } catch {
+        setSimulation(null);
+        setStep(1);
+        setError('A taxa foi excluída, mas não foi possível atualizar a prévia. Simule novamente antes de gerar o fechamento.');
+      }
+      setExcludingFee(null);
+      setExcludeReason('');
+    } catch (e) {
+      setExcludeError(e instanceof Error ? e.message : 'Não foi possível excluir a taxa do fechamento.');
+    } finally {
+      excludeInFlight.current = false;
+      setExcludeSaving(false);
     }
   }
 
@@ -514,6 +571,8 @@ export default function FechamentoPage() {
       description="Wizard de geração em lote das cobranças mensais, taxas de desinstalação e serviços."
     >
       <StepIndicator current={step} />
+
+      {notice && <p role="status" className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200">{notice}</p>}
 
       {(guardError || error) && (
         <div className="mb-4">
@@ -890,6 +949,7 @@ export default function FechamentoPage() {
                       <Th>Data de retirada</Th>
                       <Th>Valor da taxa</Th>
                       <Th>Status</Th>
+                      <Th>Ações</Th>
                     </TableHead>
                     <TableBody>
                       {pagDes.slice.map((item) => (
@@ -923,6 +983,14 @@ export default function FechamentoPage() {
                                 A faturar
                               </span>
                             )}
+                          </Td>
+                          <Td>
+                            <button type="button" aria-label={`Excluir taxa de desinstalação #${item.event_id}`}
+                              title="Excluir taxa do fechamento" disabled={generating || excludeSaving}
+                              onClick={() => openExcludeFee(item)}
+                              className="flex h-8 w-8 items-center justify-center rounded-lg border border-rose-200 text-rose-600 hover:bg-rose-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500/40 disabled:opacity-50 dark:border-rose-900 dark:text-rose-400 dark:hover:bg-rose-950">
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
                           </Td>
                         </Tr>
                       ))}
@@ -1143,6 +1211,25 @@ export default function FechamentoPage() {
       )}
 
       <ClosureDeliveryModal open={deliveryOpen} token={token} onClose={() => setDeliveryOpen(false)} initialLoteId={generateResult?.closure_batch_id} />
+
+      <Modal open={excludingFee !== null} onClose={closeExcludeFee} title="Excluir taxa do fechamento" size="sm"
+        description={excludingFee ? `${excludingFee.client_name} · ${excludingFee.vehicle_plate ?? 'Sem placa'} · ${fmt(excludingFee.fee_amount)}` : undefined}>
+        <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); void excludeUninstallFee(); }}>
+          <p className="text-sm text-slate-600 dark:text-slate-300">Use esta opção quando a taxa já foi recebida por boleto simples ou não deve ser cobrada. Ela sairá deste fechamento e dos próximos; o histórico da retirada e dos pagamentos será preservado.</p>
+          {excludingFee?.payer_name && excludingFee.payer_name !== excludingFee.client_name && <p className="text-sm">Responsável financeiro: {excludingFee.payer_name}</p>}
+          {excludeError && <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950 dark:text-rose-300">{excludeError}</p>}
+          <FormField label="Motivo da exclusão" required hint="Informe como a taxa foi recebida ou por que não deve ser cobrada. O motivo fica registrado no histórico.">
+            <Textarea value={excludeReason} maxLength={500} disabled={excludeSaving}
+              placeholder="Ex.: taxa já paga pelo boleto simples…" onChange={event => setExcludeReason(event.target.value)} />
+          </FormField>
+          <div className="flex flex-wrap justify-end gap-3">
+            <Button type="button" variant="secondary" disabled={excludeSaving} onClick={closeExcludeFee}>Voltar</Button>
+            <Button type="submit" variant="danger" disabled={excludeSaving || excludeReason.trim().length < 3}>
+              {excludeSaving ? 'Excluindo…' : 'Confirmar exclusão da taxa'}
+            </Button>
+          </div>
+        </form>
+      </Modal>
 
       <Modal
         open={editingItem !== null}

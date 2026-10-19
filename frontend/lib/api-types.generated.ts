@@ -1988,6 +1988,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/billing-closure/uninstall-events/{event_id}/exclude": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Exclude Uninstall Fee */
+        post: operations["exclude_uninstall_fee_api_v1_billing_closure_uninstall_events__event_id__exclude_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/billing-closure/simulate": {
         parameters: {
             query?: never;
@@ -6335,6 +6352,29 @@ export interface components {
             client_id?: number | null;
             /** Vehicle Id */
             vehicle_id?: number | null;
+        };
+        /** UninstallFeeExcludeIn */
+        UninstallFeeExcludeIn: {
+            /** Reason */
+            reason: string;
+        };
+        /** UninstallFeeExcludeOut */
+        UninstallFeeExcludeOut: {
+            /** Event Id */
+            event_id: number;
+            /**
+             * Status
+             * @constant
+             * @enum {string}
+             */
+            status: "canceled";
+            /** Message */
+            message: string;
+            /**
+             * Already Excluded
+             * @default false
+             */
+            already_excluded: boolean;
         };
         /** UserCreate */
         UserCreate: {
@@ -11232,6 +11272,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    exclude_uninstall_fee_api_v1_billing_closure_uninstall_events__event_id__exclude_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                event_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UninstallFeeExcludeIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UninstallFeeExcludeOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
