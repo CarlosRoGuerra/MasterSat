@@ -2,6 +2,7 @@
 -- Não transfere o contrato nem o cliente atendido da cobrança.
 -- Pagador já correto: nenhuma escrita. Pagador ausente: completa o snapshot.
 -- Pagador diferente, cliente ambíguo ou boleto diferente: aborta a transação.
+-- IDs conferidos na VPS em 21/10/2026: Fortmais 159, Acquafort 346.
 \set ON_ERROR_STOP on
 BEGIN;
 SET LOCAL lock_timeout = '5s';
@@ -14,13 +15,13 @@ DECLARE
     pagador_id integer;
 BEGIN
     SELECT id INTO STRICT dono_id FROM clients
-    WHERE is_deleted = false
-      AND upper(trim(name)) LIKE 'FORTMAIS MATERIAIS ELETRICOS E HIDRAULICOS%'
+    WHERE id = 159 AND is_deleted = false
+      AND upper(trim(name)) LIKE 'FORTMAIS%'
     FOR SHARE;
 
     SELECT id INTO STRICT pagador_id FROM clients
-    WHERE is_deleted = false
-      AND upper(trim(name)) LIKE 'ACQUAFORT COMERCIO DE MATERIAIS ELETRICOS E HIDRAULICOS%'
+    WHERE id = 346 AND is_deleted = false
+      AND upper(trim(name)) LIKE 'ACQUAFORT%'
     FOR SHARE;
 
     SELECT * INTO STRICT alvo FROM billings WHERE id = 38709 FOR UPDATE;

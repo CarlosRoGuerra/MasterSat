@@ -45,7 +45,7 @@ Se a coluna `responsavel_financeiro` do boleto 38709 já mostrar a Acquafort e `
 
 ## Saneamento pontual, somente se o pagador estiver vazio
 
-O SQL abaixo foi preparado para o título específico do vídeo. Ele valida clientes sem ambiguidade, boleto 38709, cliente atendido Fortmais, situação paga, valor R$ 649,90 e vencimento em 15/10/2026.
+O SQL abaixo foi preparado para o título específico do vídeo. Ele valida os IDs conferidos na VPS (Fortmais 159, Acquafort 346), os prefixos dos nomes, boleto 38709, situação paga, valor R$ 649,90 e vencimento em 15/10/2026. Usa os IDs porque o cadastro real da Acquafort tem grafia diferente: “MATERIAS” e “EIRELLI”.
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T db \
@@ -55,15 +55,25 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T db \
 
 - Pagador já é a Acquafort: apenas informa que o banco já está correto; nenhuma escrita.
 - Pagador vazio: preenche exclusivamente `payer_client_id` do boleto 38709, atualiza seu timestamp e registra o motivo em `billing_change_logs`.
-- Outro pagador explícito, nome ambíguo, título inexistente ou dados diferentes: aborta toda a transação. Confira a consulta antes de preparar outro saneamento.
+- Outro pagador explícito, cliente com ID/nome divergente, título inexistente ou dados diferentes: aborta toda a transação. Confira a consulta antes de preparar outro saneamento.
 - Não modifica `client_id`, contratos, veículos, componentes, pagamento, valor, recibo, dados bancários ou notas fiscais. Não percorre nem atualiza em massa os boletos antigos da Fortmais.
 
-Os comandos não foram executados em produção. O saneamento foi validado em PostgreSQL descartável, com dados fictícios.
+A consulta de auditoria foi executada na VPS em uma transação `READ ONLY`; o saneamento não foi executado em produção. O saneamento foi validado em PostgreSQL descartável, com dados fictícios.
+
+## Conferência na VPS em 21/10/2026
+
+- Boleto 38709: cliente atendido Fortmais, ID 159; pagador explícito Acquafort, ID 346.
+- Tipo `boleto_unico`, valor R$ 649,90, situação `PAID`, vencimento e pagamento em 15/10/2026.
+- Não removido, sem título substituto: satisfaz o filtro da pasta da Acquafort na correção.
+- Dez componentes, total R$ 649,90, todos com cliente 159, pagador 346 e interveniente atual 346. Estão `CANCELED` porque foram reunidos no título único 38709.
+- O banco já está correto; não é necessário executar o saneamento.
+- Na conferência, o checkout da VPS estava em `a2ce8ff`. O backend em execução ainda não aceitava `payer_client_id` na listagem, e o frontend compilado ainda consultava por `client_id`. É necessário atualizar código e reconstruir os containers para aplicar a correção.
+- A API já tinha `install_location`, mas o frontend compilado ainda não tinha o novo campo de local de instalação.
 
 ## Validação
 
 - 17 testes novos de API passaram: pasta do pagador, títulos pagos/abertos, fallback legado, origem operacional, filtros combinados, componentes, exportações, permissões e carnês.
-- 9 testes PostgreSQL do SQL passaram: saneamento, preservação integral do pagamento, repetição, nenhuma escrita quando já correto e bloqueio das divergências.
+- 10 testes PostgreSQL do SQL passaram: saneamento, preservação integral do pagamento, repetição, nenhuma escrita quando já correto, bloqueio das divergências e uso do ID confirmado mesmo com outro nome semelhante.
 - 34 testes de interface passaram, incluindo a abertura do boleto da Fortmais pela pasta da Acquafort e a atualização da carteira após manutenção.
 - TypeScript passou; ESLint sem erros, com três avisos preexistentes em Financeiro.
 - A suíte ampliada de cobranças e boletos teve 135 testes aprovados e dois testes preexistentes falhando, reproduzidos também no commit original `a2ce8ff`: `TestListBillings.test_operational_can_list` espera acesso operacional que a rota já recusa; `test_envio_de_boleto_com_nfse_anexa_os_dois_pdfs_no_mesmo_email` espera competência antiga no nome do anexo. Essas regras não foram alteradas nesta correção.

@@ -20,9 +20,9 @@ pytestmark = pytest.mark.postgres
 def repair_case(postgres_api):
     _, sessions, engine = postgres_api
     with sessions() as db:
-        owner = Client(name='FORTMAIS MATERIAIS ELETRICOS E HIDRAULICOS EIRELI', cpf_cnpj='111', type='pj')
-        payer = Client(name='ACQUAFORT COMERCIO DE MATERIAIS ELETRICOS E HIDRAULICOS EIRELI', cpf_cnpj='222', type='pj')
-        other = Client(name='Outro pagador', cpf_cnpj='333', type='pj')
+        owner = Client(id=159, name='FORTMAIS MATERIAIS ELETRICOS E HIDRAULICOS EIRELI.', cpf_cnpj='111', type='pj')
+        payer = Client(id=346, name='ACQUAFORT COMERCIO DE MATERIAS ELETRICOS E HIDRAULICOS EIRELLI', cpf_cnpj='222', type='pj')
+        other = Client(id=347, name='Outro pagador', cpf_cnpj='333', type='pj')
         db.add_all([owner, payer, other]); db.flush()
         target = Billing(id=38709, client_id=owner.id, amount=Decimal('649.90'),
                          due_date=date(2026, 10, 15), status=BillingStatus.PAID,
@@ -82,7 +82,7 @@ def test_sql_already_correct_does_not_write_even_timestamp(repair_case):
         assert db.query(BillingChangeLog).count() == 0
 
 
-@pytest.mark.parametrize('invalid', ['other_payer', 'wrong_owner', 'wrong_amount', 'wrong_date', 'unpaid', 'deleted', 'ambiguous_payer'])
+@pytest.mark.parametrize('invalid', ['other_payer', 'wrong_owner', 'wrong_amount', 'wrong_date', 'unpaid', 'deleted', 'renamed_payer'])
 def test_sql_aborts_on_conflicting_or_unexpected_data(repair_case, invalid):
     sessions, engine, (_, _, other_id) = repair_case
     with sessions() as db:
@@ -93,15 +93,25 @@ def test_sql_aborts_on_conflicting_or_unexpected_data(repair_case, invalid):
         if invalid == 'wrong_date': b.due_date = date(2026, 11, 15)
         if invalid == 'unpaid': b.status = BillingStatus.PENDING
         if invalid == 'deleted': b.is_deleted = True
-        if invalid == 'ambiguous_payer':
-            db.add(Client(name='ACQUAFORT COMERCIO DE MATERIAIS ELETRICOS E HIDRAULICOS OUTRA', cpf_cnpj='444', type='pj'))
+        if invalid == 'renamed_payer':
+            db.get(Client, 346).name = 'Outra empresa'
         db.commit()
         before = _snapshot(b)
     expected = ('outro pagador explícito' if invalid == 'other_payer' else
-                'query returned more than one row' if invalid == 'ambiguous_payer' else
+                'query returned no rows' if invalid == 'renamed_payer' else
                 'não corresponde ao título pago')
     with pytest.raises(psycopg.Error, match=expected):
         _run(engine)
     with sessions() as db:
         assert _snapshot(db.get(Billing, 38709)) == before
         assert db.query(BillingChangeLog).count() == 0
+
+
+def test_sql_uses_verified_payer_id_despite_another_similar_name(repair_case):
+    sessions, engine, (_, payer_id, _) = repair_case
+    with sessions() as db:
+        db.add(Client(id=348, name='ACQUAFORT OUTRA EMPRESA', cpf_cnpj='444', type='pj'))
+        db.commit()
+    _run(engine)
+    with sessions() as db:
+        assert db.get(Billing, 38709).payer_client_id == payer_id == 346

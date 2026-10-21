@@ -1,4 +1,6 @@
--- Somente leitura. Cliente atendido e responsável financeiro são vínculos distintos.
+-- Somente leitura. IDs conferidos na VPS: Fortmais 159, Acquafort 346.
+-- A grafia do nome no cadastro não coincide com a usada no vídeo.
+-- Cliente atendido e responsável financeiro são vínculos distintos.
 -- Primeiro consulta o título mostrado no vídeo, mesmo que tenha sido removido depois.
 SELECT b.id AS boleto, dono.id AS cliente_id, dono.name AS cliente_atendido,
        b.payer_client_id, pagador.id AS pagador_efetivo_id,
@@ -26,5 +28,5 @@ FROM billings b
 JOIN clients dono ON dono.id = b.client_id
 JOIN clients pagador ON pagador.id = COALESCE(b.payer_client_id, b.client_id)
 WHERE b.is_deleted = false AND b.substituted_by_id IS NULL
-  AND upper(trim(pagador.name)) LIKE 'ACQUAFORT COMERCIO DE MATERIAIS ELETRICOS E HIDRAULICOS%'
+  AND pagador.id = 346
 ORDER BY b.due_date DESC, b.id DESC;
