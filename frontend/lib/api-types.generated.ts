@@ -9403,6 +9403,8 @@ export interface operations {
                 contract_id?: number | null;
                 due_from?: string | null;
                 due_to?: string | null;
+                include_substituted?: boolean;
+                payer_client_id?: number | null;
             };
             header?: never;
             path?: never;
@@ -9439,6 +9441,8 @@ export interface operations {
                 contract_id?: number | null;
                 due_from?: string | null;
                 due_to?: string | null;
+                include_substituted?: boolean;
+                payer_client_id?: number | null;
             };
             header?: never;
             path?: never;
@@ -9507,7 +9511,14 @@ export interface operations {
                 vehicle_id?: number | null;
                 due_from?: string | null;
                 due_to?: string | null;
+                period_label?: string | null;
+                closure_month?: string | null;
+                closure_batch_id?: number | null;
+                boleto_emitido?: boolean | null;
+                nfse_emitida?: boolean | null;
+                include_substituted?: boolean;
                 limit?: number;
+                payer_client_id?: number | null;
             };
             header?: never;
             path?: never;
@@ -11872,8 +11883,9 @@ export interface operations {
     };
     listar_carnes_api_v1_boletos_carne_get: {
         parameters: {
-            query: {
-                client_id: number;
+            query?: {
+                client_id?: number | null;
+                payer_client_id?: number | null;
             };
             header?: never;
             path?: never;

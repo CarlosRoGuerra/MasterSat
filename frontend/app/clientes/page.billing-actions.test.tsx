@@ -107,6 +107,52 @@ async function openBatchWallet() {
 }
 
 describe('ações em lote na central financeira do cliente', () => {
+  it('mostra o boleto pago da Fortmais na pasta da Acquafort', async () => {
+    const owner = { ...client, id: 159, name: 'FORTMAIS' };
+    const payer = { ...client, id: 546, name: 'ACQUAFORT' };
+    const delegated = { ...billing, id: 38709, status: 'paga', billing_type: 'boleto_unico', amount: 649.90 };
+    const original = api.fetch.getMockImplementation()!;
+    api.fetch.mockImplementation(async (path: string, options: RequestInit = {}) => {
+      if (path.startsWith('/clients?')) return { items: [owner, payer], total: 2 };
+      if (path.startsWith('/billings?')) {
+        const query = new URLSearchParams(path.split('?')[1]);
+        return query.get('payer_client_id') === '546' ? [delegated] : [];
+      }
+      return original(path, options);
+    });
+    const user = userEvent.setup();
+    renderPage();
+    const payerRow = (await screen.findByText('ACQUAFORT')).closest('tr')!;
+    await user.click(within(payerRow).getByTitle('Central financeira / boletos do cliente'));
+    expect(await screen.findByText('38709')).toBeInTheDocument();
+    const dialog = within(screen.getByRole('dialog', { name: 'Boletos do cliente — ACQUAFORT' }));
+    expect(dialog.getByText('Paga')).toBeInTheDocument();
+    expect(dialog.getByTitle('Emitir comprovante de pagamento')).toBeInTheDocument();
+    await user.click(dialog.getByRole('button', { name: 'Fechar' }));
+    const ownerRow = screen.getByText('FORTMAIS').closest('tr')!;
+    await user.click(within(ownerRow).getByTitle('Central financeira / boletos do cliente'));
+    await waitFor(() => expect(api.fetch).toHaveBeenCalledWith('/billings?payer_client_id=159&limit=1000', {}, 'test-token'));
+    expect(within(screen.getByRole('dialog', { name: 'Boletos do cliente — FORTMAIS' })).queryByText('38709')).not.toBeInTheDocument();
+  });
+
+  it('abre e atualiza boletos e carnês pelo responsável financeiro', async () => {
+    const { user, dialog } = await openEditor();
+    const amount = dialog.getByRole('spinbutton', { name: /Valor/ });
+    await user.clear(amount);
+    await user.type(amount, '70');
+    await user.type(dialog.getByRole('textbox', { name: /Justificativa/ }), 'Correção do vencimento');
+    await user.click(dialog.getByRole('button', { name: 'Salvar alteração' }));
+    await waitFor(() => expect(api.fetch.mock.calls.filter(([path]) => path.startsWith('/billings?'))).toHaveLength(2));
+    const paths = api.fetch.mock.calls.map(([path]) => path).filter((path) =>
+      path.startsWith('/billings?') || path.startsWith('/boletos/carne?'));
+    expect(paths).toEqual(expect.arrayContaining([
+      '/billings?payer_client_id=7&limit=1000', '/boletos/carne?payer_client_id=7',
+    ]));
+    expect(paths).toHaveLength(4);
+    expect(paths.every((path) => new URLSearchParams(path.split('?')[1]).get('payer_client_id') === '7')).toBe(true);
+    expect(paths.every((path) => !new URLSearchParams(path.split('?')[1]).has('client_id'))).toBe(true);
+  });
+
   it.each(['admin', 'financeiro'])('perfil %s cancela os selecionados e atualiza a carteira', async (role) => {
     auth.role = role;
     wallet = [billing, { ...billing, id: 38513, status: 'vencida' }];

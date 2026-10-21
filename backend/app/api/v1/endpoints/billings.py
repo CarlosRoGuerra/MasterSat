@@ -292,7 +292,7 @@ def serialize_billing(row) -> BillingOut:
     )
 
 
-def apply_filters(query, search: str | None, status: str | None, client_id: int | None, contract_id: int | None, due_from: date | None, due_to: date | None, vehicle_id: int | None = None):
+def apply_filters(query, search: str | None, status: str | None, client_id: int | None, contract_id: int | None, due_from: date | None, due_to: date | None, vehicle_id: int | None = None, payer_client_id: int | None = None):
     if search:
         termo = search.strip()
         condicoes = [
@@ -311,6 +311,11 @@ def apply_filters(query, search: str | None, status: str | None, client_id: int 
         query = query.filter(Billing.status == status)
     if client_id:
         query = query.filter(Billing.client_id == client_id)
+    if payer_client_id is not None:
+        # A pasta financeira é do pagador gravado na cobrança. O dono do
+        # contrato continua em client_id; trocar o interveniente atual não
+        # pode deslocar boletos e recibos históricos para outro cliente.
+        query = query.filter(func.coalesce(Billing.payer_client_id, Billing.client_id) == payer_client_id)
     if contract_id:
         query = query.filter(Billing.contract_id == contract_id)
     if vehicle_id:
@@ -448,8 +453,8 @@ def billing_changes(item_id: int, db: Session = Depends(get_db), _: object = Dep
 
 
 @router.get('/exports/csv')
-def export_csv(search: str | None = None, status: str | None = None, client_id: int | None = None, contract_id: int | None = None, due_from: date | None = None, due_to: date | None = None, include_substituted: bool = False, db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
-    query = apply_filters(base_query(db), search, status, client_id, contract_id, due_from, due_to)
+def export_csv(search: str | None = None, status: str | None = None, client_id: int | None = None, contract_id: int | None = None, due_from: date | None = None, due_to: date | None = None, include_substituted: bool = False, payer_client_id: int | None = Query(default=None, ge=1), db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
+    query = apply_filters(base_query(db), search, status, client_id, contract_id, due_from, due_to, payer_client_id=payer_client_id)
     if not include_substituted:
         query = query.filter(Billing.substituted_by_id.is_(None))
     rows = query.order_by(Billing.due_date.desc()).all()
@@ -464,8 +469,8 @@ def export_csv(search: str | None = None, status: str | None = None, client_id: 
 
 
 @router.get('/exports/xlsx')
-def export_xlsx(search: str | None = None, status: str | None = None, client_id: int | None = None, contract_id: int | None = None, due_from: date | None = None, due_to: date | None = None, include_substituted: bool = False, db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
-    query = apply_filters(base_query(db), search, status, client_id, contract_id, due_from, due_to)
+def export_xlsx(search: str | None = None, status: str | None = None, client_id: int | None = None, contract_id: int | None = None, due_from: date | None = None, due_to: date | None = None, include_substituted: bool = False, payer_client_id: int | None = Query(default=None, ge=1), db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
+    query = apply_filters(base_query(db), search, status, client_id, contract_id, due_from, due_to, payer_client_id=payer_client_id)
     if not include_substituted:
         query = query.filter(Billing.substituted_by_id.is_(None))
     rows = query.order_by(Billing.due_date.desc()).all()
@@ -599,8 +604,8 @@ def billing_components(
 
 
 @router.get('/', response_model=list[BillingOut])
-def list_items(search: str | None = None, status: str | None = None, client_id: int | None = None, contract_id: int | None = None, vehicle_id: int | None = None, due_from: date | None = None, due_to: date | None = None, period_label: str | None = Query(default=None, pattern=r'^(0[1-9]|1[0-2])/\d{4}$'), closure_month: str | None = Query(default=None, pattern=r'^\d{4}-(0[1-9]|1[0-2])$'), closure_batch_id: int | None = Query(default=None, ge=1), boleto_emitido: bool | None = None, nfse_emitida: bool | None = None, include_substituted: bool = False, limit: int = Query(default=200, ge=1, le=1000), db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
-    query = apply_filters(base_query(db), search, status, client_id, contract_id, due_from, due_to, vehicle_id)
+def list_items(search: str | None = None, status: str | None = None, client_id: int | None = None, contract_id: int | None = None, vehicle_id: int | None = None, due_from: date | None = None, due_to: date | None = None, period_label: str | None = Query(default=None, pattern=r'^(0[1-9]|1[0-2])/\d{4}$'), closure_month: str | None = Query(default=None, pattern=r'^\d{4}-(0[1-9]|1[0-2])$'), closure_batch_id: int | None = Query(default=None, ge=1), boleto_emitido: bool | None = None, nfse_emitida: bool | None = None, include_substituted: bool = False, limit: int = Query(default=200, ge=1, le=1000), payer_client_id: int | None = Query(default=None, ge=1), db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
+    query = apply_filters(base_query(db), search, status, client_id, contract_id, due_from, due_to, vehicle_id, payer_client_id)
     if period_label:
         mes, ano = period_label.split('/')
         try:

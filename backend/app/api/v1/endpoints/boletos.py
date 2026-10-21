@@ -19,7 +19,7 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_roles
@@ -156,22 +156,29 @@ def _billing_to_boleto_item(b: Billing, c: Client) -> dict:
 
 @router.get("/carne")
 def listar_carnes(
-    client_id: int,
+    client_id: int | None = Query(default=None, ge=1),
+    payer_client_id: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*ALLOWED_ROLES)),
 ):
     """
     Carnês gerados de um cliente (para reabrir/baixar depois da geração).
 
-    Encontra os lotes tipo 'carne' cujas parcelas pertencem ao cliente, via os
-    boletos vinculados ao lote.
+    client_id consulta o cliente atendido; payer_client_id consulta o pagador
+    histórico das parcelas. A central financeira usa o segundo filtro.
     """
+    if client_id is None and payer_client_id is None:
+        raise HTTPException(status_code=422, detail='Informe o cliente ou o responsável financeiro.')
     lote_ids = (
         select(AilosBoleto.lote_id)
         .join(Billing, Billing.id == AilosBoleto.billing_id)
-        .where(Billing.client_id == client_id, AilosBoleto.lote_id.isnot(None))
+        .where(Billing.is_deleted.is_(False), AilosBoleto.lote_id.isnot(None))
         .distinct()
     )
+    if client_id is not None:
+        lote_ids = lote_ids.where(Billing.client_id == client_id)
+    if payer_client_id is not None:
+        lote_ids = lote_ids.where(func.coalesce(Billing.payer_client_id, Billing.client_id) == payer_client_id)
     lotes = (
         db.query(AilosLote)
         .filter(AilosLote.tipo == 'carne', AilosLote.id.in_(lote_ids))

@@ -812,7 +812,7 @@ export default function FinanceiroPage() {
     try {
       const [cli, bills] = await Promise.all([
         apiFetch<{ id: number; name: string; phone?: string | null; email?: string | null }>(`/clients/${id}`, {}, token),
-        apiFetch<Billing[]>(`/billings?client_id=${id}&limit=100`, {}, token),
+        apiFetch<Billing[]>(`/billings?payer_client_id=${id}&limit=100`, {}, token),
       ]);
       setEnvioCliente(cli);
       setEnvioBillings(bills.filter(b => b.status === 'pendente' || b.status === 'vencida'));
@@ -1468,8 +1468,8 @@ export default function FinanceiroPage() {
     setCarneLoading(true);
     try {
       const [data, gerados, contratos] = await Promise.all([
-        apiFetch<Billing[]>(`/billings?client_id=${clientId}&limit=200`, {}, token),
-        apiFetch<CarneGerado[]>(`/boletos/carne?client_id=${clientId}`, {}, token).catch(() => []),
+        apiFetch<Billing[]>(`/billings?payer_client_id=${clientId}&limit=200`, {}, token),
+        apiFetch<CarneGerado[]>(`/boletos/carne?payer_client_id=${clientId}`, {}, token).catch(() => []),
         apiFetch<Contract[]>(`/contracts?client_id=${clientId}&status=ativo&limit=300`, {}, token),
       ]);
       // Viram carnê na Ailos: carnê simples (somente no sistema) fica de fora.

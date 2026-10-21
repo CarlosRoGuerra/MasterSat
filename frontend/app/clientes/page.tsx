@@ -260,8 +260,8 @@ function ClientesPageInner() {
     setBillingsLoading(true);
     try {
       const [data, cs] = await Promise.all([
-        apiFetch<BillingItem[]>(`/billings?client_id=${client.id}&limit=1000`, {}, token!).catch(() => []),
-        apiFetch<CarneItem[]>(`/boletos/carne?client_id=${client.id}`, {}, token!).catch(() => []),
+        apiFetch<BillingItem[]>(`/billings?payer_client_id=${client.id}&limit=1000`, {}, token!).catch(() => []),
+        apiFetch<CarneItem[]>(`/boletos/carne?payer_client_id=${client.id}`, {}, token!).catch(() => []),
       ]);
       setClientBillings(sortByDueDateAsc(data));
       setCarnes(cs);
@@ -272,7 +272,7 @@ function ClientesPageInner() {
 
   async function reloadCarnes() {
     if (!token || !billingsModalClient) return;
-    const cs = await apiFetch<CarneItem[]>(`/boletos/carne?client_id=${billingsModalClient.id}`, {}, token);
+    const cs = await apiFetch<CarneItem[]>(`/boletos/carne?payer_client_id=${billingsModalClient.id}`, {}, token);
     setCarnes(cs);
   }
 
@@ -298,7 +298,7 @@ function ClientesPageInner() {
   async function reloadClientBillings() {
     if (!token || !billingsModalClient) return;
     const data = await apiFetch<BillingItem[]>(
-      `/billings?client_id=${billingsModalClient.id}&limit=1000`, {}, token
+      `/billings?payer_client_id=${billingsModalClient.id}&limit=1000`, {}, token
     );
     setClientBillings(sortByDueDateAsc(data));
     setSelectedBillingIds((ids) => ids.filter((id) => data.some((b) => b.id === id && canSelectBilling(b))));
