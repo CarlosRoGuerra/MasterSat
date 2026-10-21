@@ -40,6 +40,7 @@ type Tracker = {
   notes?: string | null;
   acquisition_date?: string | null;
   install_date?: string | null;
+  install_location?: string | null;
   warranty_until?: string | null;
   client_id?: number | null;
   vehicle_id?: number | null;
@@ -90,6 +91,7 @@ type TrackerFormState = {
   sim_iccid: string;
   acquisition_date: string;
   install_date: string;
+  install_location: string;
   warranty_until: string;
   notes: string;
   client_id: string;
@@ -126,6 +128,7 @@ const initialForm: TrackerFormState = {
   sim_iccid: '',
   acquisition_date: '',
   install_date: '',
+  install_location: '',
   warranty_until: '',
   notes: '',
   client_id: '',
@@ -619,6 +622,7 @@ function RastreadoresPageInner() {
       sim_iccid: tracker.sim_iccid || '',
       acquisition_date: tracker.acquisition_date || '',
       install_date: tracker.install_date || '',
+      install_location: tracker.install_location || '',
       warranty_until: tracker.warranty_until || '',
       notes: tracker.notes || '',
       client_id: tracker.client_id ? String(tracker.client_id) : '',
@@ -736,6 +740,7 @@ function RastreadoresPageInner() {
         sim_iccid: onlyDigits(form.sim_iccid) || null,
         acquisition_date: form.acquisition_date || null,
         install_date: form.install_date || null,
+        install_location: form.install_location.trim() || null,
         warranty_until: form.warranty_until || null,
         notes: form.notes.trim() || null,
         client_id: form.client_id ? Number(form.client_id) : null,
@@ -1006,12 +1011,13 @@ function RastreadoresPageInner() {
                   ['ICCID', selectedTracker.sim_iccid ?? '—'],
                   ['Firmware', selectedTracker.firmware ?? '—'],
                   ['Data instalação', selectedTracker.install_date ?? '—'],
+                  ['Local de instalação', selectedTracker.install_location?.trim() || 'Não informado'],
                   ['Garantia até', selectedTracker.warranty_until ?? '—'],
                   ['Aquisição', selectedTracker.acquisition_date ?? '—'],
                 ].map(([label, value]) => (
                   <div key={String(label)} className="rounded-xl border border-slate-100 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/50">
                     <p className="text-2xs font-semibold uppercase tracking-widest text-slate-500">{label}</p>
-                    <div className="mt-1 text-sm text-slate-800 dark:text-slate-200">{value}</div>
+                    <div className="mt-1 break-words text-sm text-slate-800 dark:text-slate-200">{value}</div>
                   </div>
                 ))}
                 <div className="col-span-2 rounded-xl border border-slate-100 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900/50">
@@ -1386,6 +1392,17 @@ function RastreadoresPageInner() {
             <label className="block">
               <span className="mb-1 block text-xs font-semibold text-slate-500 dark:text-slate-400">Data de instalação</span>
               <input type="date" className={fieldClass} value={form.install_date} onChange={(e) => setForm((prev) => ({ ...prev, install_date: e.target.value }))} />
+            </label>
+            <label className="block md:col-span-2">
+              <span className="mb-1 block text-xs font-semibold text-slate-500 dark:text-slate-400">Local de instalação</span>
+              <input
+                type="text"
+                className={fieldClass}
+                placeholder="Ex.: atrás do painel, lado do motorista"
+                maxLength={120}
+                value={form.install_location}
+                onChange={(e) => setForm((prev) => ({ ...prev, install_location: e.target.value }))}
+              />
             </label>
             <textarea className={`${areaClass} md:col-span-3`} placeholder="Observações técnicas" value={form.notes} onChange={(e) => setForm((prev) => ({ ...prev, notes: e.target.value.slice(0, 500) }))} />
           </div>
