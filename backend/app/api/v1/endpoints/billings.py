@@ -991,6 +991,24 @@ def batch_status(payload: BillingBatchStatusIn, db: Session = Depends(get_db), c
         and not locked_by_id[bid].is_deleted
         and locked_by_id[bid].status in abertas
     ]
+    if payload.sgr_cod_boleto is not None:
+        if payload.action != 'receber' or payload.expected_amount is None:
+            raise HTTPException(status_code=422, detail='Informe o total para dar baixa no boleto SGR.')
+        # Uma mudança de situação/valor desde a abertura da confirmação não
+        # pode transformar a baixa do boleto inteiro num recebimento parcial.
+        group_ids = set(db.scalars(select(Billing.id).where(
+            Billing.is_deleted.is_(False),
+            Billing.status.in_(abertas),
+            Billing.sgr_payload['cod_boleto'].as_string() == payload.sgr_cod_boleto,
+        )).all())
+        total = sum((Decimal(str(b.amount)) for b in processable), Decimal('0'))
+        payers = {b.payer_client_id or b.client_id for b in processable}
+        if (len(processable) != len(ids) or set(ids) != group_ids or len(payers) != 1
+                or total != payload.expected_amount):
+            raise HTTPException(status_code=409, detail={
+                'code': 'sgr_boleto_alterado',
+                'message': 'Os itens ou o total do boleto SGR mudaram. Atualize a carteira e confira novamente.',
+            })
     # Em lote, a tela já avisa sobre título ativo pelo retorno boletos_ativos;
     # registro em andamento ou com desfecho desconhecido bloqueia o lote.
     titulos = _exigir(
@@ -1031,10 +1049,12 @@ def batch_status(payload: BillingBatchStatusIn, db: Session = Depends(get_db), c
             continue
         if payload.action == 'receber':
             b.status = BillingStatus.PAID
-            b.paid_amount = b.paid_amount or b.amount
+            b.paid_amount = b.amount if payload.sgr_cod_boleto else (b.paid_amount or b.amount)
             b.payment_date = payload.payment_date
             b.payment_method = payload.payment_method
             b.receipt_number = b.receipt_number or lote_receipt_number
+            if payload.notes:
+                b.notes = f'{b.notes} | {payload.notes}' if b.notes else payload.notes
             refresh_charge_items_for_billing(
                 db, b, completion_date=payload.payment_date, commit=False,
             )

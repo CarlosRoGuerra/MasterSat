@@ -192,6 +192,7 @@ function ClientesPageInner() {
   const [batchBillingAction, setBatchBillingAction] = useState<BillingBatchAction | null>(null);
   const [batchBillingIds, setBatchBillingIds] = useState<number[]>([]);
   const [receiveBilling, setReceiveBilling] = useState<BillingItem | null>(null);
+  const [receiveSgrGroup, setReceiveSgrGroup] = useState<{ cod: string; items: BillingItem[] } | null>(null);
   const [receiveBillingForm, setReceiveBillingForm] = useState<ReceiveBillingForm>({
     paid_amount: '', payment_date: '', payment_method: 'pix', notes: '',
   });
@@ -514,6 +515,8 @@ function ClientesPageInner() {
   }
 
   function openReceiveBilling(b: BillingItem) {
+    if (!canFinance || receivingBilling) return;
+    setReceiveSgrGroup(null);
     setReceiveBilling(b);
     setReceiveBillingForm({
       paid_amount: String(b.amount),
@@ -523,20 +526,36 @@ function ClientesPageInner() {
     });
   }
 
+  function openReceiveSgr(cod: string, items: BillingItem[]) {
+    if (!canFinance || receivingBilling || !items.length) return;
+    const total = items.reduce((sum, item) => sum + Math.round(item.amount * 100), 0) / 100;
+    const juros = items.some((item) => item.valor_com_juros != null)
+      ? items.reduce((sum, item) => sum + Math.round((item.valor_com_juros ?? item.amount) * 100), 0) / 100
+      : null;
+    openReceiveBilling({ ...items[0], amount: total, valor_com_juros: juros,
+      boleto_ailos: items.some((item) => item.boleto_ailos) });
+    setReceiveSgrGroup({ cod, items });
+  }
+
   /** Baixa manual: cliente pagou fora do sistema (dinheiro/PIX/etc.). */
   async function saveReceiveBilling() {
-    if (!token || !receiveBilling || !canFinance) return;
+    if (!token || !receiveBilling || !canFinance || receivingBilling) return;
     const paidAmount = Number(receiveBillingForm.paid_amount.replace(',', '.'));
     if (!paidAmount || paidAmount <= 0) { alert('Informe o valor pago.'); return; }
     if (!receiveBillingForm.payment_date) { alert('Informe a data do pagamento.'); return; }
     setReceivingBilling(true);
     try {
       await apiFetch(
-        `/billings/${receiveBilling.id}/receive`,
+        receiveSgrGroup ? '/billings/lote/situacao' : `/billings/${receiveBilling.id}/receive`,
         {
           method: 'POST',
           body: JSON.stringify({
-            paid_amount: paidAmount,
+            ...(receiveSgrGroup ? {
+              billing_ids: receiveSgrGroup.items.map((item) => item.id),
+              action: 'receber',
+              sgr_cod_boleto: receiveSgrGroup.cod,
+              expected_amount: paidAmount,
+            } : { paid_amount: paidAmount }),
             payment_date: receiveBillingForm.payment_date,
             payment_method: receiveBillingForm.payment_method,
             notes: receiveBillingForm.notes.trim() || null,
@@ -545,8 +564,14 @@ function ClientesPageInner() {
         token,
       );
       setReceiveBilling(null);
+      setReceiveSgrGroup(null);
       setFeedback('Pagamento registrado com sucesso.');
-      await reloadClientBillings();
+      setEditBillingNotice('Pagamento registrado com sucesso.');
+      try {
+        await reloadClientBillings();
+      } catch {
+        setEditBillingNotice('Pagamento registrado. Não foi possível atualizar a carteira; feche e abra novamente.');
+      }
     } catch (err) {
       alert(parseError(err));
     } finally {
@@ -1424,7 +1449,7 @@ function ClientesPageInner() {
       />
 
       <BillingsModal
-        open={billingsModalOpen && !editBilling && !batchBillingAction}
+        open={billingsModalOpen && !editBilling && !batchBillingAction && !receiveBilling}
         error={editBillingError}
         feedback={editBillingNotice}
         clientName={billingsModalClient?.name}
@@ -1447,6 +1472,7 @@ function ClientesPageInner() {
         onEditBilling={openEditBilling}
         onBillingHistory={openBillingHistory}
         onReceiveBilling={openReceiveBilling}
+        onReceiveSgr={canFinance ? openReceiveSgr : undefined}
         onSendEmail={sendBoletoEmail}
         onSendWhats={sendBoletoWhats}
         onBaixarPdf={baixarBoletoPdf}
@@ -1484,10 +1510,11 @@ function ClientesPageInner() {
 
       <ReceiveBillingModal
         billing={receiveBilling}
+        sgrGroup={receiveSgrGroup}
         form={receiveBillingForm}
         saving={receivingBilling}
         onFormChange={setReceiveBillingForm}
-        onClose={() => setReceiveBilling(null)}
+        onClose={() => { if (!receivingBilling) { setReceiveBilling(null); setReceiveSgrGroup(null); } }}
         onSave={saveReceiveBilling}
       />
 

@@ -107,6 +107,60 @@ async function openBatchWallet() {
 }
 
 describe('ações em lote na central financeira do cliente', () => {
+  it('dá baixa no SGR agrupado com total em centavos, sem receber cobranças já pagas', async () => {
+    wallet = Array.from({ length: 12 }, (_, index) => ({ ...billing, id: 100 + index,
+      amount: 64.99, status: 'vencida', sgr_payload: { cod_boleto: '19398' } }));
+    wallet.push({ ...billing, id: 120, status: 'paga', sgr_payload: { cod_boleto: '19398' } });
+    const ids = wallet.slice(0, 12).map((item) => item.id);
+    const original = api.fetch.getMockImplementation()!;
+    api.fetch.mockImplementation(async (path: string, options: RequestInit = {}) => {
+      if (path !== '/billings/lote/situacao') return original(path, options);
+      const body = JSON.parse(String(options.body));
+      wallet = wallet.map((item) => ids.includes(item.id) ? { ...item, status: 'paga', paid_amount: item.amount } : item);
+      return { processados: body.billing_ids, ignorados: [], boletos_ativos: [] };
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByTitle('Central financeira / boletos do cliente'));
+    await user.click(await screen.findByRole('button', { name: 'Dar baixa' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Registrar pagamento — boleto SGR #19398' }));
+    expect(dialog.getByText(/12 cobrança\(s\) em aberto/)).toBeInTheDocument();
+    expect(dialog.getByRole('spinbutton')).toHaveValue(779.88);
+    expect(dialog.getByRole('spinbutton')).toHaveAttribute('readonly');
+    await user.type(dialog.getByRole('textbox', { name: /Observações/ }), 'PIX recebido');
+    await user.click(dialog.getByRole('button', { name: 'Confirmar pagamento' }));
+    expect(await screen.findByRole('status')).toHaveTextContent('Pagamento registrado com sucesso.');
+    const call = api.fetch.mock.calls.find(([path]) => path === '/billings/lote/situacao')!;
+    expect(JSON.parse(String(call[1].body))).toMatchObject({ billing_ids: ids, action: 'receber',
+      sgr_cod_boleto: '19398', expected_amount: 779.88, payment_method: 'pix', notes: 'PIX recebido' });
+    expect(writes('POST')).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Dar baixa' })).not.toBeInTheDocument();
+  });
+
+  it('preserva a confirmação se o servidor recusar a baixa SGR e bloqueia reenvio enquanto aguarda', async () => {
+    wallet = [1, 2].map((id) => ({ ...billing, id, status: 'vencida', sgr_payload: { cod_boleto: '19398' } }));
+    const alert = vi.spyOn(window, 'alert').mockImplementation(() => {});
+    let rejectReceive!: (reason: Error) => void;
+    const original = api.fetch.getMockImplementation()!;
+    api.fetch.mockImplementation((path: string, options: RequestInit = {}) => path === '/billings/lote/situacao'
+      ? new Promise((_resolve, reject) => { rejectReceive = reject; }) : original(path, options));
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByTitle('Central financeira / boletos do cliente'));
+    await user.click(await screen.findByRole('button', { name: 'Dar baixa' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Registrar pagamento — boleto SGR #19398' }));
+    await user.click(dialog.getByRole('button', { name: 'Confirmar pagamento' }));
+    expect(dialog.getByRole('button', { name: 'Registrando…' })).toBeDisabled();
+    expect(dialog.getByRole('button', { name: 'Cancelar' })).toBeDisabled();
+    await user.keyboard('{Escape}');
+    expect(screen.getByRole('dialog', { name: 'Registrar pagamento — boleto SGR #19398' })).toBeInTheDocument();
+    rejectReceive(new Error('Os itens ou o total do boleto SGR mudaram.'));
+    await waitFor(() => expect(alert).toHaveBeenCalledWith('Os itens ou o total do boleto SGR mudaram.'));
+    expect(dialog.getByRole('button', { name: 'Confirmar pagamento' })).toBeEnabled();
+    expect(writes('POST')).toHaveLength(1);
+    expect(wallet.every((item) => item.status === 'vencida')).toBe(true);
+  });
+
   it('mostra o boleto pago da Fortmais na pasta da Acquafort', async () => {
     const owner = { ...client, id: 159, name: 'FORTMAIS' };
     const payer = { ...client, id: 546, name: 'ACQUAFORT' };

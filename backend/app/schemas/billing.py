@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Literal
 
 from pydantic import BaseModel, Field, PositiveInt, model_validator
@@ -80,6 +81,11 @@ class BillingBatchStatusIn(BaseModel):
     # para action='receber'
     payment_date: date | None = None
     payment_method: str | None = None
+    # Baixa integral de um boleto SGR agrupado: valide a composição e o total
+    # conferidos pelo operador antes de receber qualquer uma das linhas.
+    sgr_cod_boleto: str | None = Field(default=None, min_length=1, max_length=100)
+    expected_amount: Decimal | None = Field(default=None, gt=0, decimal_places=2)
+    notes: str | None = Field(default=None, max_length=500)
     # para action='cancelar'
     reason: str | None = None
 

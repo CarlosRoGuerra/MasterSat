@@ -18,6 +18,37 @@ const parent: BillingItem = {
 };
 
 describe('BillingsModal', () => {
+  const props = () => ({
+    open: true, clientName: 'VIGFAT', loading: false, carnes: [], carneExpandido: null,
+    summaryExpanded: false, selectedIds: [], gerandoCarne: false,
+    onClose: vi.fn(), onToggleSummary: vi.fn(), onSelectedIdsChange: vi.fn(),
+    onToggleCarne: vi.fn(), onBaixarCarne: vi.fn(), onOpenUnify: vi.fn(),
+    onGerarCarne: vi.fn(), onEditBilling: vi.fn(), onBillingHistory: vi.fn(),
+    onReceiveBilling: vi.fn(), onReceiveSgr: vi.fn(), onSendEmail: vi.fn(), onSendWhats: vi.fn(),
+    onBaixarPdf: vi.fn(), onBaixarComprovante: vi.fn(), onLoadComponents: vi.fn(),
+  });
+  const sgr = (id: number, status = 'vencida', period = '08/2026'): BillingItem => ({
+    id, billing_type: 'recorrente', amount: 64.99, due_date: '2026-09-25', status,
+    sgr_payload: { cod_boleto: '19398' }, period_label: period,
+  });
+
+  it('oferece baixa no boleto SGR fechado e envia todos os itens em aberto, inclusive fora do filtro', async () => {
+    const handlers = props();
+    const items = [sgr(1), sgr(2), sgr(3, 'pendente', '07/2026'), sgr(4, 'paga'), sgr(5, 'cancelada')];
+    render(<BillingsModal {...handlers} billings={items} />);
+    await userEvent.selectOptions(screen.getByRole('combobox'), 'vencida');
+    await userEvent.click(screen.getByRole('button', { name: 'Dar baixa' }));
+    expect(handlers.onReceiveSgr).toHaveBeenCalledExactlyOnceWith('19398', items.slice(0, 3));
+    expect(screen.queryByTitle('Alterar boleto')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Ver itens' }));
+    expect(screen.getAllByTitle('Marcar como pago (baixa manual)')).toHaveLength(2);
+  });
+
+  it('não oferece baixa para boleto SGR sem itens em aberto', () => {
+    render(<BillingsModal {...props()} billings={[sgr(1, 'paga'), sgr(2, 'cancelada')]} />);
+    expect(screen.queryByRole('button', { name: 'Dar baixa' })).not.toBeInTheDocument();
+  });
+
   it('exibe boleto único como grupo e mostra seus itens sem duplicar o total', async () => {
     const onLoadComponents = vi.fn().mockResolvedValue([
       { id: 11, billing_type: 'recorrente', title: 'Mensalidade', vehicle_plate: 'ABC1234', amount: 64.99, due_date: '2026-10-15', status: 'cancelada', substituted_by_id: 56870 },

@@ -15,6 +15,7 @@ export type ReceiveBillingForm = {
 
 export function ReceiveBillingModal({
   billing,
+  sgrGroup,
   form,
   saving,
   onFormChange,
@@ -22,6 +23,7 @@ export function ReceiveBillingModal({
   onSave,
 }: {
   billing: BillingItem | null;
+  sgrGroup?: { cod: string; items: BillingItem[] } | null;
   form: ReceiveBillingForm;
   saving: boolean;
   onFormChange: (updater: (prev: ReceiveBillingForm) => ReceiveBillingForm) => void;
@@ -34,12 +36,21 @@ export function ReceiveBillingModal({
   return (
     <Modal
       open={!!billing}
-      onClose={onClose}
-      title={billing ? `Registrar pagamento — boleto #${billing.id}` : 'Registrar pagamento'}
+      onClose={() => { if (!saving) onClose(); }}
+      title={sgrGroup ? `Registrar pagamento — boleto SGR #${sgrGroup.cod}` : billing ? `Registrar pagamento — boleto #${billing.id}` : 'Registrar pagamento'}
       subtitle={billing?.period_label ? `Mês de referência: ${billing.period_label}` : 'Baixa manual da cobrança'}
       size="md"
     >
       <div className="space-y-4">
+        {sgrGroup && (
+          <div className="space-y-2 text-sm text-slate-600 dark:text-slate-300">
+            <p>{sgrGroup.items.length} cobrança(s) em aberto serão quitadas juntas pelo valor integral, com a mesma data e forma de pagamento.</p>
+            <p className="text-xs">A baixa conjunta usa o valor original das cobranças, sem acrescentar juros ou conceder desconto.</p>
+            <ul className="max-h-36 overflow-y-auto text-xs">
+              {sgrGroup.items.map((item) => <li key={item.id}>#{item.id}{item.vehicle_plate ? ` · ${item.vehicle_plate}` : ''} · {formatCurrency(item.amount)}</li>)}
+            </ul>
+          </div>
+        )}
         <FormGrid>
           <FormField
             label="Valor pago (R$)"
@@ -51,18 +62,22 @@ export function ReceiveBillingModal({
               step="0.01"
               min="0.01"
               value={form.paid_amount}
+              readOnly={!!sgrGroup}
+              disabled={saving}
               onChange={(e) => onFormChange((p) => ({ ...p, paid_amount: e.target.value }))}
             />
           </FormField>
           <FormField label="Data do pagamento" required>
             <Input
               type="date"
+              disabled={saving}
               value={form.payment_date}
               onChange={(e) => onFormChange((p) => ({ ...p, payment_date: e.target.value }))}
             />
           </FormField>
           <FormField label="Forma de pagamento" required>
             <Select
+              disabled={saving}
               value={form.payment_method}
               onChange={(e) => onFormChange((p) => ({ ...p, payment_method: e.target.value }))}
             >
@@ -75,6 +90,8 @@ export function ReceiveBillingModal({
         </FormGrid>
         <FormField label="Observações" hint="Opcional — fica gravada no histórico da cobrança">
           <Textarea
+            disabled={saving}
+            maxLength={sgrGroup ? 500 : undefined}
             placeholder="Ex.: pago em dinheiro na loja, PIX recebido direto na conta…"
             value={form.notes}
             onChange={(e) => onFormChange((p) => ({ ...p, notes: e.target.value }))}
@@ -89,7 +106,7 @@ export function ReceiveBillingModal({
           </p>
         )}
         <div className="flex justify-end gap-2 border-t border-slate-100 pt-4 dark:border-slate-800">
-          <Button variant="secondary" onClick={onClose}>Cancelar</Button>
+          <Button variant="secondary" onClick={onClose} disabled={saving}>Cancelar</Button>
           <Button onClick={onSave} disabled={saving}>
             {saving ? 'Registrando…' : 'Confirmar pagamento'}
           </Button>

@@ -124,6 +124,7 @@ export function BillingsModal({
   onEditBilling,
   onBillingHistory,
   onReceiveBilling,
+  onReceiveSgr,
   onSendEmail,
   onSendWhats,
   onBaixarPdf,
@@ -153,6 +154,7 @@ export function BillingsModal({
   onEditBilling: (b: BillingItem) => void;
   onBillingHistory: (b: BillingItem) => void;
   onReceiveBilling: (b: BillingItem) => void;
+  onReceiveSgr?: (cod: string, itens: BillingItem[]) => void;
   onSendEmail: (b: BillingItem) => void;
   onSendWhats: (b: BillingItem) => void;
   onBaixarPdf: (b: BillingItem) => void;
@@ -340,6 +342,9 @@ export function BillingsModal({
     const status = Array.from(new Set(itens.map((b) => b.status)));
     const periodos = Array.from(new Set(itens.map((b) => b.period_label).filter(Boolean)));
     const placas = new Set(itens.map(placaDa).filter(Boolean)).size;
+    // O filtro pode esconder parte das linhas de um boleto. A baixa sempre
+    // confere todos os itens em aberto, mesmo os que ficaram fora do filtro.
+    const itensEmAberto = billings.filter((b) => b.sgr_payload?.cod_boleto === cod && emAberto(b));
     return (
       <Fragment key={`sgr-${cod}`}>
         <Tr className="cursor-pointer" onClick={() => toggleBoleto(cod)}>
@@ -391,7 +396,18 @@ export function BillingsModal({
               {status.map((s) => <Badge key={s} variant={statusVariant(s)}>{statusLabel(s)}</Badge>)}
             </div>
           </Td>
-          <Td className="text-right text-2xs text-slate-500">{aberto ? 'Ocultar itens' : 'Ver itens'}</Td>
+          <Td onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-end gap-2">
+              <button type="button" className="text-2xs text-slate-500 hover:underline" onClick={() => toggleBoleto(cod)}>
+                {aberto ? 'Ocultar itens' : 'Ver itens'}
+              </button>
+              {onReceiveSgr && itensEmAberto.length > 0 && (
+                <Button variant="secondary" className="!py-1.5 text-xs" onClick={() => onReceiveSgr(cod, itensEmAberto)}>
+                  <CheckCircle2 className="mr-1 h-3.5 w-3.5" /> Dar baixa
+                </Button>
+              )}
+            </div>
+          </Td>
         </Tr>
         {aberto && itens.map((b) => linhaCobranca(b, true))}
       </Fragment>
