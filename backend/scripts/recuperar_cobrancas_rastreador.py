@@ -9,6 +9,7 @@ import argparse
 import json
 import sys
 from datetime import date
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -20,7 +21,9 @@ from app.db.session import SessionLocal
 from app.models import registry_all  # noqa: F401
 from app.models.client import Client
 from app.services.titulo_bancario import PoliticaBancariaError
-from app.services.tracker_charge_recovery import find_tracker_charge_candidates, recover_tracker_charges
+from app.services.tracker_charge_recovery import (
+    correct_tracker_charge_due_date, find_tracker_charge_candidates, recover_tracker_charges,
+)
 
 
 def parse_month(value: str) -> date:
@@ -40,8 +43,13 @@ def main(argv: list[str] | None = None) -> int:
     scope.add_argument('--cliente-id', type=int)
     parser.add_argument('--mes-servico', required=True, type=parse_month)
     parser.add_argument('--cobranca-id', type=int, action='append', help='Opcional; pode ser repetido.')
+    parser.add_argument('--adicional-vencimento', type=date.fromisoformat,
+        help='Corrige a interpretação da data de um adicional já cadastrado, sem convertê-lo de novo.')
+    parser.add_argument('--valor', type=Decimal, help='Valor exato do adicional a corrigir.')
     parser.add_argument('--aplicar', action='store_true')
     args = parser.parse_args(argv)
+    if bool(args.adicional_vencimento) != (args.valor is not None) or (args.adicional_vencimento and args.cobranca_id):
+        parser.error('Informe --adicional-vencimento e --valor juntos, sem --cobranca-id.')
     try:
         with SessionLocal() as db:
             query = select(Client).where(Client.is_deleted.is_(False))
@@ -53,13 +61,18 @@ def main(argv: list[str] | None = None) -> int:
             if len(clients) != 1:
                 raise ValueError('Cliente não encontrado ou nome ambíguo. Confira o nome ou use --cliente-id.')
             client = clients[0]
-            ids = args.cobranca_id or find_tracker_charge_candidates(db, client.id, args.mes_servico)
-            if not ids:
-                raise ValueError('Nenhuma avulsa com rastreador e veículo encontrada para este cliente e mês. '
-                                 'Para uma cobrança cadastrada em outro mês, informe --cobranca-id.')
-            result = recover_tracker_charges(
-                db, ids, args.mes_servico, apply=args.aplicar, expected_client_id=client.id,
-            )
+            if args.adicional_vencimento:
+                result = [correct_tracker_charge_due_date(db, client_id=client.id,
+                    service_month=args.mes_servico, due_date=args.adicional_vencimento,
+                    amount=args.valor, apply=args.aplicar)]
+            else:
+                ids = args.cobranca_id or find_tracker_charge_candidates(db, client.id, args.mes_servico)
+                if not ids:
+                    raise ValueError('Nenhuma avulsa com rastreador e veículo encontrada para este cliente e mês. '
+                                     'Para uma cobrança cadastrada em outro mês, informe --cobranca-id.')
+                result = recover_tracker_charges(
+                    db, ids, args.mes_servico, apply=args.aplicar, expected_client_id=client.id,
+                )
             client_info = {'id': client.id, 'nome': client.name}
             if args.aplicar:
                 db.commit()
@@ -71,7 +84,7 @@ def main(argv: list[str] | None = None) -> int:
             'proximo_passo': 'Simule o fechamento do mês do serviço informado.',
         }, ensure_ascii=False, indent=2))
         return 0
-    except (ValueError, PoliticaBancariaError) as exc:
+    except (ValueError, InvalidOperation, PoliticaBancariaError) as exc:
         print(f'Não aplicado: {exc}', file=sys.stderr)
         return 1
     except SQLAlchemyError:

@@ -17,12 +17,12 @@ async function fillForm(amount = '120,50') {
   const user = userEvent.setup();
   await user.type(screen.getByRole('textbox', { name: /^Descrição/ }), '  Instalação  ');
   await user.type(screen.getByRole('textbox', { name: /^Valor/ }), amount);
-  fireEvent.change(screen.getByLabelText(/^Data do serviço/), { target: { value: '2026-10-29' } });
+  fireEvent.change(screen.getByLabelText(/^Vencimento/), { target: { value: '2026-11-10' } });
   return user;
 }
 
 describe('Cobrança manual do rastreador', () => {
-  it('registra o adicional para o fechamento com os vínculos e a data do serviço', async () => {
+  it('registra o vencimento explicitamente para entrar no fechamento do mês anterior', async () => {
     const handlers = props();
     render(<ManualChargeModal {...handlers} />);
     const user = await fillForm();
@@ -34,7 +34,7 @@ describe('Cobrança manual do rastreador', () => {
     expect(token).toBe('test-token');
     expect(JSON.parse(options.body)).toEqual({ client_id: 1, vehicle_id: 7, tracker_id: 5, contract_id: 20,
       title: 'Instalação', quantity: 1, unit_price: 120.50, installment_count: 1,
-      start_date: '2026-10-29', description: 'Acertado com o cliente' });
+      start_date: '2026-11-10', date_basis: 'due_date', description: 'Acertado com o cliente' });
     expect(handlers.onCreated).toHaveBeenCalledExactlyOnceWith(101);
   });
 

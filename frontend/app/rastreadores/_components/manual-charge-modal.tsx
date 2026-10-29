@@ -24,7 +24,7 @@ export function ManualChargeModal({ target, token, onClose, onCreated }: {
   onClose: () => void;
   onCreated: (chargeItemId: number) => void;
 }) {
-  const [form, setForm] = useState({ title: '', amount: '', start_date: '', notes: '' });
+  const [form, setForm] = useState({ title: '', amount: '', due_date: '', notes: '' });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const sending = useRef(false);
@@ -35,8 +35,8 @@ export function ManualChargeModal({ target, token, onClose, onCreated }: {
     const normalizedAmount = form.amount.trim().replace(',', '.');
     const amount = Number(normalizedAmount);
     if (form.title.trim().length < 2 || !/^\d+(\.\d{1,2})?$/.test(normalizedAmount)
-      || !Number.isFinite(amount) || amount <= 0 || amount > 99999999.99 || !form.start_date) {
-      setError('Informe a descrição com pelo menos dois caracteres, um valor maior que zero com até duas casas decimais e a data do serviço.');
+      || !Number.isFinite(amount) || amount <= 0 || amount > 99999999.99 || !form.due_date) {
+      setError('Informe a descrição com pelo menos dois caracteres, um valor maior que zero com até duas casas decimais e o vencimento.');
       return;
     }
     sending.current = true;
@@ -54,7 +54,8 @@ export function ManualChargeModal({ target, token, onClose, onCreated }: {
           quantity: 1,
           unit_price: amount,
           installment_count: 1,
-          start_date: form.start_date,
+          start_date: form.due_date,
+          date_basis: 'due_date',
           description: form.notes.trim() || null,
         }),
       }, token);
@@ -74,8 +75,8 @@ export function ManualChargeModal({ target, token, onClose, onCreated }: {
           {target.clientName} · {target.vehiclePlate} · Rastreador {target.identifier}
         </p>
         <p className="text-xs text-slate-500 dark:text-slate-400">
-          Adiciona o valor ao fechamento mensal do cliente. Informe a data em que o serviço foi realizado;
-          o vencimento será definido no fechamento.
+          Informe o vencimento da cobrança. Ela entra no fechamento do mês anterior:
+          por exemplo, vencimento em novembro aparece no fechamento de outubro.
         </p>
         {error && <p role="alert" className="text-sm text-rose-600 dark:text-rose-400">{error}</p>}
         <fieldset disabled={saving} className="space-y-4">
@@ -88,9 +89,9 @@ export function ManualChargeModal({ target, token, onClose, onCreated }: {
               <Input inputMode="decimal" required placeholder="Ex.: 120,00" value={form.amount}
                 onChange={e => setForm(prev => ({ ...prev, amount: e.target.value }))} />
             </FormField>
-            <FormField label="Data do serviço" required>
-              <Input type="date" required value={form.start_date}
-                onChange={e => setForm(prev => ({ ...prev, start_date: e.target.value }))} />
+            <FormField label="Vencimento" required>
+              <Input type="date" required value={form.due_date}
+                onChange={e => setForm(prev => ({ ...prev, due_date: e.target.value }))} />
             </FormField>
           </FormGrid>
           <FormField label="Observações">

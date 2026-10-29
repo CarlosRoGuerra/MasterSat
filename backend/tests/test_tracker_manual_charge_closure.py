@@ -8,7 +8,7 @@ from app.models.billing import Billing
 from app.models.client_charge_item import ClientChargeItem
 
 
-def _add_manual_charge(http, tracker, contract_id=None, start_date='2026-10-29'):
+def _add_manual_charge(http, tracker, contract_id=None, start_date='2026-11-10'):
     response = http.post('/api/v1/client-charge-items/', json={
         'client_id': tracker.client_id,
         'vehicle_id': tracker.vehicle_id,
@@ -19,6 +19,7 @@ def _add_manual_charge(http, tracker, contract_id=None, start_date='2026-10-29')
         'unit_price': 120.50,
         'installment_count': 1,
         'start_date': start_date,
+        'date_basis': 'due_date',
         'description': 'Acertado com o cliente',
     })
     assert response.status_code == 200, response.text
@@ -61,7 +62,7 @@ def test_manual_charge_joins_monthly_closure_once(
     billing = db.get(Billing, billing_id)
     assert billing.billing_type == 'boleto_unico'
     assert billing.amount == Decimal('220.40')
-    assert billing.due_date == date(2026, 11, 15)
+    assert billing.due_date == date(2026, 11, 15)  # o boleto único acompanha a mensalidade
     assert billing.payer_client_id == payer_id
     components = http.get(f'/api/v1/billings/{billing_id}/components')
     assert components.status_code == 200, components.text
@@ -99,14 +100,15 @@ def test_manual_charge_without_contract_is_available_in_closure(http, db, rastre
 def test_installation_charge_joins_first_month_without_duplicate(
     http, db, contrato, rastreador_instalado,
 ):
-    item_id = _add_manual_charge(http, rastreador_instalado, contrato.id, start_date='2024-01-15')
+    item_id = _add_manual_charge(http, rastreador_instalado, contrato.id, start_date='2024-02-15')
     params = {'service_month': '2024-01'}
     preview = http.get('/api/v1/billing-closure/simulate', params=params)
     assert preview.status_code == 200, preview.text
     [monthly] = preview.json()['items']
-    assert [charge['item_id'] for charge in monthly['first_month_charges']] == [item_id]
-    assert preview.json()['charge_items'] == []
-    result = http.post('/api/v1/billing-closure/generate', params={**params, 'contract_ids': contrato.id})
+    assert monthly['first_month_charges'] == []
+    assert [charge['item_id'] for charge in preview.json()['charge_items']] == [item_id]
+    result = http.post('/api/v1/billing-closure/generate', params={
+        **params, 'contract_ids': contrato.id, 'charge_item_ids': item_id})
     assert result.status_code == 200, result.text
     [billing_id] = result.json()['payment_billing_ids']
     assert db.get(Billing, billing_id).amount == Decimal(str(preview.json()['grand_total']))

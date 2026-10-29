@@ -1484,7 +1484,7 @@ function RastreadoresPageInner() {
           onClose={() => setManualChargeTarget(null)}
           onCreated={(id) => {
             setManualChargeTarget(null);
-            setManualChargeFeedback(`Cobrança adicional #${id} registrada. Confira-a na simulação do fechamento do mês do serviço.`);
+            setManualChargeFeedback(`Cobrança adicional #${id} registrada. Confira-a no fechamento do mês anterior ao vencimento.`);
           }} />
       )}
     </PageShell>

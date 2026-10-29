@@ -614,7 +614,10 @@ def generate_item_billings(
         if only_next and index != first_open_index:
             continue
         due_base = first_due_date or item.start_date
-        billing_day = due_base.day if first_due_date else min(item.start_date.day, 28)
+        billing_day = (
+            due_base.day if first_due_date or item.date_basis == 'due_date'
+            else min(item.start_date.day, 28)
+        )
         cycle = index - first_open_index if first_due_date else index
         due_date = normalize_due_date(due_base, cycle, billing_day, 1)
         amount = amounts[index]

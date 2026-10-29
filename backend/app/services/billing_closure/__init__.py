@@ -749,7 +749,9 @@ def execute_closure(
         if item_obj:
             try:
                 parcelado = int(item_obj.installment_count or 1) > 1
-                if activity_month != reference_month or parcelado:
+                if item_obj.date_basis == 'due_date':
+                    new_billings = generate_item_billings(db, item_obj, commit=False, only_next=parcelado)
+                elif activity_month != reference_month or parcelado:
                     charge_contract = db.get(Contract, item_obj.contract_id) if item_obj.contract_id else None
                     charge_client = db.get(Client, item_obj.client_id)
                     billing_day = (

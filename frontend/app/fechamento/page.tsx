@@ -92,6 +92,7 @@ type ChargeItem = {
   amount_to_generate: number;
   total_remaining: number;
   start_date: string;
+  date_basis?: 'service_date' | 'due_date';
 };
 
 type Simulation = {
@@ -251,7 +252,7 @@ export default function FechamentoPage() {
 
   // Edição de serviço/cobrança avulsa
   const [editingItem, setEditingItem] = useState<ChargeItem | null>(null);
-  const [editForm, setEditForm] = useState({ title: '', quantity: '1', unit_price: '', installment_count: '1', start_date: '' });
+  const [editForm, setEditForm] = useState({ title: '', quantity: '1', unit_price: '', installment_count: '1', start_date: '', date_basis: 'service_date' });
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState('');
 
@@ -310,6 +311,7 @@ export default function FechamentoPage() {
       unit_price: String(item.unit_price).replace('.', ','),
       installment_count: String(item.installment_count),
       start_date: item.start_date.slice(0, 10),
+      date_basis: item.date_basis || 'service_date',
     });
   }
 
@@ -330,6 +332,7 @@ export default function FechamentoPage() {
           unit_price: editUnitPrice,
           installment_count: Number(editForm.installment_count),
           start_date: editForm.start_date,
+          date_basis: editForm.date_basis,
         }),
       }, token);
       setEditingItem(null);
@@ -1047,7 +1050,7 @@ export default function FechamentoPage() {
                           <Td>
                             <p className="text-sm font-medium text-slate-800 dark:text-slate-200">{item.title}</p>
                             <p className="text-2xs text-slate-500">
-                              início {fmtDate(item.start_date)}
+                              {item.date_basis === 'due_date' ? 'vencimento' : 'início'} {fmtDate(item.start_date)}
                             </p>
                           </Td>
                           <Td>
@@ -1069,7 +1072,7 @@ export default function FechamentoPage() {
                               <span className="inline-flex gap-1.5">
                                 <button
                                   type="button"
-                                  title="Editar valor, parcelas e vencimento"
+                                  title="Editar valor, parcelas e data"
                                   aria-label={`Editar ${item.title}`}
                                   onClick={() => openEditItem(item)}
                                   className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
@@ -1263,7 +1266,15 @@ export default function FechamentoPage() {
               <Input inputMode="numeric" value={editForm.installment_count} onChange={(e) => setEditForm((p) => ({ ...p, installment_count: e.target.value.replace(/\D/g, '').slice(0, 2) }))} required />
             </label>
             <label className="text-sm">
-              <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Início da cobrança</span>
+              <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Usar a data como</span>
+              <select className={fieldClass} value={editForm.date_basis}
+                onChange={(e) => setEditForm((p) => ({ ...p, date_basis: e.target.value }))}>
+                <option value="service_date">Data do serviço</option>
+                <option value="due_date">Vencimento da cobrança</option>
+              </select>
+            </label>
+            <label className="text-sm">
+              <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">{editForm.date_basis === 'due_date' ? 'Vencimento' : 'Data do serviço'}</span>
               <Input type="date" value={editForm.start_date} onChange={(e) => setEditForm((p) => ({ ...p, start_date: e.target.value }))} required />
             </label>
           </div>

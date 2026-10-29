@@ -1,5 +1,6 @@
 from datetime import date
-from pydantic import BaseModel, Field
+from typing import Literal
+from pydantic import BaseModel, Field, field_validator
 
 
 class ClientChargeItemBase(BaseModel):
@@ -14,6 +15,7 @@ class ClientChargeItemBase(BaseModel):
     unit_price: float = Field(gt=0)
     installment_count: int = Field(default=1, ge=1, le=60)
     start_date: date
+    date_basis: Literal['service_date', 'due_date'] = 'service_date'
     active: bool = True
     remove_after_payment: bool = False
 
@@ -29,9 +31,17 @@ class ClientChargeItemUpdate(BaseModel):
     unit_price: float | None = Field(default=None, gt=0)
     installment_count: int | None = Field(default=None, ge=1, le=60)
     start_date: date | None = None
+    date_basis: Literal['service_date', 'due_date'] | None = None
     active: bool | None = None
     remove_after_payment: bool | None = None
     status: str | None = None
+
+    @field_validator('date_basis')
+    @classmethod
+    def require_date_basis(cls, value):
+        if value is None:
+            raise ValueError('Informe se a data representa serviço ou vencimento.')
+        return value
 
 
 class ClientChargeItemOut(ClientChargeItemBase):

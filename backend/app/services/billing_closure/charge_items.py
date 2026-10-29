@@ -4,7 +4,7 @@ from collections import defaultdict
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.billing import Billing
@@ -15,7 +15,10 @@ from app.models.contract import Contract
 from app.models.enums import BillingStatus
 from app.models.vehicle import Vehicle
 from app.services.billing_closure.shared import _apply_client_scope, clientes_da_forma
-from app.services.financial import InstallmentSplitError, charge_item_payer_client_id, split_amount_in_installments
+from app.services.financial import (
+    InstallmentSplitError, add_months, charge_item_payer_client_id,
+    normalize_due_date, split_amount_in_installments,
+)
 
 
 def _effective_billing_counts_bulk(db: Session, item_ids: list[int]) -> dict[int, int]:
@@ -80,8 +83,8 @@ def _pending_charge_items(
     forma_cobranca: str | None = None,
 ) -> list[dict]:
     """
-    Retorna ClientChargeItems ativos cujos billings ainda não foram totalmente gerados
-    e cujo start_date é anterior ao final do mês de referência.
+    Retorna adicionais ativos ainda não faturados. A data do serviço é comparada
+    ao mês do serviço; o vencimento é comparado ao mês de vencimento do fechamento.
     exclude_ids: item_ids já embutidos em cobranças combinadas de primeiro mês.
 
     Serviço parcelado gera UMA parcela por fechamento: ``amount_to_generate`` é o
@@ -95,12 +98,16 @@ def _pending_charge_items(
     else:
         month_end = date(reference_month.year, reference_month.month + 1, 1)
 
+    billing_month_end = add_months((billing_month or reference_month).replace(day=1), 1)
     query = (
         db.query(ClientChargeItem)
         .filter(
             ClientChargeItem.is_deleted.is_(False),
             ClientChargeItem.active.is_(True),
-            ClientChargeItem.start_date < month_end,
+            or_(
+                and_(ClientChargeItem.date_basis == 'service_date', ClientChargeItem.start_date < month_end),
+                and_(ClientChargeItem.date_basis == 'due_date', ClientChargeItem.start_date < billing_month_end),
+            ),
         )
     )
     if filter_type == 'client' and client_id is not None:
@@ -156,6 +163,10 @@ def _pending_charge_items(
             continue
         if installments > 1 and item.id in already_in_month:
             continue
+        if item.date_basis == 'due_date':
+            next_due = normalize_due_date(item.start_date, billing_count)
+            if next_due >= billing_month_end:
+                continue
 
         if item.contract_id:
             item_contract = contract_map.get(item.contract_id)
@@ -202,6 +213,7 @@ def _pending_charge_items(
             'amount_to_generate': float(a_gerar),
             'total_remaining': float(sum(restantes, Decimal('0.00'))),
             'start_date': item.start_date,
+            'date_basis': item.date_basis,
         })
 
     return result

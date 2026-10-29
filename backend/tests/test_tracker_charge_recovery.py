@@ -69,7 +69,8 @@ def test_legacy_charge_enters_october_closure_once_with_its_links(http, db, lega
     [result] = recover(db, legacy_charge, apply=True)
     db.commit()
     item = db.get(ClientChargeItem, result['item_id'])
-    assert item.start_date == date(2026, 10, 29)
+    assert item.start_date == date(2026, 11, 10)
+    assert item.date_basis == 'due_date'
     assert item.total_amount == Decimal('120.50')
     assert (item.client_id, item.contract_id, item.vehicle_id, item.tracker_id) == (
         legacy_charge.client_id, legacy_charge.contract_id, legacy_charge.vehicle_id, legacy_charge.tracker_id,
@@ -224,7 +225,7 @@ def test_repeated_conversion_cannot_silently_change_month(db, legacy_charge):
     with pytest.raises(ValueError, match='outro mês'):
         recover_tracker_charges(db, [legacy_charge.id], date(2026, 11, 1),
             apply=True, expected_client_id=legacy_charge.client_id)
-    assert db.query(ClientChargeItem).one().start_date.month == 10
+    assert db.query(ClientChargeItem).one().start_date == date(2026, 11, 10)
 
 
 def test_candidate_month_uses_brasilia_creation_date_not_due_date(db, legacy_charge, outro_cliente):
@@ -235,7 +236,7 @@ def test_candidate_month_uses_brasilia_creation_date_not_due_date(db, legacy_cha
     assert find_tracker_charge_candidates(db, legacy_charge.client_id, date(2026, 11, 1)) == []
     [result] = recover(db, legacy_charge, apply=True)
     db.commit()
-    assert db.get(ClientChargeItem, result['item_id']).start_date == date(2026, 10, 31)
+    assert db.get(ClientChargeItem, result['item_id']).start_date == date(2026, 11, 10)
 
 
 def test_explicit_month_and_long_title_keep_original_information(db, legacy_charge):
@@ -245,7 +246,7 @@ def test_explicit_month_and_long_title_keep_original_information(db, legacy_char
     [result] = recover(db, legacy_charge, apply=True)
     db.commit()
     item = db.get(ClientChargeItem, result['item_id'])
-    assert item.start_date == MONTH
+    assert item.start_date == date(2026, 11, 10)
     assert len(item.title) == 140
     assert legacy_charge.title in item.description
 

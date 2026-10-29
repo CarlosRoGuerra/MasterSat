@@ -109,6 +109,7 @@ def _first_cycle_charge_items(
         ClientChargeItem.client_id == client_id,
         ClientChargeItem.contract_id == contract_id,
         ClientChargeItem.installment_count == 1,
+        ClientChargeItem.date_basis == 'service_date',
         ClientChargeItem.start_date >= month_start,
         ClientChargeItem.start_date < month_end,
     )

@@ -99,14 +99,14 @@ describe('Troca de cliente pela edição do rastreador', () => {
     expect(charge.getByText(/Cliente anterior · OXD0A94 · Rastreador DES000005/)).toBeInTheDocument();
     await user.type(charge.getByRole('textbox', { name: /^Descrição/ }), 'Instalação');
     await user.type(charge.getByRole('textbox', { name: /^Valor/ }), '120,50');
-    fireEvent.change(charge.getByLabelText(/^Data do serviço/), { target: { value: '2026-10-29' } });
+    fireEvent.change(charge.getByLabelText(/^Vencimento/), { target: { value: '2026-11-10' } });
     await user.click(charge.getByRole('button', { name: 'Adicionar ao fechamento' }));
     const restored = within(await screen.findByRole('dialog', { name: 'Editar rastreador' }));
-    expect(restored.getByRole('status')).toHaveTextContent('Cobrança adicional #101 registrada. Confira-a na simulação do fechamento');
+    expect(restored.getByRole('status')).toHaveTextContent('Confira-a no fechamento do mês anterior ao vencimento');
     expect(restored.getByPlaceholderText('Observações técnicas')).toHaveValue('Dados ainda não salvos');
     expect(mutations()).toHaveLength(1);
     expect(mutations()[0][0]).toBe('/client-charge-items/');
-    expect(JSON.parse(mutations()[0][1].body)).toMatchObject({ client_id: 1, vehicle_id: 7, tracker_id: 5, contract_id: 20, start_date: '2026-10-29', unit_price: 120.50 });
+    expect(JSON.parse(mutations()[0][1].body)).toMatchObject({ client_id: 1, vehicle_id: 7, tracker_id: 5, contract_id: 20, start_date: '2026-11-10', date_basis: 'due_date', unit_price: 120.50 });
   });
 
   it('exige salvar a troca de cliente antes de lançar uma cobrança', async () => {

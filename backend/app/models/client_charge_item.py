@@ -16,6 +16,7 @@ class ClientChargeItem(Base, TimestampMixin, SoftDeleteMixin):
         CheckConstraint('is_deleted OR installment_count >= 1', name='ck_client_charge_items_parcelas'),
         CheckConstraint('is_deleted OR unit_price > 0', name='ck_client_charge_items_preco_positivo'),
         CheckConstraint('is_deleted OR total_amount > 0', name='ck_client_charge_items_total_positivo'),
+        CheckConstraint("date_basis IN ('service_date', 'due_date')", name='ck_client_charge_items_date_basis'),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
@@ -32,6 +33,9 @@ class ClientChargeItem(Base, TimestampMixin, SoftDeleteMixin):
     total_amount: Mapped[float] = mapped_column(Numeric(10, 2))
     installment_count: Mapped[int] = mapped_column(Integer, default=1)
     start_date: Mapped[date] = mapped_column(Date)
+    # Serviços usam a data de realização; a cobrança manual do rastreador
+    # informa o primeiro vencimento (novembro pertence ao fechamento de outubro).
+    date_basis: Mapped[str] = mapped_column(String(20), default='service_date', server_default='service_date')
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     remove_after_payment: Mapped[bool] = mapped_column(Boolean, default=False)
     completed_at: Mapped[date | None] = mapped_column(Date, nullable=True)

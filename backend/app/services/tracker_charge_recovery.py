@@ -13,6 +13,7 @@ from app.models.billing import Billing
 from app.models.billing_adjustment import BillingAdjustment
 from app.models.billing_change_log import BillingChangeLog
 from app.models.billing_charge_item import BillingChargeItem
+from app.models.audit_log import AuditLog
 from app.models.client import Client
 from app.models.client_charge_item import ClientChargeItem
 from app.models.closure_job import ClosureJob
@@ -23,7 +24,10 @@ from app.models.tracker import Tracker
 from app.models.vehicle import Vehicle
 from app.services import titulo_bancario
 from app.services.billing_closure.shared import _lock_competencia
-from app.services.financial import add_months, contract_payer_client_id, lock_billings_for_update
+from app.services.financial import (
+    add_months, billing_ids_for_charge_item, contract_payer_client_id,
+    effective_charge_item_billings, lock_billings_for_update, lock_charge_items_for_update,
+)
 
 RECOVERY_FIELD = 'fechamento_adicional_rastreador'
 
@@ -113,10 +117,15 @@ def recover_tracker_charges(
             item = db.get(ClientChargeItem, previous.get('item_id'))
             if not item or billing.item_id != item.id or billing.status != BillingStatus.CANCELED:
                 raise ValueError(f'Cobrança #{billing.id}: vínculo da recuperação anterior foi alterado.')
-            if item.start_date.replace(day=1) != service_month:
+            item_month = item.start_date.replace(day=1)
+            if item.date_basis == 'due_date':
+                item_month = add_months(item_month, -1)
+            if item_month != service_month:
                 raise ValueError(f'Cobrança #{billing.id}: o mês do lançamento recuperado foi alterado.')
         else:
             _validate_source(db, billing)
+            if billing.due_date.replace(day=1) != add_months(service_month, 1):
+                raise ValueError(f'Cobrança #{billing.id}: o vencimento não pertence ao mês seguinte ao fechamento informado.')
             pending.append(billing)
             item = None
         entries.append({
@@ -142,17 +151,12 @@ def recover_tracker_charges(
             billing.notes, f'Origem: cobrança avulsa #{billing.id}. Título original: {title}.',
             f'Vencimento original: {billing.due_date.isoformat()}. Mês do serviço: {month_label}.',
         ]))
-        created = billing.created_at
-        created_date = (
-            (created.replace(tzinfo=timezone.utc) if created.tzinfo is None else created)
-            .astimezone(BRASILIA_TZ).date()
-        ) if created else service_month
         item = ClientChargeItem(
             client_id=billing.client_id, contract_id=billing.contract_id,
             vehicle_id=billing.vehicle_id, tracker_id=billing.tracker_id,
             title=title[:140], description=description, quantity=1,
             unit_price=billing.amount, total_amount=billing.amount, installment_count=1,
-            start_date=created_date if created_date.replace(day=1) == service_month else service_month,
+            start_date=billing.due_date, date_basis='due_date',
             active=True, status='ativo',
         )
         db.add(item)
@@ -176,6 +180,63 @@ def recover_tracker_charges(
         entries_by_id[billing.id].update(item_id=item.id, result='recuperada')
     db.flush()
     return entries
+
+
+def correct_tracker_charge_due_date(
+    db: Session, *, client_id: int, service_month: date,
+    due_date: date, amount: Decimal, apply: bool = False,
+) -> dict:
+    """Corrige um adicional pendente cuja data foi interpretada como serviço.
+
+    Cliente, data e valor devem identificar um único lançamento manual. Mantém
+    a data original e muda apenas sua interpretação, com auditoria.
+    """
+    if due_date.replace(day=1) != add_months(service_month, 1):
+        raise ValueError('O vencimento deve estar no mês seguinte ao fechamento informado.')
+    if not amount.is_finite() or amount <= 0 or amount != amount.quantize(Decimal('0.01')):
+        raise ValueError('Informe um valor positivo com até duas casas decimais.')
+    _lock_competencia(db, add_months(service_month, 1))
+    ids = list(db.scalars(select(ClientChargeItem.id).where(
+        ClientChargeItem.client_id == client_id, ClientChargeItem.is_deleted.is_(False),
+        ClientChargeItem.service_product_id.is_(None),
+        ClientChargeItem.tracker_id.is_not(None), ClientChargeItem.vehicle_id.is_not(None),
+        ClientChargeItem.installment_count == 1, ClientChargeItem.quantity == 1,
+        ClientChargeItem.start_date == due_date, ClientChargeItem.total_amount == amount,
+    )).all())
+    if len(ids) != 1:
+        raise ValueError('Cliente, vencimento e valor não identificam um único adicional do rastreador.')
+    item_id = ids[0]
+    billing_ids = billing_ids_for_charge_item(db, item_id)
+    lock_billings_for_update(db, billing_ids)
+    [item] = lock_charge_items_for_update(db, [item_id])
+    if (item.is_deleted or item.client_id != client_id or item.start_date != due_date
+            or item.total_amount != amount or item.service_product_id is not None
+            or not item.tracker_id or not item.vehicle_id
+            or item.installment_count != 1 or item.quantity != 1):
+        raise ValueError('O lançamento mudou durante a conferência; nenhuma alteração aplicada.')
+    already_correct = item.date_basis == 'due_date'
+    result = {'item_id': item.id, 'client_id': client_id, 'title': item.title,
+        'amount': str(item.total_amount), 'due_date': due_date.isoformat(),
+        'service_month': service_month.strftime('%Y-%m'),
+        'result': 'ja_corrigido' if already_correct else 'pronto_para_corrigir'}
+    if already_correct:
+        return result
+    if not item.active or effective_charge_item_billings(db, item_id):
+        raise ValueError('O adicional já foi faturado ou está inativo; a correção exige um lançamento pendente.')
+    titulo_bancario.exigir(db, titulo_bancario.ALTERAR_VALOR, billing_ids)
+    if billing_ids and db.scalar(select(NfseNota.id).where(NfseNota.billing_id.in_(billing_ids)).limit(1)):
+        raise ValueError('Há processo fiscal vinculado ao lançamento; nenhuma alteração aplicada.')
+    if apply:
+        item.date_basis = 'due_date'
+        db.add(AuditLog(method='SCRIPT', path='/scripts/recuperar_cobrancas_rastreador',
+            entity_type='client_charge_item', entity_id=item.id, status_code=200,
+            description=json.dumps({'action': 'corrigir_vencimento_adicional',
+                'previous_date_basis': 'service_date', 'date_basis': 'due_date',
+                'due_date': due_date.isoformat(), 'service_month': service_month.isoformat(),
+                'amount': str(amount)}, ensure_ascii=False)))
+        db.flush()
+        result['result'] = 'corrigido'
+    return result
 
 
 def find_tracker_charge_candidates(db: Session, client_id: int, service_month: date) -> list[int]:

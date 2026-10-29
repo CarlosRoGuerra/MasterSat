@@ -2,7 +2,7 @@ from datetime import date
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_roles
@@ -93,6 +93,7 @@ def serialize_item(db: Session, item: ClientChargeItem) -> ClientChargeItemOut:
         total_amount=decimal_to_float(item.total_amount),
         installment_count=item.installment_count,
         start_date=item.start_date,
+        date_basis=item.date_basis,
         active=item.active,
         remove_after_payment=item.remove_after_payment,
         completed_at=item.completed_at,
@@ -148,7 +149,8 @@ def create_item(payload: ClientChargeItemCreate, db: Session = Depends(get_db), 
 
 @router.put('/{item_id}', response_model=ClientChargeItemOut)
 def update_item(item_id: int, payload: ClientChargeItemUpdate, db: Session = Depends(get_db), _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
-    obj = db.get(ClientChargeItem, item_id)
+    obj = db.scalar(select(ClientChargeItem).where(ClientChargeItem.id == item_id)
+        .with_for_update().execution_options(populate_existing=True))
     if not obj or obj.is_deleted:
         raise HTTPException(status_code=404, detail='Lançamento não encontrado')
     data = payload.model_dump(exclude_unset=True)
@@ -160,7 +162,7 @@ def update_item(item_id: int, payload: ClientChargeItemUpdate, db: Session = Dep
         )
     protected_fields = {
         'title', 'quantity', 'unit_price', 'installment_count', 'start_date',
-        'remove_after_payment',
+        'remove_after_payment', 'date_basis',
     }
     if protected_fields.intersection(data) and effective_charge_item_billings(db, obj.id):
         raise HTTPException(
