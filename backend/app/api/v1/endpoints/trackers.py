@@ -1076,6 +1076,8 @@ def link_vehicle(
     tracker.vehicle_id = vehicle.id
     tracker.client_id = vehicle.client_id
     tracker.serial_number = tracker.serial_number or tracker.imei
+    if 'install_location' in payload.model_fields_set:
+        tracker.install_location = payload.install_location
     if tracker.status == TrackerStatus.STOCK:
         tracker.status = TrackerStatus.INSTALLED
         tracker.install_date = tracker.install_date or date.today()

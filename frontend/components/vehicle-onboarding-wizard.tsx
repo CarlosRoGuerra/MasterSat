@@ -177,7 +177,7 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
   const [vehicle, setVehicle] = useState<{ id: number; plate: string; brand?: string | null; model?: string | null } | null>(null);
 
   // Step 2 — tracker
-  const [tf, setTf] = useState({ tracker_id: '', start_date: new Date().toISOString().slice(0, 10) });
+  const [tf, setTf] = useState({ tracker_id: '', start_date: new Date().toISOString().slice(0, 10), install_location: '' });
   const [trackerImei, setTrackerImei] = useState('');
 
   // Step 3 — plan + billing
@@ -224,7 +224,7 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
       setStep(1); setError(''); setSaving(false);
       setVf(INITIAL_VF); setDocEntries([{ category: 'crlv', files: [] }]);
       setVehicle(null);
-      setTf({ tracker_id: '', start_date: new Date().toISOString().slice(0, 10) });
+      setTf({ tracker_id: '', start_date: new Date().toISOString().slice(0, 10), install_location: '' });
       setTrackerImei('');
       setPf({ plan_id: '', payment_method: 'boleto', billing_day: '', billing_mode: 'recorrente', num_parcelas: '12', carne_canal: 'ailos' });
       setSelectedProductIds([]);
@@ -332,6 +332,7 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
           body: JSON.stringify({
             vehicle_id: vehicle.id,
             start_date: tf.start_date,
+            install_location: tf.install_location.trim() || null,
           }),
         },
         token,
@@ -906,6 +907,19 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
                   )}
                 </div>
               )}
+
+              <label className="block">
+                <span className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-200">Local de instalação</span>
+                <input
+                  type="text"
+                  className={fieldClass}
+                  placeholder="Ex.: atrás do painel, lado do motorista"
+                  maxLength={120}
+                  value={tf.install_location}
+                  disabled={saving}
+                  onChange={e => setTf(prev => ({ ...prev, install_location: e.target.value }))}
+                />
+              </label>
 
               <div className="flex justify-between gap-3 border-t border-slate-100 pt-4 dark:border-slate-800">
                 <Button variant="secondary" onClick={onComplete}>

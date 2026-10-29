@@ -205,6 +205,7 @@ class TrackerHistoryOut(BaseModel):
 
 class TrackerLinkPayload(BaseModel):
     vehicle_id: int
+    install_location: str | None = Field(default=None, max_length=120)
     # Proteção contra clique/retry acidental: só é exigido quando o rastreador
     # já está em outro veículo e a operação vira uma transferência destrutiva.
     confirm_transfer: bool = False
@@ -219,6 +220,13 @@ class TrackerLinkPayload(BaseModel):
     interveniente_client_id: int | None = None
     # Banco emissor do boleto deste contrato
     bank: str | None = 'ailos'
+
+    @field_validator('install_location')
+    @classmethod
+    def normalize_install_location(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip() or None
 
 
 class TrackerSwapPayload(BaseModel):

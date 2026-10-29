@@ -25,6 +25,7 @@ import { ROUTE_ROLES } from '@/lib/route-roles';
 import { useAssistantContextActions } from '@/lib/assistant-context';
 import type { TrackerStatus, ClientOption, VehicleOption } from '@/lib/domain-types';
 import { AcoesEmLote, type AcaoLote, type AcaoLoteCorpo, type AcaoLoteResultado } from './_components/acoes-em-lote';
+import { ManualChargeModal, type ManualChargeTarget } from './_components/manual-charge-modal';
 
 type Tracker = {
   id: number;
@@ -289,6 +290,7 @@ function RastreadoresPageInner() {
   const { token, user, loading: guardLoading, error: guardError } = useAuthGuard(ROUTE_ROLES['/rastreadores'], '/login/admin');
   const canEdit = !!user && user.role !== 'financeiro';
   const canEditContract = user?.role === 'admin';
+  const canCreateBilling = user?.role === 'admin' || user?.role === 'financeiro';
 
   const [trackers, setTrackers] = useState<Tracker[]>([]);
   const [selecionados, setSelecionados] = useState<Set<number>>(new Set());
@@ -298,6 +300,9 @@ function RastreadoresPageInner() {
   const [plans, setPlans] = useState<PlanOption[]>([]);
   const [history, setHistory] = useState<TrackerHistory[]>([]);
   const [trackerContract, setTrackerContract] = useState<ContractInfo | null>(null);
+  const [trackerContractLoaded, setTrackerContractLoaded] = useState(false);
+  const [manualChargeTarget, setManualChargeTarget] = useState<ManualChargeTarget | null>(null);
+  const [manualChargeFeedback, setManualChargeFeedback] = useState('');
   const [contractPlanId, setContractPlanId] = useState('');
   const [savingContractPlan, setSavingContractPlan] = useState(false);
   const [contractPlanFeedback, setContractPlanFeedback] = useState('');
@@ -389,6 +394,8 @@ function RastreadoresPageInner() {
   }, [searchDebounced, statusFilter, clientFilter, vehicleFilter]);
 
   useEffect(() => {
+    let current = true;
+    setTrackerContractLoaded(false);
     if (!token || !selectedTracker) {
       setHistory([]);
       setTrackerContract(null);
@@ -397,8 +404,12 @@ function RastreadoresPageInner() {
     }
     apiFetch<TrackerHistory[]>(`/trackers/${selectedTracker.id}/history`, {}, token).then(setHistory).catch(() => setHistory([]));
     apiFetch<ContractInfo[]>(`/contracts?tracker_id=${selectedTracker.id}&status=ativo`, {}, token)
-      .then((items) => setTrackerContract(items[0] || null))
-      .catch(() => setTrackerContract(null));
+      .then((items) => {
+        if (!current) return;
+        setTrackerContract(items.find(item => item.tracker_id === selectedTracker.id && item.vehicle_id === selectedTracker.vehicle_id) || null);
+        setTrackerContractLoaded(true);
+      })
+      .catch(() => { if (current) setTrackerContract(null); });
     if (selectedTracker.vehicle_id) {
       apiFetchList<Tracker>(`/trackers?vehicle_id=${selectedTracker.vehicle_id}&limit=20`, {}, token)
         .then((items) => setVehicleTrackers(items.filter((t) => t.id !== selectedTracker.id)))
@@ -406,6 +417,7 @@ function RastreadoresPageInner() {
     } else {
       setVehicleTrackers([]);
     }
+    return () => { current = false; };
   }, [token, selectedTracker?.id, modalOpen]);
 
   // Deep-link da Busca Global (Ctrl+K): "?focus=<id>" abre o rastreador
@@ -609,6 +621,7 @@ function RastreadoresPageInner() {
     setTrackerContract(null);
     setContractPlanId(tracker.active_plan_id ? String(tracker.active_plan_id) : '');
     setContractPlanFeedback('');
+    setManualChargeFeedback('');
     setModalError('');
     setForm({
       imei: tracker.imei || '',
@@ -638,6 +651,28 @@ function RastreadoresPageInner() {
     });
     setIsEditing(true);
     setModalOpen(true);
+  }
+
+  const manualChargeAssignmentReady = Boolean(
+    isEditing && selectedTracker?.client_id && selectedTracker.vehicle_id
+    && Number(form.client_id) === selectedTracker.client_id
+    && Number(form.vehicle_id) === selectedTracker.vehicle_id
+    && !changingInstalledClient,
+  );
+
+  function openManualCharge() {
+    if (!canCreateBilling || !selectedTracker?.client_id || !selectedTracker.vehicle_id
+      || !manualChargeAssignmentReady || !trackerContractLoaded || saving || savingContractPlan) return;
+    setManualChargeFeedback('');
+    setManualChargeTarget({
+      trackerId: selectedTracker.id,
+      vehicleId: selectedTracker.vehicle_id,
+      clientId: selectedTracker.client_id,
+      contractId: trackerContract?.id ?? null,
+      clientName: clients.find(item => item.id === selectedTracker.client_id)?.name || selectedTracker.client_name || '',
+      vehiclePlate: vehicles.find(item => item.id === selectedTracker.vehicle_id)?.plate || selectedTracker.vehicle_plate || '',
+      identifier: selectedTracker.imei || `#${selectedTracker.id}`,
+    });
   }
 
   async function saveContractPlan() {
@@ -1233,7 +1268,7 @@ function RastreadoresPageInner() {
         </div>
       </Modal>
 
-      <Modal open={modalOpen} onClose={() => { setModalOpen(false); resetForm(); setModalError(''); }} title={isEditing ? 'Editar rastreador' : 'Novo rastreador'} description="Cadastre o equipamento em um fluxo mais limpo, com foco no identificador técnico, vínculo e dados essenciais." size="xl">
+      <Modal open={modalOpen && !manualChargeTarget} onClose={() => { setModalOpen(false); resetForm(); setModalError(''); }} title={isEditing ? 'Editar rastreador' : 'Novo rastreador'} description="Cadastre o equipamento em um fluxo mais limpo, com foco no identificador técnico, vínculo e dados essenciais." size="xl">
         <form className="space-y-6" onSubmit={submitTracker}>
           {modalError && <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{modalError}</p>}
           <div className="grid gap-4 md:grid-cols-2">
@@ -1374,6 +1409,18 @@ function RastreadoresPageInner() {
             </div>
           )}
 
+          {isEditing && canCreateBilling && (
+            <div className="space-y-2">
+              <Button type="button" variant="secondary" onClick={openManualCharge}
+                disabled={!manualChargeAssignmentReady || !trackerContractLoaded || saving || savingContractPlan}>
+                Adicionar cobrança manual
+              </Button>
+              {!manualChargeAssignmentReady && <p className="text-xs text-slate-500 dark:text-slate-400">Salve o vínculo com o cliente e o veículo antes de adicionar uma cobrança.</p>}
+              {manualChargeAssignmentReady && !trackerContractLoaded && <p className="text-xs text-slate-500 dark:text-slate-400">Aguardando a consulta do contrato. Se não carregar, reabra a edição.</p>}
+              {manualChargeFeedback && <p role="status" className="text-sm text-emerald-700 dark:text-emerald-300">{manualChargeFeedback}</p>}
+            </div>
+          )}
+
           <div className="grid gap-4 md:grid-cols-3">
             <div className="space-y-1">
               <select className={fieldClass} value={form.external_manufacturer_id} onChange={(e) => { const option = manufacturers.find((item) => item.code === e.target.value); setForm((prev) => ({ ...prev, external_manufacturer_id: e.target.value, external_manufacturer_label: option?.description || '' })); }}>
@@ -1432,6 +1479,14 @@ function RastreadoresPageInner() {
           </div>
         </form>
       </Modal>
+      {manualChargeTarget && token && (
+        <ManualChargeModal target={manualChargeTarget} token={token}
+          onClose={() => setManualChargeTarget(null)}
+          onCreated={(id) => {
+            setManualChargeTarget(null);
+            setManualChargeFeedback(`Cobrança avulsa #${id} criada. Consulte-a no Financeiro para emitir o boleto.`);
+          }} />
+      )}
     </PageShell>
   );
 }

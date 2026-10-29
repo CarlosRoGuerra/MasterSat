@@ -1,17 +1,18 @@
 import type { ReactNode } from 'react';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import RastreadoresPage from './page';
 
 const api = vi.hoisted(() => ({ fetch: vi.fn(), all: vi.fn(), list: vi.fn() }));
+const auth = vi.hoisted(() => ({ role: 'admin' }));
 vi.mock('@/lib/api', async () => ({
   ...await vi.importActual<typeof import('@/lib/api')>('@/lib/api'),
   apiFetch: api.fetch, apiFetchAll: api.all, apiFetchList: api.list,
 }));
 vi.mock('@/lib/use-auth-guard', () => ({
-  useAuthGuard: () => ({ token: 'local-token', user: { role: 'admin' }, loading: false, error: '' }),
+  useAuthGuard: () => ({ token: 'local-token', user: { role: auth.role }, loading: false, error: '' }),
 }));
 vi.mock('@/components/page-shell', () => ({ PageShell: ({ children }: { children: ReactNode }) => <main>{children}</main> }));
 vi.mock('@/lib/assistant-context', () => ({ useAssistantContextActions: vi.fn() }));
@@ -38,6 +39,7 @@ let tracker = { ...initialTracker };
 let saveError = '';
 
 beforeEach(() => {
+  auth.role = 'admin';
   tracker = { ...initialTracker };
   saveError = '';
   vi.clearAllMocks();
@@ -82,6 +84,45 @@ async function selectByDocument(user: ReturnType<typeof userEvent.setup>, editor
 }
 
 describe('Troca de cliente pela edição do rastreador', () => {
+  it('abre cobrança manual com cliente, veículo e contrato salvos sem perder a edição técnica', async () => {
+    const user = userEvent.setup();
+    const editor = await openEditor(user);
+    await user.type(editor.getByPlaceholderText('Observações técnicas'), 'Dados ainda não salvos');
+    const original = api.fetch.getMockImplementation()!;
+    api.fetch.mockImplementation((path: string, options?: RequestInit) => path === '/billings/'
+      ? Promise.resolve({ id: 101 }) : original(path, options));
+    const open = editor.getByRole('button', { name: 'Adicionar cobrança manual' });
+    await waitFor(() => expect(open).toBeEnabled());
+    await user.click(open);
+    const charge = within(screen.getByRole('dialog', { name: 'Adicionar cobrança manual' }));
+    expect(screen.queryByRole('dialog', { name: 'Editar rastreador' })).not.toBeInTheDocument();
+    expect(charge.getByText(/Cliente anterior · OXD0A94 · Rastreador DES000005/)).toBeInTheDocument();
+    await user.type(charge.getByRole('textbox', { name: /^Descrição/ }), 'Instalação');
+    await user.type(charge.getByRole('textbox', { name: /^Valor/ }), '120,50');
+    fireEvent.change(charge.getByLabelText(/^Vencimento/), { target: { value: '2026-11-10' } });
+    await user.click(charge.getByRole('button', { name: 'Criar cobrança' }));
+    const restored = within(await screen.findByRole('dialog', { name: 'Editar rastreador' }));
+    expect(restored.getByRole('status')).toHaveTextContent('Cobrança avulsa #101 criada.');
+    expect(restored.getByPlaceholderText('Observações técnicas')).toHaveValue('Dados ainda não salvos');
+    expect(mutations()).toHaveLength(1);
+    expect(JSON.parse(mutations()[0][1].body)).toMatchObject({ client_id: 1, vehicle_id: 7, tracker_id: 5, contract_id: 20, billing_type: 'avulsa' });
+  });
+
+  it('exige salvar a troca de cliente antes de lançar uma cobrança', async () => {
+    const user = userEvent.setup();
+    const editor = await openEditor(user);
+    await selectByDocument(user, editor);
+    expect(editor.getByRole('button', { name: 'Adicionar cobrança manual' })).toBeDisabled();
+    expect(editor.getByText(/Salve o vínculo com o cliente/)).toBeInTheDocument();
+    expect(mutations()).toHaveLength(0);
+  });
+
+  it('não disponibiliza lançamento financeiro para o operacional', async () => {
+    auth.role = 'operacional';
+    const editor = await openEditor(userEvent.setup());
+    expect(editor.queryByRole('button', { name: 'Adicionar cobrança manual' })).not.toBeInTheDocument();
+  });
+
   it.each(['CPF/CNPJ', 'nome'])('mantém a placa ao buscar por %s e salva a troca junto com os dados técnicos', async (search) => {
     const user = userEvent.setup();
     const editor = await openEditor(user);
