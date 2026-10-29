@@ -89,7 +89,7 @@ describe('Troca de cliente pela edição do rastreador', () => {
     const editor = await openEditor(user);
     await user.type(editor.getByPlaceholderText('Observações técnicas'), 'Dados ainda não salvos');
     const original = api.fetch.getMockImplementation()!;
-    api.fetch.mockImplementation((path: string, options?: RequestInit) => path === '/billings/'
+    api.fetch.mockImplementation((path: string, options?: RequestInit) => path === '/client-charge-items/'
       ? Promise.resolve({ id: 101 }) : original(path, options));
     const open = editor.getByRole('button', { name: 'Adicionar cobrança manual' });
     await waitFor(() => expect(open).toBeEnabled());
@@ -99,13 +99,14 @@ describe('Troca de cliente pela edição do rastreador', () => {
     expect(charge.getByText(/Cliente anterior · OXD0A94 · Rastreador DES000005/)).toBeInTheDocument();
     await user.type(charge.getByRole('textbox', { name: /^Descrição/ }), 'Instalação');
     await user.type(charge.getByRole('textbox', { name: /^Valor/ }), '120,50');
-    fireEvent.change(charge.getByLabelText(/^Vencimento/), { target: { value: '2026-11-10' } });
-    await user.click(charge.getByRole('button', { name: 'Criar cobrança' }));
+    fireEvent.change(charge.getByLabelText(/^Data do serviço/), { target: { value: '2026-10-29' } });
+    await user.click(charge.getByRole('button', { name: 'Adicionar ao fechamento' }));
     const restored = within(await screen.findByRole('dialog', { name: 'Editar rastreador' }));
-    expect(restored.getByRole('status')).toHaveTextContent('Cobrança avulsa #101 criada.');
+    expect(restored.getByRole('status')).toHaveTextContent('Cobrança adicional #101 registrada. Confira-a na simulação do fechamento');
     expect(restored.getByPlaceholderText('Observações técnicas')).toHaveValue('Dados ainda não salvos');
     expect(mutations()).toHaveLength(1);
-    expect(JSON.parse(mutations()[0][1].body)).toMatchObject({ client_id: 1, vehicle_id: 7, tracker_id: 5, contract_id: 20, billing_type: 'avulsa' });
+    expect(mutations()[0][0]).toBe('/client-charge-items/');
+    expect(JSON.parse(mutations()[0][1].body)).toMatchObject({ client_id: 1, vehicle_id: 7, tracker_id: 5, contract_id: 20, start_date: '2026-10-29', unit_price: 120.50 });
   });
 
   it('exige salvar a troca de cliente antes de lançar uma cobrança', async () => {

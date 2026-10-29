@@ -22,9 +22,9 @@ export function ManualChargeModal({ target, token, onClose, onCreated }: {
   target: ManualChargeTarget;
   token: string;
   onClose: () => void;
-  onCreated: (billingId: number) => void;
+  onCreated: (chargeItemId: number) => void;
 }) {
-  const [form, setForm] = useState({ title: '', amount: '', due_date: '', notes: '' });
+  const [form, setForm] = useState({ title: '', amount: '', start_date: '', notes: '' });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const sending = useRef(false);
@@ -34,30 +34,31 @@ export function ManualChargeModal({ target, token, onClose, onCreated }: {
     if (sending.current) return;
     const normalizedAmount = form.amount.trim().replace(',', '.');
     const amount = Number(normalizedAmount);
-    if (!form.title.trim() || !/^\d+(\.\d{1,2})?$/.test(normalizedAmount)
-      || !Number.isFinite(amount) || amount <= 0 || amount > 99999999.99 || !form.due_date) {
-      setError('Informe a descrição, um valor maior que zero com até duas casas decimais e o vencimento.');
+    if (form.title.trim().length < 2 || !/^\d+(\.\d{1,2})?$/.test(normalizedAmount)
+      || !Number.isFinite(amount) || amount <= 0 || amount > 99999999.99 || !form.start_date) {
+      setError('Informe a descrição com pelo menos dois caracteres, um valor maior que zero com até duas casas decimais e a data do serviço.');
       return;
     }
     sending.current = true;
     setSaving(true);
     setError('');
     try {
-      const billing = await apiFetch<{ id: number }>('/billings/', {
+      const item = await apiFetch<{ id: number }>('/client-charge-items/', {
         method: 'POST',
         body: JSON.stringify({
           client_id: target.clientId,
           vehicle_id: target.vehicleId,
           tracker_id: target.trackerId,
           contract_id: target.contractId,
-          billing_type: 'avulsa',
           title: form.title.trim(),
-          amount,
-          due_date: form.due_date,
-          notes: form.notes.trim() || null,
+          quantity: 1,
+          unit_price: amount,
+          installment_count: 1,
+          start_date: form.start_date,
+          description: form.notes.trim() || null,
         }),
       }, token);
-      onCreated(billing.id);
+      onCreated(item.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível criar a cobrança.');
     } finally {
@@ -73,12 +74,13 @@ export function ManualChargeModal({ target, token, onClose, onCreated }: {
           {target.clientName} · {target.vehiclePlate} · Rastreador {target.identifier}
         </p>
         <p className="text-xs text-slate-500 dark:text-slate-400">
-          Cria uma cobrança avulsa no Financeiro. Depois, você pode emitir o boleto pelo detalhe da cobrança.
+          Adiciona o valor ao fechamento mensal do cliente. Informe a data em que o serviço foi realizado;
+          o vencimento será definido no fechamento.
         </p>
         {error && <p role="alert" className="text-sm text-rose-600 dark:text-rose-400">{error}</p>}
         <fieldset disabled={saving} className="space-y-4">
           <FormField label="Descrição" required>
-            <Input maxLength={160} required placeholder="Ex.: instalação do rastreador" value={form.title}
+            <Input minLength={2} maxLength={140} required placeholder="Ex.: instalação do rastreador" value={form.title}
               onChange={e => setForm(prev => ({ ...prev, title: e.target.value }))} />
           </FormField>
           <FormGrid>
@@ -86,9 +88,9 @@ export function ManualChargeModal({ target, token, onClose, onCreated }: {
               <Input inputMode="decimal" required placeholder="Ex.: 120,00" value={form.amount}
                 onChange={e => setForm(prev => ({ ...prev, amount: e.target.value }))} />
             </FormField>
-            <FormField label="Vencimento" required>
-              <Input type="date" required value={form.due_date}
-                onChange={e => setForm(prev => ({ ...prev, due_date: e.target.value }))} />
+            <FormField label="Data do serviço" required>
+              <Input type="date" required value={form.start_date}
+                onChange={e => setForm(prev => ({ ...prev, start_date: e.target.value }))} />
             </FormField>
           </FormGrid>
           <FormField label="Observações">
@@ -97,7 +99,7 @@ export function ManualChargeModal({ target, token, onClose, onCreated }: {
         </fieldset>
         <div className="flex justify-end gap-2">
           <Button type="button" variant="secondary" disabled={saving} onClick={onClose}>Cancelar</Button>
-          <Button type="submit" disabled={saving}>{saving ? 'Criando…' : 'Criar cobrança'}</Button>
+          <Button type="submit" disabled={saving}>{saving ? 'Criando…' : 'Adicionar ao fechamento'}</Button>
         </div>
       </form>
     </Modal>
