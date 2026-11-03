@@ -135,12 +135,18 @@ def _validate_contract_relationships(
     vehicle: Vehicle | None,
     tracker: Tracker | None,
     interveniente: Client | None,
+    *,
+    allow_deleted_tracker: bool = False,
 ) -> None:
     """Falha fechada para contrato operacional com referência removida.
 
     A validação é local ao fechamento. Referências históricas de eventos de
     desinstalação não passam por ela e continuam podendo apontar para contrato
     ou veículo removido.
+
+    No pró-rata final, o rastreador já desinstalado é uma referência histórica:
+    sua exclusão lógica posterior não elimina os dias de serviço prestados.
+    As demais referências continuam sendo validadas normalmente.
     """
     if not client or client.is_deleted:
         raise ValueError(
@@ -154,7 +160,9 @@ def _validate_contract_relationships(
         raise ValueError(
             f'Contrato #{contract.id} referencia veículo removido #{contract.vehicle_id}.'
         )
-    if contract.tracker_id and (not tracker or tracker.is_deleted):
+    if contract.tracker_id and (
+        not tracker or (tracker.is_deleted and not allow_deleted_tracker)
+    ):
         raise ValueError(
             f'Contrato #{contract.id} referencia rastreador removido #{contract.tracker_id}.'
         )
@@ -184,7 +192,9 @@ def _locked_contracts(db: Session, contract_ids: set[int]) -> dict[int, Contract
     return {contract.id: contract for contract in rows}
 
 
-def _validate_locked_contract_for_closure(db: Session, contract: Contract) -> None:
+def _validate_locked_contract_for_closure(
+    db: Session, contract: Contract, *, allow_deleted_tracker: bool = False,
+) -> None:
     client = db.get(Client, contract.client_id)
     plan = db.get(Plan, contract.plan_id)
     vehicle = db.get(Vehicle, contract.vehicle_id) if contract.vehicle_id else None
@@ -195,4 +205,5 @@ def _validate_locked_contract_for_closure(db: Session, contract: Contract) -> No
     )
     _validate_contract_relationships(
         contract, client, plan, vehicle, tracker, interveniente,
+        allow_deleted_tracker=allow_deleted_tracker,
     )

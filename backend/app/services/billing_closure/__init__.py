@@ -246,6 +246,7 @@ def simulate_closure(
     for contract, client, plan, vehicle, tracker, interveniente in final_query.all():
         _validate_contract_relationships(
             contract, client, plan, vehicle, tracker, interveniente,
+            allow_deleted_tracker=True,
         )
         uninstall_date = contract.uninstalled_at
         if uninstall_date < contract.start_date:
@@ -506,7 +507,9 @@ def execute_closure(
                 'Refaça a simulação.'
             )
         if contract_id in recurring_contract_ids:
-            _validate_locked_contract_for_closure(db, locked_contract)
+            _validate_locked_contract_for_closure(
+                db, locked_contract, allow_deleted_tracker=final_item is not None,
+            )
 
     # Serviços que a simulação decidiu embutir na 1ª mensalidade: outro
     # fechamento (de outro mês) pode tê-los faturado depois da simulação e
