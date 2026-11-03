@@ -15,7 +15,6 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date, datetime
-from decimal import Decimal
 from io import BytesIO
 
 _LARGURA = 96          # colunas do relatório
@@ -366,77 +365,15 @@ def _resumo_geral(simulation: dict, itens: list[dict],
     return linhas
 
 
-def _grupos_conferencia_xlsx(simulation: dict) -> list[dict]:
-    """Reúne todas as naturezas pelo pagador do boleto, sem somar parcelas futuras."""
-    itens = simulation.get('items') or []
-    pagador_do_cliente = {
-        i.get('client_id'): (
-            i.get('payer_client_id') or i.get('client_id'),
-            i.get('payer_name') or i.get('interveniente_nome') or i.get('client_name'),
-        ) for i in itens
-    }
-    grupos: dict[tuple, dict] = {}
-
-    def adicionar(origem, natureza, descricao, valor, situacao='a_gerar', parcela=''):
-        pagador_id, nome = pagador_do_cliente.get(origem.get('client_id'), (None, None))
-        pagador_id = origem.get('payer_client_id') or pagador_id or origem.get('client_id')
-        nome = origem.get('payer_name') or origem.get('interveniente_nome') or nome
-        nome = nome or origem.get('client_name') or f'Cliente #{pagador_id}'
-        chave = ('id', pagador_id) if pagador_id is not None else ('nome', nome)
-        if chave not in grupos:
-            grupos[chave] = {
-                'id': pagador_id, 'nome': nome, 'clientes': set(), 'placas': set(),
-                'mensalidades': Decimal('0.00'), 'produtos': Decimal('0.00'),
-                'taxas': Decimal('0.00'), 'servicos': Decimal('0.00'),
-                'ja_faturado': Decimal('0.00'), 'acumulacao': Decimal('0.00'),
-                'detalhes': [],
-            }
-        grupo = grupos[chave]
-        cliente = origem.get('client_name') or f'Cliente #{origem.get("client_id")}'
-        placa = origem.get('vehicle_plate') or ''
-        grupo['clientes'].add(cliente)
-        if placa:
-            grupo['placas'].add(placa)
-        valor = Decimal(str(valor or 0)).quantize(Decimal('0.01'))
-        grupo[natureza if situacao == 'a_gerar' else situacao] += valor
-        grupo['detalhes'].append({
-            'cliente': cliente, 'placa': placa, 'natureza': natureza,
-            'descricao': descricao, 'parcela': parcela,
-            'a_gerar': valor if situacao == 'a_gerar' else Decimal('0.00'),
-            'ja_faturado': valor if situacao == 'ja_faturado' else Decimal('0.00'),
-            'acumulacao': valor if situacao == 'acumulacao' else Decimal('0.00'),
-        })
-
-    for item in itens:
-        situacao = 'ja_faturado' if item.get('already_generated') else 'a_gerar'
-        descricao = ('Pró-rata final' if item.get('is_final_prorata') else
-                     'Pró-rata inicial' if item.get('is_prorata') else 'Mensalidade')
-        if item.get('plan_name'):
-            descricao += f' — {item["plan_name"]}'
-        adicionar(item, 'mensalidades', descricao, item.get('billing_amount'), situacao)
-        for produto in item.get('first_month_charges') or []:
-            adicionar(item, 'produtos', produto.get('title') or 'Produto / serviço',
-                      produto.get('amount'), situacao)
-    for evento in simulation.get('uninstall_events') or []:
-        situacao = 'acumulacao' if evento.get('deferred') or evento.get('skipped') else 'a_gerar'
-        adicionar(evento, 'taxas', 'Taxa de desinstalação', evento.get('fee_amount'), situacao)
-    for servico in simulation.get('charge_items') or []:
-        parcelas = int(servico.get('installment_count') or 1)
-        parcela = f'{int(servico.get("generated_count") or 0) + 1}/{parcelas}'
-        adicionar(servico, 'servicos', servico.get('title') or 'Serviço avulso',
-                  servico.get('amount_to_generate'), parcela=parcela)
-
-    for grupo in grupos.values():
-        grupo['total'] = sum((grupo[k] for k in ('mensalidades', 'produtos', 'taxas', 'servicos')),
-                             Decimal('0.00'))
-    return sorted(grupos.values(), key=lambda g: (g['nome'].casefold(), g['id'] or 0))
-
-
 def generate_closure_xlsx(simulation: dict) -> BytesIO:
     """
-    Excel de conferência: a primeira aba reúne todas as cobranças por pagador;
-    a segunda mantém seus lançamentos juntos para conferir a composição.
-    Resumo, Contratos e Movimentação preservam as informações complementares.
+    Simulação de fechamento em Excel (.xlsx), com 3 abas:
+      Resumo        — período, painel de totais e os somatórios financeiros
+      Contratos     — uma linha por contrato (interveniente, cliente, veículo…)
+      Movimentação  — instalações e desinstalações do período, uma por linha
+
+    Ao contrário do PDF (texto monoespaçado), aqui os dados vão em colunas para
+    a operação filtrar, ordenar e somar na planilha.
     """
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill
@@ -445,12 +382,7 @@ def generate_closure_xlsx(simulation: dict) -> BytesIO:
     mes_ref = simulation.get('reference_month', '')
     itens = simulation.get('items') or []
     desinst = simulation.get('uninstall_events') or []
-    grupos = _grupos_conferencia_xlsx(simulation)
-    fin = {
-        chave: sum((g[chave] for g in grupos), Decimal('0.00'))
-        for chave in ('mensalidades', 'produtos', 'taxas', 'servicos', 'total', 'ja_faturado', 'acumulacao')
-    }
-    fin['geral'] = fin['total']
+    fin = _totais_financeiros(itens, simulation)
     cont = _contagens(itens, desinst, mes_ref)
     agora = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
 
@@ -469,78 +401,14 @@ def generate_closure_xlsx(simulation: dict) -> BytesIO:
             cell = ws.cell(1, ci, nome)
             cell.font = header_font
             cell.fill = header_fill
-            cell.alignment = Alignment(horizontal='center', wrap_text=True)
-        ws.row_dimensions[1].height = 30
+            cell.alignment = Alignment(horizontal='center')
         ws.freeze_panes = 'A2'
-
-    def _linha_conferencia(ws, valores: list) -> None:
-        ws.append(valores)
-        for cell in ws[ws.max_row]:
-            if isinstance(cell.value, str):
-                cell.data_type = 's'
 
     wb = Workbook()
 
-    # ── Conferência principal: uma linha com TODAS as cobranças do pagador ───
-    conferencia = wb.active
-    conferencia.title = 'Conferência por cliente'
-    _cabecalho(conferencia, [
-        'Responsável financeiro', 'Cód. cliente', 'Cliente(s)', 'Placa(s)',
-        'Mensalidades', 'Produtos / 1ª cobrança', 'Taxas de desinstalação',
-        'Serviços avulsos', 'Total a gerar', 'Já faturado', 'Aguardando acumulação',
-    ])
-    for grupo in grupos:
-        _linha_conferencia(conferencia, [
-            grupo['nome'], grupo['id'], '; '.join(sorted(grupo['clientes'])),
-            '; '.join(sorted(grupo['placas'])),
-            *[float(grupo[k]) for k in (
-                'mensalidades', 'produtos', 'taxas', 'servicos', 'total', 'ja_faturado', 'acumulacao',
-            )],
-        ])
-    conferencia.auto_filter.ref = f'A1:K{conferencia.max_row}'
-    _linha_conferencia(conferencia, [
-        'TOTAL GERAL', None, None, None,
-        *[float(fin[k]) for k in (
-            'mensalidades', 'produtos', 'taxas', 'servicos', 'total', 'ja_faturado', 'acumulacao',
-        )],
-    ])
-    for row in conferencia.iter_rows(min_row=2):
-        for cell in row[4:]:
-            cell.number_format = MONEY
-    for cell in conferencia[conferencia.max_row]:
-        cell.font = bold
-        cell.fill = PatternFill('solid', fgColor='E8EDF5')
-    for ci, largura in enumerate([32, 13, 38, 24, 17, 23, 23, 18, 19, 18, 25], 1):
-        conferencia.column_dimensions[get_column_letter(ci)].width = largura
-
-    # ── Todos os lançamentos contíguos por cliente, inclusive só avulsas ──────
-    detalhe = wb.create_sheet('Detalhamento por cliente')
-    _cabecalho(detalhe, [
-        'Responsável financeiro', 'Cód. cliente', 'Cliente', 'Placa', 'Tipo',
-        'Descrição', 'Parcela', 'A gerar', 'Já faturado', 'Aguardando acumulação',
-    ])
-    naturezas = {
-        'mensalidades': 'Mensalidade / pró-rata', 'produtos': 'Produto / 1ª cobrança',
-        'taxas': 'Desinstalação', 'servicos': 'Serviço avulso',
-    }
-    for numero, grupo in enumerate(grupos):
-        for item in grupo['detalhes']:
-            _linha_conferencia(detalhe, [
-                grupo['nome'], grupo['id'], item['cliente'], item['placa'],
-                naturezas[item['natureza']], item['descricao'], item['parcela'],
-                float(item['a_gerar']), float(item['ja_faturado']), float(item['acumulacao']),
-            ])
-            for cell in detalhe[detalhe.max_row]:
-                if numero % 2 == 0:
-                    cell.fill = PatternFill('solid', fgColor='F0F4FA')
-            for cell in detalhe[detalhe.max_row][7:]:
-                cell.number_format = MONEY
-    detalhe.auto_filter.ref = f'A1:J{detalhe.max_row}'
-    for ci, largura in enumerate([32, 13, 32, 12, 24, 48, 12, 18, 18, 25], 1):
-        detalhe.column_dimensions[get_column_letter(ci)].width = largura
-
     # ── Aba Resumo ──────────────────────────────────────────────────────────
-    ws = wb.create_sheet('Resumo')
+    ws = wb.active
+    ws.title = 'Resumo'
     ws['A1'] = 'PRÉVIA DE FECHAMENTO'
     ws['A1'].font = Font(bold=True, size=14)
     ws['A2'] = f'Mês de referência: {mes_ref}'
@@ -563,13 +431,11 @@ def generate_closure_xlsx(simulation: dict) -> BytesIO:
     ws.cell(linha, 1, 'Totais financeiros').font = bold
     linha += 1
     for rotulo, valor in (
-        ('Mensalidades a gerar', fin['mensalidades']),
-        ('Produtos/serviços a gerar (1ª cobrança)', fin['produtos']),
-        ('Taxas de desinstalação a gerar', fin['taxas']),
-        ('Serviços avulsos a gerar', fin['servicos']),
-        ('TOTAL GERAL A GERAR', fin['geral']),
-        ('Já faturado (fora do total a gerar)', fin['ja_faturado']),
-        ('Aguardando acumulação (fora do total)', fin['acumulacao']),
+        ('Total mensalidades', fin['mensalidades']),
+        ('Total produtos/serviços (1ª cobrança)', fin['produtos']),
+        ('Total taxas de desinstalação', fin['taxas']),
+        ('Total serviços avulsos', fin['servicos']),
+        ('TOTAL GERAL', fin['geral']),
     ):
         c1 = ws.cell(linha, 1, rotulo)
         c2 = ws.cell(linha, 2, float(valor))

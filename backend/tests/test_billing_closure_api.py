@@ -68,7 +68,9 @@ def test_september_service_closure_is_due_in_october(
 
     export = http.get(PREFIX + '/simulate/xlsx', params=params)
     assert export.status_code == 200, export.text
-    sheet = load_workbook(BytesIO(export.content), read_only=True)['Contratos']
+    workbook = load_workbook(BytesIO(export.content), read_only=True)
+    assert workbook.sheetnames == ['Resumo', 'Contratos', 'Movimentação']
+    sheet = workbook['Contratos']
     assert sheet.cell(2, 12).value.date() == date(2026, 10, 15)
     assert sheet.cell(2, 13).value == '09/2026'
 

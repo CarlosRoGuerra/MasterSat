@@ -14,6 +14,7 @@ import csv
 import io
 import re
 from datetime import date
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
@@ -310,10 +311,10 @@ def _agrupar_boletos_sgr(linhas: list[dict]) -> list[dict]:
     grupos: dict[tuple, list[dict]] = {}
     for ln in linhas:
         if ln['cod_boleto']:
-            grupos.setdefault((ln['cliente'], ln['cod_boleto']), []).append(ln)
+            grupos.setdefault((ln.get('cliente_id', ln['cliente']), ln['cod_boleto']), []).append(ln)
     saida, vistos = [], set()
     for ln in linhas:
-        chave = (ln['cliente'], ln['cod_boleto'])
+        chave = (ln.get('cliente_id', ln['cliente']), ln['cod_boleto'])
         grupo = grupos.get(chave) if ln['cod_boleto'] else None
         if not grupo or len(grupo) < 2:
             saida.append(ln)
@@ -333,6 +334,21 @@ def _agrupar_boletos_sgr(linhas: list[dict]) -> list[dict]:
             'forma': ', '.join(sorted({g['forma'] for g in grupo if g['forma']})),
         })
     return saida
+
+
+def _agrupar_cobrancas_por_cliente(linhas: list[dict]) -> list[list[dict]]:
+    """Mantém os boletos juntos pelo ID do pagador, inclusive clientes homônimos."""
+    grupos: dict[object, list[dict]] = {}
+    for linha in linhas:
+        chave = linha.get('cliente_id', linha['cliente'])
+        grupos.setdefault(chave, []).append(linha)
+    return sorted(grupos.values(), key=lambda g: (
+        (g[0]['cliente'] or '').casefold(), g[0].get('cliente_id') or 0,
+    ))
+
+
+def _total_cobrancas(linhas: list[dict], campo: str) -> Decimal:
+    return sum((Decimal(str(ln[campo])) for ln in linhas), Decimal('0.00'))
 
 
 _NUMERO_NO_TITULO_SGR = re.compile(r'^Boleto SGR (\S+)')
@@ -398,17 +414,36 @@ def _billings_report_pdf(linhas, situacao: str, periodo_por: str,
     celula = ParagraphStyle('celula', parent=styles['Normal'], fontSize=8, leading=9.5)
     header = ['Cliente', 'Nº do Boleto', 'Vencimento', 'Pagamento', 'Valor', 'Valor Pago', 'Situação']
     data = [header]
-    total, total_pago = 0.0, 0.0
-    for ln in linhas:
-        total += ln['valor']
-        total_pago += ln['valor_pago']
-        data.append([
-            Paragraph(escape(ln['cliente'] or ''), celula), Paragraph(escape(ln['numero']), celula),
-            ln['vencimento'].strftime('%d/%m/%Y') if ln['vencimento'] else '',
-            ln['pagamento'].strftime('%d/%m/%Y') if ln['pagamento'] else '—',
-            _brl(ln['valor']), _brl(ln['valor_pago']) if ln['valor_pago'] else '—',
-            _SITUACAO_LABEL.get(ln['situacao'], ln['situacao']),
-        ])
+    grupos = _agrupar_cobrancas_por_cliente(linhas) if situacao == 'paga' else [linhas]
+    if situacao == 'paga':
+        elems.append(Paragraph(
+            f'<b>Agrupado por cliente</b> — {len(grupos)} cliente(s), {len(linhas)} boleto(s)',
+            styles['Normal'],
+        ))
+        elems.append(Spacer(1, 6))
+    subtotais = []
+    inicios = []
+    for grupo in grupos:
+        if not grupo:
+            continue
+        inicios.append(len(data))
+        for ln in grupo:
+            data.append([
+                Paragraph(escape(ln['cliente'] or ''), celula), Paragraph(escape(ln['numero']), celula),
+                ln['vencimento'].strftime('%d/%m/%Y') if ln['vencimento'] else '',
+                ln['pagamento'].strftime('%d/%m/%Y') if ln['pagamento'] else '—',
+                _brl(ln['valor']), _brl(ln['valor_pago']) if ln['valor_pago'] else '—',
+                _SITUACAO_LABEL.get(ln['situacao'], ln['situacao']),
+            ])
+        if situacao == 'paga':
+            subtotais.append(len(data))
+            data.append([
+                Paragraph(f'<b>Total do cliente: {escape(grupo[0]["cliente"] or "")}</b>', celula),
+                '', '', '', _brl(_total_cobrancas(grupo, 'valor')),
+                _brl(_total_cobrancas(grupo, 'valor_pago')), f'{len(grupo)} boleto(s)',
+            ])
+    total = _total_cobrancas(linhas, 'valor')
+    total_pago = _total_cobrancas(linhas, 'valor_pago')
     data.append(['', '', '', 'TOTAL', _brl(total), _brl(total_pago), f'{len(linhas)} cobrança(s)'])
 
     table = Table(data, repeatRows=1,
@@ -427,6 +462,19 @@ def _billings_report_pdf(linhas, situacao: str, periodo_por: str,
         ('TOPPADDING', (0, 0), (-1, -1), 4),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
     ]))
+    if situacao == 'paga':
+        for rr in inicios:
+            table.setStyle(TableStyle([
+                ('LINEABOVE', (0, rr), (-1, rr), 0.8, colors.HexColor('#94A3B8')),
+            ]))
+        for rr in subtotais:
+            table.setStyle(TableStyle([
+                ('SPAN', (0, rr), (3, rr)),
+                ('BACKGROUND', (0, rr), (-1, rr), colors.HexColor('#E2E8F0')),
+                ('FONTNAME', (0, rr), (-1, rr), 'Helvetica-Bold'),
+                # O subtotal acompanha o último boleto quando a página quebra.
+                ('NOSPLIT', (0, rr - 1), (-1, rr)),
+            ]))
     elems.append(table)
     doc.build(elems)
     buf.seek(0)
@@ -498,6 +546,7 @@ def export_billings_report(
 
     linhas = [
         {
+            'cliente_id': b.payer_client_id or b.client_id,
             'cliente': cliente,
             'numero': _numero_do_boleto(b, nn_ailos, nn_cnab),
             'vencimento': b.due_date,
@@ -518,6 +567,8 @@ def export_billings_report(
     # Agrupa antes de limitar: o limite antigo (5000 linhas por placa) cortava o
     # período — 01/01 a 06/10/2026 parava em 16/01 — e podia partir um boleto.
     linhas = _agrupar_boletos_sgr(linhas)[:5000]
+    if situacao == 'paga':
+        linhas = [ln for grupo in _agrupar_cobrancas_por_cliente(linhas) for ln in grupo]
 
     if fmt == 'pdf':
         return _billings_report_pdf(linhas, situacao, periodo_por, date_from, date_to, forma_cobranca)
