@@ -189,7 +189,8 @@ SICREDI_BOLETO_HIBRIDO=true
 ```
 
 Rebuild de `backend`, `backend-worker` e `frontend`, aplicando as migrations
-até `a6e2d9c51b74` (integração, fila de lotes e forma Carnê Sicredi).
+até `b8e4c6d2a907` (integração, fila de lotes, forma Carnê Sicredi e
+conferência do vínculo de lote).
 Teste em Configurações →
 `POST /api/v1/sicredi/testar-conexao` (admin): só autentica.
 

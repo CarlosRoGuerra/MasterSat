@@ -52,7 +52,28 @@ desativadas. A validação da impressão não substitui a homologação pelo ban
 
 Aplicar as migrations com o processo normal de inicialização/Alembic e
 reconstruir backend, worker e frontend. As revisões novas são
-`f4c8b2a63d10` (lotes e reservas) e `a6e2d9c51b74` (forma Carnê Sicredi),
-após `e3b9d5a71c42`. Não é necessário recadastrar cobranças ou boletos já
+`f4c8b2a63d10` (lotes e reservas), `a6e2d9c51b74` (forma Carnê Sicredi) e
+`b8e4c6d2a907` (conferência do vínculo), após `e3b9d5a71c42`.
+Não é necessário recadastrar cobranças ou boletos já
 registrados. A ativação de produção usa as configurações documentadas em
 [homologacao.md](homologacao.md).
+
+## Correção da estrutura local
+
+Na conferência seguinte, a consulta de cobranças retornou HTTP 500 por
+ausência de `sicredi_boletos.lote_id`. O banco local estava marcado em
+`a6e2d9c51b74`, com a tabela de lotes criada, mas sem o vínculo e ainda com
+a restrição de status anterior a `NA_FILA`. Conferir apenas a revisão do
+Alembic não detectava essa inconsistência.
+
+A revisão `b8e4c6d2a907` completa coluna, FK, índice e restrição de status
+quando ausentes. Em bancos que receberam a revisão anterior completa,
+não altera esses objetos. Não atualiza valores financeiros, números de
+boletos ou vínculos existentes. Seu downgrade preserva os objetos, que
+pertencem à revisão `f4c8b2a63d10`.
+
+Dois testes com bancos PostgreSQL descartáveis confirmaram os cenários
+completo e incompleto, a preservação do título existente, a FK, o estado
+`NA_FILA` e o ciclo de downgrade/upgrade. Após a aplicação local, as doze
+rotas conferidas do Financeiro retornaram 200, com CORS permitido para o
+frontend local. A VPS não foi modificada.

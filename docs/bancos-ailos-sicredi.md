@@ -127,9 +127,11 @@ a conciliação automática atual usa as APIs, não interpreta retorno CNAB.
 
 ## Publicação posterior à aprovação
 
-Aplicar as migrations até `a6e2d9c51b74`: `e3b9d5a71c42` cria a integração
+Aplicar as migrations até `b8e4c6d2a907`: `e3b9d5a71c42` cria a integração
 Sicredi, `f4c8b2a63d10` adiciona lotes e reservas na fila e `a6e2d9c51b74`
-permite a forma de cobrança Carnê Sicredi. Reconstruir backend, worker e
+permite a forma de cobrança Carnê Sicredi; `b8e4c6d2a907` completa o vínculo
+de lote e a restrição de status em bancos marcados como atualizados com
+essa estrutura ausente. Reconstruir backend, worker e
 frontend. As migrations têm uma única revisão final. Em produção,
 configurar a chave de produção Sicredi, Código de Acesso e convênio
 2602/13/11948 no arquivo de segredos; só então usar
