@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   FileText, RefreshCw, CheckCircle2, AlertTriangle, Loader2, Receipt,
   ListChecks, ChevronLeft, ExternalLink, FileDown, FileCode2, Search, Printer,
@@ -32,8 +32,11 @@ type Elegivel = {
 };
 type Elegiveis = {
   period_label: string; total_elegiveis: number; ja_emitidas: number;
+  closure_batch_id?: number | null;
   sem_configuracao: { client_id: number; nome: string }[]; itens: Elegivel[];
 };
+
+type LoteFechamento = { id: number; mes_servico: string; criado_em: string; total_titulos: number };
 
 type LoteResumo = {
   id: number; period_label: string; competencia: string | null; codigo_servico: string | null;
@@ -231,6 +234,11 @@ export default function NotasFiscaisPage() {
 
   // Geração de lote
   const [month, setMonth] = useState('');
+  const [lotesFechamento, setLotesFechamento] = useState<LoteFechamento[]>([]);
+  const [loteFechamentoId, setLoteFechamentoId] = useState('');
+  const [carregandoFechamentos, setCarregandoFechamentos] = useState(false);
+  const consultaId = useRef(0);
+  const emissaoEmAndamento = useRef(false);
   const [codigoServico, setCodigoServico] = useState(CODIGOS_SERVICO[0].codigo);
   const [discriminacao, setDiscriminacao] = useState('');
   const [filtroNome, setFiltroNome] = useState('');
@@ -245,10 +253,33 @@ export default function NotasFiscaisPage() {
 
   // Atalho do fechamento: abre a geração em lote sem iniciar uma emissão.
   useEffect(() => {
-    if (new URLSearchParams(window.location.search).get('aba') === 'gerar') {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('aba') === 'gerar') {
       setAba('gerar');
+      const mes = params.get('service_month');
+      const lote = params.get('closure_batch_id');
+      if (mes && /^\d{4}-(0[1-9]|1[0-2])$/.test(mes)) setMonth(mes);
+      if (lote && /^[1-9]\d*$/.test(lote)) setLoteFechamentoId(lote);
     }
   }, []);
+
+  useEffect(() => {
+    if (!token || aba !== 'gerar') return;
+    let active = true;
+    setCarregandoFechamentos(true);
+    apiFetch<LoteFechamento[]>('/billing-closure/lotes', {}, token)
+      .then(data => { if (active) setLotesFechamento(data); })
+      .catch(err => { if (active) setError(parseErr(err)); })
+      .finally(() => { if (active) setCarregandoFechamentos(false); });
+    return () => { active = false; };
+  }, [aba, token]);
+
+  useEffect(() => {
+    consultaId.current += 1;
+    setElegiveis(null);
+    setSelecionados(new Set());
+    setBuscando(false);
+  }, [month, loteFechamentoId, filtroNome, filtroTipo]);
 
   /* ── Carregamentos ── */
   const carregarResumo = useCallback(() => {
@@ -306,17 +337,28 @@ export default function NotasFiscaisPage() {
 
   /* ── Ações ── */
   async function buscarBoletos() {
+    if (!token || emitindo || carregandoFechamentos) return;
     const period = monthToPeriod(month);
     if (!period) { setError('Informe o mês do fechamento.'); return; }
+    const request = ++consultaId.current;
     setError(''); setFeedback(''); setBuscando(true); setElegiveis(null);
     try {
       const p = new URLSearchParams({ period_label: period });
+      if (loteFechamentoId) p.set('closure_batch_id', loteFechamentoId);
       if (filtroNome.trim()) p.set('busca', filtroNome.trim());
       if (filtroTipo) p.set('tipo', filtroTipo);
       const data = await apiFetch<Elegiveis>(`/nfse/lotes/elegiveis?${p}`, {}, token);
+      if (request !== consultaId.current) return;
+      if (loteFechamentoId && data.closure_batch_id !== Number(loteFechamentoId)) {
+        throw new Error('O servidor não confirmou o lote de fechamento selecionado. Atualize a tela e consulte novamente.');
+      }
       setElegiveis(data);
       setSelecionados(new Set(data.itens.map((i) => i.billing_id)));
-    } catch (err) { setError(parseErr(err)); } finally { setBuscando(false); }
+    } catch (err) {
+      if (request === consultaId.current) setError(parseErr(err));
+    } finally {
+      if (request === consultaId.current) setBuscando(false);
+    }
   }
 
   function toggle(id: number) {
@@ -334,13 +376,15 @@ export default function NotasFiscaisPage() {
   }
 
   async function emitir() {
-    if (!elegiveis || selecionados.size === 0) return;
+    if (!token || !elegiveis || selecionados.size === 0 || emissaoEmAndamento.current) return;
+    emissaoEmAndamento.current = true;
     setError(''); setFeedback(''); setEmitindo(true);
     try {
       const lote = await apiFetch<LoteResumo>('/nfse/lotes', {
         method: 'POST',
         body: JSON.stringify({
           period_label: elegiveis.period_label,
+          closure_batch_id: elegiveis.closure_batch_id ?? null,
           billing_ids: [...selecionados],
           codigo_servico: codigoServico || null,
           discriminacao: discriminacao || null,
@@ -350,7 +394,7 @@ export default function NotasFiscaisPage() {
       setElegiveis(null); setSelecionados(new Set());
       carregarLotes(); carregarResumo();
       abrirLote(lote.id);
-    } catch (err) { setError(parseErr(err)); } finally { setEmitindo(false); }
+    } catch (err) { setError(parseErr(err)); } finally { emissaoEmAndamento.current = false; setEmitindo(false); }
   }
 
   async function abrirLote(id: number) {
@@ -809,19 +853,29 @@ export default function NotasFiscaisPage() {
           {/* Identificação dos serviços */}
           <Card className="p-5">
             <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-200">Identificação dos serviços</h2>
-            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               <Campo label="Fechamento (mês do serviço) *">
-                <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className={inputCls} />
+                <input type="month" value={month} disabled={emitindo} onChange={(e) => { setMonth(e.target.value); setLoteFechamentoId(''); }} className={inputCls} />
                 <span className="mt-1 block text-xs text-slate-500">
                   Seleciona os boletos do fechamento. A competência da nota é sempre a data da emissão.
                 </span>
+              </Campo>
+              <Campo label="Número do lote do fechamento">
+                <select aria-label="Número do lote do fechamento" value={loteFechamentoId} disabled={!month || emitindo || carregandoFechamentos}
+                        onChange={e => setLoteFechamentoId(e.target.value)} className={inputCls}>
+                  <option value="">{carregandoFechamentos ? 'Carregando lotes…' : 'Todos os lotes do mês'}</option>
+                  {lotesFechamento.filter(lote => lote.mes_servico === month).map(lote => (
+                    <option key={lote.id} value={lote.id}>Lote #{lote.id} · {dataBR(lote.criado_em)} · {lote.total_titulos} títulos</option>
+                  ))}
+                </select>
+                <span className="mt-1 block text-xs text-slate-500">Limita a listagem às cobranças criadas na execução escolhida.</span>
               </Campo>
               <Campo label="Serviço do município *">
                 <select value={codigoServico} onChange={(e) => setCodigoServico(e.target.value)} className={inputCls}>
                   {CODIGOS_SERVICO.map((c) => <option key={c.codigo} value={c.codigo}>{c.rotulo}</option>)}
                 </select>
               </Campo>
-              <Campo label="Discriminação / observação" className="sm:col-span-2">
+              <Campo label="Discriminação / observação" className="sm:col-span-2 lg:col-span-3">
                 <textarea value={discriminacao} onChange={(e) => setDiscriminacao(e.target.value)} rows={2}
                           placeholder="Descrição do serviço no corpo da nota"
                           className={inputCls} />
@@ -853,7 +907,7 @@ export default function NotasFiscaisPage() {
               </div>
             )}
             <div className="mt-4">
-              <Button onClick={buscarBoletos} disabled={buscando || !month}>
+              <Button onClick={buscarBoletos} disabled={buscando || emitindo || carregandoFechamentos || !month}>
                 {buscando ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
                 Buscar boletos
               </Button>
@@ -885,7 +939,7 @@ export default function NotasFiscaisPage() {
               <Card className="p-0">
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-3 dark:border-slate-800">
                   <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-200">
-                    Listagem de boletos — {elegiveis.period_label}
+                    Listagem de boletos — {elegiveis.period_label}{elegiveis.closure_batch_id ? ` · Fechamento #${elegiveis.closure_batch_id}` : ''}
                   </h2>
                   <div className="flex items-center gap-4 text-sm">
                     <span className="text-slate-500">

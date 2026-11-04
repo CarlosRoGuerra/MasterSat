@@ -1170,6 +1170,7 @@ export default function FechamentoPage() {
                 <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">Lote de fechamento #{generateResult.closure_batch_id}</p>
                 <Button type="button" onClick={() => setDeliveryOpen(true)}>Conferir e enviar lote</Button>
                 <Link href={`/financeiro?tab=overview&closure_batch_id=${generateResult.closure_batch_id}`} className="text-sm font-medium text-brand-800 underline underline-offset-4 dark:text-brand-300">Ver cobranças deste lote</Link>
+                <Link href={`/notas-fiscais?aba=gerar&service_month=${generateResult.reference_month}&closure_batch_id=${generateResult.closure_batch_id}`} className="text-sm font-medium text-brand-800 underline underline-offset-4 dark:text-brand-300">Emitir notas deste lote</Link>
               </div>
 
               <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">

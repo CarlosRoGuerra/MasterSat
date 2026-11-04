@@ -9,6 +9,7 @@ import pytest
 from app.models.billing import Billing
 from app.models.ailos_boleto import AilosBoleto
 from app.models.client import Client
+from app.models.closure_job import ClosureJob
 from app.models.contract import Contract
 from app.models.enums import BillingStatus, ClientStatus, UserRole
 from app.models.nfse_lote import NfseLote
@@ -464,6 +465,83 @@ def test_endpoint_elegiveis(db, http_fin):
     r = http_fin.get('/api/v1/nfse/lotes/elegiveis', params={'period_label': '07/2026'})
     assert r.status_code == 200
     assert r.json()['total_elegiveis'] == 1
+
+
+def _fechamento(db, ids, *, month='2026-07', status='completed'):
+    lote = ClosureJob(reference_month=month, status=status,
+                      result={'payment_billing_ids': ids})
+    db.add(lote)
+    db.commit()
+    return lote
+
+
+def test_elegiveis_por_numero_do_fechamento_nao_mistura_lotes_do_mes(db, http_fin):
+    c = _client(db, 'CLIENTE DO LOTE')
+    primeiro = _billing(db, c, period='08/2026')
+    outro = _billing(db, c)
+    manual = _billing(db, c)
+    lote = _fechamento(db, [primeiro.id])
+    _fechamento(db, [outro.id])
+    result = http_fin.get('/api/v1/nfse/lotes/elegiveis', params={
+        'period_label': '07/2026', 'closure_batch_id': lote.id,
+    })
+    assert result.status_code == 200, result.text
+    assert result.json()['closure_batch_id'] == lote.id
+    assert [i['billing_id'] for i in result.json()['itens']] == [primeiro.id]
+    assert db.query(NfseNota).count() == 0
+    assert db.query(NfseLote).count() == 0
+
+
+@pytest.mark.parametrize('case', ['inexistente', 'mes_errado', 'incompleto', 'vazio'])
+def test_filtro_de_fechamento_nao_recai_no_mes_quando_o_lote_e_invalido_ou_vazio(db, http_fin, case):
+    billing = _billing(db, _client(db, 'CLIENTE'))
+    lote = _fechamento(db, [] if case == 'vazio' else [billing.id],
+                       month='2026-08' if case == 'mes_errado' else '2026-07',
+                       status='running' if case == 'incompleto' else 'completed')
+    result = http_fin.get('/api/v1/nfse/lotes/elegiveis', params={
+        'period_label': '07/2026', 'closure_batch_id': 999999 if case == 'inexistente' else lote.id,
+    })
+    if case == 'vazio':
+        assert result.status_code == 200
+        assert result.json()['itens'] == []
+    else:
+        assert result.status_code == 422, result.text
+    assert db.query(NfseNota).count() == 0
+
+
+def test_emissao_revalida_o_numero_do_fechamento_e_recusa_cobranca_de_outro_lote(db, http_fin, monkeypatch):
+    monkeypatch.setattr(nfse_lote, '_emitir_lote_worker', lambda lote_id: None)
+    c = _client(db, 'CLIENTE')
+    dentro = _billing(db, c)
+    fora = _billing(db, c)
+    lote = _fechamento(db, [dentro.id])
+    payload = {'period_label': '07/2026', 'closure_batch_id': lote.id,
+               'billing_ids': [dentro.id, fora.id]}
+    result = http_fin.post('/api/v1/nfse/lotes', json=payload)
+    assert result.status_code == 422
+    assert 'não pertencem' in result.json()['detail']
+    assert db.query(NfseNota).count() == 0
+    assert db.query(NfseLote).count() == 0
+    payload['billing_ids'] = [dentro.id]
+    result = http_fin.post('/api/v1/nfse/lotes', json=payload)
+    assert result.status_code == 201, result.text
+    assert result.json()['total_notas'] == 1
+    assert db.query(NfseNota).one().billing_id == dentro.id
+
+
+def test_filtro_de_fechamento_preserva_preferencia_fiscal_e_idempotencia(db, http_fin):
+    sim = _client(db, 'COM NF', doc='111')
+    nao = _client(db, 'SEM NF', emitir='nao', doc='222')
+    permitida = _billing(db, sim)
+    ja_emitida = _billing(db, sim)
+    sem_nf = _billing(db, nao)
+    _nota(db, ja_emitida, status='emitida')
+    lote = _fechamento(db, [permitida.id, ja_emitida.id, sem_nf.id])
+    result = http_fin.get('/api/v1/nfse/lotes/elegiveis', params={
+        'period_label': '07/2026', 'closure_batch_id': lote.id,
+    })
+    assert result.json()['ja_emitidas'] == 1
+    assert [i['billing_id'] for i in result.json()['itens']] == [permitida.id]
 
 
 def test_endpoint_emitir_lote_cria_e_retorna(db, http_fin, monkeypatch):

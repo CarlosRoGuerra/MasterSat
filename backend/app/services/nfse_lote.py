@@ -31,6 +31,7 @@ from app.models.ailos_boleto import AilosBoleto
 from app.models.billing import Billing
 from app.models.enums import BillingStatus
 from app.models.client import Client
+from app.models.closure_job import ClosureJob
 from app.models.nfse_lote import NfseLote
 from app.models.nfse_nota import NfseNota
 # Interveniente financeiro = quem responde pela cobrança. Quando existe, ele é o
@@ -60,6 +61,17 @@ class LoteError(Exception):
 # Elegibilidade
 # ---------------------------------------------------------------------------
 
+def _ids_fechamento(db: Session, closure_batch_id: int, period_label: str) -> list[int]:
+    lote = db.get(ClosureJob, closure_batch_id)
+    ids = (lote.result or {}).get('payment_billing_ids') if lote else None
+    if not lote or lote.status != 'completed' or not isinstance(ids, list):
+        raise LoteError('Lote de fechamento não encontrado ou ainda não concluído.')
+    periodo = competencia_do_rotulo(period_label)
+    if periodo is None or lote.reference_month != periodo.strftime('%Y-%m'):
+        raise LoteError('O lote de fechamento não pertence ao mês do serviço selecionado.')
+    return [int(billing_id) for billing_id in ids]
+
+
 def listar_elegiveis(
     db: Session,
     period_label: str,
@@ -67,6 +79,7 @@ def listar_elegiveis(
     busca: str | None = None,
     tipo: str | None = None,
     billing_ids: list[int] | None = None,
+    closure_batch_id: int | None = None,
 ) -> dict:
     """
     Candidatos à emissão no lote de fechamento informado: cobranças cujo cliente
@@ -74,6 +87,10 @@ def listar_elegiveis(
 
     ``busca`` filtra por nome/razão social ou CPF/CNPJ; ``tipo`` por pf/pj.
     """
+    if closure_batch_id is not None:
+        ids_fechamento = _ids_fechamento(db, closure_batch_id, period_label)
+        billing_ids = (ids_fechamento if billing_ids is None
+                       else sorted(set(billing_ids) & set(ids_fechamento)))
     # Filtros de tomador (issue_invoice/busca/tipo) são aplicados em Python sobre
     # o tomador RESOLVIDO (interveniente-ou-cliente), não sobre o dono do veículo.
     query = (
@@ -160,6 +177,7 @@ def listar_elegiveis(
 
     return {
         'period_label': period_label,
+        'closure_batch_id': closure_batch_id,
         'total_elegiveis': len(itens),
         'ja_emitidas': ja_emitidas,
         'sem_configuracao': [
@@ -216,6 +234,7 @@ def criar_lote(
     criado_por: int | None = None,
     emitir_async: bool = True,
     selecionados_livres: bool = False,
+    closure_batch_id: int | None = None,
 ) -> NfseLote:
     """
     Cria o lote e as notas pendentes numa única transação e dispara a emissão.
@@ -230,10 +249,14 @@ def criar_lote(
         # A mesma ordem de locks em lotes concorrentes evita deadlocks. A
         # elegibilidade é lida DEPOIS do lock; o mapa da tela não é uma reserva.
         alvos = sorted(set(billing_ids))
+        if closure_batch_id is not None and not set(alvos).issubset(
+            _ids_fechamento(db, closure_batch_id, period_label)
+        ):
+            raise LoteError('Há cobranças selecionadas que não pertencem a este lote de fechamento.')
         db.query(Billing).filter(Billing.id.in_(alvos)).order_by(Billing.id).with_for_update().all()
         candidatos = (
             listar_elegiveis(db, period_label, billing_ids=alvos)
-            if selecionados_livres else listar_elegiveis(db, period_label)
+            if selecionados_livres else listar_elegiveis(db, period_label, closure_batch_id=closure_batch_id)
         )
         elegiveis = {i['billing_id'] for i in candidatos['itens']}
         lote = NfseLote(

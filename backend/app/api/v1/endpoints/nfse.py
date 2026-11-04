@@ -247,11 +247,17 @@ def lote_elegiveis(
     period_label: str,
     busca: str | None = None,
     tipo: str | None = Query(default=None, pattern='^(pf|pj)$'),
+    closure_batch_id: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*ALLOWED_ROLES)),
 ):
     """Etapa de conferência: clientes do lote de fechamento com 'Emitir NF = Sim'."""
-    return nfse_lote.listar_elegiveis(db, period_label, busca=busca, tipo=tipo)
+    try:
+        return nfse_lote.listar_elegiveis(
+            db, period_label, busca=busca, tipo=tipo, closure_batch_id=closure_batch_id,
+        )
+    except nfse_lote.LoteError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post('/lotes', response_model=LoteResumo, status_code=201)
@@ -269,6 +275,7 @@ def lote_emitir(
             codigo_servico=payload.codigo_servico,
             discriminacao=payload.discriminacao,
             criado_por=user.id,
+            closure_batch_id=payload.closure_batch_id,
         )
     except nfse_lote.LoteError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
