@@ -1,4 +1,5 @@
 import { apiFetch } from '@/lib/api';
+import { nomeBancoBoleto, type BancoBoleto } from '@/lib/banco-boleto';
 
 export type AcaoLoteBoleto = 'emitir' | 'email' | 'email_com_nfse' | 'nfse_email';
 export type ResultadoLoteBoletos = {
@@ -28,6 +29,7 @@ export async function processarBoletosSelecionados(
   acao: AcaoLoteBoleto,
   token: string,
   onProgress?: (concluidos: number, total: number) => void,
+  banco: BancoBoleto = 'ailos',
 ): Promise<ResultadoLoteBoletos> {
   const selecionados = [...new Set(ids)];
   const resultado: ResultadoLoteBoletos = { processados: [], falhas: [] };
@@ -35,11 +37,11 @@ export async function processarBoletosSelecionados(
   for (const [indice, id] of selecionados.entries()) {
     try {
       if (acao === 'emitir') {
-        const boleto = await apiFetch<{ linha_digitavel?: string | null; codigo_barras?: string | null }>('/ailos/boletos', {
+        const boleto = await apiFetch<{ linha_digitavel?: string | null; codigo_barras?: string | null }>(`/${banco}/boletos`, {
           method: 'POST', body: JSON.stringify({ billing_id: id }),
         }, token);
         if (!boleto.linha_digitavel || !boleto.codigo_barras) {
-          throw new Error('A Ailos ainda não confirmou linha digitável e código de barras.');
+          throw new Error(`${nomeBancoBoleto(banco)} ainda não confirmou linha digitável e código de barras.`);
         }
       } else if (acao === 'email_com_nfse') {
         await apiFetch(`/boletos/${id}/enviar-email?incluir_nfse=true`, { method: 'POST' }, token);

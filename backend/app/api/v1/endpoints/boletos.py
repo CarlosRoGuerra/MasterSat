@@ -33,6 +33,7 @@ from app.db.session import get_db
 from app.models.ailos_boleto import AilosBoleto
 from app.models.ailos_lote import AilosLote
 from app.models.sicredi_boleto import SicrediBoleto
+from app.models.sicredi_lote import SicrediLote
 from app.models.billing import Billing
 from app.models.billing_charge_item import BillingChargeItem
 from app.models.client import Client
@@ -217,7 +218,34 @@ def listar_carnes(
                 for b in sorted(cobrancas, key=lambda x: (x.installment_number or 0, x.due_date or date.min))
             ],
         })
-    return resultado
+    # O ID é local a cada banco; clientes distinguem pelo campo banco.
+    for item in resultado:
+        item['banco'] = 'ailos'
+    lotes_sicredi = db.query(SicrediLote).filter(SicrediLote.tipo == 'carne')
+    if payer_client_id is not None:
+        lotes_sicredi = lotes_sicredi.filter(SicrediLote.payer_client_id == payer_client_id)
+    for lote in lotes_sicredi.order_by(SicrediLote.id.desc()).all():
+        cobrancas = list(db.scalars(select(Billing).where(Billing.id.in_(lote.billing_ids or []))).all())
+        if not any(not b.is_deleted for b in cobrancas):
+            continue
+        if client_id is not None and not any(b.client_id == client_id and not b.is_deleted for b in cobrancas):
+            continue
+        registradas = sum(sicredi_boletos.registrado(db, b.id) is not None for b in cobrancas)
+        resultado.append({
+            'banco': 'sicredi', 'lote_id': lote.id, 'ticket': lote.ticket,
+            'criado_em': lote.created_at.isoformat() if lote.created_at else None,
+            'parcelas': len(lote.billing_ids or []), 'parcelas_registradas': registradas,
+            'parcelas_pagas': sum(b.status == BillingStatus.PAID for b in cobrancas),
+            'total': float(sum((b.amount or 0) for b in cobrancas)),
+            'valor_pago': float(sum((b.amount or 0) for b in cobrancas if b.status == BillingStatus.PAID)),
+            'status': 'completed' if registradas == len(lote.billing_ids or []) else lote.status,
+            'parcelas_detalhe': [{'billing_id': b.id, 'numero_parcela': b.installment_number,
+                                 'vencimento': b.due_date.isoformat() if b.due_date else None,
+                                 'valor': float(b.amount or 0), 'status': b.status.value,
+                                 'data_pagamento': b.payment_date.isoformat() if b.payment_date else None}
+                                for b in sorted(cobrancas, key=lambda b: (b.due_date or date.min, b.id))],
+        })
+    return sorted(resultado, key=lambda item: item['criado_em'] or '', reverse=True)
 
 
 # ---------------------------------------------------------------------------
@@ -711,9 +739,34 @@ def enviar_boleto_email(
     return {'message': f'E-mail enviado para {destinatario}.'}
 
 
+def _carne_pdf_sicredi(db: Session, lote_id: int, *, parcial: bool = False) -> Response:
+    lote = db.get(SicrediLote, lote_id)
+    if lote is None or lote.tipo != 'carne':
+        raise HTTPException(status_code=404, detail='Carnê Sicredi não encontrado.')
+    parcelas = []
+    abertas = 0
+    for bid in lote.billing_ids or []:
+        b = db.get(Billing, bid)
+        if b is None or b.is_deleted or b.status not in (BillingStatus.PENDING, BillingStatus.OVERDUE):
+            continue
+        abertas += 1
+        registro = sicredi_boletos.registrado(db, bid)
+        if registro is None or registro.baixa_status is not None:
+            continue
+        parcelas.append(dados_boleto_sicredi(b, _pagador_do_billing(b, db), db, registro))
+    if not parcelas:
+        raise HTTPException(status_code=409, detail='Nenhuma parcela deste carnê está registrada e disponível para pagamento.')
+    if not parcial and len(parcelas) < abertas:
+        raise HTTPException(status_code=409, detail=f'{len(parcelas)} de {abertas} parcelas em aberto disponíveis. Aguarde ou baixe explicitamente o carnê parcial.')
+    return Response(content=gerar_carne_pdf(parcelas), media_type='application/pdf',
+                    headers={'Content-Disposition': f'inline; filename="carne-sicredi-{lote_id}.pdf"'})
+
+
 @router.get("/carne/{lote_id}/pdf")
 def get_carne_pdf(
     lote_id: int,
+    banco: str = Query(default='ailos', pattern='^(ailos|sicredi)$'),
+    parcial: bool = Query(default=False),
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*ALLOWED_ROLES)),
 ):
@@ -732,6 +785,8 @@ def get_carne_pdf(
     prazo, serve o que conseguiu (senão o download ficaria bloqueado para
     sempre por uma parcela que nunca resolve do lado do banco).
     """
+    if banco == 'sicredi':
+        return _carne_pdf_sicredi(db, lote_id, parcial=parcial)
     lote = db.get(AilosLote, lote_id)
     if lote is None or lote.tipo != 'carne':
         raise HTTPException(status_code=404, detail='Carnê não encontrado')

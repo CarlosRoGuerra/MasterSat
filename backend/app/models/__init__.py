@@ -25,6 +25,7 @@ from app.models.service_order_status_log import ServiceOrderStatusLog
 from app.models.service_product import ServiceProduct
 from app.models.sicredi_api_log import SicrediApiLog
 from app.models.sicredi_boleto import SicrediBoleto, SicrediNossoNumeroSequencia
+from app.models.sicredi_lote import SicrediLote
 from app.models.tracker import Tracker
 from app.models.tracker_history import TrackerHistory
 from app.models.user import User

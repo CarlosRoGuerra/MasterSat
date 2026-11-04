@@ -92,6 +92,24 @@ def test_previa_sem_registro_nao_desenha_codigo_de_barras():
     assert 'SIMULACAO - NAO PAGAVEL' in texto
 
 
+@pytest.mark.parametrize('total', [3, 12])
+def test_carne_sicredi_com_pix_mantem_tres_parcelas_por_pagina(total):
+    from pypdf import PdfReader
+
+    parcelas = [replace(_dados(), banco_codigo='748', pix_emv='PIX DE TESTE',
+                        numero_documento=f'DOC{i}', cedente_agencia='2602.13',
+                        cedente_codigo='11948') for i in range(total)]
+    paginas = PdfReader(io.BytesIO(boleto_pdf.gerar_carne_pdf(parcelas))).pages
+    assert len(paginas) == total // 3
+    for pagina in paginas:
+        texto = pagina.extract_text()
+        assert texto.count('748-X') == 3
+        assert texto.count('Pague com Pix') == 3
+        assert '085-0' not in texto
+    for i in range(total):
+        assert f'DOC{i}' in paginas[i // 3].extract_text()
+
+
 def test_detalhamento_abre_servico_embutido_e_taxas_agrupadas(db, cliente, veiculo):
     from app.api.v1.endpoints.boletos import dados_boleto
     from app.models.billing import Billing

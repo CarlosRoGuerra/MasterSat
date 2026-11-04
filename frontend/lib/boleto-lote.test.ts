@@ -6,7 +6,7 @@ vi.mock('@/lib/api', () => ({ apiFetch }));
 import { processarBoletosSelecionados, separarBoletosPorRegistro } from '@/lib/boleto-lote';
 
 describe('ações em lote dos boletos selecionados', () => {
-  beforeEach(() => apiFetch.mockReset());
+  beforeEach(() => { apiFetch.mockReset(); });
 
   it('ignora boletos registrados e preserva a ordem dos ausentes sem duplicar IDs', () => {
     expect(separarBoletosPorRegistro([12, 8, 12, 5], [
@@ -47,6 +47,26 @@ describe('ações em lote dos boletos selecionados', () => {
     });
     expect(apiFetch).toHaveBeenNthCalledWith(1, '/boletos/4/enviar-email', { method: 'POST' }, 'token');
     expect(apiFetch).toHaveBeenNthCalledWith(2, '/boletos/5/enviar-email', { method: 'POST' }, 'token');
+  });
+
+  it('emite no Sicredi somente uma vez por seleção e continua após uma falha sem trocar de banco', async () => {
+    apiFetch.mockResolvedValueOnce({ linha_digitavel: '748', codigo_barras: '748' })
+      .mockRejectedValueOnce(new Error('Desfecho desconhecido: consulte antes de emitir novamente'))
+      .mockResolvedValueOnce({ linha_digitavel: '748', codigo_barras: '748' });
+    const progresso = vi.fn();
+    const resultado = await processarBoletosSelecionados([1, 2, 1, 3], 'emitir', 'token', progresso, 'sicredi');
+    expect(resultado.processados).toEqual([1, 3]);
+    expect(resultado.falhas).toEqual([{ id: 2, mensagem: 'Desfecho desconhecido: consulte antes de emitir novamente' }]);
+    expect(apiFetch.mock.calls.map(([path]) => path)).toEqual(['/sicredi/boletos', '/sicredi/boletos', '/sicredi/boletos']);
+    expect(apiFetch.mock.calls.map(([, options]) => JSON.parse(options.body).billing_id)).toEqual([1, 2, 3]);
+    expect(progresso).toHaveBeenLastCalledWith(3, 3);
+  });
+
+  it('não confirma emissão Sicredi sem os dois códigos oficiais', async () => {
+    apiFetch.mockResolvedValue({ linha_digitavel: '748', codigo_barras: null });
+    const resultado = await processarBoletosSelecionados([1], 'emitir', 'token', undefined, 'sicredi');
+    expect(resultado.processados).toEqual([]);
+    expect(resultado.falhas[0].mensagem).toContain('Sicredi');
   });
 
   it('não conta como emitido um boleto sem os dados bancários oficiais', async () => {

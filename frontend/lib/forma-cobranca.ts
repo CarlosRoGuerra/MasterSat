@@ -3,6 +3,7 @@
 export const FORMAS_COBRANCA = [
   { value: 'boleto_mensal', label: 'Boleto mensal' },
   { value: 'carne_ailos', label: 'Carnê Ailos' },
+  { value: 'carne_sicredi', label: 'Carnê Sicredi' },
   { value: 'carne_simples', label: 'Carnê simples' },
   { value: 'cartao_credito', label: 'Cartão de crédito' },
 ] as const;

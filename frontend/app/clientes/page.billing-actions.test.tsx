@@ -508,4 +508,29 @@ describe('cancelar e excluir pelo ícone Alterar boleto', () => {
     expect(screen.queryByTitle('Central financeira / boletos do cliente')).not.toBeInTheDocument();
     expect(writes('DELETE')).toHaveLength(0);
   });
+
+  it('gera carnê Sicredi na central e mostra o acompanhamento acima da carteira', async () => {
+    wallet = [{ ...billing }, { ...billing, id: 38513, due_date: '2026-11-15' }];
+    const original = api.fetch.getMockImplementation()!;
+    api.fetch.mockImplementation(async (path: string, options: RequestInit = {}) => {
+      if (path === '/sicredi/status') return { habilitado: true, erro_configuracao: null };
+      if (path === '/sicredi/carne/lote') return { id: 7, ticket: 'carne-sicredi', status: 'processing' };
+      if (path === '/sicredi/lotes/carne-sicredi') return { status: 'partial', total: 2, prontas: 0, parcelas: [
+        { billing_id: 38512, numero_parcela: 1, vencimento: '2026-10-15', valor: 64.99, status: 'erro', erro: 'Verifique o cadastro do pagador' },
+      ] };
+      return original(path, options);
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByTitle('Central financeira / boletos do cliente'));
+    const carteira = within(await screen.findByRole('dialog', { name: /Boletos do cliente/ }));
+    await user.click(carteira.getAllByRole('checkbox')[0]);
+    await user.selectOptions(await carteira.findByRole('combobox', { name: 'Banco do carnê' }), 'sicredi');
+    await user.click(carteira.getByRole('button', { name: 'Gerar carnê' }));
+    const acompanhamento = within(await screen.findByRole('dialog', { name: 'Gerando carnê' }));
+    expect(await acompanhamento.findByText('Verifique o cadastro do pagador')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: /Boletos do cliente/ })).not.toBeInTheDocument();
+    expect(writes('POST').map(([path]) => path)).toEqual(['/sicredi/carne/lote']);
+    expect(JSON.parse(writes('POST')[0][1].body).billing_ids.sort((a: number, b: number) => a - b)).toEqual([38512, 38513]);
+  });
 });

@@ -10,6 +10,7 @@ import { EmptyState, TableSkeleton } from '@/components/ui/empty-state';
 import { Table, TableHead, Th, TableBody, Tr, Td } from '@/components/ui/table';
 import { ActionBtn } from './action-btn';
 import { formatDate } from '@/lib/format';
+import { cobrancaCompativelComBanco, chaveCarne, nomeBancoBoleto, type BancoBoleto } from '@/lib/banco-boleto';
 import { valorComJuros } from './helpers';
 import { canSelectBilling, toggleVisibleBillings } from '@/lib/billing-batch';
 import type { BillingItem, CarneItem } from './types';
@@ -112,11 +113,15 @@ export function BillingsModal({
   summaryExpanded,
   selectedIds,
   gerandoCarne,
+  sicrediHabilitado = false,
+  carneBanco = 'ailos',
+  onCarneBancoChange,
   onClose,
   onToggleSummary,
   onSelectedIdsChange,
   onToggleCarne,
   onBaixarCarne,
+  onAcompanharCarne,
   onOpenUnify,
   onBatchCancel,
   onBatchDelete,
@@ -138,15 +143,19 @@ export function BillingsModal({
   loading: boolean;
   billings: BillingItem[];
   carnes: CarneItem[];
-  carneExpandido: number | null;
+  carneExpandido: string | number | null;
   summaryExpanded: boolean;
   selectedIds: number[];
   gerandoCarne: boolean;
+  sicrediHabilitado?: boolean;
+  carneBanco?: BancoBoleto;
+  onCarneBancoChange?: (banco: BancoBoleto) => void;
   onClose: () => void;
   onToggleSummary: () => void;
   onSelectedIdsChange: Dispatch<SetStateAction<number[]>>;
-  onToggleCarne: (loteId: number) => void;
-  onBaixarCarne: (loteId: number) => void;
+  onToggleCarne: (loteId: number, banco?: BancoBoleto) => void;
+  onBaixarCarne: (loteId: number, banco?: BancoBoleto) => void;
+  onAcompanharCarne?: (loteId: number, ticket: string, banco?: BancoBoleto) => void;
   onOpenUnify: () => void;
   onBatchCancel?: () => void;
   onBatchDelete?: () => void;
@@ -454,6 +463,7 @@ export function BillingsModal({
         const sel = billings.filter((b) => selectedIds.includes(b.id));
         // "Gerar carnê" registra na Ailos: carnê simples não pode ir junto.
         const temSoSistema = sel.some((b) => b.somente_sistema);
+        const temOutroBanco = sel.some(b => !cobrancaCompativelComBanco(b, carneBanco));
         const todasEmAberto = sel.every(emAberto);
         const total = sel.reduce((s, b) => s + b.amount, 0);
         const totalJuros = sel.reduce((s, b) => s + (valorComJuros(b) ?? b.amount), 0);
@@ -473,12 +483,19 @@ export function BillingsModal({
                 Unificar em 1 boleto
               </Button>
             )}
+            {sel.length >= 2 && todasEmAberto && sicrediHabilitado && onCarneBancoChange && (
+              <label className="text-xs text-slate-600 dark:text-slate-300">Banco do carnê
+                <select aria-label="Banco do carnê" value={carneBanco} onChange={event => onCarneBancoChange(event.target.value as BancoBoleto)} disabled={gerandoCarne} className="ml-2 rounded-lg border border-slate-300 bg-white px-2 py-1.5 dark:border-slate-700 dark:bg-slate-900">
+                  <option value="ailos">Ailos</option><option value="sicredi">Sicredi</option>
+                </select>
+              </label>
+            )}
             {sel.length >= 2 && todasEmAberto && (
               <Button
                 variant="secondary"
                 onClick={onGerarCarne}
-                disabled={gerandoCarne || temSoSistema}
-                title={temSoSistema ? 'A seleção tem parcelas de carnê simples (somente no sistema), que não vão para a Ailos.' : undefined}
+                disabled={gerandoCarne || temSoSistema || temOutroBanco || (carneBanco === 'sicredi' && !sicrediHabilitado)}
+                title={temSoSistema ? 'A seleção tem parcelas de carnê simples (somente no sistema), que não vão para o banco.' : temOutroBanco ? 'A seleção contém boletos registrados em outro banco. Selecione cobranças do mesmo banco ou sem boleto.' : undefined}
                 className="!py-1.5 text-xs"
               >
                 {gerandoCarne ? 'Gerando carnê…' : 'Gerar carnê'}
@@ -507,17 +524,17 @@ export function BillingsModal({
             {carnes.map((c) => {
               const prontas = c.parcelas_registradas >= c.parcelas;
               const quitado = c.parcelas_pagas >= c.parcelas;
-              const aberto = carneExpandido === c.lote_id;
+              const aberto = carneExpandido === chaveCarne(c.lote_id, c.banco) || (!c.banco && carneExpandido === c.lote_id);
               return (
-                <div key={c.lote_id}>
+                <div key={chaveCarne(c.lote_id, c.banco)}>
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2.5 text-sm">
                     <button
                       type="button"
-                      onClick={() => onToggleCarne(c.lote_id)}
+                      onClick={() => onToggleCarne(c.lote_id, c.banco)}
                       className="flex items-center gap-1.5 font-semibold text-slate-700 hover:underline dark:text-slate-200"
                     >
                       {aberto ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-                      Carnê #{c.lote_id}
+                      Carnê #{c.lote_id} · {nomeBancoBoleto(c.banco)}
                     </button>
                     <span className="text-slate-500 dark:text-slate-400">{c.parcelas} parcela(s) · {fmt(c.total)}</span>
                     {c.criado_em && <span className="text-xs text-slate-500">{new Date(c.criado_em).toLocaleDateString('pt-BR')}</span>}
@@ -525,9 +542,10 @@ export function BillingsModal({
                       {c.parcelas_pagas}/{c.parcelas} paga(s)
                     </Badge>
                     {!prontas && (
-                      <Badge variant="warning">{c.parcelas_registradas}/{c.parcelas} registrada(s) na Ailos</Badge>
+                      <Badge variant="warning">{c.parcelas_registradas}/{c.parcelas} registrada(s) — {nomeBancoBoleto(c.banco)}</Badge>
                     )}
-                    <Button variant="secondary" onClick={() => onBaixarCarne(c.lote_id)} className="ml-auto !py-1.5 text-xs">
+                    {c.ticket && onAcompanharCarne && <Button variant="secondary" onClick={() => onAcompanharCarne(c.lote_id, c.ticket!, c.banco)} className="!py-1.5 text-xs">Acompanhar</Button>}
+                    <Button variant="secondary" onClick={() => onBaixarCarne(c.lote_id, c.banco)} className="ml-auto !py-1.5 text-xs">
                       Baixar carnê
                     </Button>
                   </div>

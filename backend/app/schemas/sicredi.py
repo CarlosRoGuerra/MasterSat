@@ -28,6 +28,10 @@ class SicrediEmitirIn(BaseModel):
     nova_tentativa: bool = False
 
 
+class SicrediLoteIn(BaseModel):
+    billing_ids: list[int] = Field(min_length=1, max_length=1000)
+
+
 class SicrediBaixaIn(BaseModel):
     motivo: str = Field(min_length=3, max_length=500)
 

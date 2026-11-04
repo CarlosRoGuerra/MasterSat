@@ -41,6 +41,7 @@ from app.models import (  # noqa: F401
     sgr_migracao,
     sicredi_api_log,
     sicredi_boleto,
+    sicredi_lote,
     system_setting,
     tracker,
     tracker_history,

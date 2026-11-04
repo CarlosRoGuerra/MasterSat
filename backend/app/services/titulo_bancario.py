@@ -44,6 +44,7 @@ from app.models.sicredi_boleto import (
     STATUS_ERRO_REGISTRO as SICREDI_ERRO_REGISTRO,
     STATUS_REGISTRADO as SICREDI_REGISTRADO,
     STATUS_REGISTRANDO as SICREDI_REGISTRANDO,
+    STATUS_NA_FILA as SICREDI_NA_FILA,
     SicrediBoleto,
 )
 
@@ -190,6 +191,8 @@ def reserva_orfa_sicredi(boleto: SicrediBoleto, referencia: datetime | None = No
 def estado_do_sicredi(boleto: SicrediBoleto | None, referencia: datetime | None = None) -> str:
     if boleto is None:
         return SEM_TITULO
+    if boleto.status == SICREDI_NA_FILA:
+        return EM_REGISTRO
     if boleto.status == SICREDI_REGISTRADO and boleto.linha_digitavel and boleto.codigo_barras:
         return BAIXADO if boleto.baixa_status == 'confirmada' else REGISTRADO
     if boleto.status == SICREDI_REGISTRANDO:
@@ -200,7 +203,7 @@ def estado_do_sicredi(boleto: SicrediBoleto | None, referencia: datetime | None 
     return DESFECHO_DESCONHECIDO
 
 
-def titulos_bancarios(db: Session, billing_ids: Iterable[int]) -> dict[int, TituloBancario]:
+def titulos_bancarios(db: Session, billing_ids: Iterable[int], *, lote_sicredi_id: int | None = None) -> dict[int, TituloBancario]:
     ids = sorted({int(b) for b in billing_ids if b is not None})
     if not ids:
         return {}
@@ -217,6 +220,10 @@ def titulos_bancarios(db: Session, billing_ids: Iterable[int]) -> dict[int, Titu
             pendencia=boleto.pendencia,
         )
     for boleto in db.scalars(select(SicrediBoleto).where(SicrediBoleto.billing_id.in_(ids))).all():
+        if lote_sicredi_id is not None and boleto.status == SICREDI_NA_FILA and boleto.lote_id == lote_sicredi_id:
+            # Só o processador do lote pode assumir a própria reserva ainda
+            # não enviada; todas as outras situações/bancos continuam valendo.
+            continue
         estado = estado_do_sicredi(boleto, referencia)
         if _GRAVIDADE[estado] > _GRAVIDADE[resultado[boleto.billing_id].estado]:
             resultado[boleto.billing_id] = TituloBancario(
@@ -332,6 +339,7 @@ def exigir(
     *,
     confirmado: bool = False,
     permitir_em_registro: Iterable[int] = (),
+    lote_sicredi_id: int | None = None,
 ) -> dict[int, TituloBancario]:
     """Aplica a política de ``operacao`` a cada cobrança; levanta no primeiro
     estado que a proíbe, listando todas as cobranças nesse estado.
@@ -343,7 +351,7 @@ def exigir(
     billing_ids = list(billing_ids)
     if operacao in _EMISSAO_BANCARIA:
         recusar_somente_sistema(db, billing_ids)
-    titulos = titulos_bancarios(db, billing_ids)
+    titulos = titulos_bancarios(db, billing_ids, lote_sicredi_id=lote_sicredi_id if operacao == EMITIR_SICREDI else None)
     return validar_titulos(operacao, titulos, confirmado=confirmado, permitir_em_registro=permitir_em_registro)
 
 

@@ -27,6 +27,7 @@ import { loadChargeLinks, type ChargeLinks } from '@/lib/financeiro-charge-links
 import { entregarArquivo, nomeArquivoCliente } from '@/lib/arquivo';
 import { podeEmitirNfse, precisaConsultarNfse } from '@/lib/nfse';
 import { enviarBoletoEmail, enviarBoletoWhats } from '@/lib/boleto-mensagem';
+import { cobrancaCompativelComBanco, chaveCarne, nomeBancoBoleto, type BancoBoleto } from '@/lib/banco-boleto';
 import { processarBoletosSelecionados, separarBoletosPorRegistro, type AcaoLoteBoleto } from '@/lib/boleto-lote';
 import { cancelarComConfirmacoes, corpoCancelamento } from '@/lib/cancelamento-cobranca';
 import { excluirComConfirmacoes, mensagemConfirmacaoExclusao, motivoBloqueioExclusao } from '@/lib/exclusao-cobranca';
@@ -733,6 +734,8 @@ export default function FinanceiroPage() {
   const [batchBillingIds, setBatchBillingIds] = useState<number[]>([]);
   const [batchBoletoAction, setBatchBoletoAction] = useState<AcaoLoteBoleto | null>(null);
   const [batchBoletoProgress, setBatchBoletoProgress] = useState('');
+  const [emissaoLoteModal, setEmissaoLoteModal] = useState(false);
+  const [batchBoletoBanco, setBatchBoletoBanco] = useState<BancoBoleto>('ailos');
   const [gerandoCarne, setGerandoCarne] = useState(false);
   // Modal "Gerar carnê" (por cliente)
   const [carneModal, setCarneModal] = useState(false);
@@ -750,6 +753,7 @@ export default function FinanceiroPage() {
   // traz só os 100 mais recentes e deixava o seletor vazio para os demais.
   const [carneContratos, setCarneContratos] = useState<Contract[]>([]);
   type CarneGerado = {
+    banco?: BancoBoleto;
     lote_id: number;
     ticket: string | null;
     criado_em: string | null;
@@ -1429,8 +1433,16 @@ export default function FinanceiroPage() {
     } catch (err) { setError(parseError(err)); } finally { setProcessing(false); }
   }
 
-  async function handleBatchBoletos(acao: AcaoLoteBoleto) {
+  function abrirEmissaoLote() {
+    setBatchBoletoBanco('ailos');
+    if (sicrediHabilitado) setEmissaoLoteModal(true);
+    else void handleBatchBoletos('emitir', 'ailos');
+  }
+
+  async function handleBatchBoletos(acao: AcaoLoteBoleto, banco: BancoBoleto = 'ailos') {
     if (!token || !canEdit || batchBoletoAction || selectedBillingIds.length === 0) return;
+    if (banco === 'sicredi' && !sicrediHabilitado) return;
+    const nomeBanco = nomeBancoBoleto(banco);
     const selecionados = [...new Set(selectedBillingIds)];
     const separados = acao === 'emitir' ? separarBoletosPorRegistro(selecionados, billings) : null;
     const ids = separados ? separados.ausentes : selecionados;
@@ -1439,18 +1451,19 @@ export default function FinanceiroPage() {
       ? `; ${separados.somenteSistema.length} carnê(s) simples (somente no sistema) ignorado(s)` : '';
     if (ids.length === 0) {
       setFeedback(separados?.somenteSistema.length
-        ? `Nenhum boleto gerado: as cobranças selecionadas já estão emitidas na Ailos ou são carnê simples (somente no sistema)${ignoradosSistema}.`
-        : 'Todos os boletos selecionados já estão emitidos na Ailos. Nenhum novo boleto foi gerado.');
+        ? `Nenhum boleto gerado: as cobranças selecionadas já estão emitidas no banco ou são carnê simples (somente no sistema)${ignoradosSistema}.`
+        : 'Todos os boletos selecionados já estão emitidos no banco. Nenhum novo boleto foi gerado.');
       return;
     }
     const mensagem = {
-      emitir: `Emitir/confirmar ${ids.length} boleto(s) selecionado(s) na Ailos? O envio por e-mail será feito somente no outro botão.`,
+      emitir: `Emitir/confirmar ${ids.length} boleto(s) selecionado(s) — ${nomeBanco}? O envio por e-mail será feito somente no outro botão.`,
       email: `Enviar ${ids.length} boleto(s) por e-mail, um por cobrança, ao respectivo responsável financeiro?`,
       email_com_nfse: `Enviar ${ids.length} cobrança(s) por e-mail com boleto e NFS-e juntos? Cada cobrança precisa ter boleto registrado e NFS-e emitida.`,
       nfse_email: `Enviar somente a NFS-e das ${ids.length} cobrança(s) selecionada(s)? Cada nota precisa estar emitida.`,
     }[acao];
     if (!window.confirm(mensagem)) return;
 
+    setEmissaoLoteModal(false);
     setBatchBoletoAction(acao);
     setBatchBoletoProgress(`0/${ids.length}`);
     setError('');
@@ -1458,10 +1471,10 @@ export default function FinanceiroPage() {
     try {
       const resultado = await processarBoletosSelecionados(
         ids, acao, token,
-        (concluidos, total) => setBatchBoletoProgress(`${concluidos}/${total}`),
+        (concluidos, total) => setBatchBoletoProgress(`${concluidos}/${total}`), banco,
       );
       await loadData(token);
-      const rotulo = acao === 'emitir' ? 'boleto(s) registrado(s) na Ailos'
+      const rotulo = acao === 'emitir' ? `boleto(s) registrado(s) — ${nomeBanco}`
         : acao === 'nfse_email' ? 'NFS-e enviada(s) por e-mail'
         : 'envio(s) por e-mail realizado(s)';
       setFeedback(`${resultado.processados.length} ${rotulo}${separados ? `; ${separados.existentes.length} já emitido(s) ignorado(s)${ignoradosSistema}` : ''}.`);
@@ -1520,7 +1533,7 @@ export default function FinanceiroPage() {
       // Viram carnê na Ailos: carnê simples (somente no sistema) fica de fora.
       const abertos = data.filter(b => (b.status === 'pendente' || b.status === 'vencida') && !b.somente_sistema);
       setCarneBillings(abertos);
-      setCarneSelected(abertos.map(b => b.id));
+      setCarneSelected(abertos.filter(b => cobrancaCompativelComBanco(b, carneCanal === 'sistema' ? 'ailos' : carneCanal)).map(b => b.id));
       setCarnesGerados(gerados);
       setCarneContratos(contratos);
     } catch (err) { setModalError(parseError(err)); } finally { setCarneLoading(false); }
@@ -1536,11 +1549,15 @@ export default function FinanceiroPage() {
 
   // Modo "boletos existentes": carnê a partir dos boletos em aberto selecionados.
   async function gerarCarne(ids: number[]) {
-    if (!token) return;
+    if (!token || carneCanal === 'sistema') return;
+    if (carneCanal === 'sicredi' && !sicrediHabilitado) return;
+    const banco = carneCanal;
+    const incompatível = carneBillings.some(b => ids.includes(b.id) && !cobrancaCompativelComBanco(b, banco));
+    if (incompatível) { setModalError('A seleção contém boletos de outro banco. Escolha cobranças sem boleto ou já registradas no banco selecionado.'); return; }
     if (ids.length < 2) { alert('Selecione ao menos 2 boletos para gerar o carnê.'); return; }
-    if (!confirm(`Gerar o carnê registra ${ids.length} boletos reais na Ailos (um por parcela). Continuar?`)) return;
+    if (!confirm(`Gerar o carnê registra ${ids.length} boletos reais — ${nomeBancoBoleto(banco)} (um por parcela). Continuar?`)) return;
     setCarneModal(false);
-    await carne.iniciar(ids);
+    await carne.iniciar(ids, banco);
   }
 
   // Modo "a partir do plano": cria N parcelas do contrato (valor do plano) e as
@@ -1550,9 +1567,10 @@ export default function FinanceiroPage() {
     const n = Number(carneNumParcelas);
     if (!n || n < 2) { alert('Informe ao menos 2 parcelas.'); return; }
     const soSistema = carneCanal === 'sistema';
+    if (carneCanal === 'sicredi' && !sicrediHabilitado) return;
     if (!confirm(soSistema
-      ? `Serão criadas ${n} parcelas do plano somente no sistema (carnê simples, sem boleto na Ailos). Continuar?`
-      : `Serão criadas ${n} parcelas do plano e registradas na Ailos como carnê. Continuar?`)) return;
+      ? `Serão criadas ${n} parcelas do plano somente no sistema (carnê simples, sem boleto no banco). Continuar?`
+      : `Serão criadas ${n} parcelas do plano e registradas — ${nomeBancoBoleto(carneCanal as BancoBoleto)} — como carnê. Continuar?`)) return;
     setGerandoCarne(true); setModalError('');
     try {
       const criados = await apiFetch<{ id: number }[]>('/billings/parcelar', {
@@ -1563,15 +1581,16 @@ export default function FinanceiroPage() {
           valor_parcela: carneValor ? Number(carneValor.replace(',', '.')) : null,
           primeiro_vencimento: carnePrimeiroVenc || null,
           somente_sistema: soSistema,
+          banco: carneCanal === 'sicredi' ? 'sicredi' : 'ailos',
         }),
       }, token);
       setCarneModal(false);
       if (soSistema) {
-        setFeedback(`Carnê simples criado com ${criados.length} parcela(s), somente no sistema (sem boleto na Ailos).`);
+        setFeedback(`Carnê simples criado com ${criados.length} parcela(s), somente no sistema (sem boleto no banco).`);
         await loadData(token);
         return;
       }
-      await carne.iniciar(criados.map(b => b.id));
+      await carne.iniciar(criados.map(b => b.id), carneCanal as BancoBoleto);
     } catch (err) {
       setModalError(parseError(err));
     } finally {
@@ -2178,7 +2197,7 @@ export default function FinanceiroPage() {
               onBatchCancel={() => openBillingBatch('cancelar')}
               onBatchDelete={() => openBillingBatch('excluir')}
               onBatchMaint={() => { setModalError(''); setBatchMaintModal(true); }}
-              onBatchEmit={() => handleBatchBoletos('emitir')}
+              onBatchEmit={abrirEmissaoLote}
               batchBusy={!!batchBoletoAction || processing}
               batchProgress={batchBoletoProgress}
             />
@@ -2556,7 +2575,7 @@ export default function FinanceiroPage() {
               onBatchCancel={() => openBillingBatch('cancelar')}
               onBatchDelete={() => openBillingBatch('excluir')}
               onBatchMaint={() => { setModalError(''); setBatchMaintModal(true); }}
-              onBatchEmit={() => handleBatchBoletos('emitir')}
+              onBatchEmit={abrirEmissaoLote}
               batchBusy={!!batchBoletoAction || processing}
               batchProgress={batchBoletoProgress}
               batchActions={cfg?.lote}
@@ -2953,18 +2972,18 @@ export default function FinanceiroPage() {
               <p className="border-b border-slate-100 px-3 py-2 text-xs font-semibold uppercase tracking-widest text-slate-500 dark:border-slate-800">Carnês já gerados deste cliente</p>
               <div className="divide-y divide-slate-100 dark:divide-slate-800">
                 {carnesGerados.map(cg => (
-                  <div key={cg.lote_id} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
+                  <div key={chaveCarne(cg.lote_id, cg.banco)} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
                     <div className="min-w-0">
-                      <span className="font-medium text-slate-700 dark:text-slate-200">{cg.parcelas_registradas} de {cg.parcelas} parcela(s)</span>
+                      <span className="font-medium text-slate-700 dark:text-slate-200">{nomeBancoBoleto(cg.banco)} · {cg.parcelas_registradas} de {cg.parcelas} parcela(s)</span>
                       <span className="ml-2 text-xs text-slate-500">{cg.criado_em ? formatDate(cg.criado_em) : ''} · {formatCurrency(cg.total)}</span>
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
-                      <Badge variant={cg.status === 'completed' ? 'success' : 'warning'}>{cg.status === 'completed' ? 'Completo' : 'Processando'}</Badge>
+                      <Badge variant={cg.status === 'completed' ? 'success' : 'warning'}>{cg.status === 'completed' ? 'Completo' : cg.status === 'partial' ? 'Parcial' : 'Processando'}</Badge>
                       {cg.ticket && (
                         <button
                           type="button"
                           className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
-                          onClick={() => carne.abrirExistente(cg.lote_id, cg.ticket!)}
+                          onClick={() => carne.abrirExistente(cg.lote_id, cg.ticket!, cg.banco)}
                         ><Eye className="h-3.5 w-3.5" />Acompanhar</button>
                       )}
                     </div>
@@ -2980,7 +2999,7 @@ export default function FinanceiroPage() {
               <button
                 key={m}
                 type="button"
-                onClick={() => setCarneMode(m)}
+                onClick={() => { setCarneMode(m); if (m === 'existentes' && carneCanal === 'sistema') setCarneCanal('ailos'); }}
                 className={['rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors',
                   carneMode === m ? 'bg-brand-700 text-white' : 'border border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300'].join(' ')}
               >
@@ -2988,6 +3007,9 @@ export default function FinanceiroPage() {
               </button>
             ))}
           </div>
+
+          <CarneCanalChoice value={carneCanal} onChange={canal => { setCarneCanal(canal); setModalError(''); if (canal !== 'sistema') setCarneSelected(ids => ids.filter(id => carneBillings.some(b => b.id === id && cobrancaCompativelComBanco(b, canal)))); }} sicrediHabilitado={sicrediHabilitado} permitirSistema={carneMode === 'plano'} />
+          {carneCanal === 'sicredi' && sicrediAmbiente === 'sandbox' && <p className="text-sm text-amber-700">Sicredi em sandbox: os boletos são de teste e não têm validade financeira.</p>}
 
           {carneMode === 'existentes' ? (carneLoading ? (
             <p className="text-sm text-slate-500">Carregando boletos do cliente…</p>
@@ -2998,22 +3020,22 @@ export default function FinanceiroPage() {
               <div className="flex items-center justify-between">
                 <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Boletos em aberto ({carneBillings.length})</p>
                 <div className="flex items-center gap-3 text-xs">
-                  <button type="button" onClick={() => setCarneSelected(carneBillings.map(b => b.id))} className="font-semibold text-brand-700 hover:underline dark:text-brand-400">Selecionar todos</button>
+                  <button type="button" onClick={() => setCarneSelected(carneBillings.filter(b => cobrancaCompativelComBanco(b, carneCanal as BancoBoleto)).map(b => b.id))} className="font-semibold text-brand-700 hover:underline dark:text-brand-400">Selecionar todos</button>
                   <button type="button" onClick={() => setCarneSelected([])} className="text-slate-500 hover:underline">Limpar</button>
                 </div>
               </div>
               <div className="max-h-72 overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-700">
                 {carneBillings.map(b => (
                   <label key={b.id} className="flex cursor-pointer items-center gap-3 border-b border-slate-100 px-3 py-2 text-sm last:border-0 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/50">
-                    <input type="checkbox" className="rounded border-slate-300" checked={carneSelected.includes(b.id)} onChange={() => setCarneSelected(prev => prev.includes(b.id) ? prev.filter(id => id !== b.id) : [...prev, b.id])} />
-                    <span className="flex-1 truncate">{b.title || 'Cobrança'}{b.vehicle_plate ? ` · ${b.vehicle_plate}` : ''}{b.period_label ? ` · ${b.period_label}` : ''}</span>
+                    <input type="checkbox" className="rounded border-slate-300" disabled={!cobrancaCompativelComBanco(b, carneCanal as BancoBoleto)} checked={carneSelected.includes(b.id)} onChange={() => setCarneSelected(prev => prev.includes(b.id) ? prev.filter(id => id !== b.id) : [...prev, b.id])} />
+                    <span className="flex-1 truncate">{b.title || 'Cobrança'}{b.boleto_ailos ? ` · ${b.titulo_bancario?.canal === 'sicredi_api' ? 'Sicredi' : 'Ailos'}` : ''}{b.vehicle_plate ? ` · ${b.vehicle_plate}` : ''}{b.period_label ? ` · ${b.period_label}` : ''}</span>
                     <span className="whitespace-nowrap text-xs text-slate-500">venc. {formatDate(b.due_date)}</span>
                     <Badge variant={statusVariant(b.status)}>{statusLabel(b.status)}</Badge>
                     <span className="w-24 text-right font-mono font-semibold text-slate-900 dark:text-white">{formatCurrency(b.amount)}</span>
                   </label>
                 ))}
               </div>
-              <p className="text-xs text-slate-500">{carneSelected.length} de {carneBillings.length} selecionado(s). O carnê registra <strong>1 boleto real por parcela</strong> na Ailos.</p>
+              <p className="text-xs text-slate-500">{carneSelected.length} de {carneBillings.length} selecionado(s). O carnê registra <strong>1 boleto por parcela</strong> — {nomeBancoBoleto(carneCanal as BancoBoleto)}. Boletos já registrados permanecem no seu banco.</p>
             </>
           ) : (
             <p className="text-sm text-slate-500">Selecione um cliente para listar os boletos.</p>
@@ -3049,23 +3071,36 @@ export default function FinanceiroPage() {
                 <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Primeiro vencimento <span className="font-normal text-slate-500">(opcional — padrão: próximo vencimento do contrato)</span></span>
                 <input type="date" className={fieldClass} value={carnePrimeiroVenc} onChange={e => setCarnePrimeiroVenc(e.target.value)} />
               </label>
-              <div className="sm:col-span-2">
-                <CarneCanalChoice value={carneCanal} onChange={setCarneCanal} />
-              </div>
               <p className="sm:col-span-2 text-xs text-slate-500">
                 {carneCanal === 'sistema'
-                  ? `Serão criadas ${Number(carneNumParcelas) || 0} parcelas mensais do plano somente no sistema. Elas não podem ser emitidas na Ailos; o pagamento é registrado manualmente.`
-                  : `Serão criadas ${Number(carneNumParcelas) || 0} parcelas mensais do plano e registradas na Ailos como carnê (1 boleto por parcela).`}
+                  ? `Serão criadas ${Number(carneNumParcelas) || 0} parcelas mensais do plano somente no sistema. Elas não podem ser emitidas no banco; o pagamento é registrado manualmente.`
+                  : `Serão criadas ${Number(carneNumParcelas) || 0} parcelas mensais do plano e registradas — ${nomeBancoBoleto(carneCanal)} — como carnê (1 boleto por parcela).`}
               </p>
             </div>
           )}
         </div>
         <div className="mt-5 flex justify-end gap-3">
           <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200" onClick={() => setCarneModal(false)}>Cancelar</button>
-          <Button onClick={carneMode === 'existentes' ? () => gerarCarne(carneSelected) : gerarCarneDoPlano} disabled={gerandoCarne || (carneMode === 'existentes' ? carneSelected.length < 2 : (!carneContractId || Number(carneNumParcelas) < 2))}>{gerandoCarne ? 'Gerando carnê…' : carneMode === 'existentes' ? `Gerar carnê (${carneSelected.length})` : `Gerar carnê (${Number(carneNumParcelas) || 0} parcelas)`}</Button>
+          <Button onClick={carneMode === 'existentes' ? () => gerarCarne(carneSelected) : gerarCarneDoPlano} disabled={gerandoCarne || (carneCanal === 'sicredi' && !sicrediHabilitado) || (carneMode === 'existentes' ? carneSelected.length < 2 : (!carneContractId || Number(carneNumParcelas) < 2))}>{gerandoCarne ? 'Gerando carnê…' : carneMode === 'existentes' ? `Gerar carnê (${carneSelected.length})` : `Gerar carnê (${Number(carneNumParcelas) || 0} parcelas)`}</Button>
         </div>
       </Modal>
 
+      <Modal open={emissaoLoteModal} onClose={() => setEmissaoLoteModal(false)} title="Emitir boletos selecionados" size="md">
+        <div className="space-y-4 py-2">
+          <label className="block text-sm">Banco para emissão
+            <select aria-label="Banco para emissão em lote" className={fieldClass} value={batchBoletoBanco} onChange={event => setBatchBoletoBanco(event.target.value as BancoBoleto)}>
+              <option value="ailos">Ailos</option>
+              {sicrediHabilitado && <option value="sicredi">Sicredi</option>}
+            </select>
+          </label>
+          <p className="text-sm text-slate-500">Boletos já registrados serão preservados. Cada cobrança sem boleto será emitida uma única vez no banco escolhido.</p>
+          {batchBoletoBanco === 'sicredi' && sicrediAmbiente === 'sandbox' && <p className="text-sm text-amber-700">Sicredi em sandbox: emissão de teste, sem validade financeira.</p>}
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setEmissaoLoteModal(false)}>Cancelar</Button>
+            <Button disabled={!!batchBoletoAction || (batchBoletoBanco === 'sicredi' && !sicrediHabilitado)} onClick={() => handleBatchBoletos('emitir', batchBoletoBanco)}>Emitir com {nomeBancoBoleto(batchBoletoBanco)}</Button>
+          </div>
+        </div>
+      </Modal>
       <CarneTrackingModal carne={carne} />
 
       <Modal open={chargeModal} onClose={() => { setChargeModal(false); setModalError(''); }} title="Novo lançamento financeiro" description="Lance serviços, produtos e taxas com opção de parcelamento e remoção após pagamento." size="xl">

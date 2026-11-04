@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 import { BillingsModal } from './billings-modal';
-import type { BillingItem } from './types';
+import type { BillingItem, CarneItem } from './types';
 
 const parent: BillingItem = {
   id: 56870,
@@ -97,5 +97,30 @@ describe('BillingsModal', () => {
     rerender(<BillingsModal {...props} billings={[parcela(1, false), parcela(2, false)]} selectedIds={[1, 2]} />);
     expect(screen.queryByText('Carnê simples · só no sistema')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Gerar carnê' })).toBeEnabled();
+  });
+
+  it('oferece o banco Sicredi apenas quando habilitado e impede misturar títulos de outro banco', async () => {
+    const handlers = props();
+    const parcelas: BillingItem[] = [1, 2].map(id => ({ id, billing_type: 'carne', status: 'pendente', due_date: '2099-01-15', amount: 10,
+      boleto_ailos: true, titulo_bancario: { estado: 'registrado', canal: 'sicredi_api' } }));
+    const change = vi.fn();
+    const { rerender } = render(<BillingsModal {...handlers} billings={parcelas} selectedIds={[1, 2]} sicrediHabilitado carneBanco="ailos" onCarneBancoChange={change} />);
+    expect(screen.getByRole('button', { name: 'Gerar carnê' })).toBeDisabled();
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Banco do carnê' }), 'sicredi');
+    expect(change).toHaveBeenCalledWith('sicredi');
+    rerender(<BillingsModal {...handlers} billings={parcelas} selectedIds={[1, 2]} sicrediHabilitado carneBanco="sicredi" onCarneBancoChange={change} />);
+    expect(screen.getByRole('button', { name: 'Gerar carnê' })).toBeEnabled();
+  });
+
+  it('distingue carnês de bancos diferentes com o mesmo ID, inclusive no detalhe e no download', async () => {
+    const handlers = props();
+    const item: CarneItem = { lote_id: 7, ticket: 'ticket', parcelas: 1, parcelas_registradas: 1, parcelas_pagas: 0, total: 10, valor_pago: 0,
+      status: 'completed', parcelas_detalhe: [{ billing_id: 2, numero_parcela: 1, vencimento: '2099-01-15', valor: 10, status: 'pendente', data_pagamento: null }] };
+    render(<BillingsModal {...handlers} onAcompanharCarne={vi.fn()} billings={[]} carnes={[{ ...item, banco: 'ailos' }, { ...item, banco: 'sicredi' }]} carneExpandido="sicredi:7" />);
+    expect(screen.getAllByText(new Date('2099-01-15').toLocaleDateString('pt-BR'))).toHaveLength(1);
+    await userEvent.click(screen.getByRole('button', { name: 'Carnê #7 · Sicredi' }));
+    expect(handlers.onToggleCarne).toHaveBeenCalledWith(7, 'sicredi');
+    await userEvent.click(screen.getAllByRole('button', { name: 'Baixar carnê' })[1]);
+    expect(handlers.onBaixarCarne).toHaveBeenCalledWith(7, 'sicredi');
   });
 });

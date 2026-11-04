@@ -56,6 +56,19 @@ def test_carne_ailos_continua_como_antes(http, db, contrato, cliente):
     assert cliente.forma_cobranca == 'carne_ailos'
 
 
+def test_parcelamento_sicredi_define_forma_sem_emitir_titulos(http, db, contrato, cliente):
+    parcelas = _parcelar(http, contrato, banco='sicredi')
+    assert not any(p['somente_sistema'] for p in parcelas)
+    db.refresh(cliente)
+    assert cliente.forma_cobranca == 'carne_sicredi'
+    from app.models.sicredi_boleto import SicrediBoleto
+    assert db.query(SicrediBoleto).count() == 0
+    assert http.post(PARCELAR, json={
+        'contract_id': contrato.id, 'num_parcelas': 3,
+        'primeiro_vencimento': '2099-01-15', 'banco': 'outro',
+    }).status_code == 422
+
+
 def test_forma_ja_escolhida_no_cadastro_nao_e_sobrescrita(http, db, contrato, cliente):
     cliente.forma_cobranca = 'boleto_mensal'
     db.commit()

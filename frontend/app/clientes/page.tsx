@@ -8,6 +8,9 @@ import { Users, AlertTriangle, Building2, CheckCircle2, Plus, Trash2, Car, Coins
 import { PageShell } from '@/components/page-shell';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { CarneTrackingModal, useCarneTracking } from '@/components/carne-tracking-modal';
+import { useSicrediDisponivel } from '@/lib/use-sicredi-disponivel';
+import { cobrancaCompativelComBanco, caminhoPdfCarne, chaveCarne, nomeBancoBoleto, type BancoBoleto } from '@/lib/banco-boleto';
 import { BillingBatchModal } from '@/components/billing-batch-modal';
 import { billingBatchSummary, canSelectBilling, type BillingBatchAction, type BillingBatchResult } from '@/lib/billing-batch';
 import { StatCard } from '@/components/ui/stat-card';
@@ -176,7 +179,14 @@ function ClientesPageInner() {
   // Carnês já gerados do cliente (reabrir/baixar) — carneExpandido controla
   // qual card está com o detalhe por parcela (pago/pendente) aberto.
   const [carnes, setCarnes] = useState<CarneItem[]>([]);
-  const [carneExpandido, setCarneExpandido] = useState<number | null>(null);
+  const [carneExpandido, setCarneExpandido] = useState<string | null>(null);
+  const [carneBanco, setCarneBanco] = useState<BancoBoleto>('ailos');
+  const sicrediHabilitado = useSicrediDisponivel(token, billingsModalOpen);
+  const carne = useCarneTracking(token, ({ total }) => {
+    setSelectedBillingIds([]);
+    setFeedback(`Carnê gerado com ${total} parcela(s).`);
+    void refreshEditedBillings();
+  });
 
   // Unificação de boletos (negociação: N boletos abertos → 1 avulso)
   const [unifyOpen, setUnifyOpen] = useState(false);
@@ -258,6 +268,8 @@ function ClientesPageInner() {
     setBillingsModalClient(client);
     setBillingsModalOpen(true);
     setSelectedBillingIds([]);
+    setCarneBanco('ailos');
+    setCarneExpandido(null);
     setBillingsLoading(true);
     try {
       const [data, cs] = await Promise.all([
@@ -277,10 +289,10 @@ function ClientesPageInner() {
     setCarnes(cs);
   }
 
-  async function baixarCarne(loteId: number) {
+  async function baixarCarne(loteId: number, banco: BancoBoleto = 'ailos') {
     if (!token) return;
     try {
-      const resp = await fetch(`${API_URL.replace(/\/+$/, '')}/boletos/carne/${loteId}/pdf`, {
+      const resp = await fetch(`${API_URL.replace(/\/+$/, '')}${caminhoPdfCarne(loteId, banco)}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!resp.ok) {
@@ -288,7 +300,7 @@ function ClientesPageInner() {
         try { detalhe = (await resp.json())?.detail || detalhe; } catch { /* noop */ }
         throw new Error(detalhe);
       }
-      entregarArquivo(await resp.blob(), `carne-${loteId}.pdf`, { emNovaAba: true });
+      entregarArquivo(await resp.blob(), `carne-${banco}-${loteId}.pdf`, { emNovaAba: true });
     } catch (err) {
       alert(parseError(err));
     }
@@ -341,57 +353,20 @@ function ClientesPageInner() {
     setUnifyOpen(true);
   }
 
-  /**
-   * Gera o carnê das cobranças selecionadas: registra o lote na Ailos,
-   * aguarda o processamento (assíncrono) e baixa o PDF. As parcelas são as
-   * cobranças em aberto do mesmo cliente, na ordem selecionada.
-   */
+  /** Compartilha registro, consulta por parcela e recuperação com o Financeiro. */
   async function gerarCarne() {
-    if (!token || selectedBillingIds.length < 2) return;
-    const qtd = selectedBillingIds.length;
-    if (!confirm(`Gerar o carnê registra ${qtd} boletos reais na Ailos (um por parcela). Continuar?`)) return;
+    if (!token || selectedBillingIds.length < 2 || gerandoCarne) return;
+    const banco = carneBanco;
+    if (banco === 'sicredi' && !sicrediHabilitado) return;
+    if (clientBillings.some(b => selectedBillingIds.includes(b.id) && (b.somente_sistema || !cobrancaCompativelComBanco(b, banco)))) return;
+    if (!confirm(`Gerar o carnê registra ${selectedBillingIds.length} boletos reais — ${nomeBancoBoleto(banco)} (um por parcela). Continuar?`)) return;
     setGerandoCarne(true);
     try {
-      // 1. registra o carnê (assíncrono — devolve o lote com ticket)
-      const lote = await apiFetch<{ id: number; ticket: string; status: string }>(
-        '/ailos/carne/lote',
-        { method: 'POST', body: JSON.stringify({ billing_ids: selectedBillingIds }) },
-        token,
-      );
-      // 2. aguarda o lote sair de "processing" (cada consulta atualiza os boletos)
-      let status = lote.status;
-      for (let i = 0; i < 15 && status === 'processing'; i++) {
-        await new Promise((r) => setTimeout(r, 3000));
-        const st = await apiFetch<{ status: string }>(`/ailos/lotes/${lote.ticket}`, {}, token).catch(() => ({ status } as { status: string }));
-        status = st.status;
-      }
-      // O carnê já foi REGISTRADO no passo 1. Se ainda processa, não insistir no
-      // download (evita re-registro, que duplicaria boletos).
-      if (status === 'processing') {
-        setSelectedBillingIds([]);
-        await reloadCarnes();
-        setFeedback(`Carnê registrado (lote #${lote.id}). As parcelas ainda estão sendo processadas na Ailos — ele já aparece em "Carnês gerados"; baixe o PDF em instantes.`);
-        return;
-      }
-      // 3. baixa o PDF do carnê (só as parcelas já registradas entram)
-      const resp = await fetch(`${API_URL.replace(/\/+$/, '')}/boletos/carne/${lote.id}/pdf`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!resp.ok) {
-        let detalhe = `Erro ${resp.status}`;
-        try { detalhe = (await resp.json())?.detail || detalhe; } catch { /* noop */ }
-        throw new Error(`Carnê registrado (lote #${lote.id}), mas o PDF ainda não saiu: ${detalhe}`);
-      }
-      entregarArquivo(await resp.blob(), `carne-${lote.id}.pdf`, { emNovaAba: true });
-      setSelectedBillingIds([]);
-      setFeedback(`Carnê gerado com ${qtd} parcela(s).`);
-      await Promise.all([reloadClientBillings(), reloadCarnes()]);
-    } catch (err) {
-      alert(parseError(err));
-    } finally {
-      setGerandoCarne(false);
-    }
+      await carne.iniciar([...selectedBillingIds], banco);
+      await refreshEditedBillings();
+    } finally { setGerandoCarne(false); }
   }
+
 
   async function saveUnify() {
     if (!token || selectedBillingIds.length < 2) return;
@@ -1448,8 +1423,10 @@ function ClientesPageInner() {
         onDeleteDoc={removeContractDoc}
       />
 
+      <CarneTrackingModal carne={carne} />
+
       <BillingsModal
-        open={billingsModalOpen && !editBilling && !batchBillingAction && !receiveBilling}
+        open={billingsModalOpen && !editBilling && !batchBillingAction && !receiveBilling && !carne.track}
         error={editBillingError}
         feedback={editBillingNotice}
         clientName={billingsModalClient?.name}
@@ -1460,11 +1437,15 @@ function ClientesPageInner() {
         summaryExpanded={billingSummaryExpanded}
         selectedIds={selectedBillingIds}
         gerandoCarne={gerandoCarne}
+        sicrediHabilitado={sicrediHabilitado}
+        carneBanco={carneBanco}
+        onCarneBancoChange={setCarneBanco}
         onClose={() => { setBillingsModalOpen(false); setBillingsModalClient(null); setClientBillings([]); setCarnes([]); setBillingSummaryExpanded(false); setSelectedBillingIds([]); }}
         onToggleSummary={() => setBillingSummaryExpanded((p) => !p)}
         onSelectedIdsChange={setSelectedBillingIds}
-        onToggleCarne={(loteId) => setCarneExpandido((prev) => (prev === loteId ? null : loteId))}
+        onToggleCarne={(loteId, banco) => { const key = chaveCarne(loteId, banco); setCarneExpandido(prev => prev === key ? null : key); }}
         onBaixarCarne={baixarCarne}
+        onAcompanharCarne={carne.abrirExistente}
         onOpenUnify={openUnifyModal}
         onBatchCancel={canFinance ? () => openBillingBatch('cancelar') : undefined}
         onBatchDelete={canFinance ? () => openBillingBatch('excluir') : undefined}

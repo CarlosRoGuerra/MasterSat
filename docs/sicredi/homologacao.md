@@ -188,8 +188,9 @@ SICREDI_CODIGO_BENEFICIARIO=11948
 SICREDI_BOLETO_HIBRIDO=true
 ```
 
-Rebuild de `backend` e `backend-worker` (a migration `e3b9d5a71c42` cria três
-tabelas novas e não altera dados) e do `frontend`. Teste em Configurações →
+Rebuild de `backend`, `backend-worker` e `frontend`, aplicando as migrations
+até `a6e2d9c51b74` (integração, fila de lotes e forma Carnê Sicredi).
+Teste em Configurações →
 `POST /api/v1/sicredi/testar-conexao` (admin): só autentica.
 
 ## 5. Operação
@@ -197,6 +198,8 @@ tabelas novas e não altera dados) e do `frontend`. Teste em Configurações →
 | Ação | Onde | O que faz |
 |---|---|---|
 | Gerar boleto (Sicredi) | Financeiro → cobrança | Registra pela API e imprime no modelo MasterSat |
+| Emitir selecionados | Financeiro → ações em lote | Escolhe Ailos ou Sicredi e informa o resultado por cobrança |
+| Gerar carnê (Sicredi) | Financeiro, central do cliente ou cadastro do veículo | Registra as parcelas e acompanha o progresso por lote |
 | PDF do boleto (Sicredi) | idem | Mesmo layout Ailos, com identificação e códigos oficiais Sicredi |
 | Consultar no Sicredi | idem | Quita se pago, confirma baixa, resolve registro incerto |
 | Dar baixa no Sicredi | idem (registrado ou com baixa pendente) | Instrução de baixa pela API; confirmação chega pela consulta |
@@ -207,9 +210,28 @@ tabelas novas e não altera dados) e do `frontend`. Teste em Configurações →
 Cancelar uma cobrança com boleto Sicredi pede confirmação e deixa a baixa
 **pendente**: em seguida use "Dar baixa no Sicredi".
 
+O carnê Sicredi reserva cada nosso número antes do envio. A fila é durável
+e o worker recupera lotes interrompidos. Uma falha parcial mantém o que já
+foi registrado; as ações por parcela e de pendentes consultam títulos
+incertos antes de permitir outro POST. O mesmo conjunto de cobranças e
+convênio reutiliza o lote. Não se misturam responsáveis diferentes em um
+carnê, nem títulos ativos de outro banco. O cadastro **Carnê Sicredi**
+identifica a forma de cobrança, mas não emite parcelas automaticamente.
+
+Rotas (admin/financeiro):
+
+- `POST /api/v1/sicredi/carne/lote` e `/boletos/lote`: `billing_ids`.
+- `GET /api/v1/sicredi/lotes/{ticket}`: progresso e resultado por parcela,
+  sem emissão; `partial` aguarda ação manual.
+- `POST /api/v1/sicredi/lotes/{id}/registrar-pendentes` e
+  `/parcelas/{billing_id}/registrar`: retomada segura.
+- `GET /api/v1/boletos/carne`: carteira unificada, com campo `banco`.
+- `GET /api/v1/boletos/carne/{id}/pdf?banco=sicredi`: três parcelas por folha,
+  códigos e Pix oficiais. Se houver parcelas indisponíveis, somente a ação
+  explícita com `&parcial=true` permite imprimir as disponíveis.
+
 ## 6. Ainda não coberto (próxima etapa)
 
-- Carnê/lote pelo Sicredi (hoje só a emissão individual).
 - Modal "Pendências bancárias" do Financeiro lista só as da Ailos (as do
   Sicredi aparecem no detalhe da cobrança).
 - Alterar vencimento pela API (hoje "Corrigir vencimento" cria cobrança nova e

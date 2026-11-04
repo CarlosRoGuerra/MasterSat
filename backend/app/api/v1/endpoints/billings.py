@@ -8,6 +8,7 @@ from collections import defaultdict
 from datetime import date, datetime
 from decimal import Decimal
 from io import BytesIO, StringIO
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -797,6 +798,7 @@ def create_item(payload: BillingCreate, db: Session = Depends(get_db), _: object
 
 
 class ParcelarContratoIn(BaseModel):
+    banco: Literal['ailos', 'sicredi'] = 'ailos'
     contract_id: int
     num_parcelas: int = Field(ge=2, le=60)
     valor_parcela: float | None = None       # padrão: valor do plano do contrato
@@ -889,7 +891,8 @@ def parcelar_contrato(payload: ParcelarContratoIn, db: Session = Depends(get_db)
     # ainda não foi informada — escolha feita no cadastro não é sobrescrita.
     pagador = db.get(Client, payer_client_id)
     if pagador is not None and not pagador.forma_cobranca:
-        pagador.forma_cobranca = 'carne_simples' if payload.somente_sistema else 'carne_ailos'
+        pagador.forma_cobranca = ('carne_simples' if payload.somente_sistema
+                                else 'carne_sicredi' if payload.banco == 'sicredi' else 'carne_ailos')
     _commit_billing_write(db)
 
     ids = [b.id for b in criados]

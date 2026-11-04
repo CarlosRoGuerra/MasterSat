@@ -7,6 +7,7 @@ import { ClientAutocomplete } from '@/components/ui/client-autocomplete';
 import { TrackerAutocomplete } from '@/components/ui/tracker-autocomplete';
 import { BillingDayInput } from '@/components/ui/billing-day-input';
 import { CarneTrackingModal, useCarneTracking } from '@/components/carne-tracking-modal';
+import { useSicrediDisponivel } from '@/lib/use-sicredi-disponivel';
 import { CarneCanalChoice, type CarneCanal } from '@/components/carne-canal-choice';
 import { apiFetch, apiFetchList } from '@/lib/api';
 import { fetchAddressByCep } from '@/lib/cep';
@@ -191,6 +192,7 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
   // acompanhamento (não o carregamento inicial) é que deve concluir o
   // assistente.
   const carne = useCarneTracking(token);
+  const sicrediHabilitado = useSicrediDisponivel(token, open);
   const [carneIniciado, setCarneIniciado] = useState(false);
 
   useEffect(() => {
@@ -349,6 +351,7 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
   async function confirmPlan() {
     if (!vehicle || !pf.plan_id) { setError('Selecione um plano.'); return; }
     const carneMode = pf.payment_method === 'boleto' && pf.billing_mode === 'carne';
+    if (carneMode && pf.carne_canal === 'sicredi' && !sicrediHabilitado) { setError('Sicredi indisponível para emissão. Selecione outro banco.'); return; }
     const numParcelas = Number(pf.num_parcelas);
     if (carneMode && (!numParcelas || numParcelas < 2)) {
       setError('Informe ao menos 2 parcelas para o carnê.');
@@ -386,6 +389,7 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
               contract_id: contract.id,
               num_parcelas: numParcelas,
               somente_sistema: pf.carne_canal === 'sistema',
+              banco: pf.carne_canal === 'sicredi' ? 'sicredi' : 'ailos',
             }),
           },
           token,
@@ -425,10 +429,10 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
       // manualmente. onComplete() só é chamado quando o acompanhamento fechar
       // (ver o efeito que observa carne.track).
       // Carnê simples (somente no sistema) não vai à Ailos: termina aqui.
-      if (carneMode && parcelasCarne.length > 0 && pf.carne_canal === 'ailos') {
+      if (carneMode && parcelasCarne.length > 0 && pf.carne_canal !== 'sistema') {
         setCarneIniciado(true);
         setSaving(false);
-        await carne.iniciar(parcelasCarne.map(b => b.id));
+        await carne.iniciar(parcelasCarne.map(b => b.id), pf.carne_canal);
         return;
       }
 
@@ -1060,7 +1064,7 @@ export function VehicleOnboardingWizard({ open, token, clients, onComplete, onCl
 
                       {pf.billing_mode === 'carne' && (
                         <div className="mt-3">
-                          <CarneCanalChoice value={pf.carne_canal} onChange={canal => setPf(prev => ({ ...prev, carne_canal: canal }))} />
+                          <CarneCanalChoice sicrediHabilitado={sicrediHabilitado} value={pf.carne_canal} onChange={canal => setPf(prev => ({ ...prev, carne_canal: canal }))} />
                         </div>
                       )}
 

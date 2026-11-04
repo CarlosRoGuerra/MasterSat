@@ -806,6 +806,18 @@ def _sicredi_conciliacao():
                 ja_alertado = True
 
 
+def _sicredi_lotes_worker():
+    """Retoma a fila persistida quando um processo de emissão é interrompido."""
+    from app.services.sicredi_lotes import processar_fila
+    logger = logging.getLogger('uvicorn.error')
+    while True:
+        try:
+            _run_locked(918273654, processar_fila)
+        except Exception as exc:
+            logger.warning('Fila de lotes Sicredi será retomada: %s', exc)
+        time.sleep(60)
+
+
 def _sicredi_log_retention_worker():
     """Purga sicredi_api_logs mais velhos que SICREDI_LOG_RETENTION_MONTHS (1x/dia)."""
     from app.models.sicredi_api_log import SicrediApiLog
@@ -1025,6 +1037,7 @@ def on_startup():
     # a integração configurada (SICREDI_API_KEY).
     if settings.sicredi_api_key:
         threading.Thread(target=_sicredi_conciliacao, name='sicredi-conciliacao', daemon=True).start()
+        threading.Thread(target=_sicredi_lotes_worker, name='sicredi-lotes', daemon=True).start()
     # Retenção dos logs da API Sicredi: sempre ligada, como a da Ailos.
     threading.Thread(target=_sicredi_log_retention_worker, daemon=True).start()
 

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import NoReturn
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
@@ -23,6 +23,7 @@ from app.core.config import settings
 from app.db.session import get_db
 from app.models.enums import UserRole
 from app.models.sicredi_boleto import SicrediBoleto
+from app.models.sicredi_lote import SicrediLote
 from app.models.user import User
 from app.schemas.sicredi import (
     SicrediBaixaIn,
@@ -32,9 +33,10 @@ from app.schemas.sicredi import (
     SicrediConexaoOut,
     SicrediConsultaOut,
     SicrediEmitirIn,
+    SicrediLoteIn,
     SicrediStatusOut,
 )
-from app.services import sicredi_boletos, sicredi_client, titulo_bancario
+from app.services import sicredi_boletos, sicredi_client, sicredi_lotes, titulo_bancario
 from app.services.sicredi_nosso_numero import NossoNumeroError
 from app.services.titulo_bancario import PoliticaBancariaError
 
@@ -144,6 +146,79 @@ def emitir_endpoint(
         db.rollback()
         raise_sicredi_error(exc)
     return _boleto_out(boleto)
+
+
+def _criar_lote(payload: SicrediLoteIn, tasks: BackgroundTasks, db: Session, tipo: str):
+    try:
+        lote = sicredi_lotes.criar_lote(db, payload.billing_ids, tipo=tipo)
+    except (ValueError, *_EXCECOES) as exc:
+        db.rollback()
+        if isinstance(exc, ValueError):
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise_sicredi_error(exc)
+    _agendar_lote(tasks, db, lote)
+    return {'id': lote.id, 'ticket': lote.ticket, 'status': lote.status, 'banco': 'sicredi', 'billing_ids': lote.billing_ids}
+
+
+def _agendar_lote(tasks: BackgroundTasks, db: Session, lote: SicrediLote) -> None:
+    try:
+        sicredi_lotes.validar_convenio(lote)
+    except _EXCECOES as exc:
+        db.rollback()
+        raise_sicredi_error(exc)
+    # O GET seguinte acompanha a nova tentativa, mesmo antes de o task iniciar.
+    lote.status = 'processing'
+    db.commit()
+    tasks.add_task(sicredi_lotes.processar_em_background, lote.id, True)
+
+
+@router.post('/carne/lote')
+def criar_carne_endpoint(payload: SicrediLoteIn, tasks: BackgroundTasks, db: Session = Depends(get_db),
+                         _: object = Depends(require_roles(*ALLOWED_ROLES))):
+    return _criar_lote(payload, tasks, db, 'carne')
+
+
+@router.post('/boletos/lote')
+def criar_lote_endpoint(payload: SicrediLoteIn, tasks: BackgroundTasks, db: Session = Depends(get_db),
+                        _: object = Depends(require_roles(*ALLOWED_ROLES))):
+    return _criar_lote(payload, tasks, db, 'boleto')
+
+
+def _lote_ou_404(db: Session, lote_id: int) -> SicrediLote:
+    lote = db.get(SicrediLote, lote_id)
+    if lote is None:
+        raise HTTPException(status_code=404, detail='Lote Sicredi não encontrado.')
+    return lote
+
+
+@router.get('/lotes/{ticket}')
+def status_lote_endpoint(ticket: str, db: Session = Depends(get_db),
+                         _: object = Depends(require_roles(*ALLOWED_ROLES))):
+    lote = db.query(SicrediLote).filter_by(ticket=ticket).first()
+    if lote is None:
+        raise HTTPException(status_code=404, detail='Lote Sicredi não encontrado.')
+    return sicredi_lotes.status_lote(db, lote)
+
+
+@router.post('/lotes/{lote_id}/registrar-pendentes')
+def retentar_lote_endpoint(lote_id: int, tasks: BackgroundTasks, db: Session = Depends(get_db),
+                          _: object = Depends(require_roles(*ALLOWED_ROLES))):
+    lote = _lote_ou_404(db, lote_id)
+    _agendar_lote(tasks, db, lote)
+    return sicredi_lotes.status_lote(db, lote)
+
+
+@router.post('/lotes/{lote_id}/parcelas/{billing_id}/registrar')
+def retentar_parcela_endpoint(lote_id: int, billing_id: int, db: Session = Depends(get_db),
+                             _: object = Depends(require_roles(*ALLOWED_ROLES))):
+    lote = _lote_ou_404(db, lote_id)
+    if billing_id not in lote.billing_ids:
+        raise HTTPException(status_code=404, detail='A parcela não pertence ao lote.')
+    try:
+        return sicredi_lotes.processar_lote(db, lote.id, billing_ids=[billing_id], retentar=True)
+    except _EXCECOES as exc:
+        db.rollback()
+        raise_sicredi_error(exc)
 
 
 @router.get('/boletos/{billing_id}', response_model=SicrediBoletoOut)

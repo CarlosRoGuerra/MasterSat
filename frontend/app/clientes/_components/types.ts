@@ -116,6 +116,7 @@ export type CarneParcelaDetalhe = {
 };
 
 export type CarneItem = {
+  banco?: 'ailos' | 'sicredi';
   lote_id: number;
   ticket?: string | null;
   criado_em?: string | null;

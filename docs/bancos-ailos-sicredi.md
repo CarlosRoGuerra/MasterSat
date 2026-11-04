@@ -19,6 +19,29 @@ Baixar, enviar por e-mail ou abrir pelo WhatsApp/link público não cadastra
 outro título nem depende do download do PDF padrão do banco. Consulta e
 conciliação continuam confirmando o pagamento e a baixa.
 
+## Lotes e carnês
+
+O Financeiro oferece a escolha **Ailos / Sicredi** na emissão dos boletos
+selecionados. O carnê do plano, o carnê de cobranças existentes, a central
+do cliente e o cadastro de veículo também oferecem Sicredi. A opção fica
+disponível quando o canal está configurado; a Ailos permanece como padrão.
+No cadastro do cliente e nos filtros existe **Carnê Sicredi**.
+
+Cada parcela corresponde a um título registrado. O Sicredi usa a mesma
+emissão individual idempotente em uma fila persistente: reserva os números
+antes do envio, acompanha o progresso por parcela e retoma o restante após
+reinício do servidor. Uma falha não impede o registro das demais parcelas.
+A nova tentativa ignora os títulos confirmados e consulta os registros
+incertos antes de reenviar. Reservas na fila também impedem alterações de
+valor, recebimento manual e emissão em outro banco.
+
+O carnê usa o mesmo modelo compacto MasterSat, com três parcelas por folha
+A4, identificação Sicredi e o Pix oficial de cada parcela quando devolvido
+pelo banco. Download e acompanhamento não registram cobranças. Um carnê
+incompleto só pode ser baixado pela ação explícita **Baixar parcial**.
+O banco acompanha o lote, inclusive nas consultas, tentativas e PDFs;
+os IDs de carnês Ailos e Sicredi são independentes.
+
 ## Conferência local
 
 O ambiente local usa `SICREDI_AMBIENTE=sandbox`,
@@ -104,8 +127,10 @@ a conciliação automática atual usa as APIs, não interpreta retorno CNAB.
 
 ## Publicação posterior à aprovação
 
-Aplicar a migration `e3b9d5a71c42` (três tabelas Sicredi) e reconstruir backend,
-worker e frontend. As migrations têm uma única revisão final. Em produção,
+Aplicar as migrations até `a6e2d9c51b74`: `e3b9d5a71c42` cria a integração
+Sicredi, `f4c8b2a63d10` adiciona lotes e reservas na fila e `a6e2d9c51b74`
+permite a forma de cobrança Carnê Sicredi. Reconstruir backend, worker e
+frontend. As migrations têm uma única revisão final. Em produção,
 configurar a chave de produção Sicredi, Código de Acesso e convênio
 2602/13/11948 no arquivo de segredos; só então usar
 `SICREDI_AMBIENTE=producao` e `SICREDI_PRODUCAO_CONFIRMADA=true`. Boleto híbrido

@@ -302,7 +302,7 @@ def _local_pagamento(d: DadosBoleto) -> str:
     return 'Pagar preferencialmente nas cooperativas do Sistema AILOS.'
 
 
-def _draw_banco(c, d: DadosBoleto, x: float, y_top: float, h_mm: float) -> None:
+def _draw_banco(c, d: DadosBoleto, x: float, y_top: float, h_mm: float, *, max_w_mm: float = 32) -> None:
     if d.banco_codigo != '748':
         _draw_ailos(c, x, y_top, h_mm=h_mm)
         return
@@ -311,7 +311,7 @@ def _draw_banco(c, d: DadosBoleto, x: float, y_top: float, h_mm: float) -> None:
     if _SICREDI_PATH:
         reader = ImageReader(_SICREDI_PATH)
         width, height = reader.getSize()
-        scale = min(_mm(32) / width, _mm(h_mm) / height)
+        scale = min(_mm(max_w_mm) / width, _mm(h_mm) / height)
         c.drawImage(reader, x, y_top - _mm(h_mm) / 2 - height * scale / 2,
                     width=width * scale, height=height * scale, mask='auto')
     else:
@@ -729,17 +729,17 @@ def _draw_boleto_itau_style(c, d: DadosBoleto, y_top: float, parcela: tuple[int,
     ag_cod = f"{d.cedente_agencia} / {d.cedente_codigo}"
     y = y_top
 
-    # ── Cabeçalho (full width): MasterSat | Ailos | 085-0 | linha digitável ──
+    # ── Cabeçalho: MasterSat | banco | código do banco | linha digitável ──
     H_HDR = _mm(8)
     _box(c, LM, y, CW, H_HDR, lw=0.7)
     _draw_mastersat(c, LM + _mm(1.5), y - _mm(0.9), h_mm=6.2, max_w_mm=26.0)
     s1 = LM + _mm(30)
     _vline(c, s1, y - H_HDR, y, lw=0.7)
-    _draw_ailos(c, s1 + _mm(1.5), y - _mm(0.7), h_mm=6.6)
+    _draw_banco(c, d, s1 + _mm(1.5), y - _mm(0.7), h_mm=6.6, max_w_mm=25)
     s2 = s1 + _mm(28)
     _vline(c, s2, y - H_HDR, y, lw=0.7)
     c.setFillColorRGB(0, 0, 0); c.setFont("Helvetica-Bold", 11)
-    c.drawCentredString(s2 + _mm(7), y - H_HDR / 2 - _mm(1.6), "085-0")
+    c.drawCentredString(s2 + _mm(7), y - H_HDR / 2 - _mm(1.6), '748-X' if d.banco_codigo == '748' else '085-0')
     s3 = s2 + _mm(14)
     _vline(c, s3, y - H_HDR, y, lw=0.7)
     c.setFont("Helvetica-Bold", 7.5)
@@ -752,13 +752,14 @@ def _draw_boleto_itau_style(c, d: DadosBoleto, y_top: float, parcela: tuple[int,
     cF = RM - fx
 
     # ── Canhoto (recibo do pagador) — coluna esquerda ──
-    H = _mm(4.6)
+    # Compensa o I2of5 Sicredi de 13 mm sem alterar a densidade de 3 parcelas.
+    H = _mm(4.2 if d.banco_codigo == '748' else 4.6)
     yc = y
     canhoto = [
         ("Vencimento", _fd(d.data_vencimento), "left"),
         ("Agência/Código do Beneficiário", ag_cod, "left"),
         ("Nosso número", d.nosso_numero_display, "left"),
-        ("Nº documento", str(d.billing_id), "left"),
+        ("Nº documento", d.numero_documento or str(d.billing_id), "left"),
         ("Espécie", "REAL", "left"),
         ("Quantidade", "", "left"),
         ("(=) Valor Documento", _fv(d.valor), "right"),
@@ -783,7 +784,7 @@ def _draw_boleto_itau_style(c, d: DadosBoleto, y_top: float, parcela: tuple[int,
     # ── Ficha de compensação — coluna direita ──
     Hr = _mm(5.5); yf = y
     _cell(c, fx, yf, cF * 0.80, Hr, "Local de pagamento",
-          "Até o vencimento, pague nas cooperativas do Sistema AILOS.", vsize=6.3)
+          _local_pagamento(d) if d.banco_codigo == '748' else "Até o vencimento, pague nas cooperativas do Sistema AILOS.", vsize=6.3, fit=True)
     _cell(c, fx + cF * 0.80, yf, cF * 0.20, Hr, "Vencimento",
           _fd(d.data_vencimento), align="right", vsize=7)
     yf -= Hr
@@ -796,7 +797,7 @@ def _draw_boleto_itau_style(c, d: DadosBoleto, y_top: float, parcela: tuple[int,
     w = cF
     cDD = w*.13; cND = w*.17; cES = w*.08; cAC = w*.06; cDP = w*.14; cNN = w - cDD-cND-cES-cAC-cDP
     _cell(c, fx,                       yf, cDD, Hr, "Data do documento", _fd(d.data_emissao), vsize=6.3)
-    _cell(c, fx+cDD,                   yf, cND, Hr, "Nº documento", str(d.billing_id), vsize=6.3)
+    _cell(c, fx+cDD,                   yf, cND, Hr, "Nº documento", d.numero_documento or str(d.billing_id), vsize=6.3)
     _cell(c, fx+cDD+cND,               yf, cES, Hr, "Espécie", "DS", vsize=6.3)
     _cell(c, fx+cDD+cND+cES,           yf, cAC, Hr, "Aceite", d.aceite, vsize=6.3)
     _cell(c, fx+cDD+cND+cES+cAC,       yf, cDP, Hr, "Data process.", _fd(d.data_emissao), vsize=6.3)
@@ -854,8 +855,12 @@ def _draw_boleto_itau_style(c, d: DadosBoleto, y_top: float, parcela: tuple[int,
 
     _box(c, fx, yf, cF, _mm(5))
     c.setFont("Helvetica-Bold", 5.8); c.setFillColorRGB(0, 0, 0)
-    c.drawString(fx + _mm(1), yf - _mm(3.2),
-                 f"Beneficiário: {d.cedente_nome} - {_fmt_cnpj(d.cedente_cnpj)}")
+    if d.banco_codigo == '748':
+        c.setFont('Helvetica-Bold', 5)
+        c.drawString(fx + _mm(1), yf - _mm(3.2), d.cedente_nome)
+    else:
+        c.drawString(fx + _mm(1), yf - _mm(3.2),
+                     f"Beneficiário: {d.cedente_nome} - {_fmt_cnpj(d.cedente_cnpj)}")
     c.drawRightString(RM - _mm(1), yf - _mm(3.2), "Autenticação mecânica - Ficha de Compensação")
     yf -= _mm(5)
 
@@ -871,8 +876,12 @@ def _draw_boleto_itau_style(c, d: DadosBoleto, y_top: float, parcela: tuple[int,
 
     # Código de barras sob a ficha
     ybar = min(yc, yf) - _mm(2)
-    _draw_barcode(c, d.codigo_barras, fx, ybar, height_mm=9)
-    ybar -= _mm(10)
+    if d.banco_codigo == '748':
+        _draw_barcode(c, d.codigo_barras, fx, ybar, height_mm=13, width_mm=103)
+        ybar -= _mm(14)
+    else:
+        _draw_barcode(c, d.codigo_barras, fx, ybar, height_mm=9)
+        ybar -= _mm(10)
     return ybar
 
 
@@ -1152,7 +1161,7 @@ def gerar_carne_pdf(parcelas: list[DadosBoleto]) -> bytes:
     PDF do carnê: cada parcela é uma ficha de compensação completa e pagável,
     três por página A4 (mesma densidade do carnê Hinova/Itaú de referência).
 
-    ``parcelas`` já vêm com os dados oficiais da Ailos aplicados (linha
+    ``parcelas`` já vêm com os dados oficiais do banco aplicados (linha
     digitável e código de barras reais) — sem isso a parcela não é pagável.
     """
     buf = io.BytesIO()

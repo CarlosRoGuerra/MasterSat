@@ -350,7 +350,54 @@ def _gravar_registro(db: Session, billing_id: int, dados: dict, *, conferir_seu_
     return boleto
 
 
-def gerar_boleto(db: Session, billing_id: int, *, nova_tentativa: bool = False) -> SicrediBoleto:
+def preparar_reserva_lote(db: Session, billing: Billing, cred: sicredi_client.Credenciais, *, lote_id: int | None = None) -> SicrediBoleto:
+    """Prepara códigos e dados sob trava; o chamador persiste antes de enviar."""
+    existente = boleto_da_cobranca(db, billing.id)
+    billing_id = billing.id
+    cliente_pagador = resolver_pagador(db, billing)
+    pagador = montar_pagador(cliente_pagador)
+    if billing.payer_client_id is None:
+        billing.payer_client_id = cliente_pagador.id
+    if (
+        existente is not None
+        and _mesmo_convenio(existente, cred)
+        and not (existente.erro or '').startswith(PREFIXO_NOSSO_NUMERO_EM_USO)
+    ):
+        # A tentativa anterior não registrou (ERRO_REGISTRO ou desfecho
+        # resolvido como "não existe"): o número reservado não foi usado.
+        numero = existente.nosso_numero
+    else:
+        numero = sicredi_nosso_numero.proximo(
+            db, ambiente=cred.ambiente, cooperativa=cred.cooperativa, posto=cred.posto,
+            codigo_beneficiario=cred.codigo_beneficiario, ano=hoje().year,
+            byte=settings.sicredi_nosso_numero_byte,
+        )
+    payload = montar_payload(billing, pagador, codigo_beneficiario=cred.codigo_beneficiario, nosso_numero=numero)
+
+    if existente is None:
+        existente = SicrediBoleto(billing_id=billing_id)
+        db.add(existente)
+    existente.ambiente = cred.ambiente
+    existente.cooperativa = cred.cooperativa
+    existente.posto = cred.posto
+    existente.codigo_beneficiario = cred.codigo_beneficiario
+    existente.nosso_numero = numero
+    existente.seu_numero = payload['seuNumero']
+    existente.id_titulo_empresa = payload['idTituloEmpresa']
+    existente.tipo_cobranca = payload['tipoCobranca']
+    existente.valor_nominal = Decimal(str(payload['valor'])).quantize(Decimal('0.01'))
+    existente.data_vencimento = billing.due_date
+    existente.payload_request = payload
+    existente.payload_response = None
+    existente.status = STATUS_REGISTRANDO
+    existente.erro = None
+    existente.registro_iniciado_em = titulo_bancario.agora()
+    if lote_id is not None:
+        existente.lote_id = lote_id
+    return existente
+
+
+def gerar_boleto(db: Session, billing_id: int, *, nova_tentativa: bool = False, lote_id: int | None = None) -> SicrediBoleto:
     """Registra no Sicredi o boleto da cobrança.
 
     Idempotente: se já há título registrado e ativo, devolve o existente sem
@@ -386,42 +433,9 @@ def gerar_boleto(db: Session, billing_id: int, *, nova_tentativa: bool = False) 
 
     # Retomada só depois de a consulta confirmar ausência. Uma reserva recente
     # (neste banco ou na Ailos) pode ter um POST em andamento: nunca a sobrepõe.
-    titulo_bancario.exigir(db, titulo_bancario.EMITIR_SICREDI, [billing_id])
-    pagador = montar_pagador(resolver_pagador(db, billing))
-    if (
-        existente is not None
-        and _mesmo_convenio(existente, cred)
-        and not (existente.erro or '').startswith(PREFIXO_NOSSO_NUMERO_EM_USO)
-    ):
-        # A tentativa anterior não registrou (ERRO_REGISTRO ou desfecho
-        # resolvido como "não existe"): o número reservado não foi usado.
-        numero = existente.nosso_numero
-    else:
-        numero = sicredi_nosso_numero.proximo(
-            db, ambiente=cred.ambiente, cooperativa=cred.cooperativa, posto=cred.posto,
-            codigo_beneficiario=cred.codigo_beneficiario, ano=hoje().year,
-            byte=settings.sicredi_nosso_numero_byte,
-        )
-    payload = montar_payload(billing, pagador, codigo_beneficiario=cred.codigo_beneficiario, nosso_numero=numero)
-
-    if existente is None:
-        existente = SicrediBoleto(billing_id=billing_id)
-        db.add(existente)
-    existente.ambiente = cred.ambiente
-    existente.cooperativa = cred.cooperativa
-    existente.posto = cred.posto
-    existente.codigo_beneficiario = cred.codigo_beneficiario
-    existente.nosso_numero = numero
-    existente.seu_numero = payload['seuNumero']
-    existente.id_titulo_empresa = payload['idTituloEmpresa']
-    existente.tipo_cobranca = payload['tipoCobranca']
-    existente.valor_nominal = Decimal(str(payload['valor'])).quantize(Decimal('0.01'))
-    existente.data_vencimento = billing.due_date
-    existente.payload_request = payload
-    existente.payload_response = None
-    existente.status = STATUS_REGISTRANDO
-    existente.erro = None
-    existente.registro_iniciado_em = titulo_bancario.agora()
+    titulo_bancario.exigir(db, titulo_bancario.EMITIR_SICREDI, [billing_id], lote_sicredi_id=lote_id)
+    existente = preparar_reserva_lote(db, billing, cred, lote_id=lote_id)
+    payload = existente.payload_request
     db.commit()
 
     try:
@@ -507,6 +521,9 @@ def resolver_desfecho(db: Session, billing_id: int, *, forcar: bool = False) -> 
     """
     boleto = boleto_da_cobranca(db, billing_id)
     estado = titulo_bancario.estado_do_sicredi(boleto)
+    if boleto is not None and boleto.status == 'NA_FILA':
+        return {'resultado': 'aguardar', 'estado': estado,
+                'mensagem': 'Parcela na fila do lote, ainda não enviada ao Sicredi.'}
     if boleto is None or (not forcar and estado not in (
         titulo_bancario.DESFECHO_DESCONHECIDO, titulo_bancario.EM_REGISTRO,
     )):

@@ -16,6 +16,7 @@ from app.models.base import TimestampMixin
 # ``situacao`` — separada de propósito: na Ailos as duas coisas dividem a
 # mesma coluna e cada leitor precisa adivinhar qual é qual.
 STATUS_REGISTRANDO = 'REGISTRANDO'
+STATUS_NA_FILA = 'NA_FILA'
 STATUS_DESFECHO_DESCONHECIDO = 'DESFECHO_DESCONHECIDO'
 STATUS_ERRO_REGISTRO = 'ERRO_REGISTRO'
 STATUS_REGISTRADO = 'REGISTRADO'
@@ -44,7 +45,7 @@ class SicrediBoleto(Base, TimestampMixin):
     __tablename__ = 'sicredi_boletos'
     __table_args__ = (
         CheckConstraint(
-            "status IN ('REGISTRANDO', 'DESFECHO_DESCONHECIDO', 'ERRO_REGISTRO', 'REGISTRADO')",
+            "status IN ('NA_FILA', 'REGISTRANDO', 'DESFECHO_DESCONHECIDO', 'ERRO_REGISTRO', 'REGISTRADO')",
             name='ck_sicredi_boletos_status',
         ),
         CheckConstraint(
@@ -61,6 +62,7 @@ class SicrediBoleto(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     billing_id: Mapped[int] = mapped_column(ForeignKey('billings.id'), unique=True, index=True)
+    lote_id: Mapped[int | None] = mapped_column(ForeignKey('sicredi_lotes.id'), nullable=True, index=True)
     ambiente: Mapped[str] = mapped_column(String(10))
     cooperativa: Mapped[str] = mapped_column(String(4))
     posto: Mapped[str] = mapped_column(String(2))

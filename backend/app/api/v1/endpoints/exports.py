@@ -294,7 +294,7 @@ _SITUACAO_LABEL = {
     'parcial': 'Parcial',
 }
 _FORMA_COBRANCA_LABEL = {
-    'boleto_mensal': 'Boleto mensal', 'carne_ailos': 'Carnê Ailos',
+    'boleto_mensal': 'Boleto mensal', 'carne_ailos': 'Carnê Ailos', 'carne_sicredi': 'Carnê Sicredi',
     'carne_simples': 'Carnê simples', 'cartao_credito': 'Cartão de crédito',
     'nao_informado': 'Forma de cobrança não informada',
 }
@@ -495,7 +495,7 @@ def export_billings_report(
     date_to: date | None = None,
     client_id: int | None = None,
     forma_cobranca: str | None = Query(
-        default=None, pattern='^(boleto_mensal|carne_ailos|carne_simples|cartao_credito|nao_informado)$',
+        default=None, pattern='^(boleto_mensal|carne_ailos|carne_sicredi|carne_simples|cartao_credito|nao_informado)$',
         description='Forma de cobrança do responsável financeiro (cadastro do cliente)',
     ),
     db: Session = Depends(get_db),

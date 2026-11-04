@@ -121,11 +121,13 @@ def test_pdf_do_relatorio_agrupado_gera(http, db):
 
 
 @pytest.mark.parametrize('forma, esperado', [
-    ('boleto_mensal', {'BOLETO'}), ('carne_ailos', {'CARNE'}), ('nao_informado', {'SEM FORMA'}),
+    ('boleto_mensal', {'BOLETO'}), ('carne_ailos', {'CARNE'}),
+    ('carne_sicredi', {'CARNE SICREDI'}), ('nao_informado', {'SEM FORMA'}),
 ])
 def test_relatorio_filtra_pela_forma_do_responsavel(http, db, forma, esperado):
     _cobranca(db, _cliente(db, 'BOLETO', '33333333000133', 'boleto_mensal'), '10', 'a')
     _cobranca(db, _cliente(db, 'CARNE', '44444444000144', 'carne_ailos'), '10', 'b')
+    _cobranca(db, _cliente(db, 'CARNE SICREDI', '77777777000177', 'carne_sicredi'), '10', 'd')
     _cobranca(db, _cliente(db, 'SEM FORMA', '55555555000155'), '10', 'c')
     r = http.get(REPORT, params={'fmt': 'csv', 'situacao': 'paga', 'periodo_por': 'pagamento',
                                  'forma_cobranca': forma})
@@ -136,10 +138,11 @@ def test_relatorio_recusa_forma_desconhecida(http):
     assert http.get(REPORT, params={'fmt': 'csv', 'forma_cobranca': 'pix'}).status_code == 422
 
 
-def test_cadastro_grava_e_valida_a_forma_de_cobranca(http, db, cliente):
-    r = http.put(f'/api/v1/clients/{cliente.id}', json={'forma_cobranca': 'carne_simples'})
+@pytest.mark.parametrize('forma', ['carne_simples', 'carne_sicredi'])
+def test_cadastro_grava_e_valida_a_forma_de_cobranca(http, db, cliente, forma):
+    r = http.put(f'/api/v1/clients/{cliente.id}', json={'forma_cobranca': forma})
     assert r.status_code == 200, r.text
-    assert r.json()['forma_cobranca'] == 'carne_simples'
+    assert r.json()['forma_cobranca'] == forma
     assert http.put(f'/api/v1/clients/{cliente.id}', json={'forma_cobranca': 'boleto'}).status_code == 422
     r = http.put(f'/api/v1/clients/{cliente.id}', json={'forma_cobranca': None})
     assert r.json()['forma_cobranca'] is None
@@ -163,8 +166,9 @@ def test_simulacao_do_fechamento_filtra_pela_forma(db, plan):
     assert clientes('cartao_credito') == set()
 
 
-def test_rota_de_simulacao_aceita_a_forma(http, db, plan):
-    c = _cliente(db, 'CARNE', '44444444000144', 'carne_ailos')
+@pytest.mark.parametrize('forma', ['carne_ailos', 'carne_sicredi'])
+def test_rota_de_simulacao_aceita_a_forma(http, db, plan, forma):
+    c = _cliente(db, 'CARNE', '44444444000144', forma)
     db.add(Contract(client_id=c.id, plan_id=plan.id, start_date=date(2025, 1, 15),
                     status='ativo', billing_day=15))
     db.commit()
@@ -173,5 +177,5 @@ def test_rota_de_simulacao_aceita_a_forma(http, db, plan):
     assert r.status_code == 200, r.text
     assert r.json()['items'] == []
     r = http.get('/api/v1/billing-closure/simulate',
-                 params={'reference_month': '2025-05', 'forma_cobranca': 'carne_ailos'})
+                 params={'reference_month': '2025-05', 'forma_cobranca': forma})
     assert len(r.json()['items']) == 1

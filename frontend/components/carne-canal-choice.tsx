@@ -3,17 +3,21 @@
 /** Onde o carnê é gerado: registrado na Ailos (1 boleto real por parcela) ou
  *  só no sistema (carnê simples). As parcelas do carnê simples são marcadas
  *  `somente_sistema` e o backend recusa emiti-las no banco depois. */
-export type CarneCanal = 'ailos' | 'sistema';
+export type CarneCanal = 'ailos' | 'sicredi' | 'sistema';
 
 const OPCOES: { value: CarneCanal; titulo: string; descricao: string }[] = [
   { value: 'ailos', titulo: 'Registrar na Ailos', descricao: 'Carnê Ailos: 1 boleto real por parcela' },
+  { value: 'sicredi', titulo: 'Registrar no Sicredi', descricao: 'Carnê Sicredi: 1 boleto real por parcela' },
   { value: 'sistema', titulo: 'Somente no sistema', descricao: 'Carnê simples: sem boleto no banco, recebimento manual' },
 ];
 
-export function CarneCanalChoice({ value, onChange }: { value: CarneCanal; onChange: (canal: CarneCanal) => void }) {
+export function CarneCanalChoice({ value, onChange, sicrediHabilitado = false, permitirSistema = true }: {
+  value: CarneCanal; onChange: (canal: CarneCanal) => void;
+  sicrediHabilitado?: boolean; permitirSistema?: boolean;
+}) {
   return (
-    <div role="radiogroup" aria-label="Onde gerar o carnê" className="grid grid-cols-2 gap-2">
-      {OPCOES.map((op) => (
+    <div role="radiogroup" aria-label="Onde gerar o carnê" className={`grid gap-2 ${sicrediHabilitado && permitirSistema ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`}>
+      {OPCOES.filter(op => (op.value !== 'sicredi' || sicrediHabilitado) && (op.value !== 'sistema' || permitirSistema)).map((op) => (
         <button
           key={op.value}
           type="button"

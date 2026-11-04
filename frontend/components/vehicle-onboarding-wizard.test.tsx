@@ -72,4 +72,33 @@ describe('Local de instalação no cadastro de veículo', () => {
     await openEquipmentStep();
     expect(screen.getByRole('textbox', { name: 'Local de instalação' })).toHaveValue('');
   });
+
+  it('cria as parcelas uma única vez e mantém Sicredi ao repetir um registro de carnê', async () => {
+    const original = api.fetch.getMockImplementation()!;
+    api.fetch.mockImplementation(async (path: string, options: RequestInit = {}) => {
+      if (path === '/sicredi/status') return { habilitado: true, ambiente: 'sandbox', erro_configuracao: null };
+      if (path === '/plans') return [{ id: 5, name: 'Plano de teste', price: 64.99, billing_interval_months: 1 }];
+      if (path === '/contracts') return { id: 8 };
+      if (path === '/billings/parcelar') return [{ id: 11 }, { id: 12 }];
+      if (path === '/sicredi/carne/lote') throw new Error('Registro temporariamente indisponível');
+      return original(path, options);
+    });
+    render(<VehicleOnboardingWizard {...props()} />);
+    const user = await openEquipmentStep();
+    await user.click(screen.getByPlaceholderText('Buscar por IMEI, marca ou modelo…'));
+    await user.click(await screen.findByRole('button', { name: '866557080235742' }));
+    await user.click(screen.getByRole('button', { name: 'Vincular e avançar →' }));
+    await user.click(await screen.findByRole('button', { name: /Plano de teste/ }));
+    await user.click(screen.getByRole('button', { name: /Carnê.*parcelas/ }));
+    await user.click(screen.getByRole('radio', { name: /Registrar no Sicredi/ }));
+    await user.click(screen.getByRole('button', { name: 'Confirmar contratação ✓' }));
+    await screen.findByText('Registro temporariamente indisponível');
+    await user.click(screen.getByRole('button', { name: 'Tentar novamente' }));
+    expect(api.fetch.mock.calls.filter(([path]) => path === '/billings/parcelar')).toHaveLength(1);
+    expect(JSON.parse(api.fetch.mock.calls.find(([path]) => path === '/billings/parcelar')![1].body)).toMatchObject({ banco: 'sicredi', somente_sistema: false });
+    const registros = api.fetch.mock.calls.filter(([path]) => path === '/sicredi/carne/lote');
+    expect(registros).toHaveLength(2);
+    expect(registros.map(([, options]) => JSON.parse(options.body).billing_ids)).toEqual([[11, 12], [11, 12]]);
+    expect(api.fetch.mock.calls.some(([path]) => path.startsWith('/ailos/'))).toBe(false);
+  });
 });
