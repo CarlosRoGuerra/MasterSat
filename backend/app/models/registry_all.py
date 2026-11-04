@@ -39,6 +39,8 @@ from app.models import (  # noqa: F401
     service_order_status_log,
     service_product,
     sgr_migracao,
+    sicredi_api_log,
+    sicredi_boleto,
     system_setting,
     tracker,
     tracker_history,

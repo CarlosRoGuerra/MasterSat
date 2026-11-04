@@ -97,7 +97,16 @@ class Settings(BaseSettings):
     # callback só aceita state emitido há menos que isto, e uma única vez.
     ailos_state_ttl_minutes: int = 15
     ailos_timeout_seconds: int = 30
-    ailos_numero_convenio: str = '102004'
+    # Incorporação Acredicoop -> Viacredi, vigente a partir de 01/11/2026.
+    ailos_numero_convenio: str = '101004'
+    ailos_agencia: str = '0101'
+    ailos_agencia_dv: str = '5'
+    ailos_conta_corrente: str = '45470'  # sem DV; 454702 no comunicado inclui o DV 2
+    ailos_conta_dv: str = '2'
+    ailos_cooperativa_nome: str = 'VIACREDI'
+    ailos_beneficiario_nome: str = 'MASTERSAT COMERCIO E SERVICO DE RASTREADORES LTDA'
+    ailos_beneficiario_cnpj: str = '14228344000167'
+    ailos_variacao_carteira: str = '001'
     ailos_default_carteira: int = 1
     ailos_default_forma_emissao: int = 2
     # 1 = registra o título na Nuclea (boleto REGISTRADO) — valor do Postman
@@ -111,7 +120,7 @@ class Settings(BaseSettings):
     # reautorizar no navegador). Requer as credenciais abaixo. ⚠ 3 senhas
     # erradas BLOQUEIAM a conta — só ligue com a senha confirmada (trava em 2).
     ailos_auto_relogin: bool = False
-    ailos_cooperado_cooperativa: str = ''
+    ailos_cooperado_cooperativa: str = '1'
     ailos_cooperado_conta: str = ''
     ailos_cooperado_senha: str = ''
     ailos_token_encryption_key: str = ''
@@ -130,6 +139,37 @@ class Settings(BaseSettings):
     # Remessa CNAB 240/400 (FIN-07). Desligada: o layout nunca foi homologado
     # com o banco e não há leitura de retorno. Ligar só em homologação.
     cnab_remessa_habilitada: bool = False
+
+    # ── Integração Sicredi (API de Cobrança v1, OAuth2 password) ─────────────
+    # Sem SICREDI_API_KEY o canal fica desligado (botões não aparecem). Em
+    # 'sandbox' as credenciais são as fixas de teste do Sicredi; só a x-api-key
+    # (de sandbox, Portal do Desenvolvedor) vem daqui.
+    sicredi_ambiente: str = 'sandbox'            # 'sandbox' | 'producao'
+    # Trava anti-acidente: registrar boleto REAL exige este flag explícito,
+    # além de sicredi_ambiente='producao' (mesmo modelo da NFS-e Nacional).
+    sicredi_producao_confirmada: bool = False
+    sicredi_api_key: str = ''                    # x-api-key — diferente em sandbox e produção
+    sicredi_codigo_acesso: str = ''              # password: Código de Acesso do Internet Banking
+    sicredi_cooperativa: str = ''                # 4 dígitos
+    sicredi_posto: str = ''                      # 2 dígitos
+    sicredi_codigo_beneficiario: str = ''        # 5 dígitos (convênio)
+    sicredi_beneficiario_nome: str = 'MASTERSAT COMERCIO E SERVICO DE RASTREADORES LTDA'
+    sicredi_beneficiario_cnpj: str = '14228344000167'
+    sicredi_timeout_seconds: int = 30
+    # Boleto híbrido (QR Code Pix). Exige a modalidade híbrida habilitada pela
+    # cooperativa no Portal PJ; até lá o boleto sai NORMAL.
+    sicredi_boleto_hibrido: bool = False
+    # Dias em que o QR Pix continua pagável depois do vencimento (só híbrido;
+    # 0 = não envia o campo e vale o padrão do Sicredi).
+    sicredi_validade_apos_vencimento: int = 0
+    sicredi_especie_documento: str = 'DUPLICATA_SERVICO_INDICACAO'
+    # Byte indicador de geração do nosso número (2 a 9 = gerado pelo
+    # beneficiário — manual "Geração do Nosso Número").
+    sicredi_nosso_numero_byte: int = 2
+    sicredi_reserva_orfa_minutos: int = 30
+    sicredi_ausencia_confirmada_minutos: int = 10
+    sicredi_conciliacao_orcamento: int = 200
+    sicredi_log_retention_months: int = 12
 
     # ── Integração NFS-e Joinville (Pública / Nota Nacional, SOAP) ────────────
     # Emissão comprovada SEM certificado (homologação aceita RPS sem assinatura);

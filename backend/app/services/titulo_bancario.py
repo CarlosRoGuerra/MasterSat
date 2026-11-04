@@ -21,6 +21,11 @@ Estados (``TituloBancario.estado``):
 * ``baixado`` — título registrado com baixa confirmada (consulta devolveu
   situação 3/5 ou administrador confirmou): não é mais pagável;
 * ``remessa_cnab`` — incluído numa remessa CNAB ainda reservada.
+
+Dois bancos emitem pela API (Ailos e Sicredi). Uma cobrança tem no máximo um
+título ativo: os dois registros são lidos aqui e a emissão em qualquer banco
+exige ``sem_titulo`` — por isso uma cobrança com boleto no Sicredi não é
+emitida na Ailos, e vice-versa.
 """
 from __future__ import annotations
 
@@ -35,6 +40,12 @@ from app.core.config import settings
 from app.models.ailos_boleto import AilosBoleto
 from app.models.billing import Billing
 from app.models.cnab_remessa import CnabRemessaItem
+from app.models.sicredi_boleto import (
+    STATUS_ERRO_REGISTRO as SICREDI_ERRO_REGISTRO,
+    STATUS_REGISTRADO as SICREDI_REGISTRADO,
+    STATUS_REGISTRANDO as SICREDI_REGISTRANDO,
+    SicrediBoleto,
+)
 
 SEM_TITULO = 'sem_titulo'
 EM_REGISTRO = 'em_registro'
@@ -56,7 +67,12 @@ EXCLUIR = 'excluir'
 LIBERAR_COMPETENCIA = 'liberar_competencia'
 REABRIR = 'reabrir'                      # reverter substituição (originais voltam)
 EMITIR_AILOS = 'emitir_ailos'
+EMITIR_SICREDI = 'emitir_sicredi'
 EMITIR_CNAB = 'emitir_cnab'
+
+CANAL_AILOS = 'ailos_api'
+CANAL_SICREDI = 'sicredi_api'
+CANAL_CNAB = 'cnab'
 
 # Estados em que cada operação é permitida. ``registrado`` em CANCELAR exige
 # confirmação explícita (o título continua pagável até a baixa no banco).
@@ -68,18 +84,29 @@ _PERMITIDO: dict[str, frozenset[str]] = {
     LIBERAR_COMPETENCIA: frozenset({SEM_TITULO, BAIXADO}),
     REABRIR: frozenset({SEM_TITULO, BAIXADO}),
     EMITIR_AILOS: frozenset({SEM_TITULO}),
+    EMITIR_SICREDI: frozenset({SEM_TITULO}),
     EMITIR_CNAB: frozenset({SEM_TITULO}),
 }
 _EXIGE_CONFIRMACAO = {CANCELAR: frozenset({REGISTRADO, REMESSA_CNAB})}
 # Emissão em banco (qualquer canal) — recusada para cobrança só do sistema.
-_EMISSAO_BANCARIA = frozenset({EMITIR_AILOS, EMITIR_CNAB})
+_EMISSAO_BANCARIA = frozenset({EMITIR_AILOS, EMITIR_SICREDI, EMITIR_CNAB})
+
+# Quando a mesma cobrança aparece em mais de um registro (não deveria), vale o
+# estado mais restritivo.
+_GRAVIDADE = {
+    SEM_TITULO: 0, BAIXADO: 1, REMESSA_CNAB: 2, REGISTRADO: 3, EM_REGISTRO: 4, DESFECHO_DESCONHECIDO: 5,
+}
+
+
+def gravidade(estado: str) -> int:
+    return _GRAVIDADE[estado]
 
 
 @dataclass(frozen=True)
 class TituloBancario:
     billing_id: int
     estado: str
-    canal: str | None = None            # 'ailos_api' | 'cnab'
+    canal: str | None = None            # 'ailos_api' | 'sicredi_api' | 'cnab'
     nosso_numero: str | None = None
     baixa_status: str | None = None
     pendencia: str | None = None
@@ -152,6 +179,27 @@ def estado_do_boleto(boleto: AilosBoleto | None, referencia: datetime | None = N
     return DESFECHO_DESCONHECIDO
 
 
+def reserva_orfa_sicredi(boleto: SicrediBoleto, referencia: datetime | None = None) -> bool:
+    iniciado = _aware(boleto.registro_iniciado_em) or _aware(boleto.updated_at) or _aware(boleto.created_at)
+    if iniciado is None:
+        return True
+    limite = timedelta(minutes=settings.sicredi_reserva_orfa_minutos)
+    return (referencia or agora()) - iniciado > limite
+
+
+def estado_do_sicredi(boleto: SicrediBoleto | None, referencia: datetime | None = None) -> str:
+    if boleto is None:
+        return SEM_TITULO
+    if boleto.status == SICREDI_REGISTRADO and boleto.linha_digitavel and boleto.codigo_barras:
+        return BAIXADO if boleto.baixa_status == 'confirmada' else REGISTRADO
+    if boleto.status == SICREDI_REGISTRANDO:
+        return DESFECHO_DESCONHECIDO if reserva_orfa_sicredi(boleto, referencia) else EM_REGISTRO
+    if boleto.status == SICREDI_ERRO_REGISTRO:
+        return SEM_TITULO
+    # DESFECHO_DESCONHECIDO, ou REGISTRADO sem os dados oficiais.
+    return DESFECHO_DESCONHECIDO
+
+
 def titulos_bancarios(db: Session, billing_ids: Iterable[int]) -> dict[int, TituloBancario]:
     ids = sorted({int(b) for b in billing_ids if b is not None})
     if not ids:
@@ -163,11 +211,22 @@ def titulos_bancarios(db: Session, billing_ids: Iterable[int]) -> dict[int, Titu
         resultado[boleto.billing_id] = TituloBancario(
             billing_id=boleto.billing_id,
             estado=estado,
-            canal='ailos_api' if estado != SEM_TITULO else None,
+            canal=CANAL_AILOS if estado != SEM_TITULO else None,
             nosso_numero=boleto.nosso_numero,
             baixa_status=boleto.baixa_status,
             pendencia=boleto.pendencia,
         )
+    for boleto in db.scalars(select(SicrediBoleto).where(SicrediBoleto.billing_id.in_(ids))).all():
+        estado = estado_do_sicredi(boleto, referencia)
+        if _GRAVIDADE[estado] > _GRAVIDADE[resultado[boleto.billing_id].estado]:
+            resultado[boleto.billing_id] = TituloBancario(
+                billing_id=boleto.billing_id,
+                estado=estado,
+                canal=CANAL_SICREDI,
+                nosso_numero=boleto.nosso_numero,
+                baixa_status=boleto.baixa_status,
+                pendencia=boleto.pendencia,
+            )
     for item in db.scalars(
         select(CnabRemessaItem).where(
             CnabRemessaItem.billing_id.in_(ids),
@@ -176,7 +235,7 @@ def titulos_bancarios(db: Session, billing_ids: Iterable[int]) -> dict[int, Titu
     ).all():
         if resultado[item.billing_id].estado == SEM_TITULO:
             resultado[item.billing_id] = TituloBancario(
-                billing_id=item.billing_id, estado=REMESSA_CNAB, canal='cnab',
+                billing_id=item.billing_id, estado=REMESSA_CNAB, canal=CANAL_CNAB,
                 nosso_numero=item.nosso_numero,
             )
     return resultado
@@ -211,6 +270,41 @@ _MENSAGENS = {
         'enviada ao banco) antes de alterar, remover ou emitir por outro canal.',
     ),
 }
+
+
+# Mesmos códigos de _MENSAGENS (contrato com o frontend, ex.: o 409
+# boleto_ailos_registrado abre a confirmação de cancelamento); só o texto
+# muda, porque o Sicredi aceita baixa e consulta pela API.
+_MENSAGENS_SICREDI = {
+    EM_REGISTRO: (
+        'boleto_ailos_em_registro',
+        'Há um pedido de registro no Sicredi em andamento para esta cobrança. Aguarde a '
+        'resposta antes de alterar, receber, cancelar ou remover.',
+    ),
+    DESFECHO_DESCONHECIDO: (
+        'boleto_ailos_desfecho_desconhecido',
+        'O pedido de registro foi enviado ao Sicredi e não houve resposta conclusiva: o boleto '
+        'pode existir no banco. Nada pode ser alterado nem emitido de novo até a consulta '
+        'confirmar o resultado (botão "Consultar no Sicredi").',
+    ),
+    REGISTRADO: (
+        'boleto_ailos_registrado',
+        'Há boleto registrado e ativo no Sicredi para esta cobrança. Valor e vencimento não '
+        'mudam e a cobrança não pode ser removida nem emitida de novo: cancele (o título fica '
+        'com baixa pendente) e use "Dar baixa no Sicredi".',
+    ),
+    BAIXADO: (
+        'boleto_ailos_baixado',
+        'Esta cobrança tem histórico de boleto no Sicredi (baixado). Valor e vencimento não '
+        'mudam e ela não pode ser removida nem emitida de novo; lance uma nova cobrança.',
+    ),
+}
+
+
+def _mensagem(estado: str, canal: str | None) -> tuple[str, str]:
+    if canal == CANAL_SICREDI and estado in _MENSAGENS_SICREDI:
+        return _MENSAGENS_SICREDI[estado]
+    return _MENSAGENS[estado]
 
 
 def recusar_somente_sistema(db: Session, billing_ids: Iterable[int]) -> None:
@@ -265,25 +359,43 @@ def validar_titulos(
     retomadas = set(permitir_em_registro)
     bloqueados: dict[str, list[int]] = {}
     for bid, titulo in titulos.items():
-        if titulo.estado == EM_REGISTRO and bid in retomadas:
+        if (titulo.estado == EM_REGISTRO and bid in retomadas
+                and operacao == EMITIR_AILOS and titulo.canal == CANAL_AILOS):
+            # Exceção histórica para a parcela de lote Ailos, restrita ao mesmo
+            # banco. Não autoriza um segundo canal nem um POST Sicredi concorrente.
             continue
         if titulo.estado not in permitidos:
             bloqueados.setdefault(titulo.estado, []).append(bid)
     for estado in (DESFECHO_DESCONHECIDO, EM_REGISTRO, REGISTRADO, REMESSA_CNAB, BAIXADO):
         if estado in bloqueados:
-            code, message = _MENSAGENS[estado]
+            ids_bloqueados = sorted(bloqueados[estado])
+            canal = titulos[ids_bloqueados[0]].canal
+            code, message = _mensagem(estado, canal)
             if operacao == LIBERAR_COMPETENCIA and estado == REGISTRADO:
                 code = 'baixa_bancaria_pendente'
                 message = (
                     'O boleto desta cobrança continua ativo no banco. Liberar o mês agora '
-                    'permitiria cobrar o cliente duas vezes. Dê baixa no internet banking '
-                    'da Ailos e confirme a baixa (consulta automática ou "Confirmar baixa").'
+                    'permitiria cobrar o cliente duas vezes. '
+                    + ('Use "Dar baixa no Sicredi" e aguarde a confirmação da baixa.'
+                       if canal == CANAL_SICREDI else
+                       'Dê baixa no internet banking da Ailos e confirme a baixa (consulta '
+                       'automática ou "Confirmar baixa").')
                 )
-            raise PoliticaBancariaError(code, message, sorted(bloqueados[estado]), estado=estado)
+            raise PoliticaBancariaError(code, message, ids_bloqueados, estado=estado)
     precisa_confirmar = _EXIGE_CONFIRMACAO.get(operacao, frozenset())
     sem_confirmacao = sorted(bid for bid, t in titulos.items() if t.estado in precisa_confirmar)
     if sem_confirmacao and not confirmado:
         titulo = titulos[sem_confirmacao[0]]
+        if titulo.canal == CANAL_SICREDI:
+            raise PoliticaBancariaError(
+                'boleto_ailos_registrado',
+                f'Há boleto registrado no Sicredi (nosso número {titulo.nosso_numero or "—"}). O '
+                'cancelamento interrompe a cobrança no sistema e desativa o link público, mas o '
+                'título continua pagável até a baixa. Depois de cancelar, use "Dar baixa no '
+                'Sicredi" na cobrança (a baixa é feita pela API). Cancelar mesmo assim?',
+                sem_confirmacao,
+                estado=titulo.estado,
+            )
         raise PoliticaBancariaError(
             'boleto_ailos_registrado',
             f'Há boleto registrado no banco (nosso número {titulo.nosso_numero or "—"}). O '
@@ -321,11 +433,24 @@ def marcar_baixa_pendente(db: Session, billing_ids: Iterable[int], motivo: str) 
             boleto.baixa_solicitada_em = momento
             boleto.baixa_observacao = motivo
         ativos.append({'billing_id': boleto.billing_id, 'nosso_numero': boleto.nosso_numero})
+    for boleto in db.scalars(
+        select(SicrediBoleto).where(SicrediBoleto.billing_id.in_(ids)).order_by(SicrediBoleto.billing_id)
+    ).all():
+        if not (boleto.status == SICREDI_REGISTRADO and boleto.linha_digitavel and boleto.codigo_barras):
+            continue
+        if boleto.baixa_status == 'confirmada':
+            continue
+        if boleto.baixa_status is None:
+            # 'solicitada' já está a caminho do banco: não volta para pendente.
+            boleto.baixa_status = 'pendente'
+            boleto.baixa_solicitada_em = momento
+            boleto.baixa_observacao = motivo
+        ativos.append({'billing_id': boleto.billing_id, 'nosso_numero': boleto.nosso_numero})
     return ativos
 
 
 def confirmar_baixa(
-    boleto: AilosBoleto, *, origem: str, user_id: int | None = None, observacao: str | None = None,
+    boleto: AilosBoleto | SicrediBoleto, *, origem: str, user_id: int | None = None, observacao: str | None = None,
 ) -> bool:
     """Registra a baixa como confirmada. Devolve False se já estava."""
     if boleto.baixa_status == 'confirmada':
@@ -338,7 +463,7 @@ def confirmar_baixa(
     return True
 
 
-def registrar_pendencia(boleto: AilosBoleto, codigo: str, detalhe: dict) -> bool:
+def registrar_pendencia(boleto: AilosBoleto | SicrediBoleto, codigo: str, detalhe: dict) -> bool:
     """Grava divergência para revisão humana. Devolve True se é nova."""
     nova = boleto.pendencia != codigo
     boleto.pendencia = codigo

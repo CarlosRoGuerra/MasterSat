@@ -17,7 +17,7 @@ from app.api.v1.api import api_router
 from app.core.config import settings
 from app.core.limiter import limiter
 from app.db.session import SessionLocal, engine
-from app.models import ailos_api_log, ailos_boleto, ailos_client_token, ailos_integration, ailos_lote, ailos_retorno_arquivo, audit_log, billing, billing_adjustment, billing_change_log, billing_charge_item, client, client_charge_item, closure_email_delivery, closure_job, cnab_remessa, contract, document, integration_log, multiportal_outbox, nfse_certificado, nfse_lote, nfse_nota, password_reset_token, payable, payable_change_log, plan, refresh_token, service_order, service_order_status_log, service_product, sgr_migracao, system_setting, tracker, tracker_history, uninstall_event, user, vehicle  # noqa: F401 — side-effect imports that register models with SQLAlchemy Base
+from app.models import ailos_api_log, ailos_boleto, ailos_client_token, ailos_integration, ailos_lote, ailos_retorno_arquivo, audit_log, billing, billing_adjustment, billing_change_log, billing_charge_item, client, client_charge_item, closure_email_delivery, closure_job, cnab_remessa, contract, document, integration_log, multiportal_outbox, nfse_certificado, nfse_lote, nfse_nota, password_reset_token, payable, payable_change_log, plan, refresh_token, service_order, service_order_status_log, service_product, sgr_migracao, sicredi_api_log, sicredi_boleto, system_setting, tracker, tracker_history, uninstall_event, user, vehicle  # noqa: F401 — side-effect imports that register models with SQLAlchemy Base
 from app.core.audit import AuditMiddleware
 from app.core.audit_queue import run_audit_worker
 from app.core.request_timing import RequestTimingMiddleware
@@ -773,6 +773,66 @@ def _alerta_fila(logger, ja_alertado: bool, limite: int) -> bool:
     return True
 
 
+def _sicredi_conciliacao():
+    """Conciliação Sicredi de hora em hora: resolve registros incertos, aplica
+    os liquidados do dia (hoje e ontem) e consulta os títulos ativos em rodízio.
+    Advisory lock próprio (só 1 worker concilia).
+    """
+    from app.services.sicredi_boletos import conciliar
+    logger = logging.getLogger('uvicorn.error')
+    falhas_seguidas = 0
+    ja_alertado = False
+
+    while True:
+        time.sleep(3600)  # 1h
+        try:
+            res = _run_locked(918273653, conciliar)
+            falhas_seguidas = 0
+            ja_alertado = False
+            if res and (res.get('quitados') or res.get('pendencias') or res.get('erro_liquidados')):
+                logger.info('Conciliação Sicredi: %s', res)
+            if res and res.get('pendencias'):
+                _alerta_admin(
+                    f'Conciliação Sicredi encontrou {res["pendencias"]} pendência(s) para revisão.', logger,
+                )
+        except Exception as exc:  # noqa: BLE001 — conciliação nunca derruba o worker
+            falhas_seguidas += 1
+            logger.warning('Conciliação Sicredi falhou (%s seguida[s]): %s', falhas_seguidas, exc)
+            if falhas_seguidas >= 3 and not ja_alertado:
+                _alerta_admin(
+                    f'Conciliação Sicredi falhando há {falhas_seguidas} execuções seguidas: {exc}. '
+                    'Boletos pagos não estão sendo baixados automaticamente.', logger,
+                )
+                ja_alertado = True
+
+
+def _sicredi_log_retention_worker():
+    """Purga sicredi_api_logs mais velhos que SICREDI_LOG_RETENTION_MONTHS (1x/dia)."""
+    from app.models.sicredi_api_log import SicrediApiLog
+    logger = logging.getLogger('uvicorn.error')
+
+    def _job(db):
+        cutoff = datetime.now(timezone.utc) - timedelta(days=30.44 * settings.sicredi_log_retention_months)
+        deleted = (
+            db.query(SicrediApiLog)
+            .filter(SicrediApiLog.created_at < cutoff)
+            .delete(synchronize_session=False)
+        )
+        db.commit()
+        return deleted
+
+    espera = 420  # 7 min após o boot (a da Ailos roda aos 5)
+    while True:
+        time.sleep(espera)
+        espera = 86400  # 24h
+        try:
+            deleted = _run_locked(918273654, _job)
+            if deleted:
+                logger.info('Retenção sicredi_api_logs: %s registro(s) purgado(s).', deleted)
+        except Exception as exc:  # noqa: BLE001 — purga nunca derruba o worker
+            logger.warning('Purga de sicredi_api_logs falhou (tentará novamente no próximo ciclo): %s', exc)
+
+
 def _ailos_log_retention_worker():
     """Purga ailos_api_logs mais velhos que AILOS_LOG_RETENTION_MONTHS.
 
@@ -960,6 +1020,13 @@ def on_startup():
     if settings.ailos_client_id and settings.ailos_token_encryption_key:
         threading.Thread(target=_cooperado_token_keepalive, daemon=True).start()
         threading.Thread(target=_ailos_baixa_automatica, daemon=True).start()
+
+    # Conciliação automática do Sicredi (baixa dos boletos pagos). Só sobe com
+    # a integração configurada (SICREDI_API_KEY).
+    if settings.sicredi_api_key:
+        threading.Thread(target=_sicredi_conciliacao, name='sicredi-conciliacao', daemon=True).start()
+    # Retenção dos logs da API Sicredi: sempre ligada, como a da Ailos.
+    threading.Thread(target=_sicredi_log_retention_worker, daemon=True).start()
 
     # Fila durável de sincronização com o Multiportal: sem ela, uma queda do
     # provedor no meio do cadastro exigia que alguém percebesse e reprocessasse

@@ -10,13 +10,14 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import requests
+import pytest
 
 from app.models.ailos_api_log import AilosApiLog
 from app.models.ailos_boleto import AilosBoleto
 from app.models.billing_change_log import BillingChangeLog
 from app.services import ailos_boletos
 from tests.fase03_apoio import ailos_falsa  # noqa: F401 — fixture
-from tests.fase03_apoio import boleto_json, cobranca, preencher_endereco, reserva, resp
+from tests.fase03_apoio import boleto_json, cobranca, preencher_endereco, registrar_titulo, reserva, resp
 
 A = '/api/v1/ailos'
 B = '/api/v1/billings'
@@ -161,7 +162,11 @@ class TestResolucao:
         assert http_fin.post(f'{A}/boletos/{b.id}/declarar-nao-registrado',
                              json={'justificativa': 'conferido no banco'}).status_code == 403
 
-    def test_declarar_nao_registrado_e_administrativo_e_auditado(self, http, db, contrato):
+    def test_declarar_nao_registrado_e_administrativo_e_auditado(self, http, db, contrato, monkeypatch):
+        from unittest.mock import Mock
+        from app.services import ailos_client
+        banco = Mock()
+        monkeypatch.setattr(ailos_client, 'request', banco)
         b = cobranca(db, contrato)
         reserva(db, b, 'DESFECHO_DESCONHECIDO')
         r = http.post(f'{A}/boletos/{b.id}/declarar-nao-registrado', json={'justificativa': 'conferido no banco'})
@@ -169,6 +174,23 @@ class TestResolucao:
         assert _status(db, b.id) == 'ERRO_REGISTRO'
         log = db.query(BillingChangeLog).filter_by(billing_id=b.id, field_name='registro_ailos').one()
         assert 'conferido no banco' in log.justification and log.changed_by_user_id == 1
+        assert r.json()['estado'] == 'sem_titulo'
+        banco.assert_not_called()  # Libera a tentativa; não emite outro boleto.
+        assert http.post(f'{A}/boletos/{b.id}/declarar-nao-registrado',
+                         json={'justificativa': 'segunda tentativa'}).status_code == 409
+        assert db.query(BillingChangeLog).filter_by(billing_id=b.id, field_name='registro_ailos').count() == 1
+
+    @pytest.mark.parametrize('estado', ['registrado', 'REGISTRANDO'])
+    def test_declaracao_recusa_titulo_registrado_ou_em_registro(self, http, db, contrato, estado):
+        b = cobranca(db, contrato)
+        if estado == 'registrado':
+            registrar_titulo(db, b)
+        else:
+            reserva(db, b, estado)
+        response = http.post(f'{A}/boletos/{b.id}/declarar-nao-registrado',
+                             json={'justificativa': 'conferido no banco'})
+        assert response.status_code == 409
+        assert db.query(BillingChangeLog).filter_by(billing_id=b.id, field_name='registro_ailos').count() == 0
 
     def test_reserva_orfa_resolvida_pela_conciliacao(self, db, contrato, ailos_falsa):
         b = cobranca(db, contrato)

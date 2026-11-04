@@ -115,6 +115,8 @@ def validate_boleto_payload(payload: dict) -> None:
 
     _check_max_length(errors, entidade.get('nome'), 50, 'pagador.entidadeLegal.nome')
     _check_max_length(errors, endereco.get('logradouro'), 56, 'pagador.endereco.logradouro')
+    _check_max_length(errors, endereco.get('numero'), 10, 'pagador.endereco.numero')
+    _check_max_length(errors, endereco.get('complemento'), 40, 'pagador.endereco.complemento')
     _check_max_length(errors, endereco.get('bairro'), 30, 'pagador.endereco.bairro')
     _check_max_length(errors, endereco.get('cidade'), 30, 'pagador.endereco.cidade')
 

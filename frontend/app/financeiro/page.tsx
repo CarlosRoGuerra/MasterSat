@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Modal } from '@/components/ui/modal';
 import { BillingBatchModal } from '@/components/billing-batch-modal';
 import { billingBatchSummary, canSelectBilling, toggleVisibleBillings, type BillingBatchAction, type BillingBatchResult } from '@/lib/billing-batch';
+import { BoletoReleaseAction } from './_components/boleto-release-action';
 import { StatCard } from '@/components/ui/stat-card';
 import { SectionHeader } from '@/components/ui/section-header';
 import { BarChart } from '@/components/ui/bar-chart';
@@ -31,7 +32,7 @@ import { cancelarComConfirmacoes, corpoCancelamento } from '@/lib/cancelamento-c
 import { excluirComConfirmacoes, mensagemConfirmacaoExclusao, motivoBloqueioExclusao } from '@/lib/exclusao-cobranca';
 import { CorrigirVencimentoAction } from './_components/corrigir-vencimento-action';
 import { camposDiferenca, diferencaRecebimento, pendenciaDoFormulario, ROTULO_TRATAMENTO, type TratamentoDiferenca } from '@/lib/recebimento';
-import { descreverTitulo, podeConsultarDesfecho, ROTULO_PENDENCIA, type TituloBancario } from '@/lib/titulo-bancario';
+import { descreverTitulo, ehSicredi, podeConsultarDesfecho, ROTULO_PENDENCIA, type TituloBancario } from '@/lib/titulo-bancario';
 import { useAuthGuard } from '@/lib/use-auth-guard';
 import { ROUTE_ROLES } from '@/lib/route-roles';
 import { useDebouncedValue, useEffectSkipFirst } from '@/lib/use-debounced-value';
@@ -93,7 +94,7 @@ type Summary = { active_plans: number; active_contracts: number; pending_billing
 type RevenueItem = { label: string; total_received: number; total_billed: number; total_outstanding: number; total_received_by_due?: number };
 type PendenciaBancaria = { billing_id: number; nosso_numero?: string | null; estado: TituloBancario['estado']; baixa_status?: string | null; pendencia?: string | null; billing_status: string; billing_removida: boolean; valor: number; vencimento: string; cliente?: string | null; ultima_consulta_erro?: string | null };
 type Conciliacao = { carteira_monitorada: number; nunca_consultados: number; atraso_max_horas: number; janela_estimada_horas: number; desfecho_desconhecido: number; baixa_pendente: number; alerta_atraso: boolean };
-type CanaisBancarios = Record<'ailos_api' | 'cnab240' | 'cnab400', { habilitado: boolean; motivo: string | null }>;
+type CanaisBancarios = Record<'ailos_api' | 'sicredi_api' | 'cnab240' | 'cnab400', { habilitado: boolean; motivo: string | null }>;
 type DelinquentItem = { client_id: number; client_name: string; total_open: number; overdue_count: number };
 type Nfse = { billing_id: number; status: string; numero_nfse?: string | null; serie_nfse?: string | null; codigo_verificacao?: string | null; chave_acesso?: string | null; link_visualizacao?: string | null; protocolo?: string | null; situacao?: string | null; erro_codigo?: string | null; erro_mensagem?: string | null; erro_tipo?: string | null };
 
@@ -694,6 +695,9 @@ export default function FinanceiroPage() {
 
   // Saúde da sessão Ailos (emissão de boletos depende dela)
   const [ailosStatus, setAilosStatus] = useState<{ cooperado_status: string } | null>(null);
+  // Canal Sicredi: os botões só aparecem com a integração configurada.
+  const [sicrediHabilitado, setSicrediHabilitado] = useState(false);
+  const [sicrediAmbiente, setSicrediAmbiente] = useState<string | null>(null);
   // Conciliação e pendências bancárias (Fase 03): desfecho desconhecido,
   // baixa pendente, pagamento divergente.
   const [pendenciasBancarias, setPendenciasBancarias] = useState<PendenciaBancaria[]>([]);
@@ -945,6 +949,9 @@ export default function FinanceiroPage() {
     apiFetch<{ cooperado_status: string }>('/ailos/status', {}, token)
       .then(setAilosStatus)
       .catch(() => setAilosStatus(null));
+    apiFetch<{ habilitado: boolean; ambiente: string; erro_configuracao?: string | null }>('/sicredi/status', {}, token)
+      .then(s => { setSicrediHabilitado(!!s.habilitado && !s.erro_configuracao); setSicrediAmbiente(s.ambiente); })
+      .catch(() => setSicrediHabilitado(false));
     loadPendenciasBancarias(token);
     apiFetch<CanaisBancarios>('/boletos/canais', {}, token).then(setCanais).catch(() => setCanais(null));
   }, [token]);
@@ -999,9 +1006,9 @@ export default function FinanceiroPage() {
       ? [
           { id: 'registrar-pagamento-contexto', label: 'Registrar pagamento', run: () => setReceiveModal(true) },
           // Carnê simples não vai ao banco: sem atalho de emissão.
-          ...(selectedBilling.somente_sistema ? [] : [{
+          ...(selectedBilling.somente_sistema || ehSicredi(selectedBilling.titulo_bancario) || processing || boletoLoading ? [] : [{
             id: 'gerar-boleto-contexto',
-            label: 'Gerar boleto',
+            label: 'Gerar boleto (Ailos)',
             run: handleGerarBoleto,
             confirm: {
               title: 'Gerar boleto?',
@@ -1009,6 +1016,18 @@ export default function FinanceiroPage() {
               confirmLabel: 'Gerar boleto',
             },
           }]),
+          ...(sicrediHabilitado && !processing && !boletoLoading && !selectedBilling.somente_sistema
+            && ['pendente', 'vencida'].includes(selectedBilling.status)
+            && (!selectedBilling.titulo_bancario || selectedBilling.titulo_bancario.estado === 'sem_titulo') ? [{
+            id: 'gerar-boleto-sicredi-contexto',
+            label: 'Gerar boleto (Sicredi)',
+            run: handleGerarBoletoSicredi,
+            confirm: {
+              title: 'Gerar boleto no Sicredi?',
+              description: `Registrar o boleto de ${formatCurrency(selectedBilling.amount)} de ${selectedBilling.payer_name ?? selectedBilling.client_name ?? 'cliente'} (venc. ${formatDate(selectedBilling.due_date)}) no Sicredi?`,
+              confirmLabel: 'Gerar boleto (Sicredi)',
+            },
+          }] : []),
           { id: 'ajustar-cobranca-contexto', label: 'Ajustar cobrança', run: () => setAdjustModal(true) },
           { id: 'cancelar-cobranca-contexto', label: 'Cancelar cobrança', run: handleCancel, manualFeedback: true },
         ]
@@ -1216,6 +1235,27 @@ export default function FinanceiroPage() {
     } catch (err) { setError(parseError(err)); } finally { setProcessing(false); }
   }
 
+  async function handleLiberarEmissao(justificativa: string) {
+    if (!token || user?.role !== 'admin' || !selectedBilling
+      || selectedBilling.titulo_bancario?.estado !== 'desfecho_desconhecido') {
+      throw new Error('A liberação está disponível apenas para administradores em cobranças com desfecho desconhecido.');
+    }
+    setProcessing(true);
+    try {
+      await apiFetch(`/ailos/boletos/${selectedBilling.id}/declarar-nao-registrado`, {
+        method: 'POST', body: JSON.stringify({ justificativa }),
+      }, token);
+      setSelectedBilling(current => current?.id === selectedBilling.id
+        ? { ...current, titulo_bancario: { ...current.titulo_bancario, estado: 'sem_titulo' } }
+        : current);
+      setFeedback('Nova tentativa liberada. Clique em “Gerar boleto (Ailos)” para emitir.');
+      await loadData(token);
+      await loadPendenciasBancarias(token);
+    } finally {
+      setProcessing(false);
+    }
+  }
+
   // Baixa manual (administrador): o caminho normal é a conciliação confirmar
   // pela situação "baixado" na consulta.
   async function handleConfirmarBaixa(billingId: number) {
@@ -1231,15 +1271,20 @@ export default function FinanceiroPage() {
     } catch (err) { setError(parseError(err)); } finally { setProcessing(false); }
   }
 
-  async function handleResolverPendencia(billingId: number) {
+  async function handleResolverPendencia(billingId: number, sicredi = false) {
     if (!token || !canEdit) return;
     const justificativa = window.prompt('Como a pendência foi tratada? (fica no histórico da cobrança)', '');
     if (!justificativa || justificativa.trim().length < 3) return;
     setProcessing(true);
     try {
-      await apiFetch(`/ailos/boletos/${billingId}/resolver-pendencia`, { method: 'POST', body: JSON.stringify({ justificativa: justificativa.trim() }) }, token);
+      if (sicredi) {
+        await apiFetch(`/sicredi/boletos/${billingId}/resolver-pendencia`, { method: 'POST', body: JSON.stringify({ motivo: justificativa.trim() }) }, token);
+      } else {
+        await apiFetch(`/ailos/boletos/${billingId}/resolver-pendencia`, { method: 'POST', body: JSON.stringify({ justificativa: justificativa.trim() }) }, token);
+      }
       setFeedback('Pendência encerrada.');
       await loadPendenciasBancarias(token);
+      if (sicredi) await loadData(token);
     } catch (err) { setError(parseError(err)); } finally { setProcessing(false); }
   }
 
@@ -1578,7 +1623,7 @@ export default function FinanceiroPage() {
       }, token);
       setNewBillingModal(false);
       setNewBillingForm({ client_id: '', title: '', amount: '', due_date: '', notes: '' });
-      setFeedback(`Cobrança avulsa #${nova.id} criada. Gere o boleto (Ailos) e a NFS-e pelo detalhe.`);
+      setFeedback(`Cobrança avulsa #${nova.id} criada. Escolha Ailos ou Sicredi para emitir o boleto pelo detalhe.`);
       await loadData(token);
       setSelectedBilling(nova);
     } catch (err) { setModalError(parseError(err)); } finally { setProcessing(false); }
@@ -1594,7 +1639,7 @@ export default function FinanceiroPage() {
         method: 'POST',
         body: JSON.stringify({ due_date: dueDate, reason: justificativa, confirmar_boleto_ailos: true }),
       }, token);
-      setFeedback(`Cobrança #${nova.id} criada com vencimento ${formatDate(nova.due_date)}. Clique em “Gerar boleto (Ailos)” para emitir. O boleto antigo está na lista de baixa pendente.`);
+      setFeedback(`Cobrança #${nova.id} criada com vencimento ${formatDate(nova.due_date)}. Escolha Ailos ou Sicredi para emitir. O boleto antigo está na lista de baixa pendente.`);
       await loadData(token);
       loadPendenciasBancarias(token);
       setSelectedBilling(nova);
@@ -1774,6 +1819,62 @@ export default function FinanceiroPage() {
         await loadData(token);
       }
     } catch (err) { setError(parseError(err)); } finally { setBoletoLoading(false); }
+  }
+
+  // Sicredi: registra pela API e imprime no mesmo layout MasterSat da Ailos.
+  // Idempotente no backend: re-clicar não duplica o título.
+  async function handleGerarBoletoSicredi() {
+    if (!token || !selectedBilling || !canEdit) return;
+    setBoletoLoading(true);
+    setError('');
+    try {
+      const boleto = await apiFetch<{ linha_digitavel?: string | null; nosso_numero: string }>(
+        '/sicredi/boletos',
+        { method: 'POST', body: JSON.stringify({ billing_id: selectedBilling.id }) },
+        token,
+      );
+      setFeedback(
+        boleto.linha_digitavel
+          ? `Boleto registrado no Sicredi (nosso número ${boleto.nosso_numero}). Linha digitável: ${boleto.linha_digitavel}`
+          : 'Boleto registrado no Sicredi.',
+      );
+      try {
+        await downloadProtectedFile(`/boletos/${selectedBilling.id}/pdf`, token, `${nomeArquivoCliente(selectedBilling.payer_name ?? selectedBilling.client_name, selectedBilling.due_date)}.pdf`);
+      } catch {
+        setFeedback(`Boleto registrado no Sicredi (nosso número ${boleto.nosso_numero}). O PDF ainda não está disponível. Use “PDF do boleto (Sicredi)” para tentar baixar novamente.`);
+      }
+    } catch (err) { setError(parseError(err)); } finally {
+      setBoletoLoading(false);
+      await loadData(token).catch(() => undefined);
+    }
+  }
+
+  // Consulta o título no Sicredi: quita se pago, confirma a baixa ou resolve
+  // um registro com desfecho desconhecido.
+  async function handleConsultarSicredi(billingId: number) {
+    if (!token || !canEdit) return;
+    setBoletoLoading(true);
+    setError('');
+    try {
+      const res = await apiFetch<{ mensagem: string; quitada?: boolean }>(`/sicredi/boletos/${billingId}/consultar`, { method: 'POST' }, token);
+      setFeedback(res.mensagem);
+      if (res.quitada) setSelectedBilling(null);
+      await loadData(token);
+    } catch (err) { setError(parseError(err)); } finally { setBoletoLoading(false); }
+  }
+
+  // Instrução de baixa pela API do Sicredi; a confirmação chega pela consulta.
+  async function handleBaixaSicredi(billingId: number) {
+    if (!token || !canEdit) return;
+    const motivo = window.prompt('Dar baixa no boleto do Sicredi? O título deixa de ser pagável. Informe o motivo:', '');
+    if (!motivo || motivo.trim().length < 3) return;
+    setProcessing(true);
+    setError('');
+    try {
+      const res = await apiFetch<{ mensagem: string }>(`/sicredi/boletos/${billingId}/baixa`, { method: 'POST', body: JSON.stringify({ motivo: motivo.trim() }) }, token);
+      setFeedback(res.mensagem);
+      await loadData(token);
+    } catch (err) { setError(parseError(err)); } finally { setProcessing(false); }
   }
 
   /* ─────────────────────────────────────────────────────────────── */
@@ -2470,7 +2571,7 @@ export default function FinanceiroPage() {
 
       {/* ── Modals (unchanged) ── */}
 
-      <Modal open={!!selectedBilling} onClose={() => setSelectedBilling(null)} title={selectedBilling?.title ?? selectedBilling?.payer_name ?? selectedBilling?.client_name ?? 'Cobrança'} subtitle="Detalhes da cobrança" size="md">
+      <Modal open={!!selectedBilling} onClose={() => { if (!processing) setSelectedBilling(null); }} title={selectedBilling?.title ?? selectedBilling?.payer_name ?? selectedBilling?.client_name ?? 'Cobrança'} subtitle="Detalhes da cobrança" size="md">
         {selectedBilling && (
           <div className="space-y-4">
             <div className="grid gap-3 sm:grid-cols-2">
@@ -2531,17 +2632,59 @@ export default function FinanceiroPage() {
                 </Button>
               )}
               {/* Carnê simples vive só no sistema: sem emissão nem consulta na Ailos. */}
-              {(selectedBilling.status === 'pendente' || selectedBilling.status === 'vencida') && token && !selectedBilling.somente_sistema && (
-                <Button variant="secondary" disabled={!canEdit || boletoLoading} onClick={handleGerarBoleto}>
+              {(selectedBilling.status === 'pendente' || selectedBilling.status === 'vencida') && token && !selectedBilling.somente_sistema
+                && !ehSicredi(selectedBilling.titulo_bancario) && (
+                <Button variant="secondary" disabled={!canEdit || boletoLoading || processing} onClick={handleGerarBoleto}>
                   {boletoLoading ? 'Gerando…' : '🔑 Gerar boleto (Ailos)'}
                 </Button>
               )}
-              {(selectedBilling.status === 'pendente' || selectedBilling.status === 'vencida') && token && !selectedBilling.somente_sistema && (
-                <Button variant="secondary" disabled={!canEdit || boletoLoading} onClick={handleVerificarPagamento}>
+              {(selectedBilling.status === 'pendente' || selectedBilling.status === 'vencida') && token && !selectedBilling.somente_sistema
+                && !ehSicredi(selectedBilling.titulo_bancario) && (
+                <Button variant="secondary" disabled={!canEdit || boletoLoading || processing} onClick={handleVerificarPagamento}>
                   {boletoLoading ? 'Verificando…' : '🔄 Verificar pagamento'}
                 </Button>
               )}
-              {podeConsultarDesfecho(selectedBilling.titulo_bancario) && (
+              {/* Sicredi: o banco é escolhido a cada emissão. Sem título no banco,
+                  os dois botões aparecem; com título, só as ações do banco dele. */}
+              {sicrediHabilitado && sicrediAmbiente === 'sandbox' && (
+                <p className="w-full text-sm text-amber-700">Sicredi em ambiente de testes: os boletos deste canal não têm validade financeira.</p>
+              )}
+              {sicrediHabilitado && (selectedBilling.status === 'pendente' || selectedBilling.status === 'vencida') && token
+                && !selectedBilling.somente_sistema
+                && (!selectedBilling.titulo_bancario || selectedBilling.titulo_bancario.estado === 'sem_titulo') && (
+                <Button variant="secondary" disabled={!canEdit || boletoLoading || processing} onClick={handleGerarBoletoSicredi}>
+                  {boletoLoading ? 'Gerando…' : '🏦 Gerar boleto (Sicredi)'}
+                </Button>
+              )}
+              {ehSicredi(selectedBilling.titulo_bancario) && selectedBilling.titulo_bancario?.estado === 'registrado'
+                && !selectedBilling.titulo_bancario.baixa_status && (
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    if (!token) return;
+                    downloadProtectedFile(`/boletos/${selectedBilling.id}/pdf`, token, `${nomeArquivoCliente(selectedBilling.payer_name ?? selectedBilling.client_name, selectedBilling.due_date)}.pdf`)
+                      .catch(e => setError(parseError(e)));
+                  }}
+                >
+                  📄 PDF do boleto (Sicredi)
+                </Button>
+              )}
+              {ehSicredi(selectedBilling.titulo_bancario) && (
+                <Button variant="secondary" disabled={!canEdit || boletoLoading || processing} onClick={() => handleConsultarSicredi(selectedBilling.id)}>
+                  {boletoLoading ? 'Consultando…' : '🔄 Consultar no Sicredi'}
+                </Button>
+              )}
+              {ehSicredi(selectedBilling.titulo_bancario) && selectedBilling.titulo_bancario?.estado === 'registrado'
+                && (!selectedBilling.titulo_bancario.baixa_status || selectedBilling.titulo_bancario.baixa_status === 'pendente') && (
+                <Button
+                  variant={selectedBilling.titulo_bancario.baixa_status === 'pendente' ? 'danger' : 'secondary'}
+                  disabled={!canEdit || processing}
+                  onClick={() => handleBaixaSicredi(selectedBilling.id)}
+                >
+                  Dar baixa no Sicredi
+                </Button>
+              )}
+              {podeConsultarDesfecho(selectedBilling.titulo_bancario) && !ehSicredi(selectedBilling.titulo_bancario) && (
                 <Button variant="secondary" disabled={!canEdit || processing} onClick={() => handleConsultarDesfecho(selectedBilling.id)}>
                   🔎 Consultar desfecho na Ailos
                 </Button>
@@ -2550,11 +2693,12 @@ export default function FinanceiroPage() {
                 <Button variant="secondary" disabled={!canEdit || processing} onClick={handleEstornar}>Estornar recebimento</Button>
               )}
               {user?.role === 'admin' && selectedBilling.titulo_bancario?.baixa_status === 'pendente'
+                && !ehSicredi(selectedBilling.titulo_bancario)
                 && (selectedBilling.status === 'cancelada' || selectedBilling.status === 'paga') && (
                 <Button variant="secondary" disabled={processing} onClick={() => handleConfirmarBaixa(selectedBilling.id)}>Confirmar baixa no banco</Button>
               )}
               {selectedBilling.titulo_bancario?.pendencia && (
-                <Button variant="secondary" disabled={!canEdit || processing} onClick={() => handleResolverPendencia(selectedBilling.id)}>Encerrar pendência</Button>
+                <Button variant="secondary" disabled={!canEdit || processing} onClick={() => handleResolverPendencia(selectedBilling.id, ehSicredi(selectedBilling.titulo_bancario))}>Encerrar pendência</Button>
               )}
               <CorrigirVencimentoAction
                 key={`corrigir-${selectedBilling.id}`}
@@ -2571,6 +2715,15 @@ export default function FinanceiroPage() {
               {selectedBilling.status === 'paga' && (
                 <Button variant="secondary" onClick={() => { if (!token) return; downloadProtectedFile(`/billings/${selectedBilling.id}/receipt`, token, `recibo-${selectedBilling.receipt_number ?? selectedBilling.id}.pdf`).catch(e => setError(parseError(e))); }}>Baixar recibo</Button>
               )}
+              {!ehSicredi(selectedBilling.titulo_bancario) && <BoletoReleaseAction
+                key={selectedBilling.id}
+                billingId={selectedBilling.id}
+                billingStatus={selectedBilling.status}
+                titulo={selectedBilling.titulo_bancario}
+                isAdmin={user?.role === 'admin'}
+                disabled={!token || processing || boletoLoading}
+                onRelease={handleLiberarEmissao}
+              />}
             </div>
 
             {/* ── Boleto de origem (SGR) ──

@@ -238,6 +238,7 @@ def test_email_nao_e_enviado_se_pdf_nao_for_gerado(http, db, cobranca, monkeypat
 
 
 def test_envio_de_boleto_com_nfse_anexa_os_dois_pdfs_no_mesmo_email(http, db, cliente, cobranca, monkeypatch):
+    cobranca.period_label = '10/2026'
     _registrar(db, cobranca.id)
     db.add(NfseNota(billing_id=cobranca.id, status='emitida', numero_nfse='321', xml_retorno='<xml/>'))
     db.commit()

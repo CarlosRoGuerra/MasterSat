@@ -25,6 +25,9 @@ scripts/ailos_login_gerado.json
 
 # ── Artefatos gerados / material de referência ───────────────────────────────
 scripts/nfse_saida/
+scripts/sicredi_saida/
+sicredi_homologacao_*/
+output/
 *.pdf
 nfse_rps_teste.xml
 scripts/nfse_rps_teste.xml

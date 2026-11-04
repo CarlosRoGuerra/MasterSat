@@ -1,5 +1,5 @@
 """
-PDF de boleto bancário Ailos 085-0 — Canvas puro (ReportLab).
+PDF de boleto bancário Ailos/Sicredi — Canvas puro (ReportLab).
 
 Logo: copiada para tempdir sem caracteres especiais no path.
 Barcode: I2of5, barWidth=0.88, ratio=2.2, bearers=0.
@@ -54,6 +54,10 @@ def _tmp_copy(src: str, name: str) -> str | None:
         return None
 
 _AILOS_PATH = _tmp_copy(_AILOS_SRC, "ailos.png")
+_SICREDI_PATH = _tmp_copy(
+    os.path.normpath(os.path.join(_HERE, '..', 'static', 'sicredi_logo_colorido.png')),
+    'sicredi.png',
+)
 
 # Logo da MASTERSAT (beneficiário) — aparece no RECIBO DO PAGADOR. Na FICHA DE
 # COMPENSAÇÃO mantém-se o logo do banco (Ailos 085), exigência FEBRABAN.
@@ -142,7 +146,7 @@ def _box(c, x, y_top, w, h, lw=0.3):
     c.setStrokeColorRGB(0, 0, 0); c.setLineWidth(lw)
     c.rect(x, y_top - h, w, h)
 
-def _cell(c, x, y_top, w, h, label, value, align="left", vsize=7.5, box=True):
+def _cell(c, x, y_top, w, h, label, value, align="left", vsize=7.5, box=True, fit=False):
     if box: _box(c, x, y_top, w, h)
     # Deslocamentos proporcionais a h (não fixos em mm): em células baixas
     # (carnê compacto, h~4.5-6mm) os 2.8mm/2mm fixos empurravam o valor para
@@ -152,6 +156,10 @@ def _cell(c, x, y_top, w, h, label, value, align="left", vsize=7.5, box=True):
     value_off = min(_mm(2), h * 0.24)
     c.setFillColorRGB(0.5, 0.5, 0.5); c.setFont("Helvetica", 5.5)
     c.drawString(x + _mm(1), y_top - label_off, label)
+    if fit and value:
+        largura = stringWidth(value, 'Helvetica-Bold', vsize)
+        if largura > w - _mm(2):
+            vsize *= (w - _mm(2)) / largura
     c.setFillColorRGB(0, 0, 0); c.setFont("Helvetica-Bold", vsize)
     vbase = y_top - h + value_off
     if align == "right": c.drawRightString(x + w - _mm(1), vbase, value)
@@ -288,7 +296,32 @@ def _draw_ailos(c, x, y_top, h_mm=14.0):
     return _mm(28)
 
 # ── Cabeçalho (logo | 085-0 | título/linha) ──────────────────────────────
-def _draw_header(c, y_top, is_ficha, linha_dig, h):
+def _local_pagamento(d: DadosBoleto) -> str:
+    if d.banco_codigo == '748':
+        return 'Pagável preferencialmente em canais eletrônicos da sua instituição financeira.'
+    return 'Pagar preferencialmente nas cooperativas do Sistema AILOS.'
+
+
+def _draw_banco(c, d: DadosBoleto, x: float, y_top: float, h_mm: float) -> None:
+    if d.banco_codigo != '748':
+        _draw_ailos(c, x, y_top, h_mm=h_mm)
+        return
+    from reportlab.lib.utils import ImageReader
+
+    if _SICREDI_PATH:
+        reader = ImageReader(_SICREDI_PATH)
+        width, height = reader.getSize()
+        scale = min(_mm(32) / width, _mm(h_mm) / height)
+        c.drawImage(reader, x, y_top - _mm(h_mm) / 2 - height * scale / 2,
+                    width=width * scale, height=height * scale, mask='auto')
+    else:
+        c.setFillColorRGB(0.2, 0.5, 0.05)
+        c.setFont('Helvetica-Bold', 14)
+        c.drawString(x, y_top - _mm(h_mm) / 2 - _mm(2), 'Sicredi')
+        c.setFillColorRGB(0, 0, 0)
+
+
+def _draw_header(c, y_top, is_ficha, linha_dig, h, dados: DadosBoleto | None = None):
     _box(c, LM, y_top, CW, h, lw=0.5)
     sep1 = LM + _mm(37)
     sep2 = sep1 + _mm(20)
@@ -298,14 +331,18 @@ def _draw_header(c, y_top, is_ficha, linha_dig, h):
     # Logo na célula esquerda: MasterSat (beneficiário) no recibo; Ailos (banco)
     # na ficha de compensação — exigência FEBRABAN de exibir o logo do banco.
     if is_ficha:
-        _draw_ailos(c, LM + _mm(2), y_top - _mm(1.5), h_mm=(h - _mm(3)) / _mm(1))
+        if dados:
+            _draw_banco(c, dados, LM + _mm(2), y_top - _mm(1.5), h_mm=(h - _mm(3)) / _mm(1))
+        else:
+            _draw_ailos(c, LM + _mm(2), y_top - _mm(1.5), h_mm=(h - _mm(3)) / _mm(1))
     else:
         _draw_mastersat(c, LM + _mm(2), y_top - _mm(1.5), h_mm=(h - _mm(3)) / _mm(1))
 
     # "085-0"
     mid_x = (sep1 + sep2) / 2
     c.setFont("Helvetica-Bold", 13); c.setFillColorRGB(0, 0, 0)
-    c.drawCentredString(mid_x, y_top - h / 2 - _mm(2.5), "085-0")
+    banco = '748-X' if dados and dados.banco_codigo == '748' else '085-0'
+    c.drawCentredString(mid_x, y_top - h / 2 - _mm(2.5), banco)
 
     # Título ou linha digitável
     c.setFont("Helvetica-Bold", 8 if is_ficha else 9)
@@ -459,27 +496,31 @@ def _draw_ficha(c, d: DadosBoleto, y_top: float) -> float:
     # Densidade da ficha do modelo SGR: deixa espaço para muitas placas no
     # recibo do pagador sem empurrar o código de barras para outra página.
     H_HDR = _mm(12); H_R = _mm(9.5); H_FIN = _mm(7); H_PAG = _mm(13)
+    sicredi = d.banco_codigo == '748'
+    if sicredi:
+        # Ficha nos 100 mm inferiores, deixando o I2of5 a 12 mm do rodapé.
+        H_HDR = _mm(8); H_R = _mm(7.5); H_FIN = _mm(5); H_PAG = _mm(11)
     y = y_top
 
-    _draw_header(c, y, True, d.linha_digitavel, H_HDR); y -= H_HDR
+    _draw_header(c, y, True, d.linha_digitavel, H_HDR, d); y -= H_HDR
 
     cLP = CW * 0.72
     _cell(c, LM,     y, cLP,     H_R, "Local de Pagamento",
-          "Pagar preferencialmente nas cooperativas do Sistema AILOS.")
+          _local_pagamento(d), fit=sicredi)
     _cell(c, LM+cLP, y, CW-cLP, H_R, "Vencimento",
           _fd(d.data_vencimento), align="right", vsize=8.5)
     y -= H_R
 
     cBN=CW*.44; cCP=CW*.24
-    _cell(c, LM,          y, cBN,        H_R, "Beneficiário",                      d.cedente_nome)
+    _cell(c, LM,          y, cBN,        H_R, "Beneficiário",                      d.cedente_nome, fit=True)
     _cell(c, LM+cBN,      y, cCP,        H_R, "CPF/CNPJ",                          _fmt_cnpj(d.cedente_cnpj))
     _cell(c, LM+cBN+cCP,  y, CW-cBN-cCP, H_R, "Agência / Código do Beneficiário",
-          f"{d.cedente_agencia} / {d.cedente_codigo}")
+          f"{d.cedente_agencia} / {d.cedente_codigo}", fit=sicredi)
     y -= H_R
 
     cDD=CW*.12; cND=CW*.18; cES=CW*.07; cAC=CW*.05; cDP=CW*.12; cNN=CW-cDD-cND-cES-cAC-cDP
     _cell(c, LM,                      y, cDD, H_R, "Data do Documento",        _fd(d.data_emissao))
-    _cell(c, LM+cDD,                  y, cND, H_R, "Nº do Documento",          f"BOLETO-{d.billing_id}")
+    _cell(c, LM+cDD,                  y, cND, H_R, "Nº do Documento",          d.numero_documento or f"BOLETO-{d.billing_id}")
     _cell(c, LM+cDD+cND,              y, cES, H_R, "Espécie Doc.",             "DS")
     _cell(c, LM+cDD+cND+cES,          y, cAC, H_R, "Aceite",                   d.aceite)
     _cell(c, LM+cDD+cND+cES+cAC,      y, cDP, H_R, "Data de Processamento",    _fd(d.data_emissao))
@@ -490,7 +531,7 @@ def _draw_ficha(c, d: DadosBoleto, y_top: float) -> float:
     cUB=CW*.10; cCA=CW*.10; cEM=CW*.12; cQM=CW*.10; cVM=CW*.12; cVD=CW-cUB-cCA-cEM-cQM-cVM
     _cell(c, LM,                      y, cUB, H_R, "Uso do Banco",          "")
     _cell(c, LM+cUB,                  y, cCA, H_R, "Carteira",              d.carteira.split("/")[0].strip())
-    _cell(c, LM+cUB+cCA,              y, cEM, H_R, "Espécie Moeda",         "")
+    _cell(c, LM+cUB+cCA,              y, cEM, H_R, "Espécie Moeda",         'REAL' if sicredi else '')
     _cell(c, LM+cUB+cCA+cEM,          y, cQM, H_R, "Quantidade Moeda",      "")
     _cell(c, LM+cUB+cCA+cEM+cQM,      y, cVM, H_R, "Valor Moeda",           "")
     _cell(c, LM+cUB+cCA+cEM+cQM+cVM,  y, cVD, H_R, "(=) Valor do Documento",
@@ -501,11 +542,15 @@ def _draw_ficha(c, d: DadosBoleto, y_top: float) -> float:
     _box(c, LM, y, C_INSTR, H_BLOCK)
     c.setFont("Helvetica", 5.5); c.setFillColorRGB(0.5, 0.5, 0.5)
     c.drawString(LM + _mm(1), y - _mm(3.5), "Instruções")
-    c.setFont("Helvetica", 7); c.setFillColorRGB(0, 0, 0)
+    fonte_instrucao = 6.5 if sicredi else 7
+    c.setFont("Helvetica", fonte_instrucao); c.setFillColorRGB(0, 0, 0)
     txt_y = y - _mm(6.5)
     for line in (d.instrucoes or []):
-        if txt_y > y - H_BLOCK + _mm(2):
-            c.drawString(LM + _mm(1.5), txt_y, f"• {line}"); txt_y -= _mm(5)
+        linhas = _wrap(f'• {line}', 'Helvetica', fonte_instrucao, C_INSTR - _mm(3)) if sicredi else [f'• {line}']
+        for texto in linhas:
+            if txt_y > y - H_BLOCK + _mm(1.5 if sicredi else 2):
+                c.drawString(LM + _mm(1.5), txt_y, texto)
+                txt_y -= _mm(3 if sicredi else 5)
 
     fx = LM + C_INSTR
     for i, lbl in enumerate([
@@ -520,20 +565,30 @@ def _draw_ficha(c, d: DadosBoleto, y_top: float) -> float:
     c.setFont("Helvetica", 5.5); c.setFillColorRGB(0.5, 0.5, 0.5)
     c.drawString(LM + _mm(1), y - _mm(3.5), "Pagador")
     c.setFont("Helvetica", 7); c.setFillColorRGB(0, 0, 0)
-    c.drawString(LM + _mm(1), y - _mm(7),  f"{d.sacado_nome}  -  {_fmt_cnpj(d.sacado_cpf_cnpj)}")
+    pagador = f"{d.sacado_nome}  -  {_fmt_cnpj(d.sacado_cpf_cnpj)}"
+    if sicredi:
+        tamanho = min(7, (cPAG - _mm(2)) / max(stringWidth(pagador, 'Helvetica', 1), 1))
+        c.setFont('Helvetica', tamanho)
+    c.drawString(LM + _mm(1), y - _mm(5.5 if sicredi else 7), pagador)
     c.setFont("Helvetica", 6.5)
-    c.drawString(LM + _mm(1), y - _mm(11), d.sacado_endereco)
+    endereco = d.sacado_endereco
+    if sicredi:
+        endereco = ' - '.join(filter(None, [endereco, d.sacado_cidade, d.sacado_uf, _fmt_cep(d.sacado_cep)]))
+        tamanho = min(6.5, (cPAG - _mm(2)) / max(stringWidth(endereco, 'Helvetica', 1), 1))
+        c.setFont('Helvetica', tamanho)
+    c.drawString(LM + _mm(1), y - _mm(9 if sicredi else 11), endereco)
     _cell(c, LM+cPAG, y, cCOD, H_PAG, "Código de Baixa", "")
     _box(c, LM+cPAG+cCOD, y, cFICHA, H_PAG)
     c.setFont("Helvetica-Bold", 7); c.setFillColorRGB(0, 0, 0)
     c.drawRightString(RM - _mm(1), y - H_PAG + _mm(3), "FICHA DE COMPENSAÇÃO")
     y -= H_PAG
 
-    H_BENEF = _mm(7); _box(c, LM, y, CW, H_BENEF)
+    H_BENEF = _mm(4 if sicredi else 7); _box(c, LM, y, CW, H_BENEF)
     c.setFont("Helvetica", 7); c.setFillColorRGB(0, 0, 0)
-    c.drawString(LM + _mm(1), y - H_BENEF + _mm(2.5), d.cedente_nome)
+    base_beneficiario = y - H_BENEF + _mm(1 if sicredi else 2.5)
+    c.drawString(LM + _mm(1), base_beneficiario, d.cedente_nome)
     c.setFont("Helvetica", 6); c.setFillColorRGB(0.5, 0.5, 0.5)
-    c.drawRightString(RM - _mm(1), y - H_BENEF + _mm(2.5), "Autenticação Mecânica")
+    c.drawRightString(RM - _mm(1), base_beneficiario, "Autenticação Mecânica")
     y -= H_BENEF
     return y
 
@@ -542,7 +597,8 @@ def _draw_ficha(c, d: DadosBoleto, y_top: float) -> float:
 # Parâmetros calibrados conforme referência visual Ailos:
 #   barWidth=0.88pt (~0.31mm), ratio=2.2, bearers=0, quiet=0
 # ─────────────────────────────────────────────────────────────────────────────
-def _draw_barcode(c, codigo: str, x: float, y_top: float, height_mm: float = 15.0):
+def _draw_barcode(c, codigo: str, x: float, y_top: float, height_mm: float = 15.0,
+                  width_mm: float | None = None, min_bottom_mm: float = 8):
     from reportlab.graphics.barcode.common import I2of5
     h = _mm(height_mm)
 
@@ -554,7 +610,7 @@ def _draw_barcode(c, codigo: str, x: float, y_top: float, height_mm: float = 15.
         return False
 
     # Garante que o barcode não caia fora da página
-    if y_top - h < _mm(8):
+    if y_top - h < _mm(min_bottom_mm) - 0.001:
         c.showPage(); y_top = _ft(10)
 
     # Cor explicitamente preta antes de desenhar
@@ -571,7 +627,14 @@ def _draw_barcode(c, codigo: str, x: float, y_top: float, height_mm: float = 15.
             quiet=0,             # SEM quiet zone automática
         )
         bc.barHeight = h
-        bc.drawOn(c, x, y_top - h)
+        if width_mm is None:
+            bc.drawOn(c, x, y_top - h)
+        else:
+            c.saveState()
+            c.translate(x, y_top - h)
+            c.scale(_mm(width_mm) / bc.width, 1)
+            bc.drawOn(c, 0, 0)
+            c.restoreState()
         # Restaura cor preta após o barcode
         c.setFillColorRGB(0, 0, 0); c.setStrokeColorRGB(0, 0, 0)
         return True
@@ -725,7 +788,7 @@ def _draw_boleto_itau_style(c, d: DadosBoleto, y_top: float, parcela: tuple[int,
           _fd(d.data_vencimento), align="right", vsize=7)
     yf -= Hr
 
-    _cell(c, fx, yf, cF * 0.62, Hr, "Beneficiário", d.cedente_nome, vsize=6.3)
+    _cell(c, fx, yf, cF * 0.62, Hr, "Beneficiário", d.cedente_nome, vsize=6.3, fit=True)
     _cell(c, fx + cF * 0.62, yf, cF * 0.18, Hr, "CPF/CNPJ", _fmt_cnpj(d.cedente_cnpj), vsize=6.3)
     _cell(c, fx + cF * 0.80, yf, cF * 0.20, Hr, "Agência/Código", ag_cod, align="right", vsize=6.3)
     yf -= Hr
@@ -964,7 +1027,7 @@ def _draw_recibo_pagador(c, d: DadosBoleto, y_top: float) -> tuple[float, bool]:
     # ── Faixa-recibo: nº doc · nosso número · datas · agência · carteira · valor
     H = _mm(9)
     cols = [
-        ("Nº documento", str(d.billing_id), 0.12, "left"),
+        ("Nº documento", d.numero_documento or str(d.billing_id), 0.12, "left"),
         ("Nosso número", d.nosso_numero_display, 0.20, "left"),
         ("Data emissão", _fd(d.data_emissao), 0.14, "left"),
         ("Vencimento", _fd(d.data_vencimento), 0.14, "left"),
@@ -982,9 +1045,9 @@ def _draw_recibo_pagador(c, d: DadosBoleto, y_top: float) -> tuple[float, bool]:
     # ── Pagador · Beneficiário Final · Nº nota fiscal ────────────────────────
     cPag = CW * 0.45; cBenef = CW * 0.40; cNota = CW - cPag - cBenef
     _cell(c, LM, y, cPag, H, "Pagador",
-          f"{d.sacado_nome} - {_fmt_cnpj(d.sacado_cpf_cnpj)}"[:58], vsize=7)
+          f"{d.sacado_nome} - {_fmt_cnpj(d.sacado_cpf_cnpj)}", vsize=7, fit=True)
     _cell(c, LM + cPag, y, cBenef, H, "Beneficiário Final",
-          f"{d.cedente_nome} - {_fmt_cnpj(d.cedente_cnpj)}"[:56], vsize=7)
+          d.cedente_nome, vsize=7, fit=True)
     _cell(c, LM + cPag + cBenef, y, cNota, H, "Nº nota fiscal", "")
     y -= H
     return y, precisa_anexo
@@ -1040,14 +1103,26 @@ def gerar_boleto_pdf(dados: DadosBoleto) -> bytes:
     y, precisa_anexo = _draw_recibo_pagador(c, dados, _ft(10))
 
     # 2. Corte entre o recibo e a ficha de compensação.
-    y -= _mm(2)
+    sicredi = dados.banco_codigo == '748'
+    y = _mm(100) if sicredi else y - _mm(2)
     _hline(c, LM, y, RM, lw=0.5, dash=(2, 4))
     c.setFont("Helvetica", 5.5); c.setFillColorRGB(0.5, 0.5, 0.5)
     c.drawString(RM - _mm(40), y - _mm(3), "Corte na linha pontilhada")
 
-    # 3. Ficha de compensação full-width (Ailos 085-0) + código de barras.
-    y = _draw_ficha(c, dados, y - _mm(6))
-    _draw_barcode(c, dados.codigo_barras, LM, y - _mm(3), height_mm=13)
+    # 3. Mesmo desenho da ficha, com a identificação e os códigos de cada banco.
+    if sicredi:
+        # CNAB 400 2.9, pp. 45–46: ficha de 200 mm e I2of5 de 103 × 13 mm.
+        c.saveState()
+        escala = _mm(200) / CW
+        c.translate(_mm(5) - LM * escala, 0)
+        c.scale(escala, 1)
+        _draw_ficha(c, dados, _mm(97))
+        c.restoreState()
+        _draw_barcode(c, dados.codigo_barras, _mm(5), _mm(18.5), height_mm=13,
+                      width_mm=103, min_bottom_mm=5.5)
+    else:
+        y = _draw_ficha(c, dados, y - _mm(6))
+        _draw_barcode(c, dados.codigo_barras, LM, y - _mm(3), height_mm=13)
 
     if precisa_anexo:
         _draw_detalhamento_boleto(c, dados)

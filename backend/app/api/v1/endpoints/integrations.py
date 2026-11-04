@@ -28,11 +28,12 @@ from sqlalchemy import case, func
 from sqlalchemy.orm import Session, aliased, load_only
 
 from app.api.deps import require_api_key
-from app.api.v1.endpoints.boletos import public_boleto_url
+from app.api.v1.endpoints.boletos import public_boleto_url, _pdf_sicredi
 from app.api.v1.endpoints.nfse import _danfse_local_bytes
 from app.core.config import settings
 from app.db.session import get_db
 from app.models.ailos_boleto import AilosBoleto
+from app.models.sicredi_boleto import SicrediBoleto, STATUS_REGISTRADO
 from app.models.billing import Billing
 from app.models.client import Client
 from app.models.contract import Contract
@@ -78,10 +79,12 @@ def _dados_boleto(billing: Billing, client: Client, ailos_boleto: AilosBoleto | 
 def _cobranca_payload(
     billing: Billing, client: Client, ailos_boleto: AilosBoleto | None,
     nota: NfseNota | None = None, *, tem_xml: bool | None = None,
+    sicredi_boleto: SicrediBoleto | None = None,
 ) -> dict:
     base = (settings.backend_public_url or '').rstrip('/')
-    registrado = bool(ailos_boleto and ailos_boleto.linha_digitavel and ailos_boleto.codigo_barras)
-    motivo = _motivo_boleto_indisponivel(billing, ailos_boleto)
+    boleto = _selecionar_boleto(ailos_boleto, sicredi_boleto)
+    registrado = _registrado(boleto)
+    motivo = _motivo_boleto_indisponivel(billing, boleto)
     payload = {
         'id': billing.id,
         'titulo': billing.title,
@@ -107,7 +110,8 @@ def _cobranca_payload(
         'enviar_boleto_whatsapp': bool(client.send_boleto_whatsapp),
         # Referência do título bancário: permanece no histórico mesmo após
         # pagamento/baixa. A disponibilidade dos códigos e links é separada.
-        'nosso_numero': ailos_boleto.nosso_numero if ailos_boleto is not None else None,
+        'nosso_numero': boleto.nosso_numero if boleto is not None else None,
+        'banco': ('sicredi' if isinstance(boleto, SicrediBoleto) else 'ailos') if boleto else None,
         'linha_digitavel': None,
         'codigo_barras': None,
         'pix_copia_cola': None,
@@ -137,21 +141,31 @@ def _cobranca_payload(
     # A consulta entrega os dados oficiais armazenados, sem calcular códigos
     # locais ou depender da geração de PDF para serializar um título antigo.
     payload.update({
-        'linha_digitavel': ailos_boleto.linha_digitavel,
-        'codigo_barras': ailos_boleto.codigo_barras,
-        'pix_copia_cola': ailos_boleto.pix_emv,
+        'linha_digitavel': boleto.linha_digitavel,
+        'codigo_barras': boleto.codigo_barras,
+        'pix_copia_cola': boleto.qr_code if isinstance(boleto, SicrediBoleto) else boleto.pix_emv,
     })
     return payload
 
 
-def _motivo_boleto_indisponivel(billing: Billing, boleto: AilosBoleto | None) -> str | None:
+def _registrado(boleto: AilosBoleto | SicrediBoleto | None) -> bool:
+    return bool(boleto and boleto.linha_digitavel and boleto.codigo_barras
+                and (not isinstance(boleto, SicrediBoleto) or boleto.status == STATUS_REGISTRADO))
+
+
+def _selecionar_boleto(ailos: AilosBoleto | None, sicredi: SicrediBoleto | None):
+    return sicredi if _registrado(sicredi) else (ailos or sicredi)
+
+
+def _motivo_boleto_indisponivel(billing: Billing, boleto: AilosBoleto | SicrediBoleto | None) -> str | None:
     if billing.status not in _OPEN_STATUSES:
         return 'cobranca_paga' if billing.status == BillingStatus.PAID else 'cobranca_cancelada'
     if billing.somente_sistema:
         return 'somente_sistema'
-    if boleto is None or not (boleto.linha_digitavel and boleto.codigo_barras):
+    if not _registrado(boleto):
         return 'sem_registro_bancario'
-    if boleto.baixa_status is not None or boleto.status_ailos in ('3', '5'):
+    situacao = boleto.situacao if isinstance(boleto, SicrediBoleto) else boleto.status_ailos
+    if boleto.baixa_status is not None or situacao in ('3', '5', 'LIQUIDADO', 'BAIXADO POR SOLICITACAO'):
         return 'boleto_baixado'
     return None
 
@@ -248,7 +262,7 @@ def listar_cobrancas(
     )
     query = (
         db.query(
-            Billing, Pagador, AilosBoleto, NfseNota,
+            Billing, Pagador, AilosBoleto, NfseNota, SicrediBoleto,
             case((func.length(func.trim(NfseNota.xml_retorno, ' \t\r\n')) > 0, True), else_=False),
         )
         .join(Client, Client.id == Billing.client_id)
@@ -256,6 +270,7 @@ def listar_cobrancas(
         .outerjoin(Interveniente, Interveniente.id == Contract.interveniente_client_id)
         .join(Pagador, Pagador.id == pagador_id)
         .outerjoin(AilosBoleto, AilosBoleto.billing_id == Billing.id)
+        .outerjoin(SicrediBoleto, SicrediBoleto.billing_id == Billing.id)
         .outerjoin(NfseNota, NfseNota.billing_id == Billing.id)
         .options(load_only(
             NfseNota.id, NfseNota.billing_id, NfseNota.status, NfseNota.numero_nfse,
@@ -298,8 +313,8 @@ def listar_cobrancas(
     total_registros = query.count()
     rows = query.order_by(Billing.due_date.asc(), Billing.id.asc()).offset(offset).limit(limit).all()
     cobrancas = [
-        _cobranca_payload(billing, client, boleto, nota, tem_xml=tem_xml)
-        for billing, client, boleto, nota, tem_xml in rows
+        _cobranca_payload(billing, client, boleto, nota, tem_xml=tem_xml, sicredi_boleto=sicredi)
+        for billing, client, boleto, nota, sicredi, tem_xml in rows
     ]
     has_more = offset + len(cobrancas) < total_registros
     return {
@@ -310,7 +325,7 @@ def listar_cobrancas(
     }
 
 
-def _get_cobranca_or_404(billing_id: int, db: Session) -> tuple[Billing, Client, AilosBoleto | None]:
+def _get_cobranca_or_404(billing_id: int, db: Session) -> tuple[Billing, Client, AilosBoleto | SicrediBoleto | None]:
     billing = db.get(Billing, billing_id)
     if not billing or billing.is_deleted:
         raise HTTPException(status_code=404, detail='Cobrança não encontrada')
@@ -323,7 +338,8 @@ def _get_cobranca_or_404(billing_id: int, db: Session) -> tuple[Billing, Client,
     except ValueError as exc:
         raise HTTPException(status_code=404, detail='Responsável financeiro não disponível') from exc
     ailos_boleto = db.query(AilosBoleto).filter_by(billing_id=billing.id).first()
-    return billing, client, ailos_boleto
+    sicredi = db.query(SicrediBoleto).filter_by(billing_id=billing.id).first()
+    return billing, client, _selecionar_boleto(ailos_boleto, sicredi)
 
 
 @router.get('/cobrancas/{billing_id}', response_model=IntegrationBillingOut)
@@ -335,6 +351,8 @@ def detalhar_cobranca(
     """Detalhe de uma cobrança específica (mesmos campos da listagem)."""
     billing, client, ailos_boleto = _get_cobranca_or_404(billing_id, db)
     nota = db.query(NfseNota).filter_by(billing_id=billing_id).first()
+    if isinstance(ailos_boleto, SicrediBoleto):
+        return _cobranca_payload(billing, client, None, nota, sicredi_boleto=ailos_boleto)
     return _cobranca_payload(billing, client, ailos_boleto, nota)
 
 
@@ -369,6 +387,10 @@ def baixar_boleto_pdf(
             status_code=409,
             detail={'code': motivo, 'message': 'Esta cobrança não tem boleto disponível para pagamento.'},
         )
+    if isinstance(ailos_boleto, SicrediBoleto):
+        pdf_bytes, _nome = _pdf_sicredi(billing, client, db)
+        return Response(content=pdf_bytes, media_type='application/pdf',
+                        headers={'Content-Disposition': f'inline; filename="boleto_{billing.id:06d}.pdf"'})
     try:
         dados = _dados_boleto(billing, client, ailos_boleto)
         pdf_bytes = gerar_boleto_pdf(dados)

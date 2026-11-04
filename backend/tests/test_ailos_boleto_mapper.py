@@ -49,7 +49,7 @@ class TestMontarPayloadBoleto:
         assert endereco['cep'] == '28970000'
         assert endereco['logradouro'] == 'RUA PRINCIPAL'
         assert endereco['numero'] == '100'
-        assert endereco['complemento'] == 'Casa 2'
+        assert endereco['complemento'] == 'CASA 2'
         assert endereco['bairro'] == 'CENTRO'
         assert endereco['cidade'] == 'ARARUAMA'
         assert endereco['uf'] == 'RJ'

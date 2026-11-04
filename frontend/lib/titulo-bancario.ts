@@ -4,7 +4,7 @@ export type TituloBancario = {
   estado: 'sem_titulo' | 'em_registro' | 'desfecho_desconhecido' | 'registrado' | 'baixado' | 'remessa_cnab';
   canal?: string | null;
   nosso_numero?: string | null;
-  baixa_status?: 'pendente' | 'confirmada' | null;
+  baixa_status?: 'pendente' | 'solicitada' | 'confirmada' | null;
   pendencia?: string | null;
 };
 
@@ -19,6 +19,8 @@ const ESTADOS: Record<TituloBancario['estado'], { rotulo: string; tom: Tom }> = 
   remessa_cnab: { rotulo: 'Em remessa CNAB', tom: 'warning' },
 };
 
+const BANCO_DO_CANAL: Record<string, string> = { ailos_api: 'Ailos', sicredi_api: 'Sicredi', cnab: 'CNAB' };
+
 export const ROTULO_PENDENCIA: Record<string, string> = {
   pagamento_divergente: 'Banco informou pagamento com valor diferente do título',
   pago_em_cobranca_cancelada: 'Título pago no banco com a cobrança cancelada',
@@ -31,12 +33,19 @@ export function descreverTitulo(titulo: TituloBancario | null | undefined): { ro
   if (!titulo) return { ...ESTADOS.sem_titulo, detalhe: null };
   const base = ESTADOS[titulo.estado] ?? ESTADOS.sem_titulo;
   const partes: string[] = [];
+  if (titulo.canal && BANCO_DO_CANAL[titulo.canal]) partes.push(BANCO_DO_CANAL[titulo.canal]);
   if (titulo.nosso_numero) partes.push(`nosso número ${titulo.nosso_numero}`);
   if (titulo.baixa_status === 'pendente') partes.push('baixa PENDENTE no banco');
+  if (titulo.baixa_status === 'solicitada') partes.push('baixa enviada ao banco, aguardando confirmação');
   if (titulo.baixa_status === 'confirmada') partes.push('baixa confirmada');
   if (titulo.pendencia) partes.push(ROTULO_PENDENCIA[titulo.pendencia] ?? titulo.pendencia);
   const tom: Tom = titulo.pendencia || titulo.baixa_status === 'pendente' ? 'warning' : base.tom;
   return { rotulo: base.rotulo, tom, detalhe: partes.length ? partes.join(' · ') : null };
+}
+
+/** Título registrado pela API do Sicredi (ações próprias: consulta e baixa pela API). */
+export function ehSicredi(titulo: TituloBancario | null | undefined): boolean {
+  return titulo?.canal === 'sicredi_api';
 }
 
 /** Consultar o desfecho só faz sentido quando o registro está pendente. */

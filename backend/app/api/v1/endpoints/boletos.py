@@ -32,6 +32,7 @@ from app.core.config import settings
 from app.db.session import get_db
 from app.models.ailos_boleto import AilosBoleto
 from app.models.ailos_lote import AilosLote
+from app.models.sicredi_boleto import SicrediBoleto
 from app.models.billing import Billing
 from app.models.billing_charge_item import BillingChargeItem
 from app.models.client import Client
@@ -40,10 +41,10 @@ from app.models.cnab_remessa import CnabRemessa
 from app.models.enums import BillingStatus, UserRole
 from app.models.vehicle import Vehicle
 from app.models.uninstall_event import UninstallEvent
-from app.services import ailos_boletos, cnab_remessa
+from app.services import ailos_boletos, cnab_remessa, sicredi_boletos, sicredi_client
 from app.services.email_smtp import emails_cadastrados
 from app.services.ailos_boletos import aplicar_dados_oficiais_ailos
-from app.services.boleto_ailos import gerar_dados_boleto, DadosBoleto
+from app.services.boleto_ailos import CEDENTE_CNPJ, CEDENTE_NOME, gerar_dados_boleto, DadosBoleto
 from app.services.boleto_pdf import gerar_boleto_pdf, gerar_carne_pdf
 from app.services.billing_closure.uninstall_fees import uninstall_fee_for_event
 
@@ -248,8 +249,15 @@ def canais_bancarios(_: object = Depends(require_roles(*ALLOWED_ROLES))):
     motivo_cnab = None if cnab else (
         'Layout não homologado com o banco e sem leitura de retorno CNAB.'
     )
+    motivo_sicredi = None
+    try:
+        sicredi_client.credenciais()
+    except sicredi_client.SicrediError as exc:
+        motivo_sicredi = str(exc)
     return {
         'ailos_api': {'habilitado': True, 'emissao': True, 'conciliacao': True, 'motivo': None},
+        'sicredi_api': {'habilitado': motivo_sicredi is None, 'emissao': motivo_sicredi is None,
+                       'conciliacao': True, 'motivo': motivo_sicredi},
         'cnab240': {'habilitado': cnab, 'emissao': cnab, 'conciliacao': False, 'motivo': motivo_cnab},
         'cnab400': {'habilitado': cnab, 'emissao': cnab, 'conciliacao': False, 'motivo': motivo_cnab},
     }
@@ -272,6 +280,35 @@ def get_boleto(
     b = _get_billing_or_404(billing_id, db)
     c = _pagador_do_billing(b, db)
     item = _billing_to_boleto_item(b, c)
+
+    sicredi = sicredi_boletos.registrado(db, b.id)
+    if sicredi is not None:
+        return {
+            "billing_id": b.id,
+            "nosso_numero": sicredi.nosso_numero,
+            "codigo_barras": sicredi.codigo_barras,
+            "linha_digitavel": sicredi.linha_digitavel,
+            "cedente": {
+                "nome": settings.sicredi_beneficiario_nome,
+                "cnpj": settings.sicredi_beneficiario_cnpj,
+                "agencia": f"{sicredi.cooperativa}.{sicredi.posto}",
+                "codigo": sicredi.codigo_beneficiario,
+                "convenio": sicredi.codigo_beneficiario,
+                "carteira": "1",
+            },
+            "sacado": {
+                "nome": c.name,
+                "cpf_cnpj": c.cpf_cnpj or "",
+                "endereco": item["sacado_endereco"],
+            },
+            "vencimento": (sicredi.data_vencimento or b.due_date).isoformat() if (sicredi.data_vencimento or b.due_date) else None,
+            "emissao": (sicredi.created_at.date() if sicredi.created_at else date.today()).isoformat(),
+            "valor": float(sicredi.valor_nominal if sicredi.valor_nominal is not None else b.amount),
+            "banco": {"codigo": "748", "nome": "Sicredi"},
+            "boleto_registrado": True,
+            "public_pdf_url": public_boleto_url(b.id),
+            "pix_copia_cola": sicredi.qr_code,
+        }
 
     dados = gerar_dados_boleto(
         billing_id=b.id,
@@ -332,7 +369,21 @@ def boleto_registrado(billing_id: int, db: Session) -> AilosBoleto | None:
     return ab if (ab and ab.linha_digitavel and ab.codigo_barras) else None
 
 
-def _recusar_titulo_baixado(ailos_boleto: AilosBoleto) -> None:
+def _pdf_sicredi(b: Billing, c: Client, db: Session) -> tuple[bytes, str]:
+    """Layout MasterSat, com os dados do título já registrado no Sicredi."""
+    boleto = sicredi_boletos.registrado(db, b.id)
+    if boleto is None:
+        raise HTTPException(
+            status_code=409, detail='O boleto precisa estar registrado no Sicredi antes da impressão.',
+        )
+    _recusar_titulo_baixado(boleto)
+    dados = dados_boleto_sicredi(b, c, db, boleto)
+    pdf_bytes = gerar_boleto_pdf(dados)
+    data_ref = (dados.data_vencimento or date.today()).strftime("%d-%m-%Y")
+    return pdf_bytes, f"{_slug_arquivo(c.name)} {data_ref}.pdf"
+
+
+def _recusar_titulo_baixado(ailos_boleto) -> None:
     """Baixa pendente/confirmada (Fase 03): a cobrança deixou de valer ou o
     título foi baixado — não sai PDF nem e-mail para pagamento."""
     if ailos_boleto.baixa_status is not None:
@@ -426,11 +477,8 @@ def _itens_detalhados(
     return [(descricao_servico(b, plate, service_period_label), float(b.amount))]
 
 
-def dados_boleto(b: Billing, c: Client, db: Session, ailos_boleto: AilosBoleto) -> DadosBoleto:
-    """
-    Monta o DadosBoleto de uma cobrança, com os dados oficiais da Ailos
-    aplicados. Compartilhado pelo boleto avulso e por cada parcela do carnê.
-    """
+def _conteudo_boleto(b: Billing, c: Client, db: Session) -> dict:
+    """Recibo, serviços, placas e instruções comuns aos dois bancos."""
     item = _billing_to_boleto_item(b, c)
     components = list(db.scalars(
         select(Billing).where(
@@ -439,14 +487,13 @@ def dados_boleto(b: Billing, c: Client, db: Session, ailos_boleto: AilosBoleto) 
         ).order_by(Billing.id)
     ).all())
     placa = _placa_do_billing(b, db) or None
-    servico = descricao_servico(b, placa)
     # Na linha "Referente a" a placa fica em instrução própria, na linha de
     # baixo — não misturada ao resto do texto (item["itens"] mantém o
     # descritivo completo, com placa, para a tabela do boleto).
     servico_sem_placa = descricao_servico(b, None)
     itens = _itens_detalhados(b, db)
     service_period_label = _periodo_servico_fechamento(b) or b.period_label
-    dados = gerar_dados_boleto(
+    return dict(
         billing_id=b.id,
         valor=b.amount,
         vencimento=b.due_date,
@@ -467,7 +514,53 @@ def dados_boleto(b: Billing, c: Client, db: Session, ailos_boleto: AilosBoleto) 
             "Após vencimento entrar em contato: whats (47)98877-9273",
         ],
     )
+
+
+def dados_boleto(b: Billing, c: Client, db: Session, ailos_boleto: AilosBoleto | None) -> DadosBoleto:
+    """Dados oficiais Ailos com o conteúdo comum do recibo MasterSat."""
+    dados = gerar_dados_boleto(**_conteudo_boleto(b, c, db))
     return aplicar_dados_oficiais_ailos(dados, ailos_boleto)
+
+
+def dados_boleto_sicredi(b: Billing, c: Client, db: Session, boleto: SicrediBoleto) -> DadosBoleto:
+    """A impressão não calcula nem registra códigos bancários: usa os recebidos."""
+    conteudo = _conteudo_boleto(b, c, db)
+    conteudo.pop('vencimento')
+    conteudo.pop('data_emissao')
+    numero = boleto.nosso_numero
+    linha = re.sub(r'\D', '', boleto.linha_digitavel or '')
+    if len(linha) != 47 or len(boleto.codigo_barras or '') != 44 or len(numero) != 9:
+        raise HTTPException(status_code=409, detail='O registro Sicredi não contém os códigos completos para impressão.')
+    linha_formatada = (
+        f'{linha[:5]}.{linha[5:10]}  {linha[10:15]}.{linha[15:21]}  '
+        f'{linha[21:26]}.{linha[26:32]}  {linha[32]}  {linha[33:]}'
+    )
+    pagador_registrado = (boleto.payload_request or {}).get('pagador') or {}
+    # Nome e documento são os enviados ao banco; itens e placas vêm do mesmo
+    # detalhamento da Ailos, inclusive quando o título reúne várias cobranças.
+    conteudo['sacado_nome'] = pagador_registrado.get('nome') or c.name
+    conteudo['sacado_cpf_cnpj'] = pagador_registrado.get('documento') or c.cpf_cnpj or ''
+    conteudo['valor'] = Decimal(str(boleto.valor_nominal if boleto.valor_nominal is not None else b.amount))
+    if boleto.ambiente == 'sandbox':
+        conteudo['instrucoes'] = ['HOMOLOGAÇÃO - SEM VALIDADE FINANCEIRA. NÃO PAGAR.', *conteudo['instrucoes']]
+    return DadosBoleto(
+        **conteudo,
+        numero_documento=boleto.seu_numero or str(b.id),
+        nosso_numero=numero,
+        nosso_numero_dv=numero[-1],
+        nosso_numero_display=f'{numero[:2]}/{numero[2:8]}-{numero[8:]}',
+        data_emissao=boleto.created_at.date() if boleto.created_at else date.today(),
+        data_vencimento=boleto.data_vencimento or b.due_date,
+        codigo_barras=boleto.codigo_barras,
+        linha_digitavel=linha_formatada,
+        cedente_nome=settings.sicredi_beneficiario_nome,
+        cedente_cnpj=settings.sicredi_beneficiario_cnpj,
+        cedente_agencia=f'{boleto.cooperativa}.{boleto.posto}',
+        cedente_codigo=boleto.codigo_beneficiario,
+        cedente_convenio=boleto.codigo_beneficiario,
+        carteira='1', banco_codigo='748', banco_nome='Sicredi',
+        pix_emv=boleto.qr_code,
+    )
 
 
 def _slug_arquivo(texto: str) -> str:
@@ -498,13 +591,22 @@ def get_boleto_pdf(
     _: object = Depends(require_roles(*ALLOWED_ROLES)),
 ):
     """
-    PDF do boleto — só para título registrado na Ailos.
+    PDF MasterSat — só para título registrado na Ailos ou no Sicredi.
 
     Antes o PDF saía para qualquer cobrança, com nosso número e código de
     barras calculados aqui. Parecia um boleto pronto, mas o banco não tinha
     registro dele: não era pagável e não conciliava.
     """
     b = _get_billing_or_404(billing_id, db)
+    sicredi = sicredi_boletos.registrado(db, billing_id)
+    if sicredi is not None:
+        _recusar_titulo_baixado(sicredi)
+        pdf_bytes, filename = _pdf_sicredi(b, _pagador_do_billing(b, db), db)
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'inline; filename="{filename}"'},
+        )
     ailos_boleto = boleto_registrado(billing_id, db)
     if ailos_boleto is None:
         raise HTTPException(
@@ -533,23 +635,27 @@ def _valor_brl(v) -> str:
 def preparar_envio_boleto_email(db: Session, billing_id: int, incluir_nfse: bool):
     """Valida e monta o e-mail antes de reservar um envio de fechamento."""
     b = _get_billing_or_404(billing_id, db)
-    if b.status not in (BillingStatus.PENDING, BillingStatus.OVERDUE):
-        raise HTTPException(status_code=409, detail='Somente cobranças em aberto podem ser enviadas por e-mail.')
-    ailos_boleto = boleto_registrado(billing_id, db)
-    if ailos_boleto is None:
+    sicredi = sicredi_boletos.registrado(db, billing_id)
+    ailos_boleto = None if sicredi is not None else boleto_registrado(billing_id, db)
+    if sicredi is None and ailos_boleto is None:
         raise HTTPException(
             status_code=409,
-            detail='Esta cobrança ainda não tem boleto emitido na Ailos, então não pode ser enviada. '
-                   'Gere o boleto na aba Ailos do Financeiro.',
+            detail='Esta cobrança ainda não tem boleto emitido. Gere o boleto pela Ailos ou pelo Sicredi no Financeiro.',
         )
-    _recusar_titulo_baixado(ailos_boleto)
+    _recusar_titulo_baixado(sicredi or ailos_boleto)
+    if b.status not in (BillingStatus.PENDING, BillingStatus.OVERDUE):
+        raise HTTPException(status_code=409, detail='Somente cobranças em aberto podem ser enviadas por e-mail.')
     c = _pagador_do_billing(b, db)
     destinatarios = emails_cadastrados(c)
     if not destinatarios:
         raise HTTPException(status_code=400, detail='Cliente sem e-mail cadastrado.')
 
-    dados = dados_boleto(b, c, db, ailos_boleto)
-    pdf_bytes, filename = _montar_pdf_boleto(b, c, db, ailos_boleto)
+    if sicredi is not None:
+        linha_digitavel = sicredi.linha_digitavel
+        pdf_bytes, filename = _pdf_sicredi(b, c, db)
+    else:
+        linha_digitavel = dados_boleto(b, c, db, ailos_boleto).linha_digitavel
+        pdf_bytes, filename = _montar_pdf_boleto(b, c, db, ailos_boleto)
     if not pdf_bytes or not pdf_bytes.startswith(b'%PDF-'):
         raise HTTPException(status_code=502, detail='Não foi possível gerar o PDF do boleto. O e-mail não foi enviado.')
     nfse_anexo = None
@@ -562,7 +668,7 @@ def preparar_envio_boleto_email(db: Session, billing_id: int, incluir_nfse: bool
         'VALOR': _valor_brl(b.amount),
         'VENCIMENTO': b.due_date.strftime('%d/%m/%Y') if b.due_date else '',
         'REFERENTE': b.period_label or (b.due_date.strftime('%m/%Y') if b.due_date else ''),
-        'CODIGO_BARRAS': re.sub(r'\D', '', dados.linha_digitavel or ''),
+        'CODIGO_BARRAS': re.sub(r'\D', '', linha_digitavel or ''),
         'LINK_BOLETO': public_boleto_url(b.id),
     }
     tpl = carregar_mensagens(db)
@@ -698,6 +804,16 @@ def get_boleto_publico(
     # o titulo ainda esteja registrado na Ailos, não apresentamos o boleto.
     if b.status == BillingStatus.CANCELED:
         raise HTTPException(status_code=404, detail="Boleto não encontrado")
+    sicredi = sicredi_boletos.registrado(db, billing_id)
+    if sicredi is not None:
+        if sicredi.baixa_status is not None:
+            raise HTTPException(status_code=404, detail="Boleto não encontrado")
+        pdf_bytes, filename = _pdf_sicredi(b, _pagador_do_billing(b, db), db)
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'inline; filename="{filename}"'},
+        )
     # Link já enviado ao cliente + boleto ainda não registrado = cliente com um
     # papel impagável na mão. 404 (e não 409) para não expor a cobrança a quem
     # tenha o link de um título que não existe no banco.
@@ -756,6 +872,9 @@ def _gerar_remessa_endpoint(
     except cnab_remessa.RemessaError as exc:
         db.rollback()
         raise HTTPException(status_code=exc.status_code, detail=exc.detail()) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return _remessa_response(gerada)
 
 

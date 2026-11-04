@@ -47,6 +47,8 @@ backend/scripts/nfse_saida/
 
 # ─── Relatórios da POC de migração SGR (podem conter dados de cliente) ───────
 backend/scripts/sgr_saida/
+backend/scripts/sicredi_saida/
+sicredi_homologacao_*/
 backend/certs/
 
 # ─── Artefatos gerados em testes (não versionar) ─────────────────────────────

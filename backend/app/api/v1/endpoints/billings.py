@@ -15,7 +15,7 @@ from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
-from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy import and_, case, func, not_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
@@ -24,6 +24,7 @@ from app.core.integrity import raise_integrity_conflict
 from app.core.timezone import hoje
 from app.db.session import get_db
 from app.models.ailos_boleto import AilosBoleto
+from app.models.sicredi_boleto import STATUS_REGISTRADO as SICREDI_REGISTRADO, SicrediBoleto
 from app.models.audit_log import AuditLog
 from app.models.nfse_nota import NfseNota
 from app.models.billing import RECURRING_BILLING_TYPES, Billing
@@ -172,12 +173,14 @@ def base_query(db: Session, *, refresh_statuses: bool = False):
     # consistente logo após alterar o próprio status de uma cobrança.
     if refresh_statuses:
         refresh_overdue_statuses(db)
-    # boleto_ailos: título registrado na Ailos (linha digitável + código de
-    # barras devolvidos por ela). Vem no JOIN para a tela não precisar de uma
-    # consulta por linha só para decidir se mostra o botão de download.
+    # boleto_ailos: título registrado no banco (linha digitável + código de
+    # barras devolvidos por ele). O nome é histórico: vale para Ailos e
+    # Sicredi — a tela usa o campo como "boleto emitido". Vem no JOIN para a
+    # tela não precisar de uma consulta por linha só para decidir se mostra o
+    # botão de download.
     boleto_ailos = case(
-        (and_(AilosBoleto.linha_digitavel.isnot(None),
-              AilosBoleto.codigo_barras.isnot(None)), True),
+        (_ailos_registrado(), True),
+        (_sicredi_registrado(), True),
         else_=False,
     ).label('boleto_ailos')
     Payer = aliased(Client)
@@ -198,6 +201,7 @@ def base_query(db: Session, *, refresh_statuses: bool = False):
             boleto_ailos,
             NfseNota.status.label('nfse_status'),
             AilosBoleto,
+            SicrediBoleto,
             CnabRemessaItem.nosso_numero.label('cnab_nosso_numero'),
             Client.is_deleted.label('client_removed'),
             Payer.is_deleted.label('payer_removed'),
@@ -213,6 +217,7 @@ def base_query(db: Session, *, refresh_statuses: bool = False):
         .outerjoin(Vehicle, Vehicle.id == Billing.vehicle_id)
         .outerjoin(Tracker, Tracker.id == Billing.tracker_id)
         .outerjoin(AilosBoleto, AilosBoleto.billing_id == Billing.id)
+        .outerjoin(SicrediBoleto, SicrediBoleto.billing_id == Billing.id)
         .outerjoin(NfseNota, NfseNota.billing_id == Billing.id)
         .outerjoin(
             CnabRemessaItem,
@@ -225,7 +230,34 @@ def base_query(db: Session, *, refresh_statuses: bool = False):
 _RELACOES = ('cliente', 'responsavel_financeiro', 'contrato', 'plano', 'veiculo', 'rastreador')
 
 
-def _titulo_bancario_out(billing_id: int, boleto: AilosBoleto | None, cnab_nosso_numero: str | None) -> dict | None:
+def _ailos_registrado():
+    return and_(AilosBoleto.linha_digitavel.isnot(None), AilosBoleto.codigo_barras.isnot(None))
+
+
+def _sicredi_registrado():
+    # coalesce: sem boleto Sicredi o LEFT JOIN traz NULL, e NULL = 'REGISTRADO'
+    # não é falso — a negação perderia a linha.
+    return and_(
+        func.coalesce(SicrediBoleto.status, '') == SICREDI_REGISTRADO,
+        SicrediBoleto.linha_digitavel.isnot(None),
+        SicrediBoleto.codigo_barras.isnot(None),
+    )
+
+
+def _titulo_bancario_out(
+    billing_id: int, boleto: AilosBoleto | None, cnab_nosso_numero: str | None,
+    sicredi_boleto: SicrediBoleto | None = None,
+) -> dict | None:
+    estado_sicredi = titulo_bancario.estado_do_sicredi(sicredi_boleto)
+    if sicredi_boleto is not None and (
+        titulo_bancario.gravidade(estado_sicredi)
+        > titulo_bancario.gravidade(titulo_bancario.estado_do_boleto(boleto))
+    ):
+        return titulo_bancario.TituloBancario(
+            billing_id=billing_id, estado=estado_sicredi, canal=titulo_bancario.CANAL_SICREDI,
+            nosso_numero=sicredi_boleto.nosso_numero, baixa_status=sicredi_boleto.baixa_status,
+            pendencia=sicredi_boleto.pendencia,
+        ).as_dict()
     estado = titulo_bancario.estado_do_boleto(boleto)
     if estado == titulo_bancario.SEM_TITULO:
         if cnab_nosso_numero is None:
@@ -243,8 +275,8 @@ def _titulo_bancario_out(billing_id: int, boleto: AilosBoleto | None, cnab_nosso
 def serialize_billing(row) -> BillingOut:
     (
         billing, client_name, payer_name, plan_name, contract_status,
-        vehicle_plate, tracker_identifier, boleto_ailos, nfse_status, ailos_boleto, cnab_nosso_numero,
-        *removidas,
+        vehicle_plate, tracker_identifier, boleto_ailos, nfse_status, ailos_boleto, sicredi_boleto,
+        cnab_nosso_numero, *removidas,
     ) = row
     overdue_days = 0
     if billing.status == BillingStatus.OVERDUE:
@@ -287,7 +319,7 @@ def serialize_billing(row) -> BillingOut:
         ),
         boleto_ailos=bool(boleto_ailos),
         nfse_status=nfse_status,
-        titulo_bancario=_titulo_bancario_out(billing.id, ailos_boleto, cnab_nosso_numero),
+        titulo_bancario=_titulo_bancario_out(billing.id, ailos_boleto, cnab_nosso_numero, sicredi_boleto),
         relacoes_removidas=[nome for nome, removida in zip(_RELACOES, removidas) if removida],
     )
 
@@ -637,9 +669,9 @@ def list_items(search: str | None = None, status: str | None = None, client_id: 
         # O indicador da carteira exige os dois dados bancários. O LEFT JOIN
         # produz NULL quando não existe boleto; a negação simples perderia essas linhas.
         query = query.filter(
-            and_(AilosBoleto.linha_digitavel.isnot(None), AilosBoleto.codigo_barras.isnot(None))
+            or_(_ailos_registrado(), _sicredi_registrado())
             if boleto_emitido else
-            or_(AilosBoleto.linha_digitavel.is_(None), AilosBoleto.codigo_barras.is_(None))
+            and_(not_(_ailos_registrado()), not_(_sicredi_registrado()))
         )
     if nfse_emitida is not None:
         query = query.filter(

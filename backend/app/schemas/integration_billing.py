@@ -51,6 +51,7 @@ class IntegrationBillingOut(BaseModel):
     linha_digitavel: str | None
     codigo_barras: str | None
     pix_copia_cola: str | None
+    banco: str | None = None
     boleto_registrado: bool
     boleto_disponivel: bool
     motivo_boleto_indisponivel: str | None

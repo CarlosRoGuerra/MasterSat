@@ -105,6 +105,30 @@ def _boleto_response(billing_id, nosso_numero='12345678', linha='LINHA-DIGITAVEL
     }
 
 
+def test_emissao_adapta_complemento_longo_sem_alterar_cadastro(db, billing_pendente, cliente):
+    _preencher_endereco(cliente, db)
+    complemento = 'APARTAMENTO 101 BLOCO B ENTRADA PELA RUA LATERAL'
+    assert len(complemento) > 40
+    cliente.address_complement = complemento
+    db.commit()
+
+    def banco(method, url, **kwargs):
+        assert method == 'POST'
+        endereco = kwargs['json']['pagador']['endereco']
+        assert len(endereco['complemento']) == 40
+        assert endereco['numero'] == '100'
+        return _resp(200, json_data=_boleto_response(billing_pendente.id))
+
+    with patch('app.services.ailos_client.requests.request', side_effect=banco) as request:
+        boleto = gerar_boleto(db, billing_pendente, cliente)
+
+    request.assert_called_once()
+    assert boleto.linha_digitavel == 'LINHA-DIGITAVEL'
+    assert len(boleto.payload_request['pagador']['endereco']['complemento']) == 40
+    db.refresh(cliente)
+    assert cliente.address_complement == complemento
+
+
 class TestPagadorInterveniente:
     """Quando o contrato tem interveniente financeiro, o boleto sai no nome
     dele (quem responde pela cobrança), não no do dono do veículo."""

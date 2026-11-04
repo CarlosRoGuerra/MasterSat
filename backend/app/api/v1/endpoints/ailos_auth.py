@@ -42,7 +42,7 @@ def get_status(
     return AilosStatusOut(
         client_token_configured=client_token_configured,
         cooperado_status=integration.status if integration else 'pending',
-        numero_convenio=integration.numero_convenio if integration else settings.ailos_numero_convenio,
+        numero_convenio=settings.ailos_numero_convenio,
         authorized_at=integration.authorized_at if integration else None,
         last_refresh_at=integration.last_refresh_at if integration else None,
         last_error=integration.last_error if integration else None,

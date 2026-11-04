@@ -40,11 +40,13 @@ def _dados(**kw):
     return gerar_dados_boleto(**base)
 
 
-def test_boleto_unico_detalha_todos_os_itens_sem_cortar_o_total():
+@pytest.mark.parametrize('banco', ['085', '748'])
+def test_boleto_unico_detalha_todos_os_itens_sem_cortar_o_total(banco):
     from pypdf import PdfReader
 
     itens = [(f'MENSALIDADE PLACA ABC{i:04d}', 10.0) for i in range(30)]
-    pdf = boleto_pdf.gerar_boleto_pdf(_dados(valor=Decimal('300.00'), itens=itens))
+    dados = replace(_dados(valor=Decimal('300.00'), itens=itens), banco_codigo=banco)
+    pdf = boleto_pdf.gerar_boleto_pdf(dados)
     pages = PdfReader(io.BytesIO(pdf)).pages
     assert len(pages) == 1
     texto = pages[0].extract_text()
@@ -53,11 +55,12 @@ def test_boleto_unico_detalha_todos_os_itens_sem_cortar_o_total():
     assert texto.count('MENSALIDADE - R$ 10,00') == 30
 
 
-def test_boleto_com_56_mensalidades_e_pix_cabe_em_uma_pagina():
+@pytest.mark.parametrize('banco', ['085', '748'])
+def test_boleto_com_56_mensalidades_e_pix_cabe_em_uma_pagina(banco):
     from pypdf import PdfReader
 
     itens = [(f'MENSALIDADE PLACA ABC{i:04d}', 64.99) for i in range(56)]
-    dados = replace(_dados(valor=Decimal('3639.44'), itens=itens), pix_emv='PIX DE TESTE')
+    dados = replace(_dados(valor=Decimal('3639.44'), itens=itens), pix_emv='PIX DE TESTE', banco_codigo=banco)
     pages = PdfReader(io.BytesIO(boleto_pdf.gerar_boleto_pdf(dados))).pages
     assert len(pages) == 1
     texto = pages[0].extract_text()
@@ -66,11 +69,13 @@ def test_boleto_com_56_mensalidades_e_pix_cabe_em_uma_pagina():
     assert texto.count('MENSALIDADE - R$ 64,99') == 56
 
 
-def test_descricao_longa_continua_no_anexo_sem_perder_o_item():
+@pytest.mark.parametrize('banco', ['085', '748'])
+def test_descricao_longa_continua_no_anexo_sem_perder_o_item(banco):
     from pypdf import PdfReader
 
     descricao = 'PLACA ABC1D23 - SERVIÇO DE INSTALAÇÃO COM DESLOCAMENTO TÉCNICO'
-    pdf = boleto_pdf.gerar_boleto_pdf(_dados(itens=[(descricao, 99.90)]))
+    dados = replace(_dados(itens=[(descricao, 99.90)]), banco_codigo=banco)
+    pdf = boleto_pdf.gerar_boleto_pdf(dados)
     pages = PdfReader(io.BytesIO(pdf)).pages
     assert len(pages) == 2
     assert 'ABC1D23 - INSTALAÇÃO - R$ 99,90' in pages[0].extract_text()

@@ -3,10 +3,10 @@ Serviço de boleto bancário — Banco Ailos (085-0)
 
 Dados do beneficiário (MASTERSAT):
   Banco:              085-0 (Ailos Cooperativa)
-  Agência:            0102-3
+  Agência:            0101-5 (Viacredi, desde 01/11/2026)
   Carteira:           01
   Variação carteira:  001
-  Convênio:           102004
+  Convênio:           101004
   CNPJ:               14.228.344/0001-67
   Código cedente:     0045470-2
 
@@ -21,6 +21,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 
 from app.core.config import settings
+from app.services.ailos_beneficiario import BeneficiarioAilos, beneficiario_atual
 
 # ---------------------------------------------------------------------------
 # Configuração estática do beneficiário
@@ -30,10 +31,10 @@ BANCO_CODIGO    = "085"
 BANCO_NOME      = "AILOS"
 MOEDA           = "9"           # 9 = Real (BRL)
 
-AGENCIA         = "0102"        # sem dígito
-AGENCIA_DIG     = "3"
+AGENCIA         = settings.ailos_agencia
+AGENCIA_DIG     = settings.ailos_agencia_dv
 
-VARIACAO        = "001"
+VARIACAO        = settings.ailos_variacao_carteira
 
 # Convênio e carteira também alimentam a chamada real à API Ailos
 # (services/ailos_boletos.py) via settings — mesma fonte, para não divergirem
@@ -41,10 +42,10 @@ VARIACAO        = "001"
 CONVENIO        = settings.ailos_numero_convenio
 CARTEIRA        = str(settings.ailos_default_carteira).zfill(2)
 
-CEDENTE_CNPJ    = "14228344000167"
-CEDENTE_NOME    = "MASTERSAT RASTREAMENTO"
-CEDENTE_COD     = "0045470"     # sem dígito
-CEDENTE_COD_DIG = "2"
+CEDENTE_CNPJ    = settings.ailos_beneficiario_cnpj
+CEDENTE_NOME    = settings.ailos_beneficiario_nome
+CEDENTE_COD     = settings.ailos_conta_corrente.zfill(7)
+CEDENTE_COD_DIG = settings.ailos_conta_dv
 
 # Data-base para cálculo do fator de vencimento (07/10/1997)
 DATA_BASE_FATOR = date(1997, 10, 7)
@@ -139,7 +140,7 @@ def formatar_valor(valor: float | Decimal) -> str:
     return str(centavos).zfill(10)
 
 
-def gerar_nosso_numero(billing_id: int) -> tuple[str, str]:
+def gerar_nosso_numero(billing_id: int, perfil: BeneficiarioAilos | None = None) -> tuple[str, str]:
     """
     Nosso Número = conta_corrente(8 dígitos) + sequencial(9 dígitos) = 17 dígitos.
     Conta corrente = CEDENTE_COD (7) + CEDENTE_COD_DIG (1) = "00454702" (8 dígitos).
@@ -147,18 +148,21 @@ def gerar_nosso_numero(billing_id: int) -> tuple[str, str]:
 
     Exemplo: conta=00454702, seq=000000003 → nn="00454702000000003"
     """
-    conta = (CEDENTE_COD + CEDENTE_COD_DIG).zfill(8)   # "00454702"
+    perfil = perfil or beneficiario_atual()
+    if not 0 < billing_id <= 999999999:
+        raise ValueError('Identificador do título deve caber no sequencial de nove dígitos.')
+    conta = perfil.conta_com_dv
     seq   = str(billing_id).zfill(9)                    # "000000003"
     nn    = conta + seq                                  # "00454702000000003" (17 dígitos)
     dv    = modulo11_nosso_numero(nn)
     return nn, dv
 
 
-def gerar_campo_livre(nosso_numero: str) -> str:
+def gerar_campo_livre(nosso_numero: str, perfil: BeneficiarioAilos | None = None) -> str:
     """
     Campo livre Ailos (25 dígitos) — estrutura confirmada pelo manual:
 
-      Convênio        : 6 dígitos  → "102004"
+      Convênio        : 6 dígitos  → "101004"
       Conta corrente  : 8 dígitos  → cedente(7) + dígito(1) = "00454702"
       Nosso número    : 9 dígitos  → parte sequencial do nosso número
       Carteira        : 2 dígitos  → "01"
@@ -167,11 +171,12 @@ def gerar_campo_livre(nosso_numero: str) -> str:
     Linha digitável esperada para billing_id=3, venc=28/06/2026:
       08591.02006 40045.470206 00000.003012 5 14910000010000
     """
-    convenio = CONVENIO.zfill(6)                         # "102004"
-    conta    = (CEDENTE_COD + CEDENTE_COD_DIG).zfill(8) # "00454702"
+    perfil = perfil or beneficiario_atual()
+    convenio = perfil.convenio
+    conta = perfil.conta_com_dv
     # Extrai só o sequencial (últimos 9 dígitos do nosso número de 17)
     seq      = nosso_numero[-9:].zfill(9) if len(nosso_numero) > 9 else nosso_numero.zfill(9)
-    carteira = CARTEIRA.zfill(2)                         # "01"
+    carteira = perfil.carteira
 
     campo = convenio + conta + seq + carteira
     assert len(campo) == 25, f"Campo livre inválido: {len(campo)} chars"
@@ -182,6 +187,7 @@ def gerar_codigo_barras(
     nosso_numero: str,
     vencimento: date | None,
     valor: float | Decimal,
+    perfil: BeneficiarioAilos | None = None,
 ) -> str:
     """
     Código de barras completo com 44 posições.
@@ -194,7 +200,7 @@ def gerar_codigo_barras(
       [10-19] Valor                  VVVVVVVVVV
       [20-44] Campo livre            25 dígitos
     """
-    campo_livre = gerar_campo_livre(nosso_numero)
+    campo_livre = gerar_campo_livre(nosso_numero, perfil)
     fator       = fator_vencimento(vencimento)
     val_fmt     = formatar_valor(valor)
 
@@ -304,6 +310,7 @@ class DadosBoleto:
     sacado_ie: str = ""
     # Itens da tabela do recibo: [(descrição, valor)]; None → 1 item padrão
     itens: list[tuple[str, float]] | None = None
+    numero_documento: str | None = None
 
 
 def gerar_dados_boleto(
@@ -324,8 +331,9 @@ def gerar_dados_boleto(
     """
     Gera todos os dados calculados do boleto a partir das informações do billing.
     """
-    nn, nn_dv = gerar_nosso_numero(billing_id)
-    barcode   = gerar_codigo_barras(nn, vencimento, valor)
+    perfil = beneficiario_atual()
+    nn, nn_dv = gerar_nosso_numero(billing_id, perfil)
+    barcode   = gerar_codigo_barras(nn, vencimento, valor, perfil)
     linha_dig = gerar_linha_digitavel(barcode)
 
     return DadosBoleto(
@@ -343,6 +351,12 @@ def gerar_dados_boleto(
         sacado_nome=sacado_nome,
         sacado_cpf_cnpj=sacado_cpf_cnpj,
         sacado_endereco=sacado_endereco,
+        cedente_nome=perfil.nome,
+        cedente_cnpj=perfil.cnpj,
+        cedente_agencia=f'{perfil.agencia}-{perfil.agencia_dv}',
+        cedente_codigo=f'{perfil.conta}-{perfil.conta_dv}',
+        cedente_convenio=perfil.convenio,
+        carteira=f'{perfil.carteira}/{perfil.variacao}',
         sacado_cidade=sacado_cidade,
         sacado_cep=sacado_cep,
         sacado_uf=sacado_uf,

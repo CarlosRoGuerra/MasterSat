@@ -305,6 +305,11 @@ def _get_or_create_integration(db: Session) -> AilosIntegration:
         )
         db.add(integration)
         db.flush()
+    else:
+        # A identidade da sessão acompanha a parametrização ativa; os títulos
+        # emitidos continuam com o convênio salvo em cada AilosBoleto.
+        integration.numero_convenio = settings.ailos_numero_convenio
+        integration.codigo_carteira = settings.ailos_default_carteira
     return integration
 
 

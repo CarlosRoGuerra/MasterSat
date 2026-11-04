@@ -1,480 +1,143 @@
+"""Remessa Ailos CNAB 240, manual versão 14 (maio/2025), pp. 15–23.
+
+Layout do arquivo 084 e lote 043 conforme o manual. O exemplo .rem antigo
+usa 045; prevalece a especificação mais recente fornecida.
 """
-Gerador de arquivo de remessa CNAB 240 — Banco Ailos (085-0)
-
-Estrutura do arquivo (cada linha = 240 chars + CRLF):
-  Header do arquivo  (tipo 0)
-  Header do lote     (tipo 1)
-    Segmento P       (tipo 3, seg P)
-    Segmento Q       (tipo 3, seg Q)
-    Segmento R       (tipo 3, seg R)  [opcional — juros/multa]
-  Trailer do lote    (tipo 5)
-  Trailer do arquivo (tipo 9)
-
-Referência: Manual Técnico de Cobrança Bancária 240 posições — Ailos / FEBRABAN
-"""
-from __future__ import annotations
-
-import io
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Iterable
 
-from app.services.boleto_ailos import (
-    AGENCIA,
-    AGENCIA_DIG,
-    BANCO_CODIGO,
-    BANCO_NOME,
-    CARTEIRA,
-    CEDENTE_CNPJ,
-    CEDENTE_COD,
-    CEDENTE_COD_DIG,
-    CEDENTE_NOME,
-    CONVENIO,
-    VARIACAO,
-    fator_vencimento,
-    gerar_nosso_numero,
-    formatar_valor,
-)
+from app.core.timezone import hoje
+from app.services.ailos_beneficiario import beneficiario_atual
+from app.services.boleto_ailos import gerar_nosso_numero
+from app.services.cnab_campos import dinheiro, numero, registro, texto
 
-CRLF = "\r\n"
+CRLF = '\r\n'
 LINHA_LEN = 240
 
 
-def _num(v, size: int) -> str:
-    return str(v or 0).zfill(size)[:size]
-
-
-def _pad(text: str, size: int) -> str:
-    return str(text or "").ljust(size)[:size]
-
-
-def _fmt_date8(d: date | None) -> str:
-    return d.strftime("%d%m%Y") if d else "00000000"
-
-
-def _fmt_valor15(v: float | Decimal) -> str:
-    """Valor com 13 inteiros e 2 decimais, sem separador = 15 chars."""
-    centavos = round(float(v or 0) * 100)
-    return str(centavos).zfill(15)[:15]
-
-
 def _validar(linha: str, seq: int):
-    if len(linha) != LINHA_LEN:
-        raise ValueError(f"Linha {seq}: {len(linha)} chars (esperado {LINHA_LEN})")
+    if len(linha) != 240:
+        raise ValueError(f'Linha {seq}: esperado 240 caracteres.')
 
 
-def _tipo_insc(cpf_cnpj: str) -> str:
-    limpo = "".join(c for c in (cpf_cnpj or "") if c.isdigit())
-    return "2" if len(limpo) == 14 else "1"
+def _data(d: date | None) -> str:
+    return d.strftime('%d%m%Y') if d else '00000000'
 
 
-def _cpf_cnpj_fmt(cpf_cnpj: str) -> str:
-    return "".join(c for c in (cpf_cnpj or "") if c.isdigit()).zfill(14)[:14]
+def _controle(lote: int, seq: int, segmento: str) -> list:
+    return [(1, 3, '085'), (4, 7, numero(lote, 4)), (8, 8, '3'),
+            (9, 13, numero(seq, 5)), (14, 14, segmento), (16, 17, '01')]
 
-
-# ---------------------------------------------------------------------------
-# Header do Arquivo (tipo 0)
-# ---------------------------------------------------------------------------
 
 def header_arquivo(data_geracao: date | None = None, seq_arquivo: int = 1) -> str:
-    """
-    CNAB240 Header Arquivo — 240 posições.
-    Posições (1-based):
-      1-3   : Código banco = 085
-      4-7   : Lote = 0000 (header não tem lote)
-      8     : Tipo registro = 0
-      9-17  : Brancos
-      18    : Tipo inscrição empresa (2=CNPJ)
-      19-32 : CNPJ (14)
-      33-52 : Código do convênio (20) — formatado como beneficiário
-      53-57 : Agência (5) com dígito
-      58-70 : Conta corrente (13) com dígito
-      71-80 : Nome empresa (30) continua...
-
-    Implementação baseada no modelo CNAB240 Ailos.
-    """
-    dg = data_geracao or date.today()
-    hora_agora = "000000"  # HH:MM:SS
-
-    agencia_5 = _num(AGENCIA, 4) + AGENCIA_DIG        # "01023"
-    conta_13  = "0" * 5 + _num(CEDENTE_COD, 7) + CEDENTE_COD_DIG  # 13 chars
-
-    linha = (
-        BANCO_CODIGO                  # 1-3
-        + "0000"                      # 4-7  lote = 0000
-        + "0"                         # 8    tipo registro
-        + " " * 9                     # 9-17 brancos
-        + "2"                         # 18   tipo inscricao (2=CNPJ)
-        + _num(CEDENTE_CNPJ, 14)      # 19-32
-        + _pad(CONVENIO, 20)          # 33-52 convênio
-        + agencia_5                   # 53-57
-        + conta_13                    # 58-70
-        + "0"                         # 71   dígito ag/conta
-        + _pad(CEDENTE_NOME, 30)      # 72-101
-        + _pad(BANCO_NOME, 30)        # 102-131
-        + " " * 10                    # 132-141 endereço banco
-        + _num(seq_arquivo, 6)        # 142-147 nro sequencial arquivo
-        + dg.strftime("%d%m%Y")       # 148-155 data geração
-        + hora_agora                  # 156-161 hora geração
-        + "00000"                     # 162-166 densidade (brancos)
-        + " " * 69                    # 167-235 reservado
-        + " " * 5                     # 236-240 reservado banco
-    )
-    _validar(linha, 0)
-    return linha
+    b = beneficiario_atual()
+    return registro(240, [
+        (1, 3, '085'), (4, 7, '0000'), (8, 8, '0'), (18, 18, '2'), (19, 32, b.cnpj),
+        (33, 52, texto(b.convenio, 20)), (53, 57, numero(b.agencia, 5)), (58, 58, b.agencia_dv),
+        (59, 70, numero(b.conta, 12)), (71, 71, b.conta_dv), (73, 102, texto(b.nome, 30)),
+        (103, 132, texto(b.cooperativa_nome, 30)), (143, 143, '1'),
+        (144, 151, _data(data_geracao or hoje())), (152, 157, '000000'),
+        (158, 163, numero(seq_arquivo, 6)), (164, 166, '084'), (167, 171, '00000'),
+    ])
 
 
-# ---------------------------------------------------------------------------
-# Header do Lote (tipo 1)
-# ---------------------------------------------------------------------------
-
-def header_lote(lote: int = 1, data_geracao: date | None = None) -> str:
-    """
-    CNAB240 Header Lote (tipo 1, segmento R = remessa cobrança).
-    """
-    dg = data_geracao or date.today()
-    agencia_5 = _num(AGENCIA, 4) + AGENCIA_DIG
-    conta_13  = "0" * 5 + _num(CEDENTE_COD, 7) + CEDENTE_COD_DIG
-
-    linha = (
-        BANCO_CODIGO                  # 1-3
-        + _num(lote, 4)               # 4-7  número do lote
-        + "1"                         # 8    tipo registro (header lote)
-        + "R"                         # 9    tipo operação (R=remessa)
-        + "01"                        # 10-11 tipo serviço (01=cobrança)
-        + "  "                        # 12-13 forma de lançamento
-        + "045"                       # 14-16 versão layout
-        + " "                         # 17   brancos
-        + "2"                         # 18   tipo inscricao (2=CNPJ)
-        + _num(CEDENTE_CNPJ, 14)      # 19-32
-        + agencia_5                   # 33-37
-        + " "                         # 38
-        + conta_13                    # 39-51
-        + " "                         # 52
-        + "0"                         # 53   dígito ag/conta
-        + _pad(CEDENTE_NOME, 30)      # 54-83
-        + " " * 40                    # 84-123 endereço cedente (filler)
-        + _num(0, 8)                  # 124-131 nro remessa/retorno
-        + dg.strftime("%d%m%Y")       # 132-139 data gravação
-        + "00000000"                  # 140-147 data crédito (zeros = não informado)
-        + " " * 33                    # 148-180 reservado
-        + " " * 60                    # 181-240 brancos
-    )
-    _validar(linha, 100)
-    return linha
+def header_lote(lote: int = 1, data_geracao: date | None = None, seq_arquivo: int = 1) -> str:
+    b = beneficiario_atual()
+    return registro(240, [
+        (1, 3, '085'), (4, 7, numero(lote, 4)), (8, 8, '1'), (9, 9, 'R'), (10, 11, '01'),
+        (14, 16, '043'), (18, 18, '2'), (19, 33, numero(b.cnpj, 15)),
+        (34, 53, texto(b.convenio, 20)), (54, 58, numero(b.agencia, 5)), (59, 59, b.agencia_dv),
+        (60, 71, numero(b.conta, 12)), (72, 72, b.conta_dv), (74, 103, texto(b.nome, 30)),
+        (184, 191, numero(seq_arquivo, 8)), (192, 199, _data(data_geracao or hoje())), (200, 207, '00000000'),
+    ])
 
 
-# ---------------------------------------------------------------------------
-# Segmento P (dados do título)
-# ---------------------------------------------------------------------------
-
-def segmento_p(
-    lote: int,
-    seq: int,
-    billing_id: int,
-    valor: float | Decimal,
-    vencimento: date | None,
-    data_emissao: date | None = None,
-    mora_valor: float = 0.0,
-    desconto_valor: float = 0.0,
-) -> str:
-    """
-    Segmento P — dados do título de cobrança (240 posições).
-    """
-    de = data_emissao or date.today()
-    # gerar_nosso_numero retorna (17_dígitos, dv).
-    # CNAB240 Seg. P campos 43-56 (14 chars) + campo 57 (DV).
-    # Usamos os 17 dígitos completos: conta(8) + seq(9), truncado/padded a 14,
-    # e DV calculado sobre o sequencial isolado para manter rastreabilidade.
-    nn, nn_dv = gerar_nosso_numero(billing_id)
-    nosso_num_14 = nn[-14:].zfill(14) if len(nn) >= 14 else nn.zfill(14)
-
-    agencia_5 = _num(AGENCIA, 4) + AGENCIA_DIG
-    conta_12  = "0" * 4 + _num(CEDENTE_COD, 7) + CEDENTE_COD_DIG  # 12 chars
-    fator_venc = fator_vencimento(vencimento)
-    dt_venc = _fmt_date8(vencimento)
-    dt_emis = _fmt_date8(de)
-
-    linha = (
-        BANCO_CODIGO                   # 1-3
-        + _num(lote, 4)                # 4-7
-        + "3"                          # 8   tipo registro (detalhe)
-        + _num(seq, 5)                 # 9-13 nro seq. registro lote
-        + "P"                          # 14  código segmento
-        + " "                          # 15  brancos
-        + "01"                         # 16-17 código movimento remessa (01=entrada)
-        + agencia_5                    # 18-22 agência cedente
-        + " "                          # 23
-        + conta_12                     # 24-35 conta cedente
-        + " "                          # 36
-        + "0"                          # 37  dígito ag/conta
-        + CARTEIRA                     # 38-39
-        + VARIACAO                     # 40-42 variação carteira
-        + nosso_num_14                 # 43-56 nosso número (14 chars)
-        + nn_dv                        # 57   dígito nosso número
-        + "0" * 20                     # 58-77 número do documento (referência cedente)
-        + dt_venc                      # 78-85 data vencimento DDMMAAAA
-        + _fmt_valor15(valor)          # 86-100 valor título (15 chars)
-        + BANCO_CODIGO                 # 101-103 banco cobrador
-        + agencia_5                    # 104-108 agência cobradora
-        + _num(billing_id, 20)         # 109-128 nro documento cedente
-        + dt_emis                      # 129-136 data emissão
-        + "00"                         # 137-138 instrução 1
-        + "00"                         # 139-140 instrução 2
-        + _fmt_valor15(mora_valor)     # 141-155 mora/juros por dia
-        + _fmt_date8(None)             # 156-163 data desconto (zeros)
-        + _fmt_valor15(desconto_valor) # 164-178 desconto
-        + _fmt_valor15(0)              # 179-193 IOF
-        + _fmt_valor15(0)              # 194-208 abatimento
-        + "2"                          # 209   tipo inscricao sacado  ← preenchido depois
-        + "00"                         # 210-211 dias para protesto
-        + "3"                          # 212   código baixa (3=não baixar)
-        + "000"                        # 213-215 dias para baixa
-        + "09"                         # 216-217 código moeda (09=Real)
-        + _num(0, 10)                  # 218-227 nro contrato cedente
-        + "0"                          # 228   uso banco
-        + " " * 12                     # 229-240 brancos
-    )
-    _validar(linha, seq)
-    return linha
+def segmento_p(lote: int, seq: int, billing_id: int, valor: float | Decimal,
+               vencimento: date | None, data_emissao: date | None = None,
+               mora_valor: float = 0.0, desconto_valor: float = 0.0) -> str:
+    b = beneficiario_atual()
+    nosso, _dv = gerar_nosso_numero(billing_id, b)
+    juros = int(dinheiro(mora_valor, 15)) > 0
+    desconto = int(dinheiro(desconto_valor, 15)) > 0
+    return registro(240, _controle(lote, seq, 'P') + [
+        (18, 22, numero(b.agencia, 5)), (23, 23, b.agencia_dv),
+        (24, 35, numero(b.conta, 12)), (36, 36, b.conta_dv), (38, 57, texto(nosso, 20)),
+        (58, 58, numero(int(b.carteira), 1)), (59, 59, '1'), (60, 60, '1'), (61, 61, '2'), (62, 62, '2'),
+        (63, 77, texto(str(billing_id), 15)), (78, 85, _data(vencimento)),
+        (86, 100, dinheiro(valor, 15, positivo=True)), (101, 105, '00000'),
+        (107, 108, '02'), (109, 109, 'N'), (110, 117, _data(data_emissao or hoje())),
+        (118, 118, '1' if juros else '3'),
+        (119, 126, _data(vencimento + timedelta(days=1) if juros and vencimento else None)),
+        (127, 141, dinheiro(mora_valor, 15)), (142, 142, '1' if desconto else '2'),
+        (143, 150, _data(vencimento if desconto else None)), (151, 165, dinheiro(desconto_valor, 15)),
+        (166, 180, '0' * 15), (181, 195, '0' * 15), (196, 220, texto(str(billing_id), 25)),
+        (221, 221, '3'), (222, 223, '00'), (224, 224, '2'), (225, 227, '000'),
+        (228, 229, '09'), (230, 239, '0000000000'),
+    ])
 
 
-# ---------------------------------------------------------------------------
-# Segmento Q (dados do sacado)
-# ---------------------------------------------------------------------------
-
-def segmento_q(
-    lote: int,
-    seq: int,
-    sacado_nome: str,
-    sacado_cpf_cnpj: str,
-    sacado_endereco: str = "",
-    sacado_bairro: str = "",
-    sacado_cep: str = "",
-    sacado_cidade: str = "",
-    sacado_estado: str = "",
-) -> str:
-    """
-    Segmento Q — dados do sacado (pagador) e sacador/avalista.
-    """
-    tipo = _tipo_insc(sacado_cpf_cnpj)
-    cpf  = _cpf_cnpj_fmt(sacado_cpf_cnpj)
-    cep_limpo = "".join(c for c in (sacado_cep or "") if c.isdigit()).zfill(8)[:8]
-
-    linha = (
-        BANCO_CODIGO                    # 1-3
-        + _num(lote, 4)                 # 4-7
-        + "3"                           # 8
-        + _num(seq, 5)                  # 9-13
-        + "Q"                           # 14 segmento
-        + " "                           # 15
-        + "01"                          # 16-17 mov. remessa
-        + tipo                          # 18   tipo inscricao sacado
-        + cpf                           # 19-32
-        + _pad(sacado_nome, 40)         # 33-72
-        + _pad(sacado_endereco, 40)     # 73-112
-        + _pad(sacado_bairro, 15)       # 113-127
-        + cep_limpo                     # 128-135
-        + _pad(sacado_cidade, 15)       # 136-150
-        + _pad(sacado_estado, 2)        # 151-152
-        + "0"                           # 153   tipo inscricao sacador
-        + "0" * 14                      # 154-167 CNPJ sacador
-        + _pad("", 40)                  # 168-207 nome sacador
-        + BANCO_CODIGO                  # 208-210 banco correspondente
-        + " " * 20                      # 211-230 nro doc no banco correspondente
-        + " " * 10                      # 231-240 brancos
-    )
-    _validar(linha, seq)
-    return linha
+def segmento_q(lote: int, seq: int, sacado_nome: str, sacado_cpf_cnpj: str,
+               sacado_endereco: str = '', sacado_bairro: str = '', sacado_cep: str = '',
+               sacado_cidade: str = '', sacado_estado: str = '') -> str:
+    documento = ''.join(c for c in sacado_cpf_cnpj if c.isascii() and c.isdigit())
+    if len(documento) not in (11, 14):
+        raise ValueError('CPF/CNPJ do pagador deve conter 11 ou 14 dígitos.')
+    if documento == beneficiario_atual().cnpj:
+        raise ValueError('CNAB 240: o pagador não pode ser o próprio beneficiário (Dicas de homologação, p. 2).')
+    cep = ''.join(c for c in sacado_cep if c.isascii() and c.isdigit())
+    return registro(240, _controle(lote, seq, 'Q') + [
+        (18, 18, '2' if len(documento) == 14 else '1'), (19, 33, numero(documento, 15)),
+        (34, 73, texto(sacado_nome, 40)), (74, 113, texto(sacado_endereco, 40)),
+        (114, 128, texto(sacado_bairro, 15)), (129, 136, numero(cep or '0', 8)),
+        (137, 151, texto(sacado_cidade, 15)), (152, 153, texto(sacado_estado, 2)),
+        (154, 154, '0'), (155, 169, '0' * 15), (210, 212, '000'),
+    ])
 
 
-# ---------------------------------------------------------------------------
-# Segmento R (descontos, multa, juros — opcional)
-# ---------------------------------------------------------------------------
-
-def segmento_r(
-    lote: int,
-    seq: int,
-    multa_pct: float = 0.0,
-    data_multa: date | None = None,
-) -> str:
-    """
-    Segmento R — informações complementares (multa, desconto 2).
-    """
-    cod_multa = "2" if multa_pct > 0 else "0"   # 2 = percentual
-    dt_multa  = _fmt_date8(data_multa)
-
-    linha = (
-        BANCO_CODIGO                    # 1-3
-        + _num(lote, 4)                 # 4-7
-        + "3"                           # 8
-        + _num(seq, 5)                  # 9-13
-        + "R"                           # 14
-        + " "                           # 15
-        + "01"                          # 16-17 mov remessa
-        + "0"                           # 18   código desconto 2
-        + "00000000"                    # 19-26 data desconto 2
-        + _fmt_valor15(0)               # 27-41 valor desconto 2
-        + "0"                           # 42   código desconto 3
-        + "00000000"                    # 43-50 data desconto 3
-        + _fmt_valor15(0)               # 51-65 valor desconto 3
-        + cod_multa                     # 66   código multa (2=%)
-        + dt_multa                      # 67-74 data multa (ou 00000000)
-        + _fmt_valor15(multa_pct)       # 75-89 valor/percentual multa
-        + " " * 10                      # 90-99 informação sacado
-        + " " * 40                      # 100-139 mensagem 3
-        + " " * 40                      # 140-179 mensagem 4
-        + "0" * 8                       # 180-187 nro do contrato
-        + _fmt_valor15(0)               # 188-202 valor nominal do título
-        + _fmt_valor15(0)               # 203-217 valor da multa
-        + " " * 23                      # 218-240 brancos
-    )
-    _validar(linha, seq)
-    return linha
+def segmento_r(lote: int, seq: int, multa_pct: float = 0.0, data_multa: date | None = None) -> str:
+    multa = int(dinheiro(multa_pct, 15)) > 0
+    return registro(240, _controle(lote, seq, 'R') + [
+        (18, 18, '0'), (19, 26, '00000000'), (27, 41, '0' * 15),
+        (42, 42, '0'), (43, 50, '00000000'), (51, 65, '0' * 15),
+        (66, 66, '2' if multa else '0'), (67, 74, _data(data_multa)), (75, 89, dinheiro(multa_pct, 15)),
+        (200, 207, '00000000'), (208, 210, '000'), (211, 215, '00000'), (217, 228, '0' * 12), (231, 231, '0'),
+    ])
 
 
-# ---------------------------------------------------------------------------
-# Trailer do Lote (tipo 5)
-# ---------------------------------------------------------------------------
-
-def trailer_lote(
-    lote: int,
-    qtd_registros: int,
-    qtd_titulos: int,
-    valor_total: float | Decimal,
-) -> str:
-    """CNAB240 Trailer Lote (tipo 5)."""
-    linha = (
-        BANCO_CODIGO                    # 1-3
-        + _num(lote, 4)                 # 4-7
-        + "5"                           # 8
-        + " " * 9                       # 9-17 brancos
-        + _num(qtd_registros, 6)        # 18-23 qtd registros no lote
-        + _num(qtd_titulos, 6)          # 24-29 qtd títulos em cobrança simples
-        + _fmt_valor15(valor_total)     # 30-44 valor cobrança simples
-        + _num(0, 6)                    # 45-50 qtd títulos em vinculada
-        + _fmt_valor15(0)               # 51-65 valor vinculada
-        + _num(0, 6)                    # 66-71 qtd títulos descontada
-        + _fmt_valor15(0)               # 72-86 valor descontada
-        + _num(0, 6)                    # 87-92 qtd títulos vendor
-        + _fmt_valor15(0)               # 93-107 valor vendor
-        + "0" * 8                       # 108-115 aviso débito
-        + " " * 117                     # 116-232 brancos
-        + " " * 8                       # 233-240 brancos banco
-    )
-    _validar(linha, -1)
-    return linha
+def trailer_lote(lote: int, qtd_registros: int, qtd_titulos: int, valor_total: float | Decimal) -> str:
+    return registro(240, [
+        (1, 3, '085'), (4, 7, numero(lote, 4)), (8, 8, '5'), (18, 23, numero(qtd_registros, 6)),
+        (24, 29, numero(qtd_titulos, 6)), (30, 46, dinheiro(valor_total, 17)),
+        (47, 52, '000000'), (53, 69, '0' * 17), (70, 75, '000000'), (76, 92, '0' * 17),
+        (93, 98, '000000'), (99, 115, '0' * 17),
+    ])
 
 
-# ---------------------------------------------------------------------------
-# Trailer do Arquivo (tipo 9)
-# ---------------------------------------------------------------------------
-
-def trailer_arquivo(
-    qtd_lotes: int,
-    qtd_registros: int,
-) -> str:
-    """CNAB240 Trailer Arquivo (tipo 9)."""
-    linha = (
-        BANCO_CODIGO                    # 1-3
-        + "9999"                        # 4-7
-        + "9"                           # 8
-        + " " * 9                       # 9-17
-        + _num(qtd_lotes, 6)            # 18-23 qtd lotes
-        + _num(qtd_registros, 6)        # 24-29 qtd registros total
-        + _num(0, 6)                    # 30-35 qtd contas (para conciliação)
-        + " " * 205                     # 36-240 brancos
-    )
-    _validar(linha, -2)
-    return linha
+def trailer_arquivo(qtd_lotes: int, qtd_registros: int) -> str:
+    return registro(240, [(1, 3, '085'), (4, 7, '9999'), (8, 8, '9'),
+                          (18, 23, numero(qtd_lotes, 6)), (24, 29, numero(qtd_registros, 6)), (30, 35, '000000')])
 
 
-# ---------------------------------------------------------------------------
-# Gerador de arquivo completo
-# ---------------------------------------------------------------------------
-
-def gerar_arquivo_cnab240(
-    boletos: Iterable[dict],
-    seq_arquivo: int = 1,
-    data_geracao: date | None = None,
-) -> bytes:
-    """
-    Gera o arquivo CNAB240 completo.
-
-    Cada item de `boletos` deve conter:
-      billing_id, valor, vencimento (date|None),
-      sacado_nome, sacado_cpf_cnpj,
-      sacado_endereco?, sacado_bairro?, sacado_cep?,
-      sacado_cidade?, sacado_estado?,
-      mora_valor? (float), multa_pct? (float, percentual)
-    """
-    buf    = io.StringIO()
-    lote   = 1
-    seq    = 0        # sequencial global de registros
-
-    lista_boletos = list(boletos)
-
-    # Cabeçalho do arquivo
-    buf.write(header_arquivo(data_geracao, seq_arquivo) + CRLF)
-    seq += 1
-
-    # Cabeçalho do lote
-    buf.write(header_lote(lote, data_geracao) + CRLF)
-    seq += 1
-    seq_lote = 1          # sequencial dentro do lote
-    registros_lote = 2    # header + trailer do lote
-    valor_lote: float = 0.0
-    qtd_titulos = 0
-
-    for item in lista_boletos:
-        valor_item = float(item.get("valor", 0))
-        valor_lote += valor_item
-        qtd_titulos += 1
-
-        # Segmento P
-        buf.write(segmento_p(
-            lote=lote,
-            seq=seq_lote,
-            billing_id=item["billing_id"],
-            valor=valor_item,
-            vencimento=item.get("vencimento"),
-            data_emissao=item.get("data_emissao"),
-            mora_valor=item.get("mora_valor", 0.0),
-        ) + CRLF)
-        seq_lote += 1
+def gerar_arquivo_cnab240(boletos: Iterable[dict], seq_arquivo: int = 1,
+                          data_geracao: date | None = None) -> bytes:
+    lista = list(boletos)
+    linhas = [header_arquivo(data_geracao, seq_arquivo), header_lote(1, data_geracao, seq_arquivo)]
+    total = Decimal('0')
+    seq = 1
+    for item in lista:
+        linhas.append(segmento_p(1, seq, item['billing_id'], item['valor'], item.get('vencimento'),
+                                 item.get('data_emissao'), item.get('mora_valor', 0), item.get('desconto_valor', 0)))
+        total += Decimal(str(item['valor']))
         seq += 1
-        registros_lote += 1
-
-        # Segmento Q
-        buf.write(segmento_q(
-            lote=lote,
-            seq=seq_lote,
-            sacado_nome=item.get("sacado_nome", ""),
-            sacado_cpf_cnpj=item.get("sacado_cpf_cnpj", ""),
-            sacado_endereco=item.get("sacado_endereco", ""),
-            sacado_bairro=item.get("sacado_bairro", ""),
-            sacado_cep=item.get("sacado_cep", ""),
-            sacado_cidade=item.get("sacado_cidade", ""),
-            sacado_estado=item.get("sacado_estado", ""),
-        ) + CRLF)
-        seq_lote += 1
+        linhas.append(segmento_q(1, seq, item.get('sacado_nome', ''), item.get('sacado_cpf_cnpj', ''),
+                                 item.get('sacado_endereco', ''), item.get('sacado_bairro', ''),
+                                 item.get('sacado_cep', ''), item.get('sacado_cidade', ''), item.get('sacado_estado', '')))
         seq += 1
-        registros_lote += 1
-
-        # Segmento R (apenas se houver multa)
-        multa = item.get("multa_pct", 0.0)
-        if multa and multa > 0:
-            buf.write(segmento_r(lote=lote, seq=seq_lote, multa_pct=multa) + CRLF)
-            seq_lote += 1
+        if item.get('multa_pct', 0):
+            venc = item.get('vencimento')
+            linhas.append(segmento_r(1, seq, item['multa_pct'], venc + timedelta(days=1) if venc else None))
             seq += 1
-            registros_lote += 1
-
-    # Trailer do lote
-    buf.write(trailer_lote(lote, registros_lote, qtd_titulos, valor_lote) + CRLF)
-    seq += 1
-
-    # Trailer do arquivo
-    total_registros = seq + 1
-    buf.write(trailer_arquivo(1, total_registros) + CRLF)
-
-    return buf.getvalue().encode("latin-1", errors="replace")
+    linhas.append(trailer_lote(1, seq + 1, len(lista), total))
+    linhas.append(trailer_arquivo(1, len(linhas) + 1))
+    return (CRLF.join(linhas) + CRLF).encode('ascii')

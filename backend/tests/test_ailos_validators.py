@@ -152,6 +152,17 @@ class TestValidateBoletoPayload:
             validate_boleto_payload(payload)
         assert any('bairro' in e for e in excinfo.value.errors)
 
+    @pytest.mark.parametrize('campo,limite', [('numero', 10), ('complemento', 40)])
+    def test_limites_dos_campos_opcionais_do_endereco(self, campo, limite):
+        payload = self._valid_payload()
+        for valor in (None, '', 'A' * limite):
+            payload['pagador']['endereco'][campo] = valor
+            validate_boleto_payload(payload)
+        payload['pagador']['endereco'][campo] = 'A' * (limite + 1)
+        with pytest.raises(AilosValidationError) as excinfo:
+            validate_boleto_payload(payload)
+        assert any(f'pagador.endereco.{campo} excede {limite}' in error for error in excinfo.value.errors)
+
     def test_cidade_too_long_raises(self):
         payload = self._valid_payload()
         payload['pagador']['endereco']['cidade'] = 'A' * 31

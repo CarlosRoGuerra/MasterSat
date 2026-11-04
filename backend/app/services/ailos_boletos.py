@@ -94,7 +94,9 @@ def montar_dados_pagador(client: Client) -> dict:
             'cep': only_digits(client.zip_code),
             'logradouro': normalize_text(client.address_line, 56),
             'numero': client.address_number or '',
-            'complemento': client.address_complement or '',
+            # Manual Ailos, p. 21: complemento tem no máximo 40 caracteres.
+            # Adapta o envio sem alterar o endereço completo no cadastro.
+            'complemento': normalize_text(client.address_complement, 40),
             'bairro': normalize_text(client.neighborhood, 30),
             'cidade': normalize_text(client.city, 30),
             'uf': (client.state or '').upper(),
@@ -949,6 +951,14 @@ def aplicar_dados_oficiais_ailos(dados: DadosBoleto, ailos_boleto: AilosBoleto |
     if ailos_boleto is None or not (ailos_boleto.linha_digitavel and ailos_boleto.codigo_barras):
         return dados
 
+    from app.services.ailos_beneficiario import beneficiario_do_codigo
+    perfil = beneficiario_do_codigo(ailos_boleto.codigo_barras)
+    identidade = {} if perfil is None else {
+        'cedente_agencia': f'{perfil.agencia}-{perfil.agencia_dv}',
+        'cedente_codigo': f'{perfil.conta}-{perfil.conta_dv}',
+        'cedente_convenio': perfil.convenio,
+        'carteira': f'{perfil.carteira}/{perfil.variacao}',
+    }
     return dataclasses.replace(
         dados,
         codigo_barras=ailos_boleto.codigo_barras,
@@ -956,6 +966,7 @@ def aplicar_dados_oficiais_ailos(dados: DadosBoleto, ailos_boleto: AilosBoleto |
         nosso_numero_display=ailos_boleto.nosso_numero or dados.nosso_numero_display,
         pix_emv=ailos_boleto.pix_emv or dados.pix_emv,
         pix_qr_base64=ailos_boleto.pix_qr_base64 or dados.pix_qr_base64,
+        **identidade,
     )
 
 
