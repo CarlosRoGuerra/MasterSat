@@ -15,6 +15,9 @@ import {
 } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import { formatCurrency, formatDate } from '@/lib/format';
+import { processarBoletosSelecionados } from '@/lib/boleto-lote';
+import { nomeBancoBoleto, type BancoBoleto } from '@/lib/banco-boleto';
+import { useSicrediDisponivel } from '@/lib/use-sicredi-disponivel';
 import { Button } from '@/components/ui/button';
 import { Modal } from '@/components/ui/modal';
 
@@ -35,6 +38,8 @@ type Item = {
   vencimento: string | null;
   documentos: string[];
   boleto_emitido: boolean;
+  boleto_banco?: BancoBoleto | null;
+  pode_emitir_boleto?: boolean;
   nfse_status: string | null;
   emitir_nfse: string | null;
   estado: 'pronto' | 'bloqueado' | 'enviado' | 'aguardando' | 'processando' | 'desconhecido';
@@ -115,6 +120,10 @@ export function ClosureDeliveryModal({
   const [previa, setPrevia] = useState<Previa | null>(null);
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
+  const [emitting, setEmitting] = useState(false);
+  const [banco, setBanco] = useState<BancoBoleto>('ailos');
+  const [progressoEmissao, setProgressoEmissao] = useState('');
+  const sicrediDisponivel = useSicrediDisponivel(token, open);
   const [error, setError] = useState('');
   const [feedback, setFeedback] = useState('');
   const [loadingMeses, setLoadingMeses] = useState(false);
@@ -123,7 +132,7 @@ export function ClosureDeliveryModal({
   const [filtro, setFiltro] = useState<Filtro>('todos');
   const operacaoRef = useRef(false);
   const requestId = useRef(0);
-  const busy = sending || loading || loadingMeses;
+  const busy = sending || emitting || loading || loadingMeses;
   const meses = [...new Set(lotes.map(lote => lote.mes_servico))].sort().reverse();
   const lotesVisiveis = lotes.filter(lote => !mesServico || lote.mes_servico === mesServico);
   const itens = previa?.itens ?? [];
@@ -137,12 +146,18 @@ export function ClosureDeliveryModal({
   const disponiveis = visiveis.filter(selecionavel);
   const marcados = itens.filter((item) => selecionados.has(item.billing_id));
   const prontos = marcados.filter((item) => item.estado === 'pronto');
+  const paraEmitir = marcados.filter(item => item.pode_emitir_boleto);
   const prontosDoLote = itens.filter(item => item.estado === 'pronto');
   const todosMarcados =
     disponiveis.length > 0 && disponiveis.every((item) => selecionados.has(item.billing_id));
   const algunsMarcados = disponiveis.some((item) => selecionados.has(item.billing_id));
   const quantidadeValida = Number.isInteger(Number(quantidade)) && Number(quantidade) > 0;
   const filaAtiva = itens.some(item => item.estado === 'aguardando' || item.estado === 'processando');
+
+  useEffect(() => { setBanco('ailos'); }, [open, loteId]);
+  useEffect(() => {
+    if (!sicrediDisponivel) setBanco('ailos');
+  }, [sicrediDisponivel]);
 
   function aplicarPrevia(data: Previa) {
     setPrevia(data);
@@ -294,6 +309,39 @@ export function ClosureDeliveryModal({
     } finally {
       operacaoRef.current = false;
       setSending(false);
+    }
+  }
+
+  async function emitirSelecionados() {
+    if (!token || !previa || busy || operacaoRef.current || !paraEmitir.length) return;
+    if (banco === 'sicredi' && !sicrediDisponivel) return;
+    const nomeBanco = nomeBancoBoleto(banco);
+    if (!window.confirm(
+      `Emitir ${paraEmitir.length} boleto(s) pelo ${nomeBanco} no lote #${previa.id}?\n\n` +
+      (paraEmitir.length === 1 ? `Cobrança #${paraEmitir[0].billing_id} · ${paraEmitir[0].cliente} · ${formatCurrency(paraEmitir[0].valor)}.\n\n` : '') +
+      'Serão emitidas somente as cobranças selecionadas disponíveis para emissão. O envio por e-mail é feito separadamente.',
+    )) return;
+    operacaoRef.current = true;
+    setEmitting(true);
+    setError('');
+    setFeedback('');
+    setProgressoEmissao(`0/${paraEmitir.length}`);
+    try {
+      const resultado = await processarBoletosSelecionados(
+        paraEmitir.map(item => item.billing_id), 'emitir', token,
+        (concluidos, total) => setProgressoEmissao(`${concluidos}/${total}`), banco,
+      );
+      await atualizarPrevia();
+      setFeedback(`${resultado.processados.length} boleto(s) confirmado(s) pelo ${nomeBanco}. Confira os documentos antes do envio.`);
+      if (resultado.falhas.length) {
+        setError(resultado.falhas.map(falha => `#${falha.id}: ${falha.mensagem}`).join(' · '));
+      }
+    } catch (err) {
+      setError(mensagemErro(err));
+    } finally {
+      operacaoRef.current = false;
+      setEmitting(false);
+      setProgressoEmissao('');
     }
   }
 
@@ -449,7 +497,11 @@ export function ClosureDeliveryModal({
             Adicionando cobranças à fila…
           </p>
         )}
-        {(loading || loadingMeses) && !sending && (
+        {emitting && <p role="status" className="flex items-center gap-2 text-sm">
+          <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin motion-reduce:animate-none" />
+          Emitindo boletos pelo {nomeBancoBoleto(banco)}… {progressoEmissao}
+        </p>}
+        {(loading || loadingMeses) && !sending && !emitting && (
           <p role="status" className="flex items-center gap-2 py-4 text-sm text-slate-500">
             <Loader2
               aria-hidden="true"
@@ -460,6 +512,20 @@ export function ClosureDeliveryModal({
         )}
         {previa && (
           <>
+            <div className="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/40">
+              <div className="min-w-[200px]">
+                <label htmlFor="closure-issuance-bank" className="mb-2 block text-xs font-semibold text-slate-700 dark:text-slate-200">Banco para emissão</label>
+                <select id="closure-issuance-bank" className={`${inputClass} w-full`} value={banco} disabled={busy} onChange={event => setBanco(event.target.value as BancoBoleto)}>
+                  <option value="ailos">Ailos</option>
+                  {sicrediDisponivel && <option value="sicredi">Sicredi</option>}
+                </select>
+              </div>
+              <Button type="button" variant="secondary" onClick={emitirSelecionados} disabled={busy || !paraEmitir.length || (banco === 'sicredi' && !sicrediDisponivel)}>
+                <Barcode aria-hidden="true" className="h-4 w-4" />
+                Emitir selecionadas pelo {nomeBancoBoleto(banco)} ({paraEmitir.length})
+              </Button>
+              <p className="w-full text-xs text-slate-500 dark:text-slate-400">Selecione as cobranças sem boleto e escolha o banco para emitir. Depois, confira o boleto e a NFS-e exigida antes de enviar por e-mail.</p>
+            </div>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex flex-wrap gap-1" aria-label="Filtrar cobranças">
                 {(
@@ -626,7 +692,7 @@ export function ClosureDeliveryModal({
                                   ) : (
                                     <FileText aria-hidden="true" className="h-3 w-3" />
                                   )}
-                                  {documento}
+                                  {documento === 'Boleto' && item.boleto_banco ? `Boleto ${nomeBancoBoleto(item.boleto_banco)}` : documento}
                                   {emitido && (
                                     <Check
                                       aria-hidden="true"

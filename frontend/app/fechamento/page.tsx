@@ -1198,7 +1198,7 @@ export default function FechamentoPage() {
                   icon={<DollarSign className="h-5 w-5" />}
                 />
               </div>
-              <p className="text-sm text-slate-600 dark:text-slate-300">Os títulos foram criados no Financeiro. A emissão na Ailos é feita separadamente.</p>
+              <p className="text-sm text-slate-600 dark:text-slate-300">Os títulos foram criados no Financeiro. Escolha Ailos ou Sicredi para emitir os boletos na conferência do fechamento.</p>
             </div>
           )}
 

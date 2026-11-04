@@ -16,8 +16,10 @@ from app.models.closure_email_delivery import ClosureEmailDelivery
 from app.models.closure_job import ClosureJob
 from app.models.enums import BillingStatus
 from app.models.nfse_nota import NfseNota
+from app.models.sicredi_boleto import SicrediBoleto
 from app.services.ailos_boletos import resolver_pagador
 from app.services.email_smtp import emails_cadastrados
+from app.services import titulo_bancario
 
 
 def _lote(db: Session, lote_id: int) -> tuple[ClosureJob, list[int]]:
@@ -148,6 +150,8 @@ def conferir_lote(db: Session, lote_id: int, billing_id: int | None = None, *, i
         ids = [billing_id]
     billings = {b.id: b for b in db.query(Billing).filter(Billing.id.in_(ids)).all()}
     boletos = {b.billing_id: b for b in db.query(AilosBoleto).filter(AilosBoleto.billing_id.in_(ids)).all()}
+    sicredi = {b.billing_id: b for b in db.query(SicrediBoleto).filter(SicrediBoleto.billing_id.in_(ids)).all()}
+    titulos = titulo_bancario.titulos_bancarios(db, ids)
     notas = {n.billing_id: n for n in db.query(NfseNota).filter(NfseNota.billing_id.in_(ids)).all()}
     entregas = {e.billing_id: e for e in db.query(ClosureEmailDelivery).filter(
         ClosureEmailDelivery.closure_job_id == lote_id,
@@ -164,26 +168,35 @@ def conferir_lote(db: Session, lote_id: int, billing_id: int | None = None, *, i
                     payer = resolver_pagador(db, b, owner)
                 except ValueError:
                     payer = None
-        boleto = boletos.get(billing_id)
+        titulo = titulos[billing_id]
+        banco = 'sicredi' if titulo.canal == titulo_bancario.CANAL_SICREDI else 'ailos'
+        boleto = sicredi.get(billing_id) if banco == 'sicredi' else boletos.get(billing_id)
         nota = notas.get(billing_id)
         entrega = None if ignorar_entrega else entregas.get(billing_id)
         fiscal = payer.issue_invoice if payer else None
         emails = emails_cadastrados(payer) if payer else []
-        boleto_ok = bool(boleto and boleto.linha_digitavel and boleto.codigo_barras)
+        boleto_ok = bool(
+            boleto and boleto.linha_digitavel and boleto.codigo_barras
+            and titulo.estado in (titulo_bancario.REGISTRADO, titulo_bancario.BAIXADO)
+        )
+        aberta = bool(b and not b.is_deleted and b.substituted_by_id is None
+                      and b.status in (BillingStatus.PENDING, BillingStatus.OVERDUE))
         motivos = []
-        if not b or b.is_deleted or b.substituted_by_id is not None or b.status not in (
-            BillingStatus.PENDING, BillingStatus.OVERDUE,
-        ):
+        if not aberta:
             motivos.append('Cobrança não está em aberto')
         if not payer or payer.is_deleted:
             motivos.append('Responsável financeiro indisponível')
         elif not emails:
             motivos.append('Responsável financeiro sem e-mail')
         if not boleto_ok:
-            motivos.append('Boleto Ailos não emitido')
+            motivos.append({
+                titulo_bancario.EM_REGISTRO: 'Registro do boleto em andamento no banco',
+                titulo_bancario.DESFECHO_DESCONHECIDO: 'Registro bancário sem confirmação; consulte o título no Financeiro',
+                titulo_bancario.REMESSA_CNAB: 'Boleto em remessa CNAB; confira o registro no Financeiro',
+            }.get(titulo.estado, 'Boleto não emitido. Escolha Ailos ou Sicredi para emitir'))
         elif boleto.baixa_status is not None:
             motivos.append('Boleto baixado ou com baixa pendente')
-        elif boleto.status_ailos in ('3', '5'):
+        elif banco == 'ailos' and boleto.status_ailos in ('3', '5'):
             motivos.append('Boleto já baixado ou liquidado na Ailos')
         if fiscal == 'sim' and (not nota or nota.status != 'emitida'):
             motivos.append('NFS-e obrigatória ainda não emitida')
@@ -213,6 +226,11 @@ def conferir_lote(db: Session, lote_id: int, billing_id: int | None = None, *, i
             'valor': float(b.amount) if b else 0,
             'vencimento': b.due_date if b else None,
             'boleto_emitido': boleto_ok,
+            'boleto_banco': banco if boleto_ok else None,
+            'titulo_bancario': titulo.as_dict(),
+            'pode_emitir_boleto': bool(aberta and not b.somente_sistema
+                                      and titulo.estado == titulo_bancario.SEM_TITULO
+                                      and (not entrega or entrega.status == 'erro')),
             'nfse_status': nota.status if nota else None,
             'emitir_nfse': fiscal,
             'documentos': ['Boleto', 'NFS-e'] if fiscal == 'sim' else ['Boleto'],

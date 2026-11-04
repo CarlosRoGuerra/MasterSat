@@ -18,6 +18,8 @@ function item(id: number, estado = 'pronto', extra = {}) {
     emitir_nfse: 'nao',
     nfse_status: null,
     boleto_emitido: true,
+    boleto_banco: 'ailos' as 'ailos' | 'sicredi' | null,
+    pode_emitir_boleto: false,
     estado,
     motivo: null,
     ...extra,
@@ -26,6 +28,8 @@ function item(id: number, estado = 'pronto', extra = {}) {
 let rows: ReturnType<typeof item>[];
 let sendFailure: number | null;
 let previewFailure: boolean;
+let sicrediHabilitado: boolean;
+let emissionFailure: number | null;
 const calls = () =>
   vi.mocked(apiFetch).mock.calls.filter(([path]) => String(path).endsWith('/enviar'));
 
@@ -34,18 +38,32 @@ beforeEach(() => {
   vi.spyOn(window, 'confirm').mockReturnValue(true);
   sendFailure = null;
   previewFailure = false;
+  sicrediHabilitado = true;
+  emissionFailure = null;
   rows = [
     item(1),
     item(2),
     item(3, 'bloqueado', {
       boleto_emitido: false,
-      motivo: 'Boleto Ailos não emitido',
+      boleto_banco: null,
+      pode_emitir_boleto: true,
+      motivo: 'Boleto não emitido',
     }),
     item(4, 'enviado'),
     item(5, 'desconhecido'),
     item(6, 'bloqueado', { boleto_emitido: false, motivo: 'Cobrança não está em aberto' }),
   ];
   vi.mocked(apiFetch).mockImplementation(async (path, options) => {
+    if (path === '/sicredi/status') return { habilitado: sicrediHabilitado };
+    if (path === '/sicredi/boletos' || path === '/ailos/boletos') {
+      const id = JSON.parse(String(options?.body)).billing_id;
+      if (id === emissionFailure) throw new Error('Registro sem confirmação; consulte o banco.');
+      rows = rows.map(r => r.billing_id === id
+        ? { ...r, boleto_emitido: true, pode_emitir_boleto: false,
+          boleto_banco: path === '/sicredi/boletos' ? 'sicredi' : 'ailos',
+          estado: 'pronto', motivo: null } : r);
+      return { linha_digitavel: '1'.repeat(47), codigo_barras: '1'.repeat(44) };
+    }
     if (path === '/billing-closure/lotes/recuperar') return {};
     if (path === '/billing-closure/lotes')
       return [
@@ -176,6 +194,58 @@ it('envia mais de 25 títulos do lote completo, mesmo com filtro e seleção par
   await screen.findByText(/61 cobrança\(s\) adicionada\(s\) à fila/);
   expect(calls()).toHaveLength(1);
   expect(JSON.parse(String(calls()[0][1]?.body)).billing_ids).toEqual(Array.from({ length: 61 }, (_, i) => i + 1));
+});
+
+const emissoes = () => vi.mocked(apiFetch).mock.calls.filter(([path]) =>
+  path === '/sicredi/boletos' || path === '/ailos/boletos');
+
+it('oferece Sicredi e emite somente a cobrança selecionada sem enviar e-mail', async () => {
+  const { user } = await abrir();
+  expect(emissoes()).toHaveLength(0);
+  await user.click(screen.getByRole('checkbox', { name: 'Selecionar cobrança #1' }));
+  await user.click(screen.getByRole('checkbox', { name: 'Selecionar cobrança #3' }));
+  await user.selectOptions(screen.getByLabelText('Banco para emissão'), 'sicredi');
+  await user.click(screen.getByRole('button', { name: 'Emitir selecionadas pelo Sicredi (1)' }));
+  expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('Cobrança #3 · Cliente 3'));
+  await screen.findByText('Boleto Sicredi');
+  expect(emissoes()).toHaveLength(1);
+  expect(emissoes()[0]).toEqual(['/sicredi/boletos', {
+    method: 'POST', body: JSON.stringify({ billing_id: 3 }),
+  }, 'test-token']);
+  expect(calls()).toHaveLength(0);
+  expect(screen.getByRole('button', { name: 'Emitir selecionadas pelo Sicredi (0)' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Enviar selecionadas (2)' })).toBeEnabled();
+});
+
+it('continua oferecendo Ailos e respeita o cancelamento da confirmação', async () => {
+  const { user } = await abrir();
+  await user.click(screen.getByRole('checkbox', { name: 'Selecionar cobrança #3' }));
+  vi.mocked(window.confirm).mockReturnValueOnce(false);
+  await user.click(screen.getByRole('button', { name: 'Emitir selecionadas pelo Ailos (1)' }));
+  expect(emissoes()).toHaveLength(0);
+  await user.click(screen.getByRole('button', { name: 'Emitir selecionadas pelo Ailos (1)' }));
+  await screen.findByText(/1 boleto\(s\) confirmado\(s\) pelo Ailos/);
+  expect(emissoes().map(([path]) => path)).toEqual(['/ailos/boletos']);
+  expect(calls()).toHaveLength(0);
+});
+
+it('mantém a cobrança pendente e mostra a falha quando o banco não confirma', async () => {
+  emissionFailure = 3;
+  const { user } = await abrir();
+  await user.click(screen.getByRole('checkbox', { name: 'Selecionar cobrança #3' }));
+  await user.selectOptions(screen.getByLabelText('Banco para emissão'), 'sicredi');
+  await user.click(screen.getByRole('button', { name: 'Emitir selecionadas pelo Sicredi (1)' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('#3: Registro sem confirmação');
+  expect(screen.getByRole('button', { name: 'Enviar selecionadas (0)' })).toBeDisabled();
+  expect(calls()).toHaveLength(0);
+});
+
+it('não oferece Sicredi quando a integração não está configurada', async () => {
+  sicrediHabilitado = false;
+  await abrir();
+  expect(screen.queryByRole('option', { name: 'Sicredi' })).not.toBeInTheDocument();
+  expect(screen.getByLabelText('Banco para emissão')).toHaveValue('ailos');
+  expect(emissoes()).toHaveLength(0);
 });
 
 it('atualiza o andamento automaticamente e permite fechar a modal com envios na fila', async () => {

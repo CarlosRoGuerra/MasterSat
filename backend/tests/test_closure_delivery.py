@@ -2,6 +2,8 @@
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
+import pytest
+
 from app.models.ailos_boleto import AilosBoleto
 from app.models.billing import Billing
 from app.models.client import Client
@@ -9,6 +11,7 @@ from app.models.closure_email_delivery import ClosureEmailDelivery
 from app.models.closure_job import ClosureJob
 from app.models.enums import BillingStatus, ClientStatus
 from app.models.nfse_nota import NfseNota
+from app.models.sicredi_boleto import SicrediBoleto
 
 PREFIX = '/api/v1/billing-closure/lotes'
 
@@ -73,7 +76,10 @@ def test_batch_preview_contains_all_titles_and_only_exact_run(http, db):
     assert data['itens'][0]['documentos'] == ['Boleto', 'NFS-e']
     assert data['itens'][30]['documentos'] == ['Boleto']
     assert 'Preferência de NFS-e não informada' in data['itens'][31]['motivo']
-    assert 'Boleto Ailos não emitido' in data['itens'][32]['motivo']
+    assert 'Boleto não emitido' in data['itens'][32]['motivo']
+    assert data['itens'][32]['pode_emitir_boleto'] is True
+    assert data['itens'][0]['pode_emitir_boleto'] is False
+    assert data['itens'][0]['boleto_banco'] == 'ailos'
     assert http.post(f'{PREFIX}/{lote.id}/enviar/{unrelated.id}').status_code == 404
 
     additional = _billing(db, no_nfse)
@@ -151,6 +157,103 @@ def test_batch_send_attaches_nfse_only_when_required_and_does_not_repeat(http, d
     assert [len(email['anexos']) for email in emails] == [2, 1]
     assert db.query(ClosureEmailDelivery).count() == 2
     assert http.get(f'{PREFIX}/{lote.id}').json()['enviados'] == 2
+
+
+def _sicredi_boleto(db, billing, **extra):
+    boleto = SicrediBoleto(
+        billing_id=billing.id, ambiente='sandbox', cooperativa='2602', posto='13',
+        codigo_beneficiario='11948', nosso_numero=f'{billing.id:09d}',
+        status='REGISTRADO', linha_digitavel='2' * 47, codigo_barras='2' * 44,
+    )
+    for key, value in extra.items():
+        setattr(boleto, key, value)
+    db.add(boleto)
+    return boleto
+
+
+def test_closure_recognizes_sicredi_and_queues_its_pdf_without_registering_again(http, db, monkeypatch):
+    payer = _client(db, 'Sicredi no fechamento', '51000000001', 'nao')
+    billing = _billing(db, payer, registered=False)
+    _sicredi_boleto(db, billing)
+    lote = ClosureJob(reference_month='2026-09', status='completed',
+                      result={'payment_billing_ids': [billing.id]})
+    db.add(lote)
+    db.commit()
+
+    item = http.get(f'{PREFIX}/{lote.id}').json()['itens'][0]
+    assert item['estado'] == 'pronto' and item['motivo'] is None
+    assert item['boleto_emitido'] is True
+    assert item['boleto_banco'] == 'sicredi'
+    assert item['titulo_bancario']['canal'] == 'sicredi_api'
+    assert item['pode_emitir_boleto'] is False
+
+    from app.api.v1.endpoints import boletos
+    from app.services import email_smtp, sicredi_boletos
+    from app.services.closure_delivery import processar_fila
+    sent = []
+    prepared = []
+
+    def sicredi_pdf(b, c, db_):
+        prepared.append(b.id)
+        return b'%PDF-sicredi', 'sicredi.pdf'
+
+    def unexpected_registration(*args, **kwargs):
+        pytest.fail('Conferir/enviar fechamento não pode registrar boleto no banco')
+
+    monkeypatch.setattr(boletos, '_pdf_sicredi', sicredi_pdf)
+    monkeypatch.setattr(sicredi_boletos, 'gerar_boleto', unexpected_registration)
+    monkeypatch.setattr(email_smtp, 'load_config', lambda _: {'host': 'smtp.test', 'from_email': 'sender@example.test'})
+    monkeypatch.setattr(email_smtp, 'enviar_email', lambda db_, **kwargs: sent.append(kwargs))
+    result = http.post(f'{PREFIX}/{lote.id}/enviar', json={'billing_ids': [billing.id]})
+    assert result.status_code == 202, result.text
+    assert result.json()['enfileirados'] == [billing.id]
+    assert sent == [] and prepared == []
+    processar_fila(db)
+    assert prepared == [billing.id]
+    assert sent[0]['anexos'] == [('sicredi.pdf', b'%PDF-sicredi', 'application/pdf')]
+    assert db.query(AilosBoleto).count() == 0
+    assert db.query(SicrediBoleto).count() == 1
+
+
+@pytest.mark.parametrize('extra', [
+    {'baixa_status': 'pendente'}, {'baixa_status': 'solicitada'}, {'baixa_status': 'confirmada'},
+    {'status': 'REGISTRANDO'}, {'status': 'DESFECHO_DESCONHECIDO'},
+    {'status': 'NA_FILA'}, {'linha_digitavel': None},
+])
+def test_closure_blocks_sicredi_with_pending_registration_or_cancellation(http, db, monkeypatch, extra):
+    payer = _client(db, 'Sicredi pendente', '52000000001', 'nao')
+    billing = _billing(db, payer, registered=False)
+    _sicredi_boleto(db, billing, **extra)
+    lote = ClosureJob(reference_month='2026-09', status='completed',
+                      result={'payment_billing_ids': [billing.id]})
+    db.add(lote)
+    db.commit()
+    item = http.get(f'{PREFIX}/{lote.id}').json()['itens'][0]
+    assert item['estado'] == 'bloqueado'
+    assert item['pode_emitir_boleto'] is False
+    from app.services import email_smtp
+    monkeypatch.setattr(email_smtp, 'load_config', lambda _: {'host': 'smtp.test', 'from_email': 'sender@example.test'})
+    result = http.post(f'{PREFIX}/{lote.id}/enviar', json={'billing_ids': [billing.id]})
+    assert result.json()['enfileirados'] == []
+    assert db.query(ClosureEmailDelivery).count() == 0
+
+
+def test_closure_issuance_eligibility_excludes_closed_substituted_deleted_and_system_only(http, db):
+    payer = _client(db, 'Sem boleto', '53000000001', 'sim')
+    billings = [_billing(db, payer, registered=False) for _ in range(6)]
+    billings[1].status = BillingStatus.PAID
+    billings[2].status = BillingStatus.CANCELED
+    billings[3].is_deleted = True
+    billings[4].substituted_by_id = billings[0].id
+    billings[4].status = BillingStatus.CANCELED
+    billings[5].somente_sistema = True
+    lote = ClosureJob(reference_month='2026-09', status='completed',
+                      result={'payment_billing_ids': [b.id for b in billings]})
+    db.add(lote)
+    db.commit()
+    items = http.get(f'{PREFIX}/{lote.id}').json()['itens']
+    assert [item['pode_emitir_boleto'] for item in items] == [True, False, False, False, False, False]
+    assert 'NFS-e obrigatória' in items[0]['motivo']
 
 
 def test_recovers_older_closure_without_carnets_or_duplicate_batches(http, db):
