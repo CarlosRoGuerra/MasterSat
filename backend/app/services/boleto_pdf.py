@@ -902,7 +902,7 @@ _MAX_ITENS_PAGINA = 57
 
 
 def _item_grade_boleto(descricao: str, valor: float, largura: float, fonte: float) -> tuple[str, bool]:
-    """Uma linha no formato placa - serviço - valor do boleto de referência."""
+    """Formata a fatura; só sinaliza anexo se a linha realmente for cortada."""
     import re
 
     texto = ' '.join(str(descricao or '').split())
@@ -914,24 +914,21 @@ def _item_grade_boleto(descricao: str, valor: float, largura: float, fonte: floa
     if 'PRÓ-RATA' in texto_upper or 'PRO-RATA' in texto_upper:
         dias = re.search(r'PR[ÓO]-RATA\s+(\d+)\s+DIAS', texto_upper)
         tipo = f'PRÓ-RATA {dias.group(1)} DIAS' if dias else 'PRÓ-RATA'
-        abreviado = True
     elif 'MENSALIDADE' in texto_upper:
         tipo = 'MENSALIDADE'
-        abreviado = False
     elif 'DESINSTALAÇÃO' in texto_upper:
         tipo = 'DESINSTALAÇÃO'
-        abreviado = True
     elif 'INSTALAÇÃO' in texto_upper:
         tipo = 'INSTALAÇÃO'
-        abreviado = True
     else:
         tipo = texto.split(' · ', 1)[0]
-        abreviado = False
     if placa:
         tipo = f'{placa.group(1).upper()} - {tipo}'
     label = f'{tipo} - {valor_txt}'
     if stringWidth(label, 'Helvetica', fonte) <= largura:
-        return label, abreviado
+        # Pró-rata, instalação e desinstalação são rótulos da própria fatura.
+        # Usá-los não significa que faltam itens e não exige repetir a fatura.
+        return label, False
     # O valor e a placa nunca somem da linha; o descritivo integral segue
     # no anexo caso precise encurtar algum serviço.
     prefixo = f'{placa.group(1).upper()} - ' if placa else ''

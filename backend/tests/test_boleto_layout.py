@@ -70,16 +70,55 @@ def test_boleto_com_56_mensalidades_e_pix_cabe_em_uma_pagina(banco):
 
 
 @pytest.mark.parametrize('banco', ['085', '748'])
-def test_descricao_longa_continua_no_anexo_sem_perder_o_item(banco):
+def test_servico_identificado_na_fatura_nao_repete_o_detalhamento_em_anexo(banco):
     from pypdf import PdfReader
 
     descricao = 'PLACA ABC1D23 - SERVIÇO DE INSTALAÇÃO COM DESLOCAMENTO TÉCNICO'
     dados = replace(_dados(itens=[(descricao, 99.90)]), banco_codigo=banco)
     pdf = boleto_pdf.gerar_boleto_pdf(dados)
     pages = PdfReader(io.BytesIO(pdf)).pages
-    assert len(pages) == 2
+    assert len(pages) == 1
     assert 'ABC1D23 - INSTALAÇÃO - R$ 99,90' in pages[0].extract_text()
-    assert descricao in pages[1].extract_text()
+    assert 'DETALHAMENTO DO BOLETO' not in pages[0].extract_text()
+
+
+@pytest.mark.parametrize('banco', ['085', '748'])
+@pytest.mark.parametrize('descricao,rotulo', [
+    ('MENSALIDADE PROPORCIONAL (PRÓ-RATA) · PLANO MENSALIDADE 64,99 · PRÓ-RATA 3 DIAS · REF. 11/2026 · PLACA: ABC1D23', 'PRÓ-RATA 3 DIAS'),
+    ('TAXA DE DESINSTALAÇÃO · REF. 11/2026 · PLACA: ABC1D23', 'DESINSTALAÇÃO'),
+])
+def test_prorata_e_taxas_com_pix_cabem_em_uma_pagina_sem_anexo_duplicado(banco, descricao, rotulo):
+    from pypdf import PdfReader
+
+    dados = replace(_dados(valor=Decimal('6.29'), itens=[(descricao, 6.29)],
+                           instrucoes=[f'Referente a: {descricao}']),
+                    banco_codigo=banco, pix_emv='PIX DE TESTE')
+    pages = PdfReader(io.BytesIO(boleto_pdf.gerar_boleto_pdf(dados))).pages
+    assert len(pages) == 1
+    texto = pages[0].extract_text()
+    assert f'ABC1D23 - {rotulo} - R$ 6,29' in texto
+    assert 'Recibo do pagador' in texto and 'FICHA DE COMPENSAÇÃO' in texto
+    assert 'DETALHAMENTO DO BOLETO' not in texto
+
+
+@pytest.mark.parametrize('banco', ['085', '748'])
+def test_fatura_com_mensalidade_prorata_e_taxas_nao_cria_paginas_extras(banco):
+    from pypdf import PdfReader
+
+    itens = [
+        ('MENSALIDADE · PLACA: ABC1D23', 64.99),
+        ('MENSALIDADE PRÓ-RATA 3 DIAS · PLACA: DEF4G56', 6.29),
+        ('INSTALAÇÃO · PLACA: DEF4G56', 50),
+        ('DESINSTALAÇÃO · PLACA: ABC1D23', 30),
+    ]
+    dados = replace(_dados(valor=Decimal('151.28'), itens=itens),
+                    banco_codigo=banco, pix_emv='PIX DE TESTE')
+    pages = PdfReader(io.BytesIO(boleto_pdf.gerar_boleto_pdf(dados))).pages
+    assert len(pages) == 1
+    texto = pages[0].extract_text()
+    for rotulo in ('MENSALIDADE - R$ 64,99', 'PRÓ-RATA 3 DIAS - R$ 6,29',
+                   'INSTALAÇÃO - R$ 50,00', 'DESINSTALAÇÃO - R$ 30,00'):
+        assert texto.count(rotulo) == 1
 
 
 def test_previa_sem_registro_nao_desenha_codigo_de_barras():
