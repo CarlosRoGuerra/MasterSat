@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 # ATENÇÃO: evitar o padrão '/' solto — casaria com QUALQUER caminho.
 _SKIP_PREFIXES = (
     '/api/v1/audit-logs',
+    '/api/v1/sicredi-pix/webhooks/',
     '/docs',
     '/redoc',
     '/openapi',

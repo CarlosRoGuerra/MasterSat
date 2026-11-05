@@ -233,6 +233,7 @@ export function BillingsModal({
     const isAberto = emAberto(b);
     const juros = valorComJuros(b);
     const master = boletoMasterSat(b) && !dentroDeBoleto;
+    const pix = b.payment_method === 'pix_automatico' || b.titulo_bancario?.canal === 'sicredi_pix';
     const expandido = mastersAbertos.has(b.id);
     return (
       <Tr key={b.id} className={dentroDeBoleto ? 'bg-slate-50/70 dark:bg-slate-900/40' : undefined}>
@@ -258,7 +259,7 @@ export function BillingsModal({
           ) : b.id}
         </Td>
         <Td className="text-xs">
-          <span className={master ? 'font-semibold' : 'capitalize'}>{master ? 'Boleto MasterSat' : tipoLabel(b.billing_type)}</span>
+          <span className={master ? 'font-semibold' : 'capitalize'}>{pix ? 'Pix Automático' : master ? 'Boleto MasterSat' : tipoLabel(b.billing_type)}</span>
           {master && componentes[b.id] && <span className="block text-2xs text-slate-500">
             {componentes[b.id].length} itens · {new Set(componentes[b.id].map(placaDa).filter(Boolean)).size} placa(s)
           </span>}
@@ -286,8 +287,8 @@ export function BillingsModal({
             {isAberto && (
               <>
                 <ActionBtn color="yellow" icon={CheckCircle2} title="Marcar como pago (baixa manual)" onClick={() => onReceiveBilling(b)} />
-                <ActionBtn color="blue" icon={Mail} title="Enviar boleto por e-mail" onClick={() => onSendEmail(b)} />
-                <ActionBtn color="green" icon={MessageCircle} title="Enviar boleto via Whats" onClick={() => onSendWhats(b)} />
+                {!pix && <ActionBtn color="blue" icon={Mail} title="Enviar boleto por e-mail" onClick={() => onSendEmail(b)} />}
+                {!pix && <ActionBtn color="green" icon={MessageCircle} title="Enviar boleto via Whats" onClick={() => onSendWhats(b)} />}
                 {b.boleto_ailos && (
                   <ActionBtn color="teal" icon={Download} title="Baixar boleto PDF" onClick={() => onBaixarPdf(b)} />
                 )}

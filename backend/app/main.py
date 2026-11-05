@@ -21,6 +21,7 @@ from app.models import ailos_api_log, ailos_boleto, ailos_client_token, ailos_in
 from app.core.audit import AuditMiddleware
 from app.core.audit_queue import run_audit_worker
 from app.core.request_timing import RequestTimingMiddleware
+from app.core.pix_webhook_logging import PixWebhookLogFilter
 from app.core.body_limit import MaxBodySizeMiddleware
 from app.core.forwarded_proto import ForwardedProtoMiddleware
 from app.core.validation_errors import validation_exception_handler
@@ -28,6 +29,9 @@ from app.services.storage import ensure_bucket
 
 # /docs, /redoc e /openapi.json só ficam expostos se ENABLE_DOCS=true (dev).
 # Em produção ficam desativados para não publicar a superfície da API.
+logging.getLogger('uvicorn.access').addFilter(PixWebhookLogFilter())
+logging.getLogger('httpx').addFilter(PixWebhookLogFilter())
+
 app = FastAPI(
     title=settings.app_name,
     docs_url='/docs' if settings.enable_docs else None,
@@ -818,6 +822,16 @@ def _sicredi_lotes_worker():
         time.sleep(60)
 
 
+def _sicredi_pix_worker():
+    from app.services.sicredi_pix import processar_fila
+    while True:
+        time.sleep(max(30, settings.sicredi_pix_worker_interval_seconds))
+        try:
+            _run_locked(918273655, processar_fila)
+        except Exception:
+            logging.getLogger('uvicorn.error').exception('Falha ao acompanhar a fila Pix Automático.')
+
+
 def _sicredi_log_retention_worker():
     """Purga sicredi_api_logs mais velhos que SICREDI_LOG_RETENTION_MONTHS (1x/dia)."""
     from app.models.sicredi_api_log import SicrediApiLog
@@ -1038,6 +1052,8 @@ def on_startup():
     if settings.sicredi_api_key:
         threading.Thread(target=_sicredi_conciliacao, name='sicredi-conciliacao', daemon=True).start()
         threading.Thread(target=_sicredi_lotes_worker, name='sicredi-lotes', daemon=True).start()
+    if settings.sicredi_pix_enabled:
+        threading.Thread(target=_sicredi_pix_worker, name='sicredi-pix-automatico', daemon=True).start()
     # Retenção dos logs da API Sicredi: sempre ligada, como a da Ailos.
     threading.Thread(target=_sicredi_log_retention_worker, daemon=True).start()
 

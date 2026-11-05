@@ -95,6 +95,7 @@ export type BillingItem = {
   installment_number?: number | null;
   installment_total?: number | null;
   payment_date?: string | null;
+  payment_method?: string | null;
   created_at?: string | null;
   vehicle_plate?: string | null;
   substituted_by_id?: number | null;

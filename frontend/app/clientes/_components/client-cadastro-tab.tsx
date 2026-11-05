@@ -1,11 +1,16 @@
 import { Badge, statusLabel, statusVariant } from '@/components/ui/badge';
 import { formatCpfCnpj, formatPhone } from '@/lib/format';
+import { rotuloFormaCobranca } from '@/lib/forma-cobranca';
 import type { Client, VehicleSummary } from './types';
 
 export function ClientCadastroTab({ client, vehicles }: { client: Client; vehicles: VehicleSummary[] }) {
   return (
     <div className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-2">
+        <div className="rounded-xl border border-slate-100 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/50">
+          <p className="text-2xs font-semibold uppercase tracking-widest text-slate-500">Forma de cobrança</p>
+          <p className="mt-2 text-sm font-semibold">{rotuloFormaCobranca(client.forma_cobranca)}</p>
+        </div>
         <div className="rounded-xl border border-slate-100 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/50">
           <p className="text-2xs font-semibold uppercase tracking-widest text-slate-500">Documento</p>
           <p className="mt-2 font-semibold text-slate-900 dark:text-white">{formatCpfCnpj(client.cpf_cnpj)}</p>

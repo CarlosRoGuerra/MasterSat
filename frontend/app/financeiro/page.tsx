@@ -32,8 +32,9 @@ import { processarBoletosSelecionados, separarBoletosPorRegistro, type AcaoLoteB
 import { cancelarComConfirmacoes, corpoCancelamento } from '@/lib/cancelamento-cobranca';
 import { excluirComConfirmacoes, mensagemConfirmacaoExclusao, motivoBloqueioExclusao } from '@/lib/exclusao-cobranca';
 import { CorrigirVencimentoAction } from './_components/corrigir-vencimento-action';
+import { ClientPixAutomatico } from '../clientes/_components/client-pix-automatico';
 import { camposDiferenca, diferencaRecebimento, pendenciaDoFormulario, ROTULO_TRATAMENTO, type TratamentoDiferenca } from '@/lib/recebimento';
-import { descreverTitulo, ehSicredi, podeConsultarDesfecho, ROTULO_PENDENCIA, type TituloBancario } from '@/lib/titulo-bancario';
+import { descreverTitulo, ehSicredi, ehPixAutomatico, podeConsultarDesfecho, ROTULO_PENDENCIA, type TituloBancario } from '@/lib/titulo-bancario';
 import { useAuthGuard } from '@/lib/use-auth-guard';
 import { ROUTE_ROLES } from '@/lib/route-roles';
 import { useDebouncedValue, useEffectSkipFirst } from '@/lib/use-debounced-value';
@@ -980,7 +981,7 @@ export default function FinanceiroPage() {
   useEffect(() => {
     let ativa = true;
     if (selectedBilling) {
-      setReceiveForm({ ...initialReceiveForm, paid_amount: String(selectedBilling.amount || ''), payment_date: new Date().toISOString().slice(0, 10), payment_method: selectedBilling.payment_method || 'pix' });
+      setReceiveForm({ ...initialReceiveForm, paid_amount: String(selectedBilling.amount || ''), payment_date: new Date().toISOString().slice(0, 10), payment_method: selectedBilling.payment_method === 'pix_automatico' ? 'pix' : selectedBilling.payment_method || 'pix' });
       setAdjustForm({ amount: String(selectedBilling.amount || ''), due_date: selectedBilling.due_date || '', justification: '' });
       // Carrega o status da NFS-e desta cobrança (404 = ainda não emitida)
       setNfse(null);
@@ -1010,7 +1011,7 @@ export default function FinanceiroPage() {
       ? [
           { id: 'registrar-pagamento-contexto', label: 'Registrar pagamento', run: () => setReceiveModal(true) },
           // Carnê simples não vai ao banco: sem atalho de emissão.
-          ...(selectedBilling.somente_sistema || ehSicredi(selectedBilling.titulo_bancario) || processing || boletoLoading ? [] : [{
+          ...(selectedBilling.somente_sistema || selectedBilling.payment_method === 'pix_automatico' || ehPixAutomatico(selectedBilling.titulo_bancario) || ehSicredi(selectedBilling.titulo_bancario) || processing || boletoLoading ? [] : [{
             id: 'gerar-boleto-contexto',
             label: 'Gerar boleto (Ailos)',
             run: handleGerarBoleto,
@@ -1021,6 +1022,7 @@ export default function FinanceiroPage() {
             },
           }]),
           ...(sicrediHabilitado && !processing && !boletoLoading && !selectedBilling.somente_sistema
+            && selectedBilling.payment_method !== 'pix_automatico' && !ehPixAutomatico(selectedBilling.titulo_bancario)
             && ['pendente', 'vencida'].includes(selectedBilling.status)
             && (!selectedBilling.titulo_bancario || selectedBilling.titulo_bancario.estado === 'sem_titulo') ? [{
             id: 'gerar-boleto-sicredi-contexto',
@@ -2652,12 +2654,14 @@ export default function FinanceiroPage() {
               )}
               {/* Carnê simples vive só no sistema: sem emissão nem consulta na Ailos. */}
               {(selectedBilling.status === 'pendente' || selectedBilling.status === 'vencida') && token && !selectedBilling.somente_sistema
+                && selectedBilling.payment_method !== 'pix_automatico' && !ehPixAutomatico(selectedBilling.titulo_bancario)
                 && !ehSicredi(selectedBilling.titulo_bancario) && (
                 <Button variant="secondary" disabled={!canEdit || boletoLoading || processing} onClick={handleGerarBoleto}>
                   {boletoLoading ? 'Gerando…' : '🔑 Gerar boleto (Ailos)'}
                 </Button>
               )}
               {(selectedBilling.status === 'pendente' || selectedBilling.status === 'vencida') && token && !selectedBilling.somente_sistema
+                && selectedBilling.payment_method !== 'pix_automatico' && !ehPixAutomatico(selectedBilling.titulo_bancario)
                 && !ehSicredi(selectedBilling.titulo_bancario) && (
                 <Button variant="secondary" disabled={!canEdit || boletoLoading || processing} onClick={handleVerificarPagamento}>
                   {boletoLoading ? 'Verificando…' : '🔄 Verificar pagamento'}
@@ -2670,6 +2674,7 @@ export default function FinanceiroPage() {
               )}
               {sicrediHabilitado && (selectedBilling.status === 'pendente' || selectedBilling.status === 'vencida') && token
                 && !selectedBilling.somente_sistema
+                && selectedBilling.payment_method !== 'pix_automatico' && !ehPixAutomatico(selectedBilling.titulo_bancario)
                 && (!selectedBilling.titulo_bancario || selectedBilling.titulo_bancario.estado === 'sem_titulo') && (
                 <Button variant="secondary" disabled={!canEdit || boletoLoading || processing} onClick={handleGerarBoletoSicredi}>
                   {boletoLoading ? 'Gerando…' : '🏦 Gerar boleto (Sicredi)'}
@@ -2703,7 +2708,7 @@ export default function FinanceiroPage() {
                   Dar baixa no Sicredi
                 </Button>
               )}
-              {podeConsultarDesfecho(selectedBilling.titulo_bancario) && !ehSicredi(selectedBilling.titulo_bancario) && (
+              {podeConsultarDesfecho(selectedBilling.titulo_bancario) && !ehSicredi(selectedBilling.titulo_bancario) && !ehPixAutomatico(selectedBilling.titulo_bancario) && (
                 <Button variant="secondary" disabled={!canEdit || processing} onClick={() => handleConsultarDesfecho(selectedBilling.id)}>
                   🔎 Consultar desfecho na Ailos
                 </Button>
@@ -2716,7 +2721,7 @@ export default function FinanceiroPage() {
                 && (selectedBilling.status === 'cancelada' || selectedBilling.status === 'paga') && (
                 <Button variant="secondary" disabled={processing} onClick={() => handleConfirmarBaixa(selectedBilling.id)}>Confirmar baixa no banco</Button>
               )}
-              {selectedBilling.titulo_bancario?.pendencia && (
+              {selectedBilling.titulo_bancario?.pendencia && !ehPixAutomatico(selectedBilling.titulo_bancario) && (
                 <Button variant="secondary" disabled={!canEdit || processing} onClick={() => handleResolverPendencia(selectedBilling.id, ehSicredi(selectedBilling.titulo_bancario))}>Encerrar pendência</Button>
               )}
               <CorrigirVencimentoAction
@@ -2734,7 +2739,7 @@ export default function FinanceiroPage() {
               {selectedBilling.status === 'paga' && (
                 <Button variant="secondary" onClick={() => { if (!token) return; downloadProtectedFile(`/billings/${selectedBilling.id}/receipt`, token, `recibo-${selectedBilling.receipt_number ?? selectedBilling.id}.pdf`).catch(e => setError(parseError(e))); }}>Baixar recibo</Button>
               )}
-              {!ehSicredi(selectedBilling.titulo_bancario) && <BoletoReleaseAction
+              {!ehSicredi(selectedBilling.titulo_bancario) && !ehPixAutomatico(selectedBilling.titulo_bancario) && <BoletoReleaseAction
                 key={selectedBilling.id}
                 billingId={selectedBilling.id}
                 billingStatus={selectedBilling.status}
@@ -2744,6 +2749,17 @@ export default function FinanceiroPage() {
                 onRelease={handleLiberarEmissao}
               />}
             </div>
+
+            {token && (selectedBilling.payment_method === 'pix_automatico' || ehPixAutomatico(selectedBilling.titulo_bancario)) && (
+              <ClientPixAutomatico key={`pix-${selectedBilling.payer_client_id ?? selectedBilling.client_id}`}
+                client={{ id: selectedBilling.payer_client_id ?? selectedBilling.client_id,
+                  name: selectedBilling.payer_name ?? selectedBilling.client_name ?? 'Responsável financeiro' }} token={token}
+                onUpdated={() => {
+                  void loadBillingsOnly(token);
+                  void apiFetch<Billing>(`/billings/${selectedBilling.id}`, {}, token)
+                    .then(setSelectedBilling).catch((err) => setError(parseError(err)));
+                }} />
+            )}
 
             {/* ── Boleto de origem (SGR) ──
                 Cobrança migrada não tem boleto bancário para baixar: o SGR só

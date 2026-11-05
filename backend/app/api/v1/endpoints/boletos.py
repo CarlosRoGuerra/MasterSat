@@ -663,6 +663,26 @@ def _valor_brl(v) -> str:
 def preparar_envio_boleto_email(db: Session, billing_id: int, incluir_nfse: bool):
     """Valida e monta o e-mail antes de reservar um envio de fechamento."""
     b = _get_billing_or_404(billing_id, db)
+    if b.payment_method == 'pix_automatico':
+        from app.models.sicredi_pix import SicrediPixCobranca
+        agenda = db.scalar(select(SicrediPixCobranca).where(SicrediPixCobranca.billing_id == billing_id))
+        if (b.status not in (BillingStatus.PENDING, BillingStatus.OVERDUE)
+            or not agenda or agenda.status != 'ATIVA' or agenda.pendencia):
+            raise HTTPException(409, detail='Pix Automático não agendado ou com pendência de conferência.')
+        payer = _pagador_do_billing(b, db)
+        recipients = emails_cadastrados(payer)
+        if not recipients:
+            raise HTTPException(400, detail='Cliente sem e-mail cadastrado.')
+        attachments = []
+        if incluir_nfse:
+            from app.api.v1.endpoints.nfse import anexo_nfse_emitida
+            attachments.append(anexo_nfse_emitida(db, billing_id))
+        subject = f'MasterSat - Pix Automático - {b.period_label or b.due_date.strftime("%m/%Y")}'
+        body = (f'Olá, {payer.name}.\n\nSua cobrança MasterSat de R$ {_valor_brl(b.amount)}, '
+                f'com vencimento em {b.due_date.strftime("%d/%m/%Y")}, está agendada por Pix Automático. '
+                'Você pode acompanhar o agendamento no aplicativo do seu banco.\n\n'
+                + ('A NFS-e está anexada a este e-mail.\n\n' if incluir_nfse else '') + 'MasterSat')
+        return ', '.join(recipients), subject, body, attachments
     sicredi = sicredi_boletos.registrado(db, billing_id)
     ailos_boleto = None if sicredi is not None else boleto_registrado(billing_id, db)
     if sicredi is None and ailos_boleto is None:
@@ -727,7 +747,7 @@ def enviar_boleto_email(
     try:
         enviar_email(
             db, destinatario=destinatario, assunto=assunto, corpo=corpo,
-            **({'anexos': anexos} if incluir_nfse else {'anexo': anexos[0]}),
+            **({'anexos': anexos} if incluir_nfse or not anexos else {'anexo': anexos[0]}),
         )
     except EmailConfigError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -374,7 +374,7 @@ def simulate_closure(
         for entry in (*items, *uninstall_items, *charge_items)
     }
     payer_formats = {
-        payer.id: payer.boleto_format or 'unico'
+        payer.id: ('unico' if payer.forma_cobranca == 'pix_automatico' else payer.boleto_format or 'unico')
         for payer in db.scalars(select(Client).where(Client.id.in_(payer_ids))).all()
     } if payer_ids else {}
 
@@ -798,7 +798,7 @@ def execute_closure(
         if len(components) < 2:
             continue
         payer = db.get(Client, payer_id)
-        if not payer or payer.boleto_format == 'individual':
+        if not payer or (payer.boleto_format == 'individual' and payer.forma_cobranca != 'pix_automatico'):
             continue
 
         total = sum((Decimal(str(b.amount)) for b in components), Decimal('0.00'))
@@ -820,7 +820,7 @@ def execute_closure(
             client_id=next(iter(owners)) if len(owners) == 1 else payer_id,
             payer_client_id=payer_id,
             billing_type=CONSOLIDATED_BILLING_TYPE,
-            title=f'Fechamento {period} - boleto único',
+            title=f'Fechamento {period} - ' + ('Pix Automático' if payer.forma_cobranca == 'pix_automatico' else 'boleto único'),
             amount=total,
             due_date=due_date,
             status=BillingStatus.PENDING if due_date >= hoje() else BillingStatus.OVERDUE,
@@ -853,6 +853,11 @@ def execute_closure(
     )
     db.add(lote)
     db.flush()
+
+    # Apenas reserva a fila local. O worker respeita autorização e janela de
+    # 2 a 10 dias; fechar o mês nunca envia débitos diretamente ao banco.
+    from app.services.sicredi_pix import enfileirar_fechamento
+    enfileirar_fechamento(db, payment_billing_ids)
 
     # Único commit do fechamento: até aqui nada foi confirmado, então uma falha
     # em qualquer etapa acima desfaz o fechamento inteiro em vez de deixar

@@ -187,7 +187,7 @@ def _resolve_months(reference_month: str | None, service_month: str | None):
 
 
 _FORMA_COBRANCA = Query(
-    default=None, pattern='^(boleto_mensal|carne_ailos|carne_sicredi|carne_simples|cartao_credito|nao_informado)$',
+    default=None, pattern='^(boleto_mensal|carne_ailos|carne_sicredi|carne_simples|cartao_credito|pix_automatico|nao_informado)$',
     description='Forma de cobrança do responsável financeiro (cadastro do cliente)',
 )
 

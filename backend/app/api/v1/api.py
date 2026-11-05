@@ -23,6 +23,7 @@ from app.api.v1.endpoints import (
     payables,
     settings as settings_endpoints,
     sicredi,
+    sicredi_pix,
     nfse,
     plans,
     search,
@@ -69,4 +70,5 @@ api_router.include_router(ailos_boletos.router, prefix='/ailos', tags=['ailos'])
 api_router.include_router(ailos_pagadores.router, prefix='/ailos', tags=['ailos'])
 api_router.include_router(ailos_retorno.router, prefix='/ailos', tags=['ailos'])
 api_router.include_router(sicredi.router, prefix='/sicredi', tags=['sicredi'])
+api_router.include_router(sicredi_pix.router, prefix='/sicredi-pix', tags=['sicredi-pix'])
 api_router.include_router(nfse.router, prefix='/nfse', tags=['nfse'])

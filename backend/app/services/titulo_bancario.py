@@ -47,6 +47,7 @@ from app.models.sicredi_boleto import (
     STATUS_NA_FILA as SICREDI_NA_FILA,
     SicrediBoleto,
 )
+from app.models.sicredi_pix import SicrediPixCobranca
 
 SEM_TITULO = 'sem_titulo'
 EM_REGISTRO = 'em_registro'
@@ -70,10 +71,12 @@ REABRIR = 'reabrir'                      # reverter substituição (originais vo
 EMITIR_AILOS = 'emitir_ailos'
 EMITIR_SICREDI = 'emitir_sicredi'
 EMITIR_CNAB = 'emitir_cnab'
+EMITIR_PIX = 'emitir_pix'
 
 CANAL_AILOS = 'ailos_api'
 CANAL_SICREDI = 'sicredi_api'
 CANAL_CNAB = 'cnab'
+CANAL_PIX = 'sicredi_pix'
 
 # Estados em que cada operação é permitida. ``registrado`` em CANCELAR exige
 # confirmação explícita (o título continua pagável até a baixa no banco).
@@ -87,10 +90,11 @@ _PERMITIDO: dict[str, frozenset[str]] = {
     EMITIR_AILOS: frozenset({SEM_TITULO}),
     EMITIR_SICREDI: frozenset({SEM_TITULO}),
     EMITIR_CNAB: frozenset({SEM_TITULO}),
+    EMITIR_PIX: frozenset({SEM_TITULO}),
 }
 _EXIGE_CONFIRMACAO = {CANCELAR: frozenset({REGISTRADO, REMESSA_CNAB})}
 # Emissão em banco (qualquer canal) — recusada para cobrança só do sistema.
-_EMISSAO_BANCARIA = frozenset({EMITIR_AILOS, EMITIR_SICREDI, EMITIR_CNAB})
+_EMISSAO_BANCARIA = frozenset({EMITIR_AILOS, EMITIR_SICREDI, EMITIR_CNAB, EMITIR_PIX})
 
 # Quando a mesma cobrança aparece em mais de um registro (não deveria), vale o
 # estado mais restritivo.
@@ -203,7 +207,18 @@ def estado_do_sicredi(boleto: SicrediBoleto | None, referencia: datetime | None 
     return DESFECHO_DESCONHECIDO
 
 
-def titulos_bancarios(db: Session, billing_ids: Iterable[int], *, lote_sicredi_id: int | None = None) -> dict[int, TituloBancario]:
+def estado_do_pix(charge: SicrediPixCobranca) -> str:
+    if charge.status in ('CANCELADA', 'REJEITADA', 'EXPIRADA', 'CONCLUIDA'):
+        return BAIXADO if charge.enviada_em else SEM_TITULO
+    if charge.status == 'DESFECHO_DESCONHECIDO':
+        return DESFECHO_DESCONHECIDO
+    if charge.status in ('CRIADA', 'ATIVA'):
+        return REGISTRADO
+    return EM_REGISTRO
+
+
+def titulos_bancarios(db: Session, billing_ids: Iterable[int], *, lote_sicredi_id: int | None = None,
+                     pix_cobranca_id: int | None = None) -> dict[int, TituloBancario]:
     ids = sorted({int(b) for b in billing_ids if b is not None})
     if not ids:
         return {}
@@ -245,6 +260,13 @@ def titulos_bancarios(db: Session, billing_ids: Iterable[int], *, lote_sicredi_i
                 billing_id=item.billing_id, estado=REMESSA_CNAB, canal=CANAL_CNAB,
                 nosso_numero=item.nosso_numero,
             )
+    for charge in db.scalars(select(SicrediPixCobranca).where(SicrediPixCobranca.billing_id.in_(ids))).all():
+        if charge.id == pix_cobranca_id:
+            continue
+        estado = estado_do_pix(charge)
+        if _GRAVIDADE[estado] > _GRAVIDADE[resultado[charge.billing_id].estado]:
+            resultado[charge.billing_id] = TituloBancario(billing_id=charge.billing_id, estado=estado,
+                canal=CANAL_PIX, nosso_numero=charge.txid, pendencia=charge.pendencia)
     return resultado
 
 
@@ -309,6 +331,9 @@ _MENSAGENS_SICREDI = {
 
 
 def _mensagem(estado: str, canal: str | None) -> tuple[str, str]:
+    if canal == CANAL_PIX:
+        return ('pix_automatico_ativo', 'Esta cobrança tem agendamento Pix Automático reservado ou enviado. '
+                'Consulte e cancele o agendamento Pix antes de alterar, receber ou emitir por outro canal.')
     if canal == CANAL_SICREDI and estado in _MENSAGENS_SICREDI:
         return _MENSAGENS_SICREDI[estado]
     return _MENSAGENS[estado]
@@ -340,6 +365,7 @@ def exigir(
     confirmado: bool = False,
     permitir_em_registro: Iterable[int] = (),
     lote_sicredi_id: int | None = None,
+    pix_cobranca_id: int | None = None,
 ) -> dict[int, TituloBancario]:
     """Aplica a política de ``operacao`` a cada cobrança; levanta no primeiro
     estado que a proíbe, listando todas as cobranças nesse estado.
@@ -351,7 +377,15 @@ def exigir(
     billing_ids = list(billing_ids)
     if operacao in _EMISSAO_BANCARIA:
         recusar_somente_sistema(db, billing_ids)
-    titulos = titulos_bancarios(db, billing_ids, lote_sicredi_id=lote_sicredi_id if operacao == EMITIR_SICREDI else None)
+        if operacao != EMITIR_PIX:
+            pix_ids = list(db.scalars(select(Billing.id).where(
+                Billing.id.in_(billing_ids), Billing.payment_method == 'pix_automatico')).all())
+            if pix_ids:
+                raise PoliticaBancariaError('cobranca_pix_automatico',
+                    'Cobrança destinada ao Pix Automático. Confira a autorização e o agendamento '
+                    'no cadastro do responsável financeiro antes de escolher outro meio de pagamento.', pix_ids)
+    titulos = titulos_bancarios(db, billing_ids, lote_sicredi_id=lote_sicredi_id if operacao == EMITIR_SICREDI else None,
+                              pix_cobranca_id=pix_cobranca_id if operacao == EMITIR_PIX else None)
     return validar_titulos(operacao, titulos, confirmado=confirmado, permitir_em_registro=permitir_em_registro)
 
 
@@ -367,6 +401,9 @@ def validar_titulos(
     retomadas = set(permitir_em_registro)
     bloqueados: dict[str, list[int]] = {}
     for bid, titulo in titulos.items():
+        if (titulo.canal == CANAL_PIX and titulo.ativo_no_banco and operacao in (CANCELAR, RECEBER)):
+            code, message = _mensagem(titulo.estado, titulo.canal)
+            raise PoliticaBancariaError(code, message, [bid], estado=titulo.estado)
         if (titulo.estado == EM_REGISTRO and bid in retomadas
                 and operacao == EMITIR_AILOS and titulo.canal == CANAL_AILOS):
             # Exceção histórica para a parcela de lote Ailos, restrita ao mesmo

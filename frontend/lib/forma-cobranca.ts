@@ -6,6 +6,7 @@ export const FORMAS_COBRANCA = [
   { value: 'carne_sicredi', label: 'Carnê Sicredi' },
   { value: 'carne_simples', label: 'Carnê simples' },
   { value: 'cartao_credito', label: 'Cartão de crédito' },
+  { value: 'pix_automatico', label: 'Pix Automático' },
 ] as const;
 
 export type FormaCobranca = (typeof FORMAS_COBRANCA)[number]['value'];

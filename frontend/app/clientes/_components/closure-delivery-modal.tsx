@@ -11,6 +11,7 @@ import {
   Loader2,
   Mail,
   RefreshCw,
+  QrCode,
   Send,
 } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
@@ -38,6 +39,7 @@ type Item = {
   vencimento: string | null;
   documentos: string[];
   boleto_emitido: boolean;
+  pix_agendado?: boolean;
   boleto_banco?: BancoBoleto | null;
   pode_emitir_boleto?: boolean;
   nfse_status: string | null;
@@ -680,16 +682,16 @@ export function ClosureDeliveryModal({
                               const emitido =
                                 documento === 'Boleto'
                                   ? item.boleto_emitido
-                                  : item.nfse_status === 'emitida';
+                                  : documento === 'Pix Automático' ? item.pix_agendado : item.nfse_status === 'emitida';
                               return (
                                 <span
                                   key={documento}
-                                  title={`${documento}: ${emitido ? 'emitido' : 'pendente'}`}
+                                  title={`${documento}: ${emitido ? documento === 'Pix Automático' ? 'agendado' : 'emitido' : 'pendente'}`}
                                   className={`inline-flex items-center gap-1 rounded border px-2 py-1 ${emitido ? 'border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-300' : 'border-dashed border-amber-300 text-amber-800 dark:border-amber-800 dark:text-amber-300'}`}
                                 >
                                   {documento === 'Boleto' ? (
                                     <Barcode aria-hidden="true" className="h-3 w-3" />
-                                  ) : (
+                                  ) : documento === 'Pix Automático' ? <QrCode aria-hidden="true" className="h-3 w-3" /> : (
                                     <FileText aria-hidden="true" className="h-3 w-3" />
                                   )}
                                   {documento === 'Boleto' && item.boleto_banco ? `Boleto ${nomeBancoBoleto(item.boleto_banco)}` : documento}

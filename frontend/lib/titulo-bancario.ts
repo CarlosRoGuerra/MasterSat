@@ -19,7 +19,7 @@ const ESTADOS: Record<TituloBancario['estado'], { rotulo: string; tom: Tom }> = 
   remessa_cnab: { rotulo: 'Em remessa CNAB', tom: 'warning' },
 };
 
-const BANCO_DO_CANAL: Record<string, string> = { ailos_api: 'Ailos', sicredi_api: 'Sicredi', cnab: 'CNAB' };
+const BANCO_DO_CANAL: Record<string, string> = { ailos_api: 'Ailos', sicredi_api: 'Sicredi', sicredi_pix: 'Pix Automático Sicredi', cnab: 'CNAB' };
 
 export const ROTULO_PENDENCIA: Record<string, string> = {
   pagamento_divergente: 'Banco informou pagamento com valor diferente do título',
@@ -32,20 +32,27 @@ export const ROTULO_PENDENCIA: Record<string, string> = {
 export function descreverTitulo(titulo: TituloBancario | null | undefined): { rotulo: string; tom: Tom; detalhe: string | null } {
   if (!titulo) return { ...ESTADOS.sem_titulo, detalhe: null };
   const base = ESTADOS[titulo.estado] ?? ESTADOS.sem_titulo;
+  const rotulo = titulo.canal === 'sicredi_pix'
+    ? ({ em_registro: 'Pix Automático reservado', registrado: 'Pix Automático agendado', baixado: 'Agendamento Pix encerrado' } as Record<string, string>)[titulo.estado] ?? base.rotulo
+    : base.rotulo;
   const partes: string[] = [];
   if (titulo.canal && BANCO_DO_CANAL[titulo.canal]) partes.push(BANCO_DO_CANAL[titulo.canal]);
-  if (titulo.nosso_numero) partes.push(`nosso número ${titulo.nosso_numero}`);
+  if (titulo.nosso_numero) partes.push(`${titulo.canal === 'sicredi_pix' ? 'transação' : 'nosso número'} ${titulo.nosso_numero}`);
   if (titulo.baixa_status === 'pendente') partes.push('baixa PENDENTE no banco');
   if (titulo.baixa_status === 'solicitada') partes.push('baixa enviada ao banco, aguardando confirmação');
   if (titulo.baixa_status === 'confirmada') partes.push('baixa confirmada');
   if (titulo.pendencia) partes.push(ROTULO_PENDENCIA[titulo.pendencia] ?? titulo.pendencia);
   const tom: Tom = titulo.pendencia || titulo.baixa_status === 'pendente' ? 'warning' : base.tom;
-  return { rotulo: base.rotulo, tom, detalhe: partes.length ? partes.join(' · ') : null };
+  return { rotulo, tom, detalhe: partes.length ? partes.join(' · ') : null };
 }
 
 /** Título registrado pela API do Sicredi (ações próprias: consulta e baixa pela API). */
 export function ehSicredi(titulo: TituloBancario | null | undefined): boolean {
   return titulo?.canal === 'sicredi_api';
+}
+
+export function ehPixAutomatico(titulo: TituloBancario | null | undefined): boolean {
+  return titulo?.canal === 'sicredi_pix';
 }
 
 /** Consultar o desfecho só faz sentido quando o registro está pendente. */

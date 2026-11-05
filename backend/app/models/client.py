@@ -9,7 +9,7 @@ from app.models.enums import ClientStatus
 
 
 # Como o cliente paga — filtro de relatórios e do fechamento. Nulo = não informado.
-FORMAS_COBRANCA = ('boleto_mensal', 'carne_ailos', 'carne_sicredi', 'carne_simples', 'cartao_credito')
+FORMAS_COBRANCA = ('boleto_mensal', 'carne_ailos', 'carne_sicredi', 'carne_simples', 'cartao_credito', 'pix_automatico')
 
 
 class Client(Base, TimestampMixin, SoftDeleteMixin):
@@ -26,7 +26,7 @@ class Client(Base, TimestampMixin, SoftDeleteMixin):
         trigram_index('ix_clients_trade_name_trgm', 'trade_name'),
         CheckConstraint(
             "forma_cobranca IS NULL OR forma_cobranca IN "
-            "('boleto_mensal', 'carne_ailos', 'carne_sicredi', 'carne_simples', 'cartao_credito')",
+            "('boleto_mensal', 'carne_ailos', 'carne_sicredi', 'carne_simples', 'cartao_credito', 'pix_automatico')",
             name='ck_clients_forma_cobranca',
         ),
     )

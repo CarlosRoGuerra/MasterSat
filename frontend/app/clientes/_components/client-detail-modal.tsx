@@ -3,6 +3,7 @@ import { Badge, statusLabel, statusVariant } from '@/components/ui/badge';
 import { ClientCadastroTab } from './client-cadastro-tab';
 import { ClientHistoricoTab } from './client-historico-tab';
 import { ClientDocumentosTab } from './client-documentos-tab';
+import { ClientPixAutomatico } from './client-pix-automatico';
 import type { Client, ClientDocument, VehicleSummary } from './types';
 
 export type DetailsTab = 'cadastro' | 'historico' | 'documentos';
@@ -88,7 +89,9 @@ export function ClientDetailModal({
 
           {tab === 'cadastro' && (vehiclesLoading
             ? <p className="text-sm text-slate-500">Carregando veículos…</p>
-            : <ClientCadastroTab client={client} vehicles={vehicles} />)}
+            : <><ClientCadastroTab client={client} vehicles={vehicles} />
+              {canViewFinance && client.forma_cobranca === 'pix_automatico' && <ClientPixAutomatico key={client.id} client={client} token={token} />}
+            </>)}
 
           {tab === 'historico' && client && (
             <ClientHistoricoTab

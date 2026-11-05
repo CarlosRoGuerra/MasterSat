@@ -17,6 +17,7 @@ from app.models.closure_job import ClosureJob
 from app.models.enums import BillingStatus
 from app.models.nfse_nota import NfseNota
 from app.models.sicredi_boleto import SicrediBoleto
+from app.models.sicredi_pix import SicrediPixCobranca
 from app.services.ailos_boletos import resolver_pagador
 from app.services.email_smtp import emails_cadastrados
 from app.services import titulo_bancario
@@ -151,6 +152,7 @@ def conferir_lote(db: Session, lote_id: int, billing_id: int | None = None, *, i
     billings = {b.id: b for b in db.query(Billing).filter(Billing.id.in_(ids)).all()}
     boletos = {b.billing_id: b for b in db.query(AilosBoleto).filter(AilosBoleto.billing_id.in_(ids)).all()}
     sicredi = {b.billing_id: b for b in db.query(SicrediBoleto).filter(SicrediBoleto.billing_id.in_(ids)).all()}
+    pix = {p.billing_id: p for p in db.query(SicrediPixCobranca).filter(SicrediPixCobranca.billing_id.in_(ids)).all()}
     titulos = titulo_bancario.titulos_bancarios(db, ids)
     notas = {n.billing_id: n for n in db.query(NfseNota).filter(NfseNota.billing_id.in_(ids)).all()}
     entregas = {e.billing_id: e for e in db.query(ClosureEmailDelivery).filter(
@@ -181,6 +183,7 @@ def conferir_lote(db: Session, lote_id: int, billing_id: int | None = None, *, i
         )
         aberta = bool(b and not b.is_deleted and b.substituted_by_id is None
                       and b.status in (BillingStatus.PENDING, BillingStatus.OVERDUE))
+        usa_pix = bool(b and b.payment_method == 'pix_automatico')
         motivos = []
         if not aberta:
             motivos.append('Cobrança não está em aberto')
@@ -188,7 +191,11 @@ def conferir_lote(db: Session, lote_id: int, billing_id: int | None = None, *, i
             motivos.append('Responsável financeiro indisponível')
         elif not emails:
             motivos.append('Responsável financeiro sem e-mail')
-        if not boleto_ok:
+        if usa_pix:
+            agenda = pix.get(billing_id)
+            if not agenda or agenda.status != 'ATIVA' or agenda.pendencia:
+                motivos.append('Pix Automático ainda não agendado ou com pendência; confira a autorização no Financeiro')
+        elif not boleto_ok:
             motivos.append({
                 titulo_bancario.EM_REGISTRO: 'Registro do boleto em andamento no banco',
                 titulo_bancario.DESFECHO_DESCONHECIDO: 'Registro bancário sem confirmação; consulte o título no Financeiro',
@@ -226,14 +233,16 @@ def conferir_lote(db: Session, lote_id: int, billing_id: int | None = None, *, i
             'valor': float(b.amount) if b else 0,
             'vencimento': b.due_date if b else None,
             'boleto_emitido': boleto_ok,
+            'pix_agendado': bool(usa_pix and pix.get(billing_id) and pix[billing_id].status == 'ATIVA' and not pix[billing_id].pendencia),
             'boleto_banco': banco if boleto_ok else None,
             'titulo_bancario': titulo.as_dict(),
-            'pode_emitir_boleto': bool(aberta and not b.somente_sistema
+            'pode_emitir_boleto': bool(aberta and not usa_pix and not b.somente_sistema
                                       and titulo.estado == titulo_bancario.SEM_TITULO
                                       and (not entrega or entrega.status == 'erro')),
             'nfse_status': nota.status if nota else None,
             'emitir_nfse': fiscal,
-            'documentos': ['Boleto', 'NFS-e'] if fiscal == 'sim' else ['Boleto'],
+            'documentos': (['Pix Automático', 'NFS-e'] if fiscal == 'sim' else ['Pix Automático']) if usa_pix
+                         else (['Boleto', 'NFS-e'] if fiscal == 'sim' else ['Boleto']),
             'estado': estado,
             'motivo': motivo,
             'enviado_em': entrega.sent_at if entrega else None,

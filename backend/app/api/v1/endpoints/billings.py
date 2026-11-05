@@ -26,6 +26,7 @@ from app.core.timezone import hoje
 from app.db.session import get_db
 from app.models.ailos_boleto import AilosBoleto
 from app.models.sicredi_boleto import STATUS_REGISTRADO as SICREDI_REGISTRADO, SicrediBoleto
+from app.models.sicredi_pix import SicrediPixCobranca
 from app.models.audit_log import AuditLog
 from app.models.nfse_nota import NfseNota
 from app.models.billing import RECURRING_BILLING_TYPES, Billing
@@ -204,6 +205,7 @@ def base_query(db: Session, *, refresh_statuses: bool = False):
             AilosBoleto,
             SicrediBoleto,
             CnabRemessaItem.nosso_numero.label('cnab_nosso_numero'),
+            SicrediPixCobranca,
             Client.is_deleted.label('client_removed'),
             Payer.is_deleted.label('payer_removed'),
             Contract.is_deleted.label('contract_removed'),
@@ -219,6 +221,7 @@ def base_query(db: Session, *, refresh_statuses: bool = False):
         .outerjoin(Tracker, Tracker.id == Billing.tracker_id)
         .outerjoin(AilosBoleto, AilosBoleto.billing_id == Billing.id)
         .outerjoin(SicrediBoleto, SicrediBoleto.billing_id == Billing.id)
+        .outerjoin(SicrediPixCobranca, SicrediPixCobranca.billing_id == Billing.id)
         .outerjoin(NfseNota, NfseNota.billing_id == Billing.id)
         .outerjoin(
             CnabRemessaItem,
@@ -248,7 +251,15 @@ def _sicredi_registrado():
 def _titulo_bancario_out(
     billing_id: int, boleto: AilosBoleto | None, cnab_nosso_numero: str | None,
     sicredi_boleto: SicrediBoleto | None = None,
+    pix_cobranca: SicrediPixCobranca | None = None,
 ) -> dict | None:
+    if pix_cobranca is not None:
+        previous = _titulo_bancario_out(billing_id, boleto, cnab_nosso_numero, sicredi_boleto)
+        estado = titulo_bancario.estado_do_pix(pix_cobranca)
+        if titulo_bancario.gravidade(estado) > titulo_bancario.gravidade(previous['estado'] if previous else titulo_bancario.SEM_TITULO):
+            return titulo_bancario.TituloBancario(billing_id=billing_id, estado=estado,
+                canal=titulo_bancario.CANAL_PIX, nosso_numero=pix_cobranca.txid, pendencia=pix_cobranca.pendencia).as_dict()
+        return previous
     estado_sicredi = titulo_bancario.estado_do_sicredi(sicredi_boleto)
     if sicredi_boleto is not None and (
         titulo_bancario.gravidade(estado_sicredi)
@@ -277,7 +288,7 @@ def serialize_billing(row) -> BillingOut:
     (
         billing, client_name, payer_name, plan_name, contract_status,
         vehicle_plate, tracker_identifier, boleto_ailos, nfse_status, ailos_boleto, sicredi_boleto,
-        cnab_nosso_numero, *removidas,
+        cnab_nosso_numero, pix_cobranca, *removidas,
     ) = row
     overdue_days = 0
     if billing.status == BillingStatus.OVERDUE:
@@ -320,7 +331,7 @@ def serialize_billing(row) -> BillingOut:
         ),
         boleto_ailos=bool(boleto_ailos),
         nfse_status=nfse_status,
-        titulo_bancario=_titulo_bancario_out(billing.id, ailos_boleto, cnab_nosso_numero, sicredi_boleto),
+        titulo_bancario=_titulo_bancario_out(billing.id, ailos_boleto, cnab_nosso_numero, sicredi_boleto, pix_cobranca),
         relacoes_removidas=[nome for nome, removida in zip(_RELACOES, removidas) if removida],
     )
 

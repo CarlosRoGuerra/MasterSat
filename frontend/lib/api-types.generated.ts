@@ -217,6 +217,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/clients/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Client Summary
+         * @description Filtered counters for the client page, independent of pagination.
+         */
+        get: operations["client_summary_api_v1_clients_summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/clients/{item_id}": {
         parameters: {
             query?: never;
@@ -340,23 +360,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/vehicles/lote/excluir": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Delete Batch */
-        post: operations["delete_batch_api_v1_vehicles_lote_excluir_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/vehicles/{item_id}": {
         parameters: {
             query?: never;
@@ -371,6 +374,40 @@ export interface paths {
         post?: never;
         /** Delete Item */
         delete: operations["delete_item_api_v1_vehicles__item_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/vehicles/{item_id}/change-client": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Change Client */
+        post: operations["change_client_api_v1_vehicles__item_id__change_client_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/vehicles/lote/excluir": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Delete Batch */
+        post: operations["delete_batch_api_v1_vehicles_lote_excluir_post"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -487,6 +524,69 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/trackers/lote/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Alterar Status Lote
+         * @description Altera o status dos rastreadores selecionados.
+         *
+         *     Rastreador instalado (ou preso a contrato ativo) fica de fora: o status
+         *     dele acompanha o vínculo e só muda pela desinstalação/transferência.
+         */
+        post: operations["alterar_status_lote_api_v1_trackers_lote_status_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/trackers/lote/excluir": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Excluir Lote
+         * @description Exclui (soft delete) os selecionados que estão extraviados ou em manutenção.
+         */
+        post: operations["excluir_lote_api_v1_trackers_lote_excluir_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/trackers/billing-day-suggestion": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Billing Day Suggestion
+         * @description Dia de vencimento que o contrato do veículo herdaria (ver dia_vencimento).
+         */
+        get: operations["billing_day_suggestion_api_v1_trackers_billing_day_suggestion_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/trackers/{item_id}": {
         parameters: {
             query?: never;
@@ -517,6 +617,23 @@ export interface paths {
         get: operations["get_history_api_v1_trackers__item_id__history_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/trackers/{item_id}/change-client": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Change Client */
+        post: operations["change_client_api_v1_trackers__item_id__change_client_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1065,6 +1182,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/billings/{item_id}/components": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Billing Components
+         * @description Itens de um boleto único, inclusive contratos de outro cliente pagos pelo interveniente.
+         */
+        get: operations["billing_components_api_v1_billings__item_id__components_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/billings/": {
         parameters: {
             query?: never;
@@ -1097,6 +1234,9 @@ export interface paths {
          * @description Cria N parcelas (boletos) de um contrato — vincula ao plano do veículo e à
          *     quantidade de parcelas — para depois virarem carnê. Cada parcela vale o valor
          *     do plano (ou o valor informado), com vencimentos mensais.
+         *
+         *     Com ``somente_sistema`` é o carnê simples: as parcelas ficam só no sistema e
+         *     a política de título bancário recusa emiti-las na Ailos ou por CNAB.
          */
         post: operations["parcelar_contrato_api_v1_billings_parcelar_post"];
         delete?: never;
@@ -1279,6 +1419,28 @@ export interface paths {
         put?: never;
         /** Cancel Billing */
         post: operations["cancel_billing_api_v1_billings__item_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/billings/{item_id}/corrigir-vencimento": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Corrigir Vencimento Billing
+         * @description Boleto já registrado com a data errada: a cobrança é substituída por uma
+         *     nova, sem boleto, com o vencimento certo (a antiga vai para baixa pendente).
+         *     A emissão do boleto novo é o "Gerar boleto (Ailos)" de sempre.
+         */
+        post: operations["corrigir_vencimento_billing_api_v1_billings__item_id__corrigir_vencimento_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1650,6 +1812,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/integrations/cobrancas/{billing_id}/nfse": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Detalhar Nfse
+         * @description Dados da nota fiscal vinculada à cobrança; consulta sem emissão fiscal.
+         */
+        get: operations["detalhar_nfse_api_v1_integrations_cobrancas__billing_id__nfse_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/cobrancas/{billing_id}/nfse/pdf": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Baixar Nfse Pdf
+         * @description PDF da NFS-e para anexar na mensagem; usa o XML autorizado armazenado.
+         */
+        get: operations["baixar_nfse_pdf_api_v1_integrations_cobrancas__billing_id__nfse_pdf_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/cobrancas/{billing_id}/nfse/xml": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Baixar Nfse Xml
+         * @description XML fiscal de retorno da NFS-e; não devolve XML de envio/RPS.
+         */
+        get: operations["baixar_nfse_xml_api_v1_integrations_cobrancas__billing_id__nfse_xml_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/service-products/": {
         parameters: {
             query?: never;
@@ -1717,6 +1939,23 @@ export interface paths {
         post?: never;
         /** Delete Item */
         delete: operations["delete_item_api_v1_client_charge_items__item_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/audit-logs/paged": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Logs Paged */
+        get: operations["list_logs_paged_api_v1_audit_logs_paged_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -2005,6 +2244,125 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/billing-closure/meses": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Closure Service Months */
+        get: operations["closure_service_months_api_v1_billing_closure_meses_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/billing-closure/meses/{mes_servico}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Closure Month Preview */
+        get: operations["closure_month_preview_api_v1_billing_closure_meses__mes_servico__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/billing-closure/lotes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Closure Batches */
+        get: operations["closure_batches_api_v1_billing_closure_lotes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/billing-closure/lotes/recuperar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Recover Older Closure Batches */
+        post: operations["recover_older_closure_batches_api_v1_billing_closure_lotes_recuperar_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/billing-closure/lotes/{lote_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Closure Batch Preview */
+        get: operations["closure_batch_preview_api_v1_billing_closure_lotes__lote_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/billing-closure/lotes/{lote_id}/enviar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Closure Batch Enqueue */
+        post: operations["closure_batch_enqueue_api_v1_billing_closure_lotes__lote_id__enviar_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/billing-closure/lotes/{lote_id}/enviar/{billing_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Closure Batch Send Title */
+        post: operations["closure_batch_send_title_api_v1_billing_closure_lotes__lote_id__enviar__billing_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/billing-closure/simulate": {
         parameters: {
             query?: never;
@@ -2185,6 +2543,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/contract-signature": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Contract Signature Status */
+        get: operations["contract_signature_status_api_v1_settings_contract_signature_get"];
+        put?: never;
+        /** Upload Contract Signature */
+        post: operations["upload_contract_signature_api_v1_settings_contract_signature_post"];
+        /** Remove Contract Signature */
+        delete: operations["remove_contract_signature_api_v1_settings_contract_signature_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/contract-signature/image": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Contract Signature Image */
+        get: operations["contract_signature_image_api_v1_settings_contract_signature_image_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings/mensagens": {
         parameters: {
             query?: never;
@@ -2252,8 +2646,8 @@ export interface paths {
          * Listar Carnes
          * @description Carnês gerados de um cliente (para reabrir/baixar depois da geração).
          *
-         *     Encontra os lotes tipo 'carne' cujas parcelas pertencem ao cliente, via os
-         *     boletos vinculados ao lote.
+         *     client_id consulta o cliente atendido; payer_client_id consulta o pagador
+         *     histórico das parcelas. A central financeira usa o segundo filtro.
          */
         get: operations["listar_carnes_api_v1_boletos_carne_get"];
         put?: never;
@@ -2331,7 +2725,7 @@ export interface paths {
         };
         /**
          * Get Boleto Pdf
-         * @description PDF do boleto — só para título registrado na Ailos.
+         * @description PDF MasterSat — só para título registrado na Ailos ou no Sicredi.
          *
          *     Antes o PDF saía para qualquer cobrança, com nosso número e código de
          *     barras calculados aqui. Parecia um boleto pronto, mas o banco não tinha
@@ -2357,9 +2751,7 @@ export interface paths {
         put?: never;
         /**
          * Enviar Boleto Email
-         * @description Envia o boleto por e-mail direto do painel, via SMTP configurado em
-         *     Configurações → E-mail, com o PDF anexado — sem depender de cliente de
-         *     e-mail externo na máquina do operador.
+         * @description Envia boleto por SMTP; anexa a NFS-e quando solicitada.
          */
         post: operations["enviar_boleto_email_api_v1_boletos__billing_id__enviar_email_post"];
         delete?: never;
@@ -2501,6 +2893,26 @@ export interface paths {
          *     WhatsApp/e-mail. Protegido por token HMAC — sem token válido, 404.
          */
         get: operations["get_boleto_publico_api_v1_public_boleto__billing_id___token__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/nfse/{billing_id}/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Baixar Nfse Pdf Publico
+         * @description Abre o PDF sem JWT/X-API-Key; exige o token da nota emitida atual.
+         */
+        get: operations["baixar_nfse_pdf_publico_api_v1_public_nfse__billing_id___token__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2975,6 +3387,440 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sicredi/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Status Endpoint
+         * @description Como o canal está configurado (não chama o Sicredi).
+         */
+        get: operations["status_endpoint_api_v1_sicredi_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sicredi/testar-conexao": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Testar Conexao Endpoint
+         * @description Autentica no ambiente configurado — nenhum boleto é criado.
+         */
+        post: operations["testar_conexao_endpoint_api_v1_sicredi_testar_conexao_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sicredi/boletos": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Emitir Endpoint */
+        post: operations["emitir_endpoint_api_v1_sicredi_boletos_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sicredi/carne/lote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Criar Carne Endpoint */
+        post: operations["criar_carne_endpoint_api_v1_sicredi_carne_lote_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sicredi/boletos/lote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Criar Lote Endpoint */
+        post: operations["criar_lote_endpoint_api_v1_sicredi_boletos_lote_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sicredi/lotes/{ticket}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Status Lote Endpoint */
+        get: operations["status_lote_endpoint_api_v1_sicredi_lotes__ticket__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sicredi/lotes/{lote_id}/registrar-pendentes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retentar Lote Endpoint */
+        post: operations["retentar_lote_endpoint_api_v1_sicredi_lotes__lote_id__registrar_pendentes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sicredi/lotes/{lote_id}/parcelas/{billing_id}/registrar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retentar Parcela Endpoint */
+        post: operations["retentar_parcela_endpoint_api_v1_sicredi_lotes__lote_id__parcelas__billing_id__registrar_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sicredi/boletos/{billing_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Detalhe Endpoint */
+        get: operations["detalhe_endpoint_api_v1_sicredi_boletos__billing_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sicredi/boletos/{billing_id}/consultar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Consultar Endpoint */
+        post: operations["consultar_endpoint_api_v1_sicredi_boletos__billing_id__consultar_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sicredi/boletos/{billing_id}/pdf": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Pdf Endpoint */
+        get: operations["pdf_endpoint_api_v1_sicredi_boletos__billing_id__pdf_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sicredi/boletos/{billing_id}/baixa": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Baixa Endpoint */
+        post: operations["baixa_endpoint_api_v1_sicredi_boletos__billing_id__baixa_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sicredi/boletos/{billing_id}/resolver-pendencia": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolver Pendencia Endpoint
+         * @description Encerra a pendência de conciliação (o ``motivo`` vai para o histórico).
+         */
+        post: operations["resolver_pendencia_endpoint_api_v1_sicredi_boletos__billing_id__resolver_pendencia_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sicredi/conciliar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Conciliar Endpoint */
+        post: operations["conciliar_endpoint_api_v1_sicredi_conciliar_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sicredi-pix/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Status */
+        get: operations["status_api_v1_sicredi_pix_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sicredi-pix/testar-conexao": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Testar Conexao */
+        post: operations["testar_conexao_api_v1_sicredi_pix_testar_conexao_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sicredi-pix/clientes/{client_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Cliente */
+        get: operations["cliente_api_v1_sicredi_pix_clientes__client_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sicredi-pix/clientes/{client_id}/autorizacao": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Autorizar */
+        post: operations["autorizar_api_v1_sicredi_pix_clientes__client_id__autorizacao_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sicredi-pix/clientes/{client_id}/consultar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Consultar */
+        post: operations["consultar_api_v1_sicredi_pix_clientes__client_id__consultar_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sicredi-pix/clientes/{client_id}/cancelar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancelar */
+        post: operations["cancelar_api_v1_sicredi_pix_clientes__client_id__cancelar_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sicredi-pix/clientes/{client_id}/preparar-pendentes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preparar Pendentes */
+        post: operations["preparar_pendentes_api_v1_sicredi_pix_clientes__client_id__preparar_pendentes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sicredi-pix/cobrancas/{charge_id}/consultar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Consultar Cobranca */
+        post: operations["consultar_cobranca_api_v1_sicredi_pix_cobrancas__charge_id__consultar_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sicredi-pix/cobrancas/{charge_id}/cancelar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancelar Cobranca */
+        post: operations["cancelar_cobranca_api_v1_sicredi_pix_cobrancas__charge_id__cancelar_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sicredi-pix/processar-fila": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Processar Fila */
+        post: operations["processar_fila_api_v1_sicredi_pix_processar_fila_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sicredi-pix/webhooks/configurar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Configurar Webhooks */
+        post: operations["configurar_webhooks_api_v1_sicredi_pix_webhooks_configurar_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nfse/": {
         parameters: {
             query?: never;
@@ -3122,6 +3968,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/nfse/lotes/selecionados/previa": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Lote Previa Selecionados */
+        post: operations["lote_previa_selecionados_api_v1_nfse_lotes_selecionados_previa_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/nfse/lotes/selecionados": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Lote Emitir Selecionados
+         * @description Emite em lote apenas as cobranças marcadas e com tomador optante por NFS-e.
+         */
+        post: operations["lote_emitir_selecionados_api_v1_nfse_lotes_selecionados_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nfse/lotes/{lote_id}": {
         parameters: {
             query?: never;
@@ -3164,6 +4047,26 @@ export interface paths {
         get: operations["danfse_api_v1_nfse__billing_id__danfse_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/nfse/{billing_id}/enviar-email": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Enviar Nfse Email
+         * @description Envia somente a NFS-e já emitida ao tomador financeiro da cobrança.
+         */
+        post: operations["enviar_nfse_email_api_v1_nfse__billing_id__enviar_email_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3259,120 +4162,6 @@ export interface paths {
         get: operations["healthcheck__get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/integrations/cobrancas/{billing_id}/nfse": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Detalhar Nfse
-         * @description Dados da nota fiscal vinculada à cobrança; consulta sem emissão fiscal.
-         */
-        get: operations["detalhar_nfse_api_v1_integrations_cobrancas__billing_id__nfse_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/integrations/cobrancas/{billing_id}/nfse/pdf": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Baixar Nfse Pdf
-         * @description PDF da NFS-e para anexar na mensagem; usa o XML autorizado armazenado.
-         */
-        get: operations["baixar_nfse_pdf_api_v1_integrations_cobrancas__billing_id__nfse_pdf_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/integrations/cobrancas/{billing_id}/nfse/xml": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Baixar Nfse Xml
-         * @description XML fiscal de retorno da NFS-e; não devolve XML de envio/RPS.
-         */
-        get: operations["baixar_nfse_xml_api_v1_integrations_cobrancas__billing_id__nfse_xml_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/public/nfse/{billing_id}/{token}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Baixar Nfse Pdf Publico
-         * @description Abre o PDF sem JWT/X-API-Key; exige o token da nota emitida atual.
-         */
-        get: operations["baixar_nfse_pdf_publico_api_v1_public_nfse__billing_id___token__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/vehicles/{item_id}/change-client": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Change Client */
-        post: operations["change_client_api_v1_vehicles__item_id__change_client_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/trackers/{item_id}/change-client": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Change Client */
-        post: operations["change_client_api_v1_trackers__item_id__change_client_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3689,6 +4478,21 @@ export interface components {
             /** Created At */
             created_at?: string | null;
         };
+        /** AuditLogPage */
+        AuditLogPage: {
+            /** Items */
+            items: components["schemas"]["AuditLogOut"][];
+            /** Total */
+            total: number;
+            /** Today Count */
+            today_count: number;
+            /** Error Count */
+            error_count: number;
+            /** Unique Users */
+            unique_users: number;
+            /** Entity Types */
+            entity_types: string[];
+        };
         /** BillingAdjustmentOut */
         BillingAdjustmentOut: {
             /** Id */
@@ -3816,6 +4620,12 @@ export interface components {
             payment_date?: string | null;
             /** Payment Method */
             payment_method?: string | null;
+            /** Sgr Cod Boleto */
+            sgr_cod_boleto?: string | null;
+            /** Expected Amount */
+            expected_amount?: number | string | null;
+            /** Notes */
+            notes?: string | null;
             /** Reason */
             reason?: string | null;
         };
@@ -3857,6 +4667,24 @@ export interface components {
             justification: string;
             /** Created At */
             created_at?: string | null;
+        };
+        /**
+         * BillingCorrigirVencimento
+         * @description Reemissão com vencimento corrigido (ver app/services/reemissao.py).
+         */
+        BillingCorrigirVencimento: {
+            /**
+             * Due Date
+             * Format: date
+             */
+            due_date: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Confirmar Boleto Ailos
+             * @default false
+             */
+            confirmar_boleto_ailos: boolean;
         };
         /** BillingCreate */
         BillingCreate: {
@@ -3977,6 +4805,8 @@ export interface components {
              * @default false
              */
             boleto_ailos: boolean;
+            /** Nfse Status */
+            nfse_status?: string | null;
             /** Sgr Payload */
             sgr_payload?: Record<string, never> | null;
             /** Competencia */
@@ -3986,6 +4816,11 @@ export interface components {
              * @default false
              */
             competencia_liberada: boolean;
+            /**
+             * Somente Sistema
+             * @default false
+             */
+            somente_sistema: boolean;
             /** Substituted By Id */
             substituted_by_id?: number | null;
             titulo_bancario?: components["schemas"]["TituloBancarioOut"] | null;
@@ -4125,6 +4960,11 @@ export interface components {
             /** Files */
             files: string[];
         };
+        /** Body_upload_contract_signature_api_v1_settings_contract_signature_post */
+        Body_upload_contract_signature_api_v1_settings_contract_signature_post: {
+            /** File */
+            file: string;
+        };
         /** Body_upload_documents_api_v1_service_orders__item_id__documents_post */
         Body_upload_documents_api_v1_service_orders__item_id__documents_post: {
             /** Category */
@@ -4224,6 +5064,12 @@ export interface components {
              */
             start_date: string;
             /**
+             * Date Basis
+             * @default service_date
+             * @enum {string}
+             */
+            date_basis: "service_date" | "due_date";
+            /**
              * Active
              * @default true
              */
@@ -4267,6 +5113,12 @@ export interface components {
              * Format: date
              */
             start_date: string;
+            /**
+             * Date Basis
+             * @default service_date
+             * @enum {string}
+             */
+            date_basis: "service_date" | "due_date";
             /**
              * Active
              * @default true
@@ -4315,6 +5167,8 @@ export interface components {
             installment_count?: number | null;
             /** Start Date */
             start_date?: string | null;
+            /** Date Basis */
+            date_basis?: ("service_date" | "due_date") | null;
             /** Active */
             active?: boolean | null;
             /** Remove After Payment */
@@ -4373,6 +5227,8 @@ export interface components {
             emergency_contacts?: components["schemas"]["EmergencyContact"][] | null;
             /** Boleto Format */
             boleto_format?: string | null;
+            /** Forma Cobranca */
+            forma_cobranca?: ("boleto_mensal" | "carne_ailos" | "carne_sicredi" | "carne_simples" | "cartao_credito" | "pix_automatico") | null;
             /** Boleto Fee */
             boleto_fee?: string | null;
             /** Issue Invoice */
@@ -4439,6 +5295,8 @@ export interface components {
             emergency_contacts?: components["schemas"]["EmergencyContact"][] | null;
             /** Boleto Format */
             boleto_format?: string | null;
+            /** Forma Cobranca */
+            forma_cobranca?: ("boleto_mensal" | "carne_ailos" | "carne_sicredi" | "carne_simples" | "cartao_credito" | "pix_automatico") | null;
             /** Boleto Fee */
             boleto_fee?: string | null;
             /** Issue Invoice */
@@ -4455,6 +5313,11 @@ export interface components {
             send_boleto_whatsapp?: boolean | null;
             /** Id */
             id: number;
+            /**
+             * Vehicle Count
+             * @default 0
+             */
+            vehicle_count: number;
             /**
              * Contrato Armazenado
              * @default false
@@ -4513,6 +5376,8 @@ export interface components {
             emergency_contacts?: components["schemas"]["EmergencyContact"][] | null;
             /** Boleto Format */
             boleto_format?: string | null;
+            /** Forma Cobranca */
+            forma_cobranca?: ("boleto_mensal" | "carne_ailos" | "carne_sicredi" | "carne_simples" | "cartao_credito" | "pix_automatico") | null;
             /** Boleto Fee */
             boleto_fee?: string | null;
             /** Issue Invoice */
@@ -4527,6 +5392,11 @@ export interface components {
             delivery_method?: string | null;
             /** Send Boleto Whatsapp */
             send_boleto_whatsapp?: boolean | null;
+        };
+        /** ClosureQueueIn */
+        ClosureQueueIn: {
+            /** Billing Ids */
+            billing_ids: number[];
         };
         /** ContactItem */
         ContactItem: {
@@ -4643,6 +5513,8 @@ export interface components {
             id: number;
             /** Client Name */
             client_name?: string | null;
+            /** Interveniente Name */
+            interveniente_name?: string | null;
             /** Vehicle Plate */
             vehicle_plate?: string | null;
             /** Tracker Identifier */
@@ -4745,10 +5617,17 @@ export interface components {
         ElegiveisOut: {
             /** Period Label */
             period_label: string;
+            /** Closure Batch Id */
+            closure_batch_id?: number | null;
             /** Total Elegiveis */
             total_elegiveis: number;
             /** Ja Emitidas */
             ja_emitidas: number;
+            /**
+             * Sem Configuracao
+             * @default []
+             */
+            sem_configuracao: Record<string, never>[];
             /**
              * Itens
              * @default []
@@ -4903,6 +5782,71 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** IntegrationBillingOut */
+        IntegrationBillingOut: {
+            /** Id */
+            id: number;
+            /** Titulo */
+            titulo: string | null;
+            cliente: components["schemas"]["IntegrationPayerOut"];
+            /** Valor */
+            valor: number;
+            /** Vencimento */
+            vencimento: string | null;
+            status: components["schemas"]["BillingStatus"];
+            /** Pagamento Confirmado */
+            pagamento_confirmado: boolean;
+            /** Data Pagamento */
+            data_pagamento: string | null;
+            /** Valor Pago */
+            valor_pago: number | null;
+            /** Forma Pagamento */
+            forma_pagamento: string | null;
+            /** Forma Envio */
+            forma_envio: string;
+            /** Enviar Boleto Whatsapp */
+            enviar_boleto_whatsapp: boolean;
+            /** Nosso Numero */
+            nosso_numero: string | null;
+            /** Linha Digitavel */
+            linha_digitavel: string | null;
+            /** Codigo Barras */
+            codigo_barras: string | null;
+            /** Pix Copia Cola */
+            pix_copia_cola: string | null;
+            /** Banco */
+            banco?: string | null;
+            /** Boleto Registrado */
+            boleto_registrado: boolean;
+            /** Boleto Disponivel */
+            boleto_disponivel: boolean;
+            /** Motivo Boleto Indisponivel */
+            motivo_boleto_indisponivel: string | null;
+            /** Boleto Pdf Url */
+            boleto_pdf_url: string | null;
+            /** Boleto Link Cliente */
+            boleto_link_cliente: string | null;
+            /** Valor Com Juros */
+            valor_com_juros: number | null;
+            nfse?: components["schemas"]["IntegrationNfseOut"] | null;
+        };
+        /** IntegrationBillingPage */
+        IntegrationBillingPage: {
+            /** Total */
+            total: number;
+            /** Total Registros */
+            total_registros: number;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Has More */
+            has_more: boolean;
+            /** Next Offset */
+            next_offset: number | null;
+            /** Cobrancas */
+            cobrancas: components["schemas"]["IntegrationBillingOut"][];
+        };
         /** IntegrationCallResult */
         IntegrationCallResult: {
             /** Operation */
@@ -4989,6 +5933,65 @@ export interface components {
             /** Created At */
             created_at?: string | null;
         };
+        /** IntegrationNfseOut */
+        IntegrationNfseOut: {
+            /** Nota Id */
+            nota_id: number;
+            /** Billing Id */
+            billing_id: number;
+            /** Status */
+            status: string;
+            /** Numero Nfse */
+            numero_nfse: string | null;
+            /** Serie Nfse */
+            serie_nfse: string | null;
+            /** Codigo Verificacao */
+            codigo_verificacao: string | null;
+            /** Chave Acesso */
+            chave_acesso: string | null;
+            /** Link Visualizacao */
+            link_visualizacao: string | null;
+            /** Data Emissao */
+            data_emissao: string | null;
+            /** Competencia */
+            competencia: string | null;
+            /** Ambiente */
+            ambiente: string | null;
+            /** Pdf Disponivel */
+            pdf_disponivel: boolean;
+            /** Xml Disponivel */
+            xml_disponivel: boolean;
+            /** Motivo Indisponibilidade */
+            motivo_indisponibilidade: string | null;
+            /**
+             * Pdf Url
+             * @description Link do PDF para o cliente, protegido por token; abre sem X-API-Key.
+             */
+            pdf_url: string | null;
+            /**
+             * Pdf Api Url
+             * @description Download do PDF para a integradora, exige X-API-Key.
+             */
+            pdf_api_url: string | null;
+            /**
+             * Xml Url
+             * @description Download do XML fiscal para a integradora, exige X-API-Key.
+             */
+            xml_url: string | null;
+        };
+        /** IntegrationPayerOut */
+        IntegrationPayerOut: {
+            /** Id */
+            id: number;
+            /** Nome */
+            nome: string;
+            /** Cpf Cnpj */
+            cpf_cnpj: string | null;
+            /** Telefone */
+            telefone: string | null;
+            /** Email */
+            email: string | null;
+        };
         /** IntegrationStatusOut */
         IntegrationStatusOut: {
             /** Enabled */
@@ -5047,6 +6050,11 @@ export interface components {
              * @description Lote de fechamento, ex.: '07/2026'
              */
             period_label: string;
+            /**
+             * Closure Batch Id
+             * @description Número da execução do fechamento
+             */
+            closure_batch_id?: number | null;
             /**
              * Billing Ids
              * @description Cobranças selecionadas
@@ -5121,6 +6129,29 @@ export interface components {
             /** Concluido Em */
             concluido_em?: string | null;
         };
+        /** LoteSelecionadosIn */
+        LoteSelecionadosIn: {
+            /**
+             * Billing Ids
+             * @description Cobranças marcadas no Financeiro
+             */
+            billing_ids: number[];
+        };
+        /** LoteSelecionadosOut */
+        LoteSelecionadosOut: {
+            lote: components["schemas"]["LoteResumo"];
+            /** Ignorados */
+            ignorados?: number[];
+        };
+        /** LoteSelecionadosPreviaOut */
+        LoteSelecionadosPreviaOut: {
+            /** Elegiveis */
+            elegiveis?: number[];
+            /** Nao Emitem */
+            nao_emitem?: components["schemas"]["NfseClienteNaoEmite"][];
+            /** Outros Ignorados */
+            outros_ignorados?: number[];
+        };
         /** ManufacturerOut */
         ManufacturerOut: {
             /** Code */
@@ -5134,6 +6165,8 @@ export interface components {
             msg_boleto?: string | null;
             /** Msg Boleto Assunto */
             msg_boleto_assunto?: string | null;
+            /** Msg Boleto Email */
+            msg_boleto_email?: string | null;
         };
         /**
          * NfseClientItem
@@ -5180,6 +6213,13 @@ export interface components {
             valor?: number | null;
             /** Titulo */
             titulo?: string | null;
+        };
+        /** NfseClienteNaoEmite */
+        NfseClienteNaoEmite: {
+            /** Billing Id */
+            billing_id: number;
+            /** Cliente */
+            cliente: string;
         };
         /**
          * NfseOut
@@ -5327,6 +6367,12 @@ export interface components {
         };
         /** ParcelarContratoIn */
         ParcelarContratoIn: {
+            /**
+             * Banco
+             * @default ailos
+             * @enum {string}
+             */
+            banco: "ailos" | "sicredi";
             /** Contract Id */
             contract_id: number;
             /** Num Parcelas */
@@ -5335,6 +6381,11 @@ export interface components {
             valor_parcela?: number | null;
             /** Primeiro Vencimento */
             primeiro_vencimento?: string | null;
+            /**
+             * Somente Sistema
+             * @default false
+             */
+            somente_sistema: boolean;
         };
         /** PayableCancel */
         PayableCancel: {
@@ -5444,6 +6495,104 @@ export interface components {
             notes?: string | null;
             /** Justification */
             justification?: string | null;
+        };
+        /** PixAutorizacaoIn */
+        PixAutorizacaoIn: {
+            /**
+             * Data Inicial
+             * Format: date
+             */
+            data_inicial: string;
+            /**
+             * Valor Minimo
+             * @default 0.01
+             */
+            valor_minimo: number | string;
+            /**
+             * Objeto
+             * @default Mensalidades e serviços MasterSat
+             */
+            objeto: string;
+        };
+        /** PixClienteOut */
+        PixClienteOut: {
+            /** Client Id */
+            client_id: number;
+            /** Forma Cobranca */
+            forma_cobranca: string | null;
+            conexao: components["schemas"]["PixStatusOut"];
+            recorrencia: components["schemas"]["PixRecorrenciaOut"] | null;
+            /** Cobrancas */
+            cobrancas: components["schemas"]["PixCobrancaOut"][];
+            /** Pendentes Adesao */
+            pendentes_adesao: number;
+        };
+        /** PixCobrancaOut */
+        PixCobrancaOut: {
+            /** Id */
+            id: number;
+            /** Billing Id */
+            billing_id: number;
+            /** Txid */
+            txid: string;
+            /** Status */
+            status: string;
+            /**
+             * Vencimento
+             * Format: date
+             */
+            vencimento: string;
+            /** Valor */
+            valor: string;
+            /** Pendencia */
+            pendencia: string | null;
+            /** Erro */
+            erro: string | null;
+            /** Enviada Em */
+            enviada_em: string | null;
+        };
+        /** PixRecorrenciaOut */
+        PixRecorrenciaOut: {
+            /** Id */
+            id: number;
+            /** Id Rec */
+            id_rec: string | null;
+            /** Status */
+            status: string;
+            /** Ativa */
+            ativa: boolean;
+            /** Ambiente */
+            ambiente: string;
+            /**
+             * Data Inicial
+             * Format: date
+             */
+            data_inicial: string;
+            /** Objeto */
+            objeto: string;
+            /** Valor Minimo */
+            valor_minimo: string;
+            /** Pix Copia Cola */
+            pix_copia_cola: string | null;
+            /** Qr Svg */
+            qr_svg?: string | null;
+            /** Erro */
+            erro: string | null;
+            /** Consultada Em */
+            consultada_em: string | null;
+        };
+        /** PixStatusOut */
+        PixStatusOut: {
+            /** Habilitado */
+            habilitado: boolean;
+            /** Configurado */
+            configurado: boolean;
+            /** Ambiente */
+            ambiente: string;
+            /** Escrita Habilitada */
+            escrita_habilitada: boolean;
+            /** Erro Configuracao */
+            erro_configuracao?: string | null;
         };
         /** PlanCreate */
         PlanCreate: {
@@ -5929,6 +7078,159 @@ export interface components {
             /** Auto Add On Uninstall */
             auto_add_on_uninstall?: boolean | null;
         };
+        /** SicrediBaixaIn */
+        SicrediBaixaIn: {
+            /** Motivo */
+            motivo: string;
+        };
+        /** SicrediBaixaOut */
+        SicrediBaixaOut: {
+            /** Billing Id */
+            billing_id: number;
+            /** Baixa Status */
+            baixa_status: string;
+            /** Transaction Id */
+            transaction_id?: string | null;
+            /** Mensagem */
+            mensagem: string;
+        };
+        /** SicrediBoletoOut */
+        SicrediBoletoOut: {
+            /** Billing Id */
+            billing_id: number;
+            /** Estado */
+            estado: string;
+            /** Status */
+            status: string;
+            /** Ambiente */
+            ambiente: string;
+            /** Situacao */
+            situacao?: string | null;
+            /** Nosso Numero */
+            nosso_numero: string;
+            /** Seu Numero */
+            seu_numero?: string | null;
+            /** Tipo Cobranca */
+            tipo_cobranca: string;
+            /** Linha Digitavel */
+            linha_digitavel?: string | null;
+            /** Codigo Barras */
+            codigo_barras?: string | null;
+            /** Txid */
+            txid?: string | null;
+            /** Qr Code */
+            qr_code?: string | null;
+            /** Valor Nominal */
+            valor_nominal?: number | null;
+            /** Data Vencimento */
+            data_vencimento?: string | null;
+            /** Erro */
+            erro?: string | null;
+            /** Baixa Status */
+            baixa_status?: string | null;
+            /** Baixa Enviada Em */
+            baixa_enviada_em?: string | null;
+            /** Baixa Confirmada Em */
+            baixa_confirmada_em?: string | null;
+            /** Pendencia */
+            pendencia?: string | null;
+            /** Ultima Consulta Em */
+            ultima_consulta_em?: string | null;
+            /** Data Liquidacao */
+            data_liquidacao?: string | null;
+            /** Valor Liquidado */
+            valor_liquidado?: number | null;
+        };
+        /** SicrediConciliacaoOut */
+        SicrediConciliacaoOut: {
+            /** Desfechos Resolvidos */
+            desfechos_resolvidos: number;
+            /** Liquidados No Banco */
+            liquidados_no_banco: number;
+            /** Consultados */
+            consultados: number;
+            /** Quitados */
+            quitados: number;
+            /** Pendencias */
+            pendencias: number;
+            /** Falhas */
+            falhas: number;
+            /** Erro Liquidados */
+            erro_liquidados?: string | null;
+        };
+        /** SicrediConexaoOut */
+        SicrediConexaoOut: {
+            /** Ok */
+            ok: boolean;
+            /** Ambiente */
+            ambiente: string;
+            /** Cooperativa */
+            cooperativa: string;
+            /** Posto */
+            posto: string;
+            /** Codigo Beneficiario */
+            codigo_beneficiario: string;
+        };
+        /** SicrediConsultaOut */
+        SicrediConsultaOut: {
+            /** Billing Id */
+            billing_id: number;
+            /** Consultado */
+            consultado: boolean;
+            /** Situacao */
+            situacao?: string | null;
+            /** Pago */
+            pago: boolean;
+            /** Data Pagamento */
+            data_pagamento?: string | null;
+            /** Valor Pago */
+            valor_pago?: number | null;
+            /** Mensagem */
+            mensagem: string;
+            /** Pendencia */
+            pendencia?: string | null;
+            /**
+             * Quitada
+             * @default false
+             */
+            quitada: boolean;
+            /** Desfecho */
+            desfecho?: string | null;
+        };
+        /** SicrediEmitirIn */
+        SicrediEmitirIn: {
+            /** Billing Id */
+            billing_id: number;
+            /**
+             * Nova Tentativa
+             * @default false
+             */
+            nova_tentativa: boolean;
+        };
+        /** SicrediLoteIn */
+        SicrediLoteIn: {
+            /** Billing Ids */
+            billing_ids: number[];
+        };
+        /** SicrediStatusOut */
+        SicrediStatusOut: {
+            /** Habilitado */
+            habilitado: boolean;
+            /** Ambiente */
+            ambiente: string;
+            /** Producao Confirmada */
+            producao_confirmada: boolean;
+            /** Cooperativa */
+            cooperativa?: string | null;
+            /** Posto */
+            posto?: string | null;
+            /** Codigo Beneficiario */
+            codigo_beneficiario?: string | null;
+            /** Hibrido */
+            hibrido: boolean;
+            /** Erro Configuracao */
+            erro_configuracao?: string | null;
+        };
         /** SignatureIn */
         SignatureIn: {
             /**
@@ -6014,6 +7316,62 @@ export interface components {
              * @default bearer
              */
             token_type: string;
+        };
+        /**
+         * TrackerAcaoLoteIn
+         * @description Ação sobre vários rastreadores selecionados na listagem.
+         *
+         *     Com ``simular=True`` nada é gravado — devolve o relatório de quais serão
+         *     alterados e quais ficam de fora (e por quê), para conferir antes.
+         */
+        TrackerAcaoLoteIn: {
+            /** Ids */
+            ids: number[];
+            /**
+             * Simular
+             * @default false
+             */
+            simular: boolean;
+        };
+        /**
+         * TrackerAcaoLoteItem
+         * @description situacao: 'aplicado' | 'ignorado'
+         */
+        TrackerAcaoLoteItem: {
+            /** Tracker Id */
+            tracker_id: number;
+            /** Imei */
+            imei?: string | null;
+            /** Situacao */
+            situacao: string;
+            /** Motivo */
+            motivo?: string | null;
+        };
+        /** TrackerAcaoLoteOut */
+        TrackerAcaoLoteOut: {
+            /** Simulacao */
+            simulacao: boolean;
+            /** Total Enviados */
+            total_enviados: number;
+            /** Aplicados */
+            aplicados: number;
+            /** Ignorados */
+            ignorados: number;
+            /**
+             * Itens
+             * @default []
+             */
+            itens: components["schemas"]["TrackerAcaoLoteItem"][];
+        };
+        /** TrackerClientChange */
+        TrackerClientChange: {
+            /** Client Id */
+            client_id: number;
+            /** Expected Vehicle Id */
+            expected_vehicle_id: number;
+            /** Expected Client Id */
+            expected_client_id: number;
+            tracker_update?: components["schemas"]["TrackerUpdate"];
         };
         /** TrackerCreate */
         TrackerCreate: {
@@ -6101,6 +7459,8 @@ export interface components {
         TrackerLinkPayload: {
             /** Vehicle Id */
             vehicle_id: number;
+            /** Install Location */
+            install_location?: string | null;
             /**
              * Confirm Transfer
              * @default false
@@ -6290,6 +7650,19 @@ export interface components {
          * @enum {string}
          */
         TrackerStatus: "em_estoque" | "instalado" | "em_manutencao" | "extraviado" | "descartado";
+        /** TrackerStatusLoteIn */
+        TrackerStatusLoteIn: {
+            /** Ids */
+            ids: number[];
+            /**
+             * Simular
+             * @default false
+             */
+            simular: boolean;
+            status: components["schemas"]["TrackerStatus"];
+            /** Notes */
+            notes?: string | null;
+        };
         /** TrackerSwapPayload */
         TrackerSwapPayload: {
             /** New Tracker Id */
@@ -6425,6 +7798,15 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /** VehicleClientChange */
+        VehicleClientChange: {
+            /** Client Id */
+            client_id: number;
+            /** Interveniente Client Id */
+            interveniente_client_id?: number | null;
+            /** Expected Client Id */
+            expected_client_id?: number | null;
         };
         /** VehicleCreate */
         VehicleCreate: {
@@ -6696,146 +8078,6 @@ export interface components {
             client_id?: number | null;
             /** Id */
             id: number;
-        };
-        /** IntegrationBillingPage */
-        IntegrationBillingPage: {
-            /** Total */
-            total: number;
-            /** Total Registros */
-            total_registros: number;
-            /** Limit */
-            limit: number;
-            /** Offset */
-            offset: number;
-            /** Has More */
-            has_more: boolean;
-            /** Next Offset */
-            next_offset: number | null;
-            /** Cobrancas */
-            cobrancas: components["schemas"]["IntegrationBillingOut"][];
-        };
-        /** IntegrationBillingOut */
-        IntegrationBillingOut: {
-            /** Id */
-            id: number;
-            /** Titulo */
-            titulo: string | null;
-            cliente: components["schemas"]["IntegrationPayerOut"];
-            /** Valor */
-            valor: number;
-            /** Vencimento */
-            vencimento: string | null;
-            status: components["schemas"]["BillingStatus"];
-            /** Pagamento Confirmado */
-            pagamento_confirmado: boolean;
-            /** Data Pagamento */
-            data_pagamento: string | null;
-            /** Valor Pago */
-            valor_pago: number | null;
-            /** Forma Pagamento */
-            forma_pagamento: string | null;
-            /** Forma Envio */
-            forma_envio: string;
-            /** Enviar Boleto Whatsapp */
-            enviar_boleto_whatsapp: boolean;
-            /** Nosso Numero */
-            nosso_numero: string | null;
-            /** Linha Digitavel */
-            linha_digitavel: string | null;
-            /** Codigo Barras */
-            codigo_barras: string | null;
-            /** Pix Copia Cola */
-            pix_copia_cola: string | null;
-            /** Boleto Registrado */
-            boleto_registrado: boolean;
-            /** Boleto Disponivel */
-            boleto_disponivel: boolean;
-            /** Motivo Boleto Indisponivel */
-            motivo_boleto_indisponivel: string | null;
-            /** Boleto Pdf Url */
-            boleto_pdf_url: string | null;
-            /** Boleto Link Cliente */
-            boleto_link_cliente: string | null;
-            /** Valor Com Juros */
-            valor_com_juros: number | null;
-            nfse?: components["schemas"]["IntegrationNfseOut"] | null;
-        };
-        /** IntegrationPayerOut */
-        IntegrationPayerOut: {
-            /** Id */
-            id: number;
-            /** Nome */
-            nome: string;
-            /** Cpf Cnpj */
-            cpf_cnpj: string | null;
-            /** Telefone */
-            telefone: string | null;
-            /** Email */
-            email: string | null;
-        };
-        /** IntegrationNfseOut */
-        IntegrationNfseOut: {
-            /** Nota Id */
-            nota_id: number;
-            /** Billing Id */
-            billing_id: number;
-            /** Status */
-            status: string;
-            /** Numero Nfse */
-            numero_nfse: string | null;
-            /** Serie Nfse */
-            serie_nfse: string | null;
-            /** Codigo Verificacao */
-            codigo_verificacao: string | null;
-            /** Chave Acesso */
-            chave_acesso: string | null;
-            /** Link Visualizacao */
-            link_visualizacao: string | null;
-            /** Data Emissao */
-            data_emissao: string | null;
-            /** Competencia */
-            competencia: string | null;
-            /** Ambiente */
-            ambiente: string | null;
-            /** Pdf Disponivel */
-            pdf_disponivel: boolean;
-            /** Xml Disponivel */
-            xml_disponivel: boolean;
-            /** Motivo Indisponibilidade */
-            motivo_indisponibilidade: string | null;
-            /**
-             * Pdf Url
-             * @description Link do PDF para o cliente, protegido por token; abre sem X-API-Key.
-             */
-            pdf_url: string | null;
-            /**
-             * Pdf Api Url
-             * @description Download do PDF para a integradora, exige X-API-Key.
-             */
-            pdf_api_url: string | null;
-            /**
-             * Xml Url
-             * @description Download do XML fiscal para a integradora, exige X-API-Key.
-             */
-            xml_url: string | null;
-        };
-        /** VehicleClientChange */
-        VehicleClientChange: {
-            /** Client Id */
-            client_id: number;
-            /** Interveniente Client Id */
-            interveniente_client_id?: number | null;
-            /** Expected Client Id */
-            expected_client_id?: number | null;
-        };
-        TrackerClientChange: {
-            /** Client Id */
-            client_id: number;
-            /** Expected Vehicle Id */
-            expected_vehicle_id: number;
-            /** Expected Client Id */
-            expected_client_id: number;
-            tracker_update?: components["schemas"]["TrackerUpdate"];
         };
     };
     responses: never;
@@ -7228,6 +8470,8 @@ export interface operations {
                 type?: string | null;
                 skip?: number;
                 limit?: number;
+                sort?: string;
+                direction?: string;
             };
             header?: never;
             path?: never;
@@ -7275,6 +8519,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ClientOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    client_summary_api_v1_clients_summary_get: {
+        parameters: {
+            query?: {
+                search?: string | null;
+                status?: string | null;
+                type?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -7751,6 +9028,74 @@ export interface operations {
             };
         };
     };
+    change_client_api_v1_vehicles__item_id__change_client_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VehicleClientChange"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VehicleOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_batch_api_v1_vehicles_lote_excluir_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VehicleDeleteBatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VehicleDeleteBatchOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     uninstall_vehicle_api_v1_vehicles__item_id__uninstall_post: {
         parameters: {
             query: {
@@ -8028,6 +9373,103 @@ export interface operations {
             };
         };
     };
+    alterar_status_lote_api_v1_trackers_lote_status_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TrackerStatusLoteIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrackerAcaoLoteOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    excluir_lote_api_v1_trackers_lote_excluir_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TrackerAcaoLoteIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrackerAcaoLoteOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    billing_day_suggestion_api_v1_trackers_billing_day_suggestion_get: {
+        parameters: {
+            query: {
+                vehicle_id: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_item_api_v1_trackers__item_id__get: {
         parameters: {
             query?: never;
@@ -8143,6 +9585,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TrackerHistoryOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    change_client_api_v1_trackers__item_id__change_client_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TrackerClientChange"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrackerOut"];
                 };
             };
             /** @description Validation Error */
@@ -9501,6 +10978,37 @@ export interface operations {
             };
         };
     };
+    billing_components_api_v1_billings__item_id__components_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_items_api_v1_billings__get: {
         parameters: {
             query?: {
@@ -9957,6 +11465,41 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["BillingCancel"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    corrigir_vencimento_billing_api_v1_billings__item_id__corrigir_vencimento_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BillingCorrigirVencimento"];
             };
         };
         responses: {
@@ -10617,6 +12160,123 @@ export interface operations {
             };
         };
     };
+    detalhar_nfse_api_v1_integrations_cobrancas__billing_id__nfse_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-API-Key"?: string | null;
+            };
+            path: {
+                billing_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationNfseOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    baixar_nfse_pdf_api_v1_integrations_cobrancas__billing_id__nfse_pdf_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-API-Key"?: string | null;
+            };
+            path: {
+                billing_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description DANFSE gerado localmente a partir do XML fiscal armazenado. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pdf": string;
+                };
+            };
+            /** @description Nota ainda não emitida ou XML indisponível. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description ID inválido ou XML fiscal inválido para a geração do PDF. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    baixar_nfse_xml_api_v1_integrations_cobrancas__billing_id__nfse_xml_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-API-Key"?: string | null;
+            };
+            path: {
+                billing_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description XML de retorno da NFS-e emitida, preservado como armazenado. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/xml": string;
+                };
+            };
+            /** @description Nota ainda não emitida ou XML indisponível. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_items_api_v1_service_products__get: {
         parameters: {
             query?: {
@@ -10879,6 +12539,46 @@ export interface operations {
             };
         };
     };
+    list_logs_paged_api_v1_audit_logs_paged_get: {
+        parameters: {
+            query?: {
+                user_id?: number | null;
+                user_role?: string | null;
+                entity_type?: string | null;
+                entity_id?: number | null;
+                method?: string | null;
+                date_from?: string | null;
+                date_to?: string | null;
+                search?: string | null;
+                skip?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditLogPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_logs_api_v1_audit_logs__get: {
         parameters: {
             query?: {
@@ -11062,6 +12762,8 @@ export interface operations {
                 date_from?: string | null;
                 date_to?: string | null;
                 client_id?: number | null;
+                /** @description Forma de cobrança do responsável financeiro (cadastro do cliente) */
+                forma_cobranca?: string | null;
             };
             header?: never;
             path?: never;
@@ -11322,6 +13024,195 @@ export interface operations {
             };
         };
     };
+    closure_service_months_api_v1_billing_closure_meses_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    closure_month_preview_api_v1_billing_closure_meses__mes_servico__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mes_servico: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    closure_batches_api_v1_billing_closure_lotes_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    recover_older_closure_batches_api_v1_billing_closure_lotes_recuperar_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    closure_batch_preview_api_v1_billing_closure_lotes__lote_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                lote_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    closure_batch_enqueue_api_v1_billing_closure_lotes__lote_id__enviar_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                lote_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClosureQueueIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    closure_batch_send_title_api_v1_billing_closure_lotes__lote_id__enviar__billing_id__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                lote_id: number;
+                billing_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     simulate_api_v1_billing_closure_simulate_get: {
         parameters: {
             query?: {
@@ -11331,6 +13222,8 @@ export interface operations {
                 service_month?: string | null;
                 filter_type?: string;
                 client_id?: number | null;
+                /** @description Forma de cobrança do responsável financeiro (cadastro do cliente) */
+                forma_cobranca?: string | null;
             };
             header?: never;
             path?: never;
@@ -11367,6 +13260,8 @@ export interface operations {
                 service_month?: string | null;
                 filter_type?: string;
                 client_id?: number | null;
+                /** @description Forma de cobrança do responsável financeiro (cadastro do cliente) */
+                forma_cobranca?: string | null;
             };
             header?: never;
             path?: never;
@@ -11403,6 +13298,8 @@ export interface operations {
                 service_month?: string | null;
                 filter_type?: string;
                 client_id?: number | null;
+                /** @description Forma de cobrança do responsável financeiro (cadastro do cliente) */
+                forma_cobranca?: string | null;
             };
             header?: never;
             path?: never;
@@ -11439,6 +13336,8 @@ export interface operations {
                 service_month?: string | null;
                 filter_type?: string;
                 client_id?: number | null;
+                /** @description Forma de cobrança do responsável financeiro (cadastro do cliente) */
+                forma_cobranca?: string | null;
                 /** @description Seleção exata de contratos recorrentes */
                 contract_ids?: number[] | null;
                 /** @description Seleção exata de eventos de desinstalação */
@@ -11742,6 +13641,99 @@ export interface operations {
             };
         };
     };
+    contract_signature_status_api_v1_settings_contract_signature_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    upload_contract_signature_api_v1_settings_contract_signature_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_contract_signature_api_v1_settings_contract_signature_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_contract_signature_api_v1_settings_contract_signature_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    contract_signature_image_api_v1_settings_contract_signature_image_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     get_mensagens_api_v1_settings_mensagens_get: {
         parameters: {
             query?: never;
@@ -12017,7 +14009,9 @@ export interface operations {
     };
     enviar_boleto_email_api_v1_boletos__billing_id__enviar_email_post: {
         parameters: {
-            query?: never;
+            query?: {
+                incluir_nfse?: boolean;
+            };
             header?: never;
             path: {
                 billing_id: number;
@@ -12048,7 +14042,10 @@ export interface operations {
     };
     get_carne_pdf_api_v1_boletos_carne__lote_id__pdf_get: {
         parameters: {
-            query?: never;
+            query?: {
+                banco?: string;
+                parcial?: boolean;
+            };
             header?: never;
             path: {
                 lote_id: number;
@@ -12242,6 +14239,47 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    baixar_nfse_pdf_publico_api_v1_public_nfse__billing_id___token__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                billing_id: number;
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description PDF da NFS-e para abrir no navegador, protegido por token. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pdf": string;
+                };
+            };
+            /** @description Token inválido ou documento indisponível. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description ID inválido ou XML fiscal inválido para gerar o PDF. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };
@@ -12963,6 +15001,723 @@ export interface operations {
             };
         };
     };
+    status_endpoint_api_v1_sicredi_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SicrediStatusOut"];
+                };
+            };
+        };
+    };
+    testar_conexao_endpoint_api_v1_sicredi_testar_conexao_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SicrediConexaoOut"];
+                };
+            };
+        };
+    };
+    emitir_endpoint_api_v1_sicredi_boletos_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SicrediEmitirIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SicrediBoletoOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    criar_carne_endpoint_api_v1_sicredi_carne_lote_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SicrediLoteIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    criar_lote_endpoint_api_v1_sicredi_boletos_lote_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SicrediLoteIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    status_lote_endpoint_api_v1_sicredi_lotes__ticket__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ticket: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retentar_lote_endpoint_api_v1_sicredi_lotes__lote_id__registrar_pendentes_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                lote_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retentar_parcela_endpoint_api_v1_sicredi_lotes__lote_id__parcelas__billing_id__registrar_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                lote_id: number;
+                billing_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    detalhe_endpoint_api_v1_sicredi_boletos__billing_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                billing_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SicrediBoletoOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    consultar_endpoint_api_v1_sicredi_boletos__billing_id__consultar_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                billing_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SicrediConsultaOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pdf_endpoint_api_v1_sicredi_boletos__billing_id__pdf_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                billing_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    baixa_endpoint_api_v1_sicredi_boletos__billing_id__baixa_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                billing_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SicrediBaixaIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SicrediBaixaOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resolver_pendencia_endpoint_api_v1_sicredi_boletos__billing_id__resolver_pendencia_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                billing_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SicrediBaixaIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SicrediBoletoOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    conciliar_endpoint_api_v1_sicredi_conciliar_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SicrediConciliacaoOut"];
+                };
+            };
+        };
+    };
+    status_api_v1_sicredi_pix_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PixStatusOut"];
+                };
+            };
+        };
+    };
+    testar_conexao_api_v1_sicredi_pix_testar_conexao_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    cliente_api_v1_sicredi_pix_clientes__client_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                client_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PixClienteOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    autorizar_api_v1_sicredi_pix_clientes__client_id__autorizacao_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                client_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PixAutorizacaoIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PixClienteOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    consultar_api_v1_sicredi_pix_clientes__client_id__consultar_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                client_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PixClienteOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancelar_api_v1_sicredi_pix_clientes__client_id__cancelar_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                client_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PixClienteOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preparar_pendentes_api_v1_sicredi_pix_clientes__client_id__preparar_pendentes_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                client_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PixClienteOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    consultar_cobranca_api_v1_sicredi_pix_cobrancas__charge_id__consultar_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                charge_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PixCobrancaOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancelar_cobranca_api_v1_sicredi_pix_cobrancas__charge_id__cancelar_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                charge_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PixCobrancaOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    processar_fila_api_v1_sicredi_pix_processar_fila_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    configurar_webhooks_api_v1_sicredi_pix_webhooks_configurar_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     listar_api_v1_nfse__get: {
         parameters: {
             query?: {
@@ -13000,7 +15755,6 @@ export interface operations {
             query?: {
                 /** @description Código de tributação nacional (ex.: 110201); vazio usa o padrão */
                 cod_trib_nacional?: string | null;
-                competencia?: string | null;
                 discriminacao?: string | null;
             };
             header?: never;
@@ -13157,6 +15911,7 @@ export interface operations {
                 period_label: string;
                 busca?: string | null;
                 tipo?: string | null;
+                closure_batch_id?: number | null;
             };
             header?: never;
             path?: never;
@@ -13248,6 +16003,72 @@ export interface operations {
             };
         };
     };
+    lote_previa_selecionados_api_v1_nfse_lotes_selecionados_previa_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoteSelecionadosIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoteSelecionadosPreviaOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    lote_emitir_selecionados_api_v1_nfse_lotes_selecionados_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoteSelecionadosIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoteSelecionadosOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     lote_detalhe_api_v1_nfse_lotes__lote_id__get: {
         parameters: {
             query?: never;
@@ -13280,6 +16101,37 @@ export interface operations {
         };
     };
     danfse_api_v1_nfse__billing_id__danfse_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                billing_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    enviar_nfse_email_api_v1_nfse__billing_id__enviar_email_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -13450,267 +16302,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-        };
-    };
-    detalhar_nfse_api_v1_integrations_cobrancas__billing_id__nfse_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-API-Key"?: string | null;
-            };
-            path: {
-                billing_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["IntegrationNfseOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    baixar_nfse_pdf_api_v1_integrations_cobrancas__billing_id__nfse_pdf_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-API-Key"?: string | null;
-            };
-            path: {
-                billing_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description DANFSE gerado localmente a partir do XML fiscal armazenado. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/pdf": string;
-                };
-            };
-            /** @description Nota ainda não emitida ou XML indisponível. */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description ID inválido ou XML fiscal inválido para a geração do PDF. */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-        };
-    };
-    baixar_nfse_xml_api_v1_integrations_cobrancas__billing_id__nfse_xml_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-API-Key"?: string | null;
-            };
-            path: {
-                billing_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description XML de retorno da NFS-e emitida, preservado como armazenado. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/xml": string;
-                };
-            };
-            /** @description Nota ainda não emitida ou XML indisponível. */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    baixar_nfse_pdf_publico_api_v1_public_nfse__billing_id___token__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                billing_id: number;
-                token: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description PDF da NFS-e para abrir no navegador, protegido por token. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/pdf": string;
-                };
-            };
-            /** @description Token inválido ou documento indisponível. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description ID inválido ou XML fiscal inválido para gerar o PDF. */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-        };
-    };
-    change_client_api_v1_vehicles__item_id__change_client_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                item_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["VehicleClientChange"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["VehicleOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    change_client_api_v1_trackers__item_id__change_client_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                item_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TrackerClientChange"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TrackerOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_batch_api_v1_vehicles_lote_excluir_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["VehicleDeleteBatch"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["VehicleDeleteBatchOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

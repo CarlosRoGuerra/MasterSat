@@ -247,6 +247,8 @@ def create_item(
         raise HTTPException(status_code=409, detail='Já existe cliente com este CPF/CNPJ')
 
     data = payload.model_dump()
+    if data.get('forma_cobranca') == 'pix_automatico':
+        data.update(boleto_format='unico', boleto_fee='nao')
     if data.get('type') != 'pj':
         data['extra_emails'] = None
     elif data.get('email') and data.get('extra_emails'):
@@ -287,7 +289,14 @@ def update_item(
     _: object = Depends(require_roles(*EDIT_ROLES)),
 ):
     obj = _get_client_or_404(item_id, db)
+    obj = db.scalar(select(Client).where(Client.id == item_id).with_for_update().execution_options(populate_existing=True))
     data = payload.model_dump(exclude_unset=True)
+    from app.services.sicredi_pix import validar_alteracao_cliente
+    from app.services.sicredi_pix_client import PixError
+    try:
+        validar_alteracao_cliente(db, obj, data)
+    except PixError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     if 'cpf_cnpj' in data and data['cpf_cnpj']:
         existing = db.scalar(
@@ -343,6 +352,13 @@ def delete_item(
     _: object = Depends(require_roles(*EDIT_ROLES)),
 ):
     obj = _get_client_or_404(item_id, db)
+    obj = db.scalar(select(Client).where(Client.id == item_id).with_for_update().execution_options(populate_existing=True))
+    from app.services.sicredi_pix import validar_alteracao_cliente
+    from app.services.sicredi_pix_client import PixError
+    try:
+        validar_alteracao_cliente(db, obj, {'is_deleted': True})
+    except PixError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     obj.is_deleted = True
     db.commit()
     return {'message': 'Registro removido com soft delete'}

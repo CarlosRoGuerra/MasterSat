@@ -234,20 +234,29 @@ export function ClientFormModal({
                 className="max-w-[120px]"
               />
             </FormField>
-            <FormField label="Forma de cobrança" hint="Usada nos filtros do relatório de cobranças e do fechamento.">
-              <Select value={form.forma_cobranca} onChange={(e) => onFieldChange('forma_cobranca', e.target.value)}>
+            <FormField label="Forma de cobrança" hint={form.forma_cobranca === 'pix_automatico'
+              ? 'Após salvar, abra os detalhes do cliente para solicitar a autorização no banco.'
+              : 'Usada nos filtros do relatório de cobranças e do fechamento.'}>
+              <Select value={form.forma_cobranca} onChange={(e) => {
+                const value = e.target.value;
+                if (value === 'pix_automatico') onFormPatch((p) => ({ ...p, forma_cobranca: value, boleto_format: 'unico', boleto_fee: 'nao' }));
+                else onFieldChange('forma_cobranca', value);
+              }}>
                 <option value="">Não informada</option>
                 {FORMAS_COBRANCA.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
               </Select>
             </FormField>
-            <FormField label="Formato do Boleto" required>
-              <Select value={form.boleto_format} onChange={(e) => onFieldChange('boleto_format', e.target.value)}>
-                <option value="unico">Boleto Único</option>
-                <option value="individual">Boleto Individual</option>
+            <FormField label={form.forma_cobranca === 'pix_automatico' ? 'Agrupamento da cobrança' : 'Formato do Boleto'} required>
+              <Select value={form.forma_cobranca === 'pix_automatico' ? 'unico' : form.boleto_format}
+                disabled={form.forma_cobranca === 'pix_automatico'} onChange={(e) => onFieldChange('boleto_format', e.target.value)}>
+                {form.forma_cobranca === 'pix_automatico'
+                  ? <option value="unico">Uma cobrança por responsável e ciclo</option>
+                  : <><option value="unico">Boleto Único</option><option value="individual">Boleto Individual</option></>}
               </Select>
             </FormField>
             <FormField label="Taxa de Emissão do Boleto">
-              <Select value={form.boleto_fee} onChange={(e) => onFieldChange('boleto_fee', e.target.value)}>
+              <Select value={form.forma_cobranca === 'pix_automatico' ? 'nao' : form.boleto_fee}
+                disabled={form.forma_cobranca === 'pix_automatico'} onChange={(e) => onFieldChange('boleto_fee', e.target.value)}>
                 <option value="nao">Não</option>
                 <option value="sim">Sim</option>
               </Select>

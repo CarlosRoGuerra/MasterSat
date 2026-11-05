@@ -6,9 +6,10 @@ export const chaveCarne = (loteId: number, banco: BancoBoleto = 'ailos') => `${b
 
 /** Um título registrado fica no seu banco; mudar a escolha não pode reemiti-lo. */
 export function cobrancaCompativelComBanco(
-  cobranca: { boleto_ailos?: boolean; titulo_bancario?: { canal?: string | null } | null },
+  cobranca: { boleto_ailos?: boolean; payment_method?: string | null; titulo_bancario?: { canal?: string | null } | null },
   banco: BancoBoleto,
 ) {
+  if (cobranca.payment_method === 'pix_automatico' || cobranca.titulo_bancario?.canal === 'sicredi_pix') return false;
   if (!cobranca.boleto_ailos) return true;
   return (cobranca.titulo_bancario?.canal === 'sicredi_api') === (banco === 'sicredi');
 }

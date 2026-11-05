@@ -171,6 +171,24 @@ class Settings(BaseSettings):
     sicredi_conciliacao_orcamento: int = 200
     sicredi_log_retention_months: int = 12
 
+    # API Pix Recebimento / Pix Automático: credenciais e mTLS próprios.
+    # Ler produção não autoriza criar adesões ou agendamentos.
+    sicredi_pix_enabled: bool = False
+    sicredi_pix_ambiente: str = 'homologacao'
+    sicredi_pix_client_id: str = ''
+    sicredi_pix_client_secret: str = ''
+    sicredi_pix_cert_path: str = ''
+    sicredi_pix_key_path: str = ''
+    sicredi_pix_ca_path: str = ''
+    sicredi_pix_chave: str = ''
+    sicredi_pix_agencia: str = ''
+    sicredi_pix_conta: str = ''
+    sicredi_pix_escrita_habilitada: bool = False
+    sicredi_pix_producao_confirmada: bool = False
+    sicredi_pix_webhook_token: str = ''
+    sicredi_pix_timeout_seconds: int = 30
+    sicredi_pix_worker_interval_seconds: int = 300
+
     # ── Integração NFS-e Joinville (Pública / Nota Nacional, SOAP) ────────────
     # Emissão comprovada SEM certificado (homologação aceita RPS sem assinatura);
     # o certificado A1 é opcional — se nfse_cert_path estiver definido, assina.
