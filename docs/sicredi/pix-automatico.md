@@ -47,6 +47,7 @@ SICREDI_PIX_AGENCIA=2602
 SICREDI_PIX_CONTA=208865
 SICREDI_PIX_ESCRITA_HABILITADA=false
 SICREDI_PIX_PRODUCAO_CONFIRMADA=false
+SICREDI_PIX_ENVIO_AUTOMATICO=false
 SICREDI_PIX_WEBHOOK_TOKEN=<segredo-alfanumerico-com-ao-menos-32-caracteres>
 SICREDI_PIX_WORKER_INTERVAL_SECONDS=300
 ```
@@ -60,6 +61,10 @@ Produção usa `https://api-pix.sicredi.com.br`. HML usa `https://api-pix-h.sicr
 Os escopos de leitura utilizados são `rec.read payloadlocationrec.read cobr.read pix.read webhookrec.read webhookcobr.read webhook.read`. As operações de escrita precisam também de `rec.write payloadlocationrec.write cobr.write webhookrec.write webhookcobr.write webhook.write`, cuja liberação bancária ainda deve ser validada.
 
 O worker é iniciado apenas com `RUN_BACKGROUND_JOBS=true` e `SICREDI_PIX_ENABLED=true`, usando advisory lock próprio. No modo de leitura ele acompanha o que já foi enviado, sem consumir a fila de novas instruções.
+
+Na composição de produção, o worker tem um controle adicional: `SICREDI_PIX_ENVIO_AUTOMATICO`, desativado por padrão. Com os dois controles de escrita da API habilitados e este controle em `false`, a equipe pode criar/cancelar autorizações pelas telas e usar os endpoints administrativos manuais, mas o worker só consulta o banco. Preparar cobranças do fechamento grava a fila local; não envia o débito nesse modo. O endpoint administrativo `POST /api/v1/sicredi-pix/processar-fila` continua sendo uma ação manual explícita. Não é executado durante a habilitação.
+
+Somente uma liberação posterior de `SICREDI_PIX_ENVIO_AUTOMATICO=true` permite que o worker envie novas instruções, observando autorização e vencimento. Esse controle não desliga os jobs dos outros canais nem a conciliação por consulta. A liberação manual solicitada em 05/11/2026 preserva o envio automático desligado e não cadastra webhooks ou recursos financeiros.
 
 ## Webhooks
 

@@ -94,6 +94,10 @@ services:
     env_file: [.env]
     environment:
       RUN_BACKGROUND_JOBS: "true"
+      # A API pode liberar ações manuais sem liberar envio de débitos pelo worker.
+      # Os demais jobs e a consulta de pagamentos Pix continuam funcionando.
+      SICREDI_PIX_ESCRITA_HABILITADA: "${SICREDI_PIX_ENVIO_AUTOMATICO:-false}"
+      SICREDI_PIX_PRODUCAO_CONFIRMADA: "${SICREDI_PIX_ENVIO_AUTOMATICO:-false}"
     command: ["python", "-m", "app.worker"]
     volumes:
       - ${NFSE_CERT_DIR:-/opt/mastersat/certs}:/certs:ro
