@@ -130,6 +130,65 @@ def test_forma_pix_e_uma_opcao_do_cadastro_sem_criar_autorizacao(http, db, clien
     assert bank.calls == []
 
 
+def test_datas_sugeridas_usam_cobranca_real_e_nao_criam_teste_na_data_da_autorizacao(http, db, cliente, bank):
+    cliente.billing_day = 10
+    cliente.forma_cobranca = 'pix_automatico'
+    target = Billing(client_id=cliente.id, payer_client_id=cliente.id, billing_type='avulsa',
+        title='Fechamento 11/2026', amount=Decimal('74.99'), due_date=date(2026, 12, 15),
+        period_label='11/2026', payment_method='pix_automatico', status=BillingStatus.PENDING)
+    db.add(target)
+    for due, method, status, removed in (
+        (date(2026, 11, 1), 'pix_automatico', BillingStatus.OVERDUE, False),
+        (date(2026, 11, 8), 'pix_automatico', BillingStatus.PENDING, True),
+        (date(2026, 11, 9), 'pix_automatico', BillingStatus.PAID, False),
+        (date(2026, 11, 10), None, BillingStatus.PENDING, False),
+    ):
+        db.add(Billing(client_id=cliente.id, billing_type='avulsa', title='Outra cobrança',
+            amount=Decimal('5.00'), due_date=due, payment_method=method, status=status, is_deleted=removed))
+    db.commit()
+    response = http.get(f'/api/v1/sicredi-pix/clientes/{cliente.id}')
+    assert response.status_code == 200
+    body = response.json()
+    assert body['primeiro_vencimento_sugerido'] == '2026-12-15'
+    assert body['data_minima_autorizacao'] == '2026-11-07'
+    assert body['recorrencia'] is None
+    assert bank.calls == []
+    assert db.scalar(select(func.count()).select_from(SicrediPixCobranca)) == 0
+    db.refresh(target)
+    assert target.due_date == date(2026, 12, 15)
+    assert target.period_label == '11/2026'
+
+
+@pytest.mark.parametrize('today,day,expected', [
+    (date(2026, 11, 5), 15, date(2026, 11, 15)),
+    (date(2026, 11, 9), 10, date(2026, 12, 10)),
+    (date(2026, 12, 30), 31, date(2027, 1, 31)),
+    (date(2027, 2, 20), 31, date(2027, 2, 28)),
+    (date(2026, 11, 5), None, date(2026, 11, 7)),
+])
+def test_sem_cobranca_sugestao_respeita_dia_do_cliente_e_prazo_minimo(db, cliente, bank, monkeypatch, today, day, expected):
+    monkeypatch.setattr(svc, 'hoje', lambda: today)
+    cliente.billing_day = day
+    db.commit()
+    assert svc.sugerir_inicio_autorizacao(db, cliente) == expected
+    assert bank.calls == []
+
+
+def test_tela_informa_inicio_autorizacao_vencimento_e_janela_separadamente(http, db, cliente, rec, bank):
+    rec.data_inicial = date(2026, 11, 7)
+    _, charge = make_charge(db, cliente, rec, due=date(2026, 12, 15), amount='74.99')
+    response = http.get(f'/api/v1/sicredi-pix/clientes/{cliente.id}')
+    assert response.status_code == 200
+    body = response.json()
+    assert body['recorrencia']['data_inicial'] == '2026-11-07'
+    assert body['cobrancas'][0]['vencimento'] == '2026-12-15'
+    assert body['cobrancas'][0]['inicio_janela_envio'] == '2026-12-05'
+    assert body['cobrancas'][0]['fim_janela_envio'] == '2026-12-13'
+    assert body['cobrancas'][0]['enviada_em'] is None
+    assert bank.calls == []
+    assert charge.tentativas == 0
+
+
 def test_cria_jornada2_mensal_com_devedor_do_cliente_e_qr_do_banco(db, cliente, bank):
     cliente.forma_cobranca = 'pix_automatico'; db.commit()
     rec = svc.criar_recorrencia(db, cliente.id, data_inicial=date(2026, 11, 15),

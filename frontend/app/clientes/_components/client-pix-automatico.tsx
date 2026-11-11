@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Image from 'next/image';
 import { Copy, QrCode, RefreshCw } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
@@ -13,12 +13,14 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import type { Client } from './types';
 
 type Charge = { id: number; billing_id: number; txid: string; status: string; vencimento: string;
-  valor: string | number; pendencia: string | null; erro: string | null; enviada_em: string | null };
+  valor: string | number; pendencia: string | null; erro: string | null; enviada_em: string | null;
+  inicio_janela_envio?: string; fim_janela_envio?: string };
 type Data = {
   conexao: { configurado: boolean; escrita_habilitada: boolean; ambiente: string };
   recorrencia: { id: number; status: string; ativa: boolean; data_inicial: string; objeto: string;
     pix_copia_cola: string | null; qr_svg: string | null; erro: string | null } | null;
   cobrancas: Charge[]; pendentes_adesao: number;
+  primeiro_vencimento_sugerido?: string; data_minima_autorizacao?: string;
 };
 
 const LABELS: Record<string, string> = {
@@ -30,24 +32,29 @@ const LABELS: Record<string, string> = {
 };
 const TERMINAL = new Set(['CANCELADA', 'EXPIRADA', 'REJEITADA', 'CONCLUIDA']);
 
-function primeiroVencimento(day?: number | null): string {
+function primeiroVencimento(day?: number | null, ...suggestions: (string | null | undefined)[]): string {
   const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' });
   const [year, month, date] = today.split('-').map(Number);
   const earliest = new Date(year, month - 1, date + 2);
+  const minimum = `${earliest.getFullYear()}-${String(earliest.getMonth() + 1).padStart(2, '0')}-${String(earliest.getDate()).padStart(2, '0')}`;
+  const suggested = suggestions.find((value) => value && /^\d{4}-\d{2}-\d{2}$/.test(value) && value >= minimum);
+  if (suggested) return suggested;
   const dueDay = day || earliest.getDate();
   let due = new Date(year, month - 1, Math.min(dueDay, new Date(year, month, 0).getDate()));
   if (due < earliest) due = new Date(year, month, Math.min(dueDay, new Date(year, month + 1, 0).getDate()));
   return `${due.getFullYear()}-${String(due.getMonth() + 1).padStart(2, '0')}-${String(due.getDate()).padStart(2, '0')}`;
 }
 
-export function ClientPixAutomatico({ client, token, onUpdated }: {
+export function ClientPixAutomatico({ client, token, onUpdated, vencimentoCobranca }: {
   client: Pick<Client, 'id' | 'name' | 'billing_day'>; token: string; onUpdated?: () => void;
+  vencimentoCobranca?: string | null;
 }) {
   const [data, setData] = useState<Data | null>(null);
   const [error, setError] = useState('');
   const [feedback, setFeedback] = useState('');
   const [busy, setBusy] = useState(false);
-  const [initialDate, setInitialDate] = useState(() => primeiroVencimento(client.billing_day));
+  const [initialDate, setInitialDate] = useState(() => primeiroVencimento(client.billing_day, vencimentoCobranca));
+  const dateEdited = useRef(false);
   const [confirmation, setConfirmation] = useState<{ path: string; description: string } | null>(null);
   const base = `/sicredi-pix/clientes/${client.id}`;
 
@@ -62,6 +69,12 @@ export function ClientPixAutomatico({ client, token, onUpdated }: {
       .catch((err) => { if (active) setError(err instanceof Error ? err.message : 'Falha ao carregar Pix Automático.'); });
     return () => { active = false; };
   }, [base, token]);
+
+  useEffect(() => {
+    if (!dateEdited.current && !data?.recorrencia) {
+      setInitialDate(primeiroVencimento(client.billing_day, vencimentoCobranca, data?.primeiro_vencimento_sugerido));
+    }
+  }, [client.billing_day, vencimentoCobranca, data?.primeiro_vencimento_sugerido, data?.recorrencia]);
 
   const run = async (path: string, body?: object) => {
     setBusy(true); setError(''); setFeedback('');
@@ -81,13 +94,14 @@ export function ClientPixAutomatico({ client, token, onUpdated }: {
   const rec = data?.recorrencia;
   const enabled = Boolean(data?.conexao.escrita_habilitada);
   const canCreate = !rec || !rec.ativa;
+  const minimumDate = data?.data_minima_autorizacao ?? primeiroVencimento();
 
   return (
     <section aria-label="Pix Automático" className="space-y-4 rounded-2xl border border-brand-200 bg-brand-50/30 p-4 dark:border-brand-900 dark:bg-brand-950/20">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h3 className="flex items-center gap-2 font-semibold"><QrCode className="h-4 w-4" aria-hidden="true" />Pix Automático · Sicredi</h3>
-          <p className="mt-1 text-xs text-slate-500">O cliente autoriza no banco. As cobranças do fechamento seguem essa autorização.</p>
+          <p className="mt-1 text-xs text-slate-500">O cliente autoriza no banco. Cada cobrança mantém o vencimento definido no fechamento.</p>
         </div>
         {rec && <Badge variant={rec.status === 'APROVADA' ? 'success' : rec.ativa ? 'warning' : 'default'}>{LABELS[rec.status] ?? rec.status}</Badge>}
       </div>
@@ -95,15 +109,20 @@ export function ClientPixAutomatico({ client, token, onUpdated }: {
       {feedback && <p role="status" className="text-sm text-emerald-700">{feedback}</p>}
       {!data && !error && <p className="text-sm text-slate-500">Carregando Pix Automático…</p>}
       {data && !enabled && <p className="rounded-xl bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">Autorizações e novos agendamentos ainda não estão liberados neste ambiente.</p>}
+      {vencimentoCobranca && <p className="text-sm">Vencimento da cobrança selecionada: <strong>{formatDate(vencimentoCobranca)}</strong>.</p>}
       {data && canCreate && (
         <div className="flex flex-wrap items-end gap-3">
-          <FormField label="Primeiro vencimento previsto" hint="Pagamentos mensais; o valor será definido em cada fechamento.">
-            <Input type="date" value={initialDate} onChange={(event) => setInitialDate(event.target.value)} disabled={busy} />
+          <FormField label="Início da autorização" hint="Autorizar a recorrência não cria uma cobrança para esta data. O débito segue o vencimento de cada cobrança.">
+            <Input type="date" min={minimumDate} value={initialDate} onChange={(event) => {
+              dateEdited.current = true;
+              setInitialDate(event.target.value);
+            }} disabled={busy} />
           </FormField>
-          <Button type="button" disabled={busy || !enabled || !initialDate}
+          <Button type="button" disabled={busy || !enabled || !initialDate || initialDate < minimumDate}
             onClick={() => run(`${base}/autorizacao`, { data_inicial: initialDate })}>Gerar autorização do cliente</Button>
         </div>
       )}
+      {rec?.data_inicial && <p className="text-sm">Autorização iniciada em <strong>{formatDate(rec.data_inicial)}</strong>. A aprovação permite agendar as cobranças; ela não confirma pagamento nem cria uma cobrança nessa data.</p>}
       {rec?.erro && <p className="text-sm text-amber-800 dark:text-amber-200">{rec.erro}</p>}
       {rec?.ativa && (
         <div className="flex flex-wrap gap-2">
@@ -142,6 +161,10 @@ export function ClientPixAutomatico({ client, token, onUpdated }: {
             <Badge variant={charge.pendencia ? 'warning' : 'default'}>{charge.status === 'CRIADA' ? 'Criada no banco' : LABELS[charge.status] ?? charge.status}</Badge>
           </div>
           {(charge.pendencia || charge.erro) && <p className="text-xs text-amber-800 dark:text-amber-200">{charge.pendencia || charge.erro}</p>}
+          {!charge.enviada_em && !TERMINAL.has(charge.status) && <div className="space-y-1 text-xs text-slate-600 dark:text-slate-300">
+            <p>Débito previsto para {formatDate(charge.vencimento)}. Esta cobrança ainda não foi enviada ao banco.</p>
+            {charge.inicio_janela_envio && charge.fim_janela_envio && <p>Janela de envio ao Sicredi: {formatDate(charge.inicio_janela_envio)} a {formatDate(charge.fim_janela_envio)}. O envio exige autorização aprovada.</p>}
+          </div>}
           <div className="flex gap-2">
             {charge.enviada_em && <Button type="button" variant="ghost" disabled={busy || !data!.conexao.configurado} onClick={() => run(`/sicredi-pix/cobrancas/${charge.id}/consultar`)}>Consultar pagamento</Button>}
             {!TERMINAL.has(charge.status) && <Button type="button" variant="ghost" disabled={busy || (!!charge.enviada_em && !enabled)} onClick={() => setConfirmation({

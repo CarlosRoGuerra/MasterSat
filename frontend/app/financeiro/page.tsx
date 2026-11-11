@@ -2776,6 +2776,7 @@ export default function FinanceiroPage() {
               <ClientPixAutomatico key={`pix-${selectedBilling.payer_client_id ?? selectedBilling.client_id}`}
                 client={{ id: selectedBilling.payer_client_id ?? selectedBilling.client_id,
                   name: selectedBilling.payer_name ?? selectedBilling.client_name ?? 'Responsável financeiro' }} token={token}
+                vencimentoCobranca={selectedBilling.due_date}
                 onUpdated={() => {
                   void loadBillingsOnly(token);
                   void apiFetch<Billing>(`/billings/${selectedBilling.id}`, {}, token)

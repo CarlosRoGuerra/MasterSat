@@ -1,7 +1,7 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 class PixAutorizacaoIn(BaseModel):
@@ -38,6 +38,16 @@ class PixCobrancaOut(BaseModel):
     enviada_em: datetime | None
     model_config = {'from_attributes': True}
 
+    @computed_field
+    @property
+    def inicio_janela_envio(self) -> date:
+        return self.vencimento - timedelta(days=10)
+
+    @computed_field
+    @property
+    def fim_janela_envio(self) -> date:
+        return self.vencimento - timedelta(days=2)
+
 
 class PixStatusOut(BaseModel):
     habilitado: bool
@@ -54,3 +64,5 @@ class PixClienteOut(BaseModel):
     recorrencia: PixRecorrenciaOut | None
     cobrancas: list[PixCobrancaOut]
     pendentes_adesao: int
+    primeiro_vencimento_sugerido: date
+    data_minima_autorizacao: date

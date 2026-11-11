@@ -7,7 +7,7 @@ from decimal import Decimal, InvalidOperation
 import re
 from uuid import uuid4
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -35,6 +35,27 @@ def recorrencia_cliente(db: Session, client_id: int) -> SicrediPixRecorrencia | 
         SicrediPixRecorrencia.client_id == client_id,
         SicrediPixRecorrencia.ambiente == ambiente(),
     ).order_by(SicrediPixRecorrencia.ativa.desc(), SicrediPixRecorrencia.id.desc()))
+
+
+def sugerir_inicio_autorizacao(db: Session, payer: Client) -> date:
+    """Sugere uma data compatível com cobrança real, sem criar ou alterar títulos."""
+    minimum = hoje() + timedelta(days=2)
+    due = db.scalar(select(Billing.due_date).where(
+        func.coalesce(Billing.payer_client_id, Billing.client_id) == payer.id,
+        Billing.payment_method == 'pix_automatico', Billing.is_deleted.is_(False),
+        Billing.status.in_((BillingStatus.PENDING, BillingStatus.OVERDUE)),
+        Billing.due_date >= minimum,
+    ).order_by(Billing.due_date, Billing.id).limit(1))
+    if due:
+        return due
+    day = payer.billing_day
+    if not day or not 1 <= day <= 31:
+        return minimum
+    due = minimum.replace(day=min(day, monthrange(minimum.year, minimum.month)[1]))
+    if due < minimum:
+        year, month = (minimum.year + 1, 1) if minimum.month == 12 else (minimum.year, minimum.month + 1)
+        due = date(year, month, min(day, monthrange(year, month)[1]))
+    return due
 
 
 def validar_alteracao_cliente(db: Session, client: Client, data: dict) -> None:

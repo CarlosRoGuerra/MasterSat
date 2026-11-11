@@ -1,6 +1,7 @@
 """Canal Pix Automático: seleção não cria consentimento nem débito no banco."""
 from __future__ import annotations
 
+from datetime import timedelta
 from secrets import compare_digest
 from urllib.parse import urlsplit
 
@@ -74,7 +75,9 @@ def _cliente(db: Session, client_id: int) -> PixClienteOut:
         ~Billing.id.in_(select(SicrediPixCobranca.billing_id)),
     )) or 0
     return PixClienteOut(client_id=client_id, forma_cobranca=payer.forma_cobranca, conexao=_status(),
-                         recorrencia=rec_out, cobrancas=charges, pendentes_adesao=pending)
+                         recorrencia=rec_out, cobrancas=charges, pendentes_adesao=pending,
+                         primeiro_vencimento_sugerido=service.sugerir_inicio_autorizacao(db, payer),
+                         data_minima_autorizacao=service.hoje() + timedelta(days=2))
 
 
 @router.get('/status', response_model=PixStatusOut)

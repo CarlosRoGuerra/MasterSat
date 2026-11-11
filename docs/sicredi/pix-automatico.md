@@ -15,6 +15,16 @@ O fechamento, a conferência de documentos e os filtros passam a reconhecer a no
 
 Cobranças antigas não são convertidas pela mudança da preferência. A ação **Preparar cobranças do fechamento** considera apenas obrigações já identificadas como Pix Automático pelo novo fechamento. Se o primeiro vencimento não couber na autorização, ou se houver outra cobrança do mesmo ciclo, a equipe precisa revisar o lançamento.
 
+### Datas da autorização e da cobrança
+
+O campo **Início da autorização** habilita a recorrência a partir da data informada. A aprovação, sozinha, não cria uma obrigação, não envia uma instrução e não confirma pagamento para aquela data. O vencimento efetivo vem da cobrança preparada no fechamento.
+
+A sugestão inicial considera primeiro a cobrança selecionada no Financeiro e, em seguida, a primeira cobrança Pix em aberto com antecedência mínima de dois dias. Sem uma cobrança compatível, usa o dia do cadastro do pagador ou a primeira data permitida. A sugestão não altera vencimentos existentes. O operador continua podendo escolher outra data válida antes de criar a autorização.
+
+Por exemplo, uma autorização iniciada em **07/11/2026** e uma cobrança com vencimento em **15/12/2026** não representam um débito em novembro. Para essa obrigação, a janela de envio é de **05/12 a 13/12**, e o débito é previsto para **15/12**. A tela apresenta as datas separadamente e informa quando a instrução ainda não foi enviada.
+
+O fechamento dos serviços de novembro continua gerando vencimentos em dezembro. Esta correção de apresentação e sugestão não muda essa regra, não antecipa uma mensalidade nem cria uma cobrança de teste. Uma data já passada não pode ser usada para iniciar um novo débito automático retroativo; um novo teste precisa de cobrança própria e vencimento futuro compatível com a janela bancária.
+
 ## Regras de segurança financeira
 
 - Uma autorização ativa por cliente e ambiente; um agendamento por cobrança e ciclo da recorrência.
