@@ -87,14 +87,17 @@ _PERMITIDO: dict[str, frozenset[str]] = {
     # Exclusão da carteira de cobrança cancelada: o título e a conciliação
     # permanecem preservados, inclusive quando a baixa no banco está pendente.
     EXCLUIR: frozenset({SEM_TITULO, BAIXADO, REGISTRADO, EM_REGISTRO, DESFECHO_DESCONHECIDO, REMESSA_CNAB}),
-    LIBERAR_COMPETENCIA: frozenset({SEM_TITULO, BAIXADO}),
+    LIBERAR_COMPETENCIA: frozenset({SEM_TITULO, BAIXADO, REGISTRADO}),
     REABRIR: frozenset({SEM_TITULO, BAIXADO}),
     EMITIR_AILOS: frozenset({SEM_TITULO}),
     EMITIR_SICREDI: frozenset({SEM_TITULO}),
     EMITIR_CNAB: frozenset({SEM_TITULO}),
     EMITIR_PIX: frozenset({SEM_TITULO}),
 }
-_EXIGE_CONFIRMACAO = {CANCELAR: frozenset({REGISTRADO, REMESSA_CNAB})}
+_EXIGE_CONFIRMACAO = {
+    CANCELAR: frozenset({REGISTRADO, REMESSA_CNAB}),
+    LIBERAR_COMPETENCIA: frozenset({REGISTRADO}),
+}
 # Emissão em banco (qualquer canal) — recusada para cobrança só do sistema.
 _EMISSAO_BANCARIA = frozenset({EMITIR_AILOS, EMITIR_SICREDI, EMITIR_CNAB, EMITIR_PIX})
 
@@ -107,6 +110,11 @@ _GRAVIDADE = {
 
 def gravidade(estado: str) -> int:
     return _GRAVIDADE[estado]
+
+
+def site_do_banco(canal: str | None) -> str:
+    """Onde o operador dá a baixa manual do título cancelado no MasterSat."""
+    return 'site do Sicredi' if canal == CANAL_SICREDI else 'site da Ailos'
 
 
 @dataclass(frozen=True)
@@ -403,7 +411,8 @@ def validar_titulos(
     retomadas = set(permitir_em_registro)
     bloqueados: dict[str, list[int]] = {}
     for bid, titulo in titulos.items():
-        if (titulo.canal == CANAL_PIX and titulo.ativo_no_banco and operacao in (CANCELAR, RECEBER)):
+        if (titulo.canal == CANAL_PIX and titulo.ativo_no_banco
+                and operacao in (CANCELAR, RECEBER, LIBERAR_COMPETENCIA)):
             code, message = _mensagem(titulo.estado, titulo.canal)
             raise PoliticaBancariaError(code, message, [bid], estado=titulo.estado)
         if (titulo.estado == EM_REGISTRO and bid in retomadas
@@ -418,28 +427,25 @@ def validar_titulos(
             ids_bloqueados = sorted(bloqueados[estado])
             canal = titulos[ids_bloqueados[0]].canal
             code, message = _mensagem(estado, canal)
-            if operacao == LIBERAR_COMPETENCIA and estado == REGISTRADO:
-                code = 'baixa_bancaria_pendente'
-                message = (
-                    'O boleto desta cobrança continua ativo no banco. Liberar o mês agora '
-                    'permitiria cobrar o cliente duas vezes. '
-                    + ('Use "Dar baixa no Sicredi" e aguarde a confirmação da baixa.'
-                       if canal == CANAL_SICREDI else
-                       'Dê baixa no internet banking da Ailos e confirme a baixa (consulta '
-                       'automática ou "Confirmar baixa").')
-                )
             raise PoliticaBancariaError(code, message, ids_bloqueados, estado=estado)
     precisa_confirmar = _EXIGE_CONFIRMACAO.get(operacao, frozenset())
     sem_confirmacao = sorted(bid for bid, t in titulos.items() if t.estado in precisa_confirmar)
     if sem_confirmacao and not confirmado:
         titulo = titulos[sem_confirmacao[0]]
+        if operacao == LIBERAR_COMPETENCIA:
+            raise PoliticaBancariaError(
+                'confirmacao_baixa_origem',
+                f'O mês será liberado no MasterSat. Providencie a baixa do boleto no {site_do_banco(titulo.canal)}. '
+                'A liberação no sistema não cancela o título no banco. Confirmar?',
+                sem_confirmacao, estado=titulo.estado,
+            )
         if titulo.canal == CANAL_SICREDI:
             raise PoliticaBancariaError(
                 'boleto_ailos_registrado',
                 f'Há boleto registrado no Sicredi (nosso número {titulo.nosso_numero or "—"}). O '
                 'cancelamento interrompe a cobrança no sistema e desativa o link público, mas o '
-                'título continua pagável até a baixa. Depois de cancelar, use "Dar baixa no '
-                'Sicredi" na cobrança (a baixa é feita pela API). Cancelar mesmo assim?',
+                'título continua pagável até a baixa. Providencie a baixa no site do Sicredi. '
+                'O cancelamento no MasterSat não cancela o boleto no banco. Cancelar mesmo assim?',
                 sem_confirmacao,
                 estado=titulo.estado,
             )
@@ -447,9 +453,10 @@ def validar_titulos(
             'boleto_ailos_registrado',
             f'Há boleto registrado no banco (nosso número {titulo.nosso_numero or "—"}). O '
             'cancelamento interrompe a cobrança no sistema e desativa o link público, mas o '
-            'título continua pagável até a baixa no internet banking da Ailos — o convênio não '
-            'oferece baixa pela API. A baixa fica registrada como pendente e a conciliação '
-            'continua acompanhando o título. Cancelar mesmo assim?',
+            'título continua pagável até a baixa. Providencie a baixa no site da Ailos — o '
+            'convênio não oferece baixa pela API. O cancelamento no MasterSat não cancela o '
+            'boleto no banco; a baixa fica registrada como pendente e a conciliação continua '
+            'acompanhando o título. Cancelar mesmo assim?',
             sem_confirmacao,
             estado=titulo.estado,
         )
@@ -460,8 +467,9 @@ def marcar_baixa_pendente(db: Session, billing_ids: Iterable[int], motivo: str) 
     """A cobrança local deixou de valer, mas o título segue pagável no banco.
 
     Estrutural (não só nota): enquanto a baixa não é confirmada o título
-    continua na conciliação, a competência não pode ser liberada e a tela de
-    pendências lista o nosso número. Devolve ``[{billing_id, nosso_numero}]``.
+    continua na conciliação e a tela de pendências lista o nosso número.
+    A liberação local da competência não confirma baixa bancária.
+    Devolve ``[{billing_id, nosso_numero}]``.
     """
     ids = sorted(set(billing_ids))
     if not ids:

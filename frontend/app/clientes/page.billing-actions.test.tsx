@@ -297,7 +297,7 @@ describe('cancelar e excluir pelo ícone Alterar boleto', () => {
     expect(writes('POST')).toHaveLength(1);
     expect(writes('POST')[0][0]).toBe('/billings/38512/cancel');
     expect(JSON.parse(writes('POST')[0][1].body)).toEqual({ reason: 'Dispensa negociada',
-      liberar_competencia: false, confirmar_boleto_ailos: false, reverter_substituicao: false });
+      liberar_competencia: true, confirmar_boleto_ailos: false, reverter_substituicao: false });
     expect(dialog.getByRole('button', { name: 'Excluir boleto' })).toBeEnabled();
     expect(dialog.getByRole('button', { name: 'Cancelar boleto' })).toBeDisabled();
     await user.click(dialog.getByRole('button', { name: 'Fechar janela' }));
@@ -337,7 +337,7 @@ describe('cancelar e excluir pelo ícone Alterar boleto', () => {
     expect(writes('POST')).toHaveLength(accept ? 2 : 1);
     if (accept) {
       expect(JSON.parse(writes('POST')[1][1].body).confirmar_boleto_ailos).toBe(true);
-      expect(dialog.getByRole('status')).toHaveTextContent('continua ativo no banco até a baixa');
+      expect(dialog.getByRole('status')).toHaveTextContent('Providencie a baixa do boleto no site do Sicredi ou da Ailos');
       expect(dialog.getByRole('button', { name: 'Excluir boleto' })).toBeEnabled();
       expect(dialog.getByText(/A baixa bancária está pendente/)).toBeInTheDocument();
     } else {

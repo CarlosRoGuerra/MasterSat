@@ -164,19 +164,29 @@ class TestCompetenciaCanonica:
 # ---------------------------------------------------------------------------
 
 class TestCancelamentoELiberacao:
-    def test_cancelada_continua_ocupando_o_mes(self, http, db, contrato):
+    def test_cancelar_libera_o_mes_por_padrao(self, http, db, contrato):
         b = _mensalidade(db, contrato, '09/2099')
-        assert http.post(f'{PREFIX}/{b.id}/cancel', json={'reason': 'dispensa'}).status_code == 200
+        r = http.post(f'{PREFIX}/{b.id}/cancel', json={'reason': 'refazer carnê'})
+        assert r.status_code == 200 and r.json()['competencia_liberada'] is True
+        r = http.post(PREFIX + '/parcelar', json={
+            'contract_id': contrato.id, 'num_parcelas': 2, 'primeiro_vencimento': '2099-09-15',
+        })
+        assert r.status_code == 200, r.text
+
+    def test_dispensa_mantem_o_mes_e_carne_pede_confirmacao(self, http, db, contrato):
+        b = _mensalidade(db, contrato, '09/2099')
+        assert http.post(f'{PREFIX}/{b.id}/cancel', json={
+            'reason': 'dispensa', 'liberar_competencia': False}).status_code == 200
         r = http.post(PREFIX + '/parcelar', json={
             'contract_id': contrato.id, 'num_parcelas': 2, 'primeiro_vencimento': '2099-09-15',
         })
         assert r.status_code == 409
-        # A mensagem antiga mandava "cancelar" — o que não liberava nada.
-        assert 'liberando a competência' in r.json()['detail']
+        assert r.json()['detail']['code'] == 'competencias_canceladas'
+        assert r.json()['detail']['meses'] == ['09/2099']
 
     def test_liberar_competencia_permite_novo_carne(self, http, db, contrato):
         b = _mensalidade(db, contrato, '09/2099')
-        http.post(f'{PREFIX}/{b.id}/cancel', json={'reason': 'valor errado'})
+        http.post(f'{PREFIX}/{b.id}/cancel', json={'reason': 'valor errado', 'liberar_competencia': False})
         r = http.post(f'{PREFIX}/{b.id}/liberar-competencia', json={'justificativa': 'reemitir no carnê'})
         assert r.status_code == 200, r.text
         assert r.json()['competencia_liberada'] is True

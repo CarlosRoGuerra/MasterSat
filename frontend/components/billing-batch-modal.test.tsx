@@ -70,7 +70,20 @@ describe('conferência e resultado do lote de boletos', () => {
     await user.click(button);
     await screen.findByRole('button', { name: 'Fechar resultado' });
     expect(JSON.parse(api.mock.calls[1][1].body).confirmar_boleto_ailos).toBe(true);
-    expect(screen.getByText(/competência continua reservada/)).toBeInTheDocument();
+    expect(screen.getByText(/não confirma a baixa no banco/)).toBeInTheDocument();
+    expect(screen.getByRole('note')).toHaveTextContent('Providencie a baixa no site do Sicredi ou da Ailos');
+  });
+
+  it('cancelamento libera os meses sem pedir a confirmação usada na exclusão', async () => {
+    const review = response('cancelar', { libera_competencia: true });
+    api.mockImplementation(async (_path, options) => JSON.parse(options.body).simular ? review : applied(review));
+    const { user } = renderModal();
+    await screen.findByText(/O cancelamento de 1 mensalidade\(s\) libera os meses/);
+    expect(screen.queryByRole('checkbox', { name: /Confirmo a liberação dos meses/ })).not.toBeInTheDocument();
+    await user.type(screen.getByRole('textbox', { name: /Justificativa/ }), 'Refazer carnê');
+    await user.click(screen.getByRole('button', { name: 'Cancelar 1 boleto(s)' }));
+    await screen.findByRole('button', { name: 'Fechar resultado' });
+    expect(JSON.parse(api.mock.calls[1][1].body).confirmar_liberacao_competencia).toBe(false);
   });
 
   it('avisa e exige confirmação da liberação do mês na exclusão', async () => {

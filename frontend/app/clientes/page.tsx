@@ -441,7 +441,9 @@ function ClientesPageInner() {
         async (confirmacoes) => {
           const updated = await apiFetch<BillingItem>(
             `/billings/${billingId}/cancel`,
-            { method: 'POST', body: JSON.stringify(corpoCancelamento(reason, false, confirmacoes)) }, token,
+            // Cancelar libera o mês da mensalidade para um novo carnê; o backend
+            // só aplica a mensalidades de contrato sem substituição.
+            { method: 'POST', body: JSON.stringify(corpoCancelamento(reason, true, confirmacoes)) }, token,
           );
           setEditBilling(updated);
           setEditBillingForm({ amount: String(updated.amount), due_date: updated.due_date, justification: '' });
@@ -453,7 +455,9 @@ function ClientesPageInner() {
       if (!cancelada) return;
       setEditBillingNotice(`Boleto #${billingId} cancelado no sistema.`
         + (flags.reverter_substituicao ? ' As cobranças originais foram reabertas.' : '')
-        + (flags.confirmar_boleto_ailos ? ' O boleto continua ativo no banco até a baixa bancária.' : ''));
+        + (flags.confirmar_boleto_ailos
+          ? ' Providencie a baixa do boleto no site do Sicredi ou da Ailos, conforme o banco do boleto: o cancelamento no MasterSat não cancela o título no banco.'
+          : ''));
       await refreshEditedBillings();
     } catch (err) {
       setEditBillingError(parseError(err));

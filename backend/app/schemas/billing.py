@@ -210,10 +210,9 @@ class BillingCancel(BaseModel):
     # Confirma o cancelamento mesmo havendo boleto registrado na Ailos (que
     # continua ativo no banco — o convênio não oferece baixa automática).
     confirmar_boleto_ailos: bool = False
-    # Mensalidade cancelada continua ocupando o mês do contrato (o fechamento
-    # não recobra). True devolve o mês para ser cobrado de novo — carnê ou
-    # fechamento. Fica registrado no histórico da cobrança.
-    liberar_competencia: bool = False
+    # Por padrão o cancelamento libera o mês para um novo carnê/fechamento.
+    # False preserva uma dispensa explícita. A baixa bancária é independente.
+    liberar_competencia: bool = True
     # Obrigatório para cancelar um boleto único/negociação que substituiu
     # outras cobranças: as originais são reabertas (a dívida volta para elas).
     reverter_substituicao: bool = False
@@ -223,6 +222,7 @@ class BillingReleasePeriod(BaseModel):
     """Libera o mês de uma mensalidade já cancelada para nova cobrança."""
 
     justificativa: str = Field(min_length=3, max_length=500)
+    confirmar_baixa_origem: bool = False
 
 
 class BillingOut(BillingBase):

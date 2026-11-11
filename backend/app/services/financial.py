@@ -214,6 +214,28 @@ def existing_recurring_periods(
     return found
 
 
+def occupying_recurring_billings(
+    db: Session, contract_id: int | None, period_labels: Iterable[str],
+) -> list[Billing]:
+    """As cobranças que ocupam os meses informados — mesma regra de
+    ``existing_recurring_periods``, inclusive canceladas já excluídas."""
+    labels = {label for label in period_labels if label}
+    if not labels or not contract_id:
+        return []
+    competencias = {competencia_do_rotulo(label) for label in labels} - {None}
+    textual = {label for label in labels if competencia_do_rotulo(label) is None}
+    filtros = []
+    if competencias:
+        filtros.append(Billing.competencia.in_(list(competencias)))
+    if textual:
+        filtros.append(Billing.period_label.in_(textual))
+    return list(db.scalars(
+        select(Billing).where(
+            Billing.contract_id == contract_id, or_(*filtros), *occupying_recurring_filter(),
+        ).order_by(Billing.id)
+    ).all())
+
+
 def plan_title(plan) -> str:
     """Título da cobrança a partir do plano, sem duplicar a palavra 'Plano'
     ("Plano Plano TESTE" quando o nome do plano já começa com 'Plano')."""
@@ -1106,6 +1128,7 @@ def release_billing_competencia(
     *,
     user_id: int | None,
     justification: str,
+    confirmar_baixa_origem: bool = False,
 ) -> None:
     """Devolve o mês de uma mensalidade cancelada para ser cobrado de novo."""
     if billing.billing_type not in RECURRING_BILLING_TYPES:
@@ -1129,10 +1152,15 @@ def release_billing_competencia(
             'coberto por ela. Reverta a substituição em vez de liberar a competência.',
             [billing.substituted_by_id],
         )
-    # Título ainda pagável no banco (ou desfecho desconhecido) não libera o
-    # mês: a nova mensalidade seria uma segunda cobrança do mesmo período
-    # enquanto o boleto antigo continua valendo (FIN-02).
-    titulo_bancario.exigir(db, titulo_bancario.LIBERAR_COMPETENCIA, [billing.id])
+    # A baixa do boleto no banco é independente da liberação local do mês.
+    # A ciência do operador fica na justificativa, sem inventar retorno bancário.
+    titulos = titulo_bancario.exigir(db, titulo_bancario.LIBERAR_COMPETENCIA,
+                                   [billing.id], confirmado=confirmar_baixa_origem)
+    titulo = titulos[billing.id]
+    if titulo.ativo_no_banco:
+        justification += (f' | Providenciar baixa no {titulo_bancario.site_do_banco(titulo.canal)}; '
+                          'liberação somente no MasterSat.')
+        titulo_bancario.marcar_baixa_pendente(db, [billing.id], justification)
     db.add(BillingChangeLog(
         billing_id=billing.id,
         changed_by_user_id=user_id,

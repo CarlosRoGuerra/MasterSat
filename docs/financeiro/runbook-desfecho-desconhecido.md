@@ -77,8 +77,9 @@ da migration). O convênio **não tem baixa pela API**.
 1. Baixar o título no internet banking da Ailos (nosso número na tela).
 2. Esperar a conciliação: quando a consulta devolver situação **3 (baixado)**
    ou **5 (liquidado)**, a baixa é confirmada sozinha.
-3. Se precisar liberar o mês antes da próxima rodada, o **administrador**
-   confirma: botão "Confirmar baixa no banco"
+3. O mês já é liberado no cancelamento (ou por "Liberar competência", com a
+   ciência da baixa no site do banco). Para registrar a baixa antes da próxima
+   rodada, o **administrador** confirma: botão "Confirmar baixa no banco"
    (`POST /ailos/boletos/{id}/confirmar-baixa`, justificativa obrigatória,
    só para cobrança já cancelada/paga/removida).
 

@@ -26,7 +26,7 @@ describe('cancelarComConfirmacoes', () => {
     const r = await cancelarComConfirmacoes(chamar, confirmar);
     expect(r).toEqual({
       cancelada: true,
-      flags: { confirmar_boleto_ailos: false, reverter_substituicao: true, desistir_liberacao: false },
+      flags: { confirmar_boleto_ailos: false, reverter_substituicao: true },
     });
     expect(confirmar).toHaveBeenCalledWith(expect.stringContaining('Substitui #1, #2.'));
     expect(chamadas.map((f) => f.reverter_substituicao)).toEqual([false, true]);
@@ -38,7 +38,7 @@ describe('cancelarComConfirmacoes', () => {
       if (!flags.confirmar_boleto_ailos) throw conflito('boleto_ailos_registrado');
     });
     const r = await cancelarComConfirmacoes(chamar, () => true);
-    expect(r.flags).toEqual({ confirmar_boleto_ailos: true, reverter_substituicao: true, desistir_liberacao: false });
+    expect(r.flags).toEqual({ confirmar_boleto_ailos: true, reverter_substituicao: true });
     expect(chamar).toHaveBeenCalledTimes(3);
   });
 
@@ -62,25 +62,24 @@ describe('cancelarComConfirmacoes', () => {
     expect(confirmar).not.toHaveBeenCalled();
   });
 
-  it('boleto ainda ativo ao liberar o mês: oferece cancelar sem liberar (Fase 03)', async () => {
+  it('boleto ainda ativo: só pede a ciência bancária e mantém a liberação do mês', async () => {
     const corpos: Record<string, unknown>[] = [];
     const chamar = vi.fn(async (flags: FlagsCancelamento) => {
-      const corpo = corpoCancelamento('desistiu', true, flags);
+      const corpo = corpoCancelamento('refazer carnê', true, flags);
       corpos.push(corpo);
-      if (!flags.confirmar_boleto_ailos) throw conflito('boleto_ailos_registrado');
-      if (corpo.liberar_competencia) throw conflito('baixa_bancaria_pendente', 'Boleto ativo no banco.');
+      if (!flags.confirmar_boleto_ailos) throw conflito('boleto_ailos_registrado', 'Providencie a baixa no site do Sicredi.');
     });
     const confirmar = vi.fn().mockReturnValue(true);
     const r = await cancelarComConfirmacoes(chamar, confirmar);
-    expect(r.cancelada).toBe(true);
-    expect(r.flags.desistir_liberacao).toBe(true);
-    expect(confirmar).toHaveBeenLastCalledWith(expect.stringContaining('SEM liberar'));
-    expect(corpos.map((c) => c.liberar_competencia)).toEqual([true, true, false]);
+    expect(r).toEqual({ cancelada: true, flags: { confirmar_boleto_ailos: true, reverter_substituicao: false } });
+    expect(confirmar).toHaveBeenCalledTimes(1);
+    expect(confirmar).toHaveBeenCalledWith(expect.stringContaining('site do Sicredi'));
+    expect(corpos.map((c) => c.liberar_competencia)).toEqual([true, true]);
   });
 
   it('corpo do cancelamento não envia a flag interna', () => {
     const corpo = corpoCancelamento('x', false, {
-      confirmar_boleto_ailos: true, reverter_substituicao: false, desistir_liberacao: false,
+      confirmar_boleto_ailos: true, reverter_substituicao: false,
     });
     expect(corpo).toEqual({ reason: 'x', liberar_competencia: false, confirmar_boleto_ailos: true, reverter_substituicao: false });
   });

@@ -57,7 +57,7 @@ export function BillingBatchModal({ action, ids, token, onClose, onCompleted }: 
   const bankCount = data?.itens.filter((item) => item.baixa_bancaria_pendente).length ?? 0;
   const periodCount = data?.itens.filter((item) => item.libera_competencia).length ?? 0;
   const ready = !!preview?.aplicados && reason.trim().length >= 3
-    && (!bankCount || bankConfirmed) && (!periodCount || periodConfirmed);
+    && (!bankCount || bankConfirmed) && (action !== 'excluir' || !periodCount || periodConfirmed);
 
   async function apply() {
     if (!action || !token || !ready || !preview || inflight.current || result) return;
@@ -93,7 +93,7 @@ export function BillingBatchModal({ action, ids, token, onClose, onCompleted }: 
     title={action === 'excluir' ? 'Excluir boletos em lote' : 'Cancelar boletos em lote'} size="md"
     description={action === 'excluir'
       ? 'Todas as cobranças canceladas podem ser excluídas da carteira. O histórico e o acompanhamento bancário ficam preservados.'
-      : 'Cancelamento das cobranças em aberto. As competências continuam ocupadas.'}
+      : 'Cancelamento das cobranças em aberto. Os meses das mensalidades são liberados para um novo carnê ou fechamento.'}
     footer={<div className="flex flex-wrap justify-end gap-2">
       <Button variant="secondary" disabled={applying} onClick={close}>{result ? 'Fechar resultado' : 'Voltar'}</Button>
       {!result && !checking && <Button variant="secondary" disabled={applying} onClick={() => setRetry((value) => value + 1)}>Conferir novamente</Button>}
@@ -107,19 +107,19 @@ export function BillingBatchModal({ action, ids, token, onClose, onCompleted }: 
       {result && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-300">{billingBatchSummary(result)}</p>}
       {data && <>
         {!result && <p className="text-sm">{data.aplicados} apto(s) · {data.ignorados} ignorado(s) · {data.total_enviados} selecionado(s)</p>}
-        {action === 'excluir' && <p role="note" className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-300">
-          Atenção: excluir no MasterSat não dá baixa no banco ou sistema de pagamento de origem. Providencie ou confirme a baixa também na origem. Os títulos com baixa pendente continuam sendo acompanhados no Financeiro.
-        </p>}
+        <p role="note" className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-300">
+          Atenção: cancelar ou excluir no MasterSat não dá baixa no banco ou sistema de pagamento de origem. Providencie a baixa no site do Sicredi ou da Ailos, conforme o banco do boleto. Os títulos com baixa pendente continuam sendo acompanhados no Financeiro.
+        </p>
         {!!bankCount && <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-300">
-          <p>{bankCount} boleto(s) têm situação bancária pendente. A competência continua reservada enquanto houver risco de cobrança na origem.</p>
+          <p>{bankCount} boleto(s) têm situação bancária pendente. A liberação dos meses no MasterSat não confirma a baixa no banco.</p>
           {!result && <label className="flex items-start gap-2">
             <input type="checkbox" className="mt-1 h-4 w-4 shrink-0" checked={bankConfirmed} disabled={applying} onChange={(event) => setBankConfirmed(event.target.checked)} />
             Estou ciente de que preciso providenciar a baixa dos títulos no banco.
           </label>}
         </div>}
         {!!periodCount && <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-300">
-          <p>A exclusão de {periodCount} mensalidade(s) libera os meses para nova cobrança pelo fechamento.</p>
-          {!result && <label className="flex items-start gap-2">
+          <p>{action === 'excluir' ? 'A exclusão' : 'O cancelamento'} de {periodCount} mensalidade(s) libera os meses para nova cobrança pelo fechamento.</p>
+          {!result && action === 'excluir' && <label className="flex items-start gap-2">
             <input type="checkbox" className="mt-1 h-4 w-4 shrink-0" checked={periodConfirmed} disabled={applying} onChange={(event) => setPeriodConfirmed(event.target.checked)} />
             Confirmo a liberação dos meses para nova cobrança.
           </label>}

@@ -31,9 +31,11 @@ competência não liberada, para o mesmo `(contract_id, competencia)`.
   o contrato antes (`FOR UPDATE`).
 - `09/2026`, `9/2026`, `9-2026`, `2026-09` são o mesmo mês. Trimestre, semestre
   e ano ocupam o **primeiro** mês do período (`2026 • T3` → 2026-07-01).
-- **Cancelada continua ocupando.** É isso que impede o fechamento de recobrar um
-  mês dispensado, negociado ou consolidado. Sair da ocupação exige remover a
-  cobrança (soft delete, bloqueado para paga) ou liberar a competência.
+- **Cancelar libera o mês por padrão** (desde 11/11/2026), inclusive com boleto
+  ainda ativo no Sicredi ou na Ailos: a baixa no site do banco é manual e fica
+  pendente na conciliação. Continua ocupando a cancelada com
+  `liberar_competencia: false` (dispensa), a substituída por boleto único ou
+  negociação e a de título em registro/desfecho desconhecido/Pix.
 
 Não cobre (limite conhecido): rótulo fora de formato fica sem competência e só
 colide com o mesmo texto; contrato de plano trimestral que vira mensal colide
@@ -66,8 +68,13 @@ removida que seja **não cancelada, ou cancelada por substituição**.
 
 ### I4 — Liberar competência é ato explícito e auditado
 
-- `POST /billings/{id}/cancel` com `liberar_competencia: true`, ou
-  `POST /billings/{id}/liberar-competencia` para cobrança já cancelada.
+- `POST /billings/{id}/cancel` (`liberar_competencia` é `true` por padrão), ou
+  `POST /billings/{id}/liberar-competencia` para cobrança já cancelada, ou
+  `POST /billings/parcelar` com `liberar_canceladas: true` quando os meses do
+  novo carnê estão presos só por canceladas (inclusive excluídas antes da regra).
+- Título ainda ativo no banco exige ciência (`confirmar_boleto_ailos` no
+  cancelamento, `confirmar_baixa_origem` na liberação): o mês é liberado no
+  MasterSat e a baixa no site do Sicredi/Ailos continua pendente.
 - Só mensalidade (`RECURRING_BILLING_TYPES`) e só cancelada
   (**banco:** `ck_billings_liberada_so_cancelada`).
 - Original com substituto válido não é liberada (reverter o substituto).
@@ -101,9 +108,10 @@ históricos podem apontar para cadastros removidos ou transferidos).
   registrado, baixado, remessa CNAB).
 - Cobrança cancelada pode ser excluída logicamente da carteira; cancelada/recebida por fora
   com título ativo fica com **baixa pendente** (coluna, não nota) e continua
-  na conciliação; liberar a competência exige baixa confirmada. A exclusão
-  preserva o título, as pendências e os vínculos de substituição. O índice único
-  mantém a competência/parcela reservada quando a exclusão não a libera com segurança.
+  na conciliação; liberar a competência só exige a ciência de que a baixa será
+  feita no site do banco — não a baixa confirmada. A exclusão preserva o título,
+  as pendências e os vínculos de substituição. O índice único mantém a
+  competência/parcela reservada quando há substituição ou registro incerto.
 - Detalhes e códigos 409: [runbook-desfecho-desconhecido.md](runbook-desfecho-desconhecido.md).
 
 ### I8 — Resultado bancário incerto não libera a cobrança (Fase 03)
@@ -145,8 +153,8 @@ flowchart LR
 |---|---|---|---|---|---|
 | Boleto único (fechamento) | canceladas, `substituted_by_id` | sim | — | `recorrente`, sem contrato, pagador = interveniente | cancelar/excluir o boleto único com `reverter_substituicao` |
 | Negociação (`/unificar`) | canceladas, `substituted_by_id` | sim (se mensalidade) | sim (se parcela de serviço) | `avulsa`, sem contrato; serviços via `billing_charge_items` | idem, na negociação |
-| Cancelamento simples | cancelada, sem vínculo | **sim** | não (serviço volta à fila) | — | não há; para recobrar o mês, liberar a competência |
-| Cancelamento + liberação | cancelada, `competencia_liberada` | não | não | — | — |
+| Cancelamento (padrão) | cancelada, `competencia_liberada` | não | não (serviço volta à fila) | — | — |
+| Cancelamento como dispensa (`liberar_competencia: false`) | cancelada, sem vínculo | **sim** | não | — | para recobrar o mês, liberar a competência |
 | Exclusão (soft delete) | `is_deleted` | não | não | — | — |
 
 Cadeias funcionam: uma negociação pode unificar um boleto único; reverter a
@@ -158,9 +166,10 @@ ele.
 Critérios que dependem da empresa. Cada um tem proposta e efeito demonstrável;
 o comportamento atual está indicado.
 
-1. **Cancelamento ocupa o mês por padrão.** *Atual (mantido):* sim. *Proposta:*
-   manter — liberar é explícito. *Efeito:* sem liberar, carnê/fechamento não
-   recobram o mês (`test_cancelada_continua_ocupando_o_mes`).
+1. **Cancelamento ocupa o mês por padrão.** *Decidido em 11/11/2026:* não —
+   cancelar libera o mês, mesmo com boleto ativo, e avisa que a baixa deve ser
+   feita no site do Sicredi/Ailos (`test_cancelar_libera_o_mes_por_padrao`).
+   Dispensa explícita usa `liberar_competencia: false`.
 2. **Plano não mensal no carnê.** `/parcelar` sempre gera parcelas mensais. Um
    contrato trimestral com `2026 • T3` colide com o carnê só em `07/2026`, não
    em agosto/setembro. *Proposta:* recusar `/parcelar` para plano com

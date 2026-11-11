@@ -140,29 +140,23 @@ def test_bank_state_change_invalidates_review_before_any_deletion(http, db, cont
 
 
 @pytest.mark.parametrize('banco', ['ailos', 'sicredi'])
-def test_deleted_active_title_keeps_month_reserved_until_explicit_release(http, db, contrato, banco):
+def test_deleted_active_title_releases_month_and_keeps_bank_lowering_pending(http, db, contrato, banco):
     billing = cobranca(db, contrato, status=BillingStatus.CANCELED,
         billing_type='carne', period_label='11/2099')
     boleto = titulo(db, billing, banco)
     review = preview(http, [billing.id], 'excluir')
-    assert review['aplicados'] == 1 and not review['itens'][0]['libera_competencia']
+    assert review['aplicados'] == 1 and review['itens'][0]['libera_competencia']
     assert apply(http, review).status_code == 409  # exige ciência da baixa na origem
-    response = apply(http, review, confirmar_boleto_ailos=True)
+    assert apply(http, review, confirmar_boleto_ailos=True).status_code == 409  # e da liberação do mês
+    response = apply(http, review, confirmar_boleto_ailos=True, confirmar_liberacao_competencia=True)
     assert response.status_code == 200, response.text
     db.refresh(billing)
     db.refresh(boleto)
-    assert billing.is_deleted and not billing.competencia_liberada
-    assert boleto.baixa_status == 'pendente'
-    assert existing_recurring_periods(db, contrato.id, ['11/2099']) == {'11/2099'}
-    assert http.post(f'{B}/', json={'client_id': contrato.client_id, 'contract_id': contrato.id,
-        'billing_type': 'recorrente', 'period_label': '11/2099', 'due_date': '2099-12-10', 'amount': 100}).status_code == 409
-    release = f'{B}/{billing.id}/liberar-competencia'
-    assert http.post(release, json={'justificativa': 'Preparar nova cobrança'}).status_code == 409
-    boleto.baixa_status = 'confirmada'
-    db.commit()
-    result = http.post(release, json={'justificativa': 'Baixa confirmada na origem'})
-    assert result.status_code == 200, result.text
+    assert billing.is_deleted and billing.competencia_liberada
+    assert boleto.baixa_status == 'pendente' and boleto.baixa_confirmada_em is None
     assert existing_recurring_periods(db, contrato.id, ['11/2099']) == set()
+    assert http.post(f'{B}/', json={'client_id': contrato.client_id, 'contract_id': contrato.id,
+        'billing_type': 'recorrente', 'period_label': '11/2099', 'due_date': '2099-12-10', 'amount': 100}).status_code == 200
 
 
 def test_deleted_original_keeps_month_and_can_be_restored_by_explicit_reversal(http, db, contrato):

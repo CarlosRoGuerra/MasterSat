@@ -130,24 +130,34 @@ class TestCancelamento:
         assert boleto.baixa_status == 'pendente'
         assert com.json()['titulo_bancario']['baixa_status'] == 'pendente'
 
-    def test_cancelar_liberando_mes_com_boleto_ativo_e_recusado_sem_efeito(self, http, db, contrato):
+    def test_cancelar_com_boleto_ativo_libera_o_mes_e_mantem_baixa_pendente(self, http, db, contrato):
         b = cobranca(db, contrato, billing_type='recorrente', period_label='09/2099',
                      due_date=date(2099, 9, 15))
-        registrar_titulo(db, b)
+        boleto = registrar_titulo(db, b)
         r = http.post(f'{B}/{b.id}/cancel', json={
             'reason': 'x', 'confirmar_boleto_ailos': True, 'liberar_competencia': True})
-        assert r.status_code == 409 and _detail(r)['code'] == 'baixa_bancaria_pendente'
+        assert r.status_code == 200, r.text
         db.refresh(b)
-        assert b.status == BillingStatus.PENDING and b.competencia_liberada is False
+        db.refresh(boleto)
+        assert b.status == BillingStatus.CANCELED and b.competencia_liberada is True
+        assert 'Providencie a baixa no site da Ailos' in b.notes
+        # Liberar o mês no MasterSat não é baixa: o título segue acompanhado.
+        assert boleto.baixa_status == 'pendente' and boleto.baixa_confirmada_em is None
 
-    def test_liberar_mes_so_depois_da_baixa_confirmada(self, http, db, contrato):
+    def test_liberar_mes_mantido_exige_ciencia_da_baixa_no_site_do_banco(self, http, db, contrato):
         b = cobranca(db, contrato, billing_type='recorrente', period_label='08/2099',
                      due_date=date(2099, 8, 15))
         boleto = registrar_titulo(db, b)
-        assert http.post(f'{B}/{b.id}/cancel', json={'reason': 'x', 'confirmar_boleto_ailos': True}).status_code == 200
+        assert http.post(f'{B}/{b.id}/cancel', json={
+            'reason': 'x', 'confirmar_boleto_ailos': True, 'liberar_competencia': False}).status_code == 200
 
         antes = http.post(f'{B}/{b.id}/liberar-competencia', json={'justificativa': 'recobrar'})
-        assert antes.status_code == 409 and _detail(antes)['code'] == 'baixa_bancaria_pendente'
+        assert antes.status_code == 409 and _detail(antes)['code'] == 'confirmacao_baixa_origem'
+        assert 'site da Ailos' in _detail(antes)['message']
+        liberada = http.post(f'{B}/{b.id}/liberar-competencia', json={
+            'justificativa': 'recobrar', 'confirmar_baixa_origem': True})
+        assert liberada.status_code == 200, liberada.text
+        assert liberada.json()['competencia_liberada'] is True
 
         conf = http.post(f'/api/v1/ailos/boletos/{b.id}/confirmar-baixa',
                          json={'justificativa': 'baixado no internet banking em 30/09'})
@@ -155,8 +165,7 @@ class TestCancelamento:
         db.refresh(boleto)
         assert boleto.baixa_status == 'confirmada' and boleto.baixa_confirmada_por_user_id == 1
 
-        depois = http.post(f'{B}/{b.id}/liberar-competencia', json={'justificativa': 'recobrar'})
-        assert depois.status_code == 200
+        # A baixa conferida depois continua sendo registrada normalmente.
         assert db.query(BillingChangeLog).filter_by(billing_id=b.id, field_name='baixa_bancaria').count() == 1
 
     def test_confirmar_baixa_nao_e_do_financeiro(self, http_fin, db, contrato):

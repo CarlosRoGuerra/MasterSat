@@ -31,6 +31,7 @@ import { cobrancaCompativelComBanco, chaveCarne, nomeBancoBoleto, type BancoBole
 import { processarBoletosSelecionados, separarBoletosPorRegistro, type AcaoLoteBoleto } from '@/lib/boleto-lote';
 import { cancelarComConfirmacoes, corpoCancelamento } from '@/lib/cancelamento-cobranca';
 import { excluirComConfirmacoes, mensagemConfirmacaoExclusao, motivoBloqueioExclusao } from '@/lib/exclusao-cobranca';
+import { parcelarLiberandoCanceladas } from '@/lib/parcelar-carne';
 import { CorrigirVencimentoAction } from './_components/corrigir-vencimento-action';
 import { ClientPixAutomatico } from '../clientes/_components/client-pix-automatico';
 import { camposDiferenca, diferencaRecebimento, pendenciaDoFormulario, ROTULO_TRATAMENTO, type TratamentoDiferenca } from '@/lib/recebimento';
@@ -1576,7 +1577,7 @@ export default function FinanceiroPage() {
       : `Serão criadas ${n} parcelas do plano e registradas — ${nomeBancoBoleto(carneCanal as BancoBoleto)} — como carnê. Continuar?`)) return;
     setGerandoCarne(true); setModalError('');
     try {
-      const criados = await apiFetch<{ id: number }[]>('/billings/parcelar', {
+      const parcelar = (liberar_canceladas: boolean) => apiFetch<{ id: number }[]>('/billings/parcelar', {
         method: 'POST',
         body: JSON.stringify({
           contract_id: Number(carneContractId),
@@ -1585,8 +1586,11 @@ export default function FinanceiroPage() {
           primeiro_vencimento: carnePrimeiroVenc || null,
           somente_sistema: soSistema,
           banco: carneCanal === 'sicredi' ? 'sicredi' : 'ailos',
+          liberar_canceladas,
         }),
       }, token);
+      const criados = await parcelarLiberandoCanceladas(parcelar, (mensagem) => confirm(mensagem));
+      if (!criados) return;
       setCarneModal(false);
       if (soSistema) {
         setFeedback(`Carnê simples criado com ${criados.length} parcela(s), somente no sistema (sem boleto no banco).`);
@@ -1676,14 +1680,9 @@ export default function FinanceiroPage() {
     if (!token || !selectedBilling || !canEdit) return;
     const reason = window.prompt('Informe a justificativa para cancelamento:', '');
     if (!reason) return;
-    // Mensalidade cancelada continua ocupando o mês (o fechamento não recobra).
-    // Liberar é decisão explícita: permite cobrar o mês de novo no carnê.
+    // Cancelar libera o mês localmente; o aviso bancário continua obrigatório.
     const liberar_competencia = TIPOS_MENSALIDADE.includes(selectedBilling.billing_type)
-      && !!selectedBilling.contract_id
-      && window.confirm(
-        `Liberar a competência ${selectedBilling.period_label ?? ''} para ser cobrada de novo (carnê ou fechamento)?\n\n`
-        + 'OK = liberar. Cancelar = o mês continua dado como cobrado (ex.: dispensa, negociação).',
-      );
+      && !!selectedBilling.contract_id;
     setProcessing(true);
     try {
       // Boleto registrado ou título que substitui outros: o backend pede
@@ -1697,11 +1696,13 @@ export default function FinanceiroPage() {
         (mensagem) => window.confirm(mensagem),
       );
       if (!cancelada) return;
-      setFeedback(flags.reverter_substituicao
+      setFeedback((flags.reverter_substituicao
         ? 'Cobrança cancelada; as cobranças que ela substituía foram reabertas.'
-        : flags.desistir_liberacao
-          ? 'Cobrança cancelada. A competência continua ocupada até a baixa do boleto no banco ser confirmada.'
-          : 'Cobrança cancelada com sucesso.');
+        : 'Cobrança cancelada no MasterSat.')
+        + (liberar_competencia ? ' O mês ficou livre para um novo carnê ou fechamento.' : '')
+        + (flags.confirmar_boleto_ailos
+          ? ' Providencie a baixa do boleto no site do Sicredi ou da Ailos, conforme o banco do boleto: o cancelamento no MasterSat não cancela o título no banco.'
+          : ''));
       loadPendenciasBancarias(token);
       await loadData(token);
     } catch (err) { setError(parseError(err)); } finally { setProcessing(false); }
@@ -1709,8 +1710,13 @@ export default function FinanceiroPage() {
 
   async function handleLiberarCompetencia() {
     if (!token || !selectedBilling || !canEdit) return;
+    // Boleto ainda ativo no banco: o mês é liberado mesmo assim, com o aviso.
+    const avisoBanco = selectedBilling.titulo_bancario?.estado === 'registrado'
+      ? `Providencie a baixa do boleto no ${selectedBilling.titulo_bancario.canal === 'sicredi_api' ? 'site do Sicredi' : 'site da Ailos'}. A liberação no MasterSat não cancela o título no banco.`
+      : '';
     const justificativa = window.prompt(
-      `Liberar a competência ${selectedBilling.period_label ?? ''} desta cobrança cancelada para nova cobrança? Informe o motivo:`,
+      `Liberar a competência ${selectedBilling.period_label ?? ''} desta cobrança cancelada para nova cobrança?\n\n`
+      + (avisoBanco ? `${avisoBanco}\n\n` : '') + 'Informe o motivo:',
       '',
     );
     if (!justificativa || justificativa.trim().length < 3) return;
@@ -1718,11 +1724,11 @@ export default function FinanceiroPage() {
     try {
       const atualizada = await apiFetch<Billing>(
         `/billings/${selectedBilling.id}/liberar-competencia`,
-        { method: 'POST', body: JSON.stringify({ justificativa: justificativa.trim() }) },
+        { method: 'POST', body: JSON.stringify({ justificativa: justificativa.trim(), confirmar_baixa_origem: true }) },
         token,
       );
       setSelectedBilling(atualizada);
-      setFeedback(`Competência ${atualizada.period_label ?? ''} liberada: o mês pode ser cobrado de novo.`);
+      setFeedback(`Competência ${atualizada.period_label ?? ''} liberada: o mês pode ser cobrado de novo.${avisoBanco ? ` ${avisoBanco}` : ''}`);
       await loadData(token);
     } catch (err) { setError(parseError(err)); } finally { setProcessing(false); }
   }

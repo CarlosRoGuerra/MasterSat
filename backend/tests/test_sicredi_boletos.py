@@ -330,7 +330,7 @@ def test_cancelar_pede_confirmacao_e_deixa_baixa_pendente(db, http, billing_pend
     resp = http.post(f'/api/v1/billings/{billing_pendente.id}/cancel', json={'reason': 'teste'})
     assert resp.status_code == 409
     assert resp.json()['detail']['code'] == 'boleto_ailos_registrado'
-    assert 'Dar baixa no Sicredi' in resp.json()['detail']['message']
+    assert 'Providencie a baixa no site do Sicredi' in resp.json()['detail']['message']
 
     resp = http.post(f'/api/v1/billings/{billing_pendente.id}/cancel',
                      json={'reason': 'teste', 'confirmar_boleto_ailos': True})

@@ -77,6 +77,7 @@ from app.services.financial import (
     marcar_billing_pago,
     mark_billings_substituted,
     normalize_due_date,
+    occupying_recurring_billings,
     period_bucket,
     plan_title,
     refresh_overdue_statuses,
@@ -816,11 +817,67 @@ class ParcelarContratoIn(BaseModel):
     primeiro_vencimento: date | None = None  # padrão: próximo vencimento, após o mês inicial do serviço
     # Carnê simples: parcelas só no sistema, sem registro na Ailos (nem depois).
     somente_sistema: bool = False
+    # Meses ocupados só por mensalidades canceladas (inclusive as excluídas
+    # antes de o cancelamento liberar o mês): True libera e gera o carnê.
+    liberar_canceladas: bool = False
+
+
+def _liberar_meses_cancelados(
+    db: Session, contract_id: int, meses: list[str], payload: ParcelarContratoIn, user_id: int,
+) -> None:
+    """Aplica a regra atual do cancelamento aos meses que ainda estão presos.
+
+    Só libera quando TODOS os ocupantes são canceladas liberáveis; qualquer
+    cobrança em aberto, paga, substituída ou com registro incerto mantém o
+    conflito original. A baixa no banco continua manual e pendente.
+    """
+    ocupantes = occupying_recurring_billings(db, contract_id, meses)
+    titulos = titulo_bancario.titulos_bancarios(db, [b.id for b in ocupantes])
+    liberaveis = bool(ocupantes) and all(
+        b.status == BillingStatus.CANCELED and _exclusao_libera_competencia(b, titulos[b.id])
+        for b in ocupantes
+    )
+    if not liberaveis:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                'Este contrato já tem cobrança de mensalidade lançada para: '
+                + ', '.join(meses)
+                + '. Cancelada também ocupa o mês. Para cobrar um desses meses no carnê, '
+                'cancele a cobrança liberando a competência (ou use "Liberar competência" '
+                'numa cobrança já cancelada); ou ajuste o primeiro vencimento.'
+            ),
+        )
+    sites = sorted({titulo_bancario.site_do_banco(titulos[b.id].canal)
+                    for b in ocupantes if titulos[b.id].ativo_no_banco})
+    if not payload.liberar_canceladas:
+        raise HTTPException(status_code=409, detail={
+            'code': 'competencias_canceladas',
+            'billing_ids': [b.id for b in ocupantes],
+            'meses': meses,
+            'message': (
+                f'Os meses {", ".join(meses)} estão ocupados por cobranças canceladas. '
+                'Liberar esses meses e gerar o novo carnê?'
+                + (f'\n\nProvidencie a baixa dos boletos antigos no {" e no ".join(sites)}: '
+                   'a liberação no MasterSat não cancela o título no banco.' if sites else '')
+            ),
+        })
+    lock_billings_for_update(db, [b.id for b in ocupantes])
+    try:
+        for billing in ocupantes:
+            release_billing_competencia(
+                db, billing, user_id=user_id, confirmar_baixa_origem=True,
+                justification='Mês liberado para gerar novo carnê',
+            )
+    except (BillingSubstitutionError, titulo_bancario.PoliticaBancariaError) as exc:
+        db.rollback()
+        raise _substitution_conflict(exc) from exc
+    db.flush()
 
 
 @router.post('/parcelar', response_model=list[BillingOut])
 def parcelar_contrato(payload: ParcelarContratoIn, db: Session = Depends(get_db),
-                      _: object = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
+                      current_user: User = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
     """Cria N parcelas (boletos) de um contrato — vincula ao plano do veículo e à
     quantidade de parcelas — para depois virarem carnê. Cada parcela vale o valor
     do plano (ou o valor informado), com vencimentos mensais.
@@ -869,16 +926,8 @@ def parcelar_contrato(payload: ParcelarContratoIn, db: Session = Depends(get_db)
     # mesmo mês ao gerar/regerar o carnê — cobrança duplicada em produção.
     conflitos = existing_recurring_periods(db, contract.id, period_labels)
     if conflitos:
-        meses_em_ordem = [p for p in period_labels if p in conflitos]
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                'Este contrato já tem cobrança de mensalidade lançada para: '
-                + ', '.join(meses_em_ordem)
-                + '. Cancelada também ocupa o mês. Para cobrar um desses meses no carnê, '
-                'cancele a cobrança liberando a competência (ou use "Liberar competência" '
-                'numa cobrança já cancelada); ou ajuste o primeiro vencimento.'
-            ),
+        _liberar_meses_cancelados(
+            db, contract.id, [p for p in period_labels if p in conflitos], payload, current_user.id,
         )
 
     criados: list[Billing] = []
@@ -966,7 +1015,7 @@ def batch_actions(
             'situacao': 'ignorado' if reason else 'aplicavel', 'motivo': reason,
             'nosso_numero': titulo.nosso_numero,
             'baixa_bancaria_pendente': not reason and titulo.ativo_no_banco,
-            'libera_competencia': bool(not reason and payload.action == 'excluir'
+            'libera_competencia': bool(not reason
                 and _exclusao_libera_competencia(billing, titulo)),
         })
     fingerprint = {
@@ -983,7 +1032,8 @@ def batch_actions(
         if any(item['baixa_bancaria_pendente'] for item in itens) and not payload.confirmar_boleto_ailos:
             raise HTTPException(409, {'code': 'confirmacao_bancaria_necessaria',
                 'message': 'Excluir ou cancelar no MasterSat não dá baixa no sistema de pagamento de origem. Confirme que providenciará ou conferirá a baixa.'})
-        if any(item['libera_competencia'] for item in itens) and not payload.confirmar_liberacao_competencia:
+        if (payload.action == 'excluir' and any(item['libera_competencia'] for item in itens)
+                and not payload.confirmar_liberacao_competencia):
             raise HTTPException(409, {'code': 'confirmacao_competencia_necessaria',
                 'message': 'Confirme que excluir estas mensalidades libera os meses para nova cobrança.'})
         try:
@@ -1110,16 +1160,8 @@ def batch_status(payload: BillingBatchStatusIn, db: Session = Depends(get_db), c
                 db, b, completion_date=payload.payment_date, commit=False,
             )
         else:
-            b.status = BillingStatus.CANCELED
-            marker = f'Cancelada em lote: {payload.reason}'
-            titulo = titulos.get(bid)
-            if titulo is not None and titulo.ativo_no_banco:
-                marker += (
-                    f' | [ATENÇÃO] Boleto Ailos (nosso número {titulo.nosso_numero or "—"}) '
-                    'segue ativo no banco — baixa manual pendente.'
-                )
-            b.notes = f'{b.notes} | {marker}' if b.notes else marker
-            refresh_charge_items_for_billing(db, b, commit=False)
+            _cancel_billing_locked(b, BillingCancel(reason=payload.reason,
+                confirmar_boleto_ailos=True), db, current_user)
         processados.append(bid)
     # Cancelada ou recebida por fora com boleto ativo: baixa pendente
     # estrutural — a conciliação continua acompanhando o título (FIN-02).
@@ -1324,10 +1366,6 @@ def _cancel_billing_locked(billing: Billing, payload: BillingCancel, db: Session
         db, titulo_bancario.CANCELAR, [billing.id], confirmado=payload.confirmar_boleto_ailos,
     )
     titulo = titulos[billing.id]
-    if payload.liberar_competencia and titulo.ativo_no_banco:
-        # Liberar o mês com o boleto antigo ainda pagável deixaria cobrar o
-        # mesmo período duas vezes. Recusa antes de cancelar.
-        _exigir(db, titulo_bancario.LIBERAR_COMPETENCIA, [billing.id])
     try:
         originals = ensure_substitution_allows_removal(
             db, billing, revert_substitution=payload.reverter_substituicao,
@@ -1344,16 +1382,19 @@ def _cancel_billing_locked(billing: Billing, payload: BillingCancel, db: Session
         billing.status = BillingStatus.CANCELED
         nota_extra = ''
         if titulo.ativo_no_banco:
+            banco = 'Sicredi' if titulo.canal == titulo_bancario.CANAL_SICREDI else 'Ailos'
             nota_extra = (
-                f'\n[ATENÇÃO] Boleto Ailos (nosso número {titulo.nosso_numero or "—"}) '
-                'segue ativo no banco — baixa manual pendente.'
+                f'\n[ATENÇÃO] Boleto {banco} (nosso número {titulo.nosso_numero or "—"}) '
+                f'com baixa manual pendente. Providencie a baixa no '
+                f'{titulo_bancario.site_do_banco(titulo.canal)}.'
             )
         billing.notes = f'{billing.notes or ""}\nCancelada: {payload.reason}{nota_extra}'.strip()
         titulo_bancario.marcar_baixa_pendente(db, [billing.id], f'cancelada: {payload.reason}')
         _encerrar_pendencia_resolvida_no_cancelamento(db, billing.id, current_user.id)
-        if payload.liberar_competencia:
+        if payload.liberar_competencia and _exclusao_libera_competencia(billing, titulo):
             release_billing_competencia(
                 db, billing, user_id=current_user.id, justification=payload.reason,
+                confirmar_baixa_origem=payload.confirmar_boleto_ailos,
             )
     except (BillingSubstitutionError, titulo_bancario.PoliticaBancariaError) as exc:
         db.rollback()
@@ -1463,7 +1504,10 @@ def update_item(item_id: int, payload: BillingUpdate, db: Session = Depends(get_
 def _exclusao_libera_competencia(obj: Billing, titulo: titulo_bancario.TituloBancario) -> bool:
     return bool(obj.contract_id and obj.billing_type in RECURRING_BILLING_TYPES
         and not obj.competencia_liberada and not obj.substituted_by_id
-        and titulo.estado in (titulo_bancario.SEM_TITULO, titulo_bancario.BAIXADO) and not titulo.pendencia)
+        and not titulo.pendencia
+        and (titulo.estado in (titulo_bancario.SEM_TITULO, titulo_bancario.BAIXADO)
+             or (titulo.estado == titulo_bancario.REGISTRADO
+                 and titulo.canal in (titulo_bancario.CANAL_AILOS, titulo_bancario.CANAL_SICREDI))))
 
 
 def _delete_billing_locked(obj: Billing, db: Session, current_user: User, *, reverter_substituicao: bool = False):
@@ -1472,8 +1516,8 @@ def _delete_billing_locked(obj: Billing, db: Session, current_user: User, *, rev
             status_code=400,
             detail='Cobrança paga não pode ser removida; preserve o histórico financeiro.',
         )
-    # Qualquer cancelada pode sair da carteira. O título, as pendências e a
-    # reserva de competência ficam preservados quando há risco bancário.
+    # Qualquer cancelada pode sair da carteira. A baixa na origem permanece
+    # acompanhada mesmo quando o mês já está liberado para novo carnê.
     titulos = _exigir(db, titulo_bancario.EXCLUIR, [obj.id])
     titulo = titulos[obj.id]
     if obj.status != BillingStatus.CANCELED and titulo.estado != titulo_bancario.SEM_TITULO:
@@ -1494,7 +1538,10 @@ def _delete_billing_locked(obj: Billing, db: Session, current_user: User, *, rev
         raise _substitution_conflict(exc) from exc
     lock_charge_items_for_billings(db, [obj])
     if obj.status == BillingStatus.CANCELED:
-        if (not obj.substituted_by_id and not titulo.pendencia
+        if _exclusao_libera_competencia(obj, titulo):
+            release_billing_competencia(db, obj, user_id=current_user.id,
+                justification='Exclusão de cobrança cancelada', confirmar_baixa_origem=True)
+        elif (not obj.substituted_by_id and not titulo.pendencia
                 and titulo.estado in (titulo_bancario.SEM_TITULO, titulo_bancario.BAIXADO)):
             obj.competencia_liberada = True
         titulo_bancario.marcar_baixa_pendente(db, [obj.id],
@@ -1528,7 +1575,7 @@ def release_period(
     current_user: User = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL)),
 ):
     """Devolve o mês de uma mensalidade cancelada para nova cobrança (carnê ou
-    fechamento). Cancelada continua ocupando o mês até isto ser feito."""
+    fechamento), inclusive cobranças canceladas e excluídas pela regra antiga."""
     locked = lock_billings_for_update(db, [item_id])
     if not locked:
         raise HTTPException(status_code=404, detail='Cobrança não encontrada')
@@ -1536,6 +1583,7 @@ def release_period(
     try:
         release_billing_competencia(
             db, billing, user_id=current_user.id, justification=payload.justificativa.strip(),
+            confirmar_baixa_origem=payload.confirmar_baixa_origem,
         )
     except (BillingSubstitutionError, titulo_bancario.PoliticaBancariaError) as exc:
         db.rollback()

@@ -25,7 +25,7 @@ export type CobrancaParaExcluir = {
   competencia_liberada?: boolean;
   period_label?: string | null;
   substituted_by_id?: number | null;
-  titulo_bancario?: Pick<TituloBancario, 'estado' | 'pendencia'> | null;
+  titulo_bancario?: Pick<TituloBancario, 'estado' | 'pendencia' | 'canal'> | null;
 };
 
 type ErroApi = Error & { status?: number; detail?: { code?: string; message?: string } };
@@ -42,12 +42,14 @@ export function ocupaCompetencia(cobranca: CobrancaParaExcluir): boolean {
     && !cobranca.competencia_liberada
     && !cobranca.substituted_by_id
     && !cobranca.titulo_bancario?.pendencia
-    && (!cobranca.titulo_bancario?.estado || ['sem_titulo', 'baixado'].includes(cobranca.titulo_bancario.estado));
+    && (!cobranca.titulo_bancario?.estado || ['sem_titulo', 'baixado'].includes(cobranca.titulo_bancario.estado)
+      || (cobranca.titulo_bancario.estado === 'registrado'
+        && ['ailos_api', 'sicredi_api'].includes(cobranca.titulo_bancario.canal ?? '')));
 }
 
 export function mensagemConfirmacaoExclusao(cobranca: CobrancaParaExcluir): string {
   const base = `Excluir a cobrança cancelada #${cobranca.id}? Ela sai da carteira; o histórico continua registrado.`
-    + '\n\nAtenção: excluir no MasterSat não dá baixa no banco ou sistema de pagamento de origem. Providencie ou confirme a baixa também na origem.';
+    + '\n\nAtenção: excluir no MasterSat não dá baixa no banco ou sistema de pagamento de origem. Providencie a baixa no site do Sicredi ou da Ailos, conforme o banco do boleto.';
   if (!ocupaCompetencia(cobranca)) return base;
   return `${base}\n\nAtenção: esta mensalidade ainda ocupa a competência ${cobranca.period_label ?? 'do contrato'}. `
     + 'Excluindo, o mês fica livre e o fechamento pode gerar a cobrança de novo. '
