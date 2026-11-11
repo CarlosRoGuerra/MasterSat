@@ -26,7 +26,14 @@ describe('motivoBloqueioExclusao', () => {
     expect(motivoBloqueioExclusao({ ...cancelada, status: 'paga' })).toMatch(/cancelada/);
   });
 
-  it.each(['registrado', 'baixado', 'em_registro', 'desfecho_desconhecido', 'remessa_cnab'] as const)(
+  it('libera cancelada com baixa confirmada e bloqueia pendência financeira', () => {
+    expect(motivoBloqueioExclusao({ ...cancelada, titulo_bancario: { estado: 'baixado' } })).toBeNull();
+    expect(motivoBloqueioExclusao({ ...cancelada, titulo_bancario: {
+      estado: 'baixado', pendencia: 'pago_em_cobranca_cancelada',
+    } })).toMatch(/pendência bancária/);
+  });
+
+  it.each(['registrado', 'em_registro', 'desfecho_desconhecido', 'remessa_cnab'] as const)(
     'bloqueia cancelada com título %s no banco',
     (estado) => {
       expect(motivoBloqueioExclusao({ ...cancelada, titulo_bancario: { estado } })).toMatch(/banco/);

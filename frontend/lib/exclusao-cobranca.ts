@@ -3,8 +3,8 @@
 // DELETE /billings/{id} é exclusão lógica (o registro e o histórico ficam no
 // banco). O backend continua recusando — e a tela não tenta contornar:
 //   - cobrança paga;
-//   - qualquer título no banco (registrado, baixado, em registro, desfecho
-//     desconhecido, remessa CNAB): sairia da conciliação (FIN-02);
+//   - título ativo no banco, em registro, com desfecho desconhecido ou em
+//     remessa CNAB; títulos baixados só saem sem pendências financeiras;
 //   - original de boleto único/negociação que ainda vale (o mês seria
 //     cobrado de novo por cima da negociação).
 // Boleto único cancelado que ainda aponta para originais responde 409
@@ -26,7 +26,7 @@ export type CobrancaParaExcluir = {
   contract_id?: number | null;
   competencia_liberada?: boolean;
   period_label?: string | null;
-  titulo_bancario?: Pick<TituloBancario, 'estado'> | null;
+  titulo_bancario?: Pick<TituloBancario, 'estado' | 'pendencia'> | null;
 };
 
 type ErroApi = Error & { status?: number; detail?: { code?: string; message?: string } };
@@ -35,8 +35,14 @@ type ErroApi = Error & { status?: number; detail?: { code?: string; message?: st
 export function motivoBloqueioExclusao(cobranca: CobrancaParaExcluir): string | null {
   if (cobranca.status !== 'cancelada') return 'Só cobrança cancelada pode ser excluída.';
   const estado = cobranca.titulo_bancario?.estado;
-  if (estado && estado !== 'sem_titulo') {
-    return 'Cobrança com boleto no banco não é excluída: o histórico bancário e a conciliação dependem dela.';
+  if (estado === 'baixado' && cobranca.titulo_bancario?.pendencia) {
+    return 'Resolva a pendência bancária no Financeiro antes de excluir.';
+  }
+  if (estado === 'registrado') {
+    return 'A baixa no banco ainda não está confirmada no sistema. Atualize a situação bancária no Financeiro antes de excluir.';
+  }
+  if (estado && !['sem_titulo', 'baixado'].includes(estado)) {
+    return 'A situação do boleto no banco ainda precisa ser resolvida antes de excluir.';
   }
   return null;
 }

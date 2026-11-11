@@ -84,7 +84,9 @@ _PERMITIDO: dict[str, frozenset[str]] = {
     ALTERAR_VALOR: frozenset({SEM_TITULO}),
     RECEBER: frozenset({SEM_TITULO, REGISTRADO, BAIXADO, REMESSA_CNAB}),
     CANCELAR: frozenset({SEM_TITULO, REGISTRADO, BAIXADO, REMESSA_CNAB}),
-    EXCLUIR: frozenset({SEM_TITULO}),
+    # Exclusão lógica: um título com baixa confirmada deixa de ser pagável.
+    # O registro bancário e a auditoria permanecem vinculados à cobrança.
+    EXCLUIR: frozenset({SEM_TITULO, BAIXADO}),
     LIBERAR_COMPETENCIA: frozenset({SEM_TITULO, BAIXADO}),
     REABRIR: frozenset({SEM_TITULO, BAIXADO}),
     EMITIR_AILOS: frozenset({SEM_TITULO}),
@@ -291,7 +293,7 @@ _MENSAGENS = {
     BAIXADO: (
         'boleto_ailos_baixado',
         'Esta cobrança tem histórico de boleto no banco (baixado). Valor e vencimento não '
-        'mudam e ela não pode ser removida nem emitida de novo; lance uma nova cobrança.',
+        'mudam e ela não pode ser emitida de novo; lance uma nova cobrança.',
     ),
     REMESSA_CNAB: (
         'titulo_em_remessa_cnab',
@@ -325,7 +327,7 @@ _MENSAGENS_SICREDI = {
     BAIXADO: (
         'boleto_ailos_baixado',
         'Esta cobrança tem histórico de boleto no Sicredi (baixado). Valor e vencimento não '
-        'mudam e ela não pode ser removida nem emitida de novo; lance uma nova cobrança.',
+        'mudam e ela não pode ser emitida de novo; lance uma nova cobrança.',
     ),
 }
 
@@ -401,6 +403,12 @@ def validar_titulos(
     retomadas = set(permitir_em_registro)
     bloqueados: dict[str, list[int]] = {}
     for bid, titulo in titulos.items():
+        if operacao == EXCLUIR and titulo.estado == BAIXADO and titulo.pendencia:
+            raise PoliticaBancariaError(
+                'pendencia_bancaria_na_exclusao',
+                'Há uma pendência bancária nesta cobrança. Resolva a pendência no Financeiro antes de excluir.',
+                [bid], estado=titulo.estado,
+            )
         if (titulo.canal == CANAL_PIX and titulo.ativo_no_banco and operacao in (CANCELAR, RECEBER)):
             code, message = _mensagem(titulo.estado, titulo.canal)
             raise PoliticaBancariaError(code, message, [bid], estado=titulo.estado)
@@ -416,6 +424,14 @@ def validar_titulos(
             ids_bloqueados = sorted(bloqueados[estado])
             canal = titulos[ids_bloqueados[0]].canal
             code, message = _mensagem(estado, canal)
+            if operacao == EXCLUIR and estado == REGISTRADO and canal in (CANAL_AILOS, CANAL_SICREDI):
+                message = (
+                    'A baixa bancária ainda não está confirmada no sistema. '
+                    + ('Use "Consultar no Sicredi" para atualizar a situação do título.'
+                       if canal == CANAL_SICREDI else
+                       'Consulte o título na Ailos ou, se já o baixou no internet banking, '
+                       'peça a um administrador para usar "Confirmar baixa" nas pendências bancárias do Financeiro.')
+                )
             if operacao == LIBERAR_COMPETENCIA and estado == REGISTRADO:
                 code = 'baixa_bancaria_pendente'
                 message = (

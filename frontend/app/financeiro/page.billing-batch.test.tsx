@@ -4,11 +4,13 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import FinanceiroPage from './page';
 import type { BillingBatchResult } from '@/lib/billing-batch';
+import type { TituloBancario } from '@/lib/titulo-bancario';
 
 const api = vi.hoisted(() => ({ fetch: vi.fn(), list: vi.fn() }));
+const auth = vi.hoisted(() => ({ role: 'financeiro' }));
 vi.mock('@/lib/api', async () => ({ ...await vi.importActual<typeof import('@/lib/api')>('@/lib/api'),
   apiFetch: api.fetch, apiFetchList: api.list }));
-vi.mock('@/lib/use-auth-guard', () => ({ useAuthGuard: () => ({ token: 'test-token', user: { role: 'financeiro' }, loading: false, error: '' }) }));
+vi.mock('@/lib/use-auth-guard', () => ({ useAuthGuard: () => ({ token: 'test-token', user: { role: auth.role }, loading: false, error: '' }) }));
 vi.mock('@/components/page-shell', () => ({ PageShell: ({ children }: { children: ReactNode }) => <main>{children}</main> }));
 vi.mock('@/lib/assistant-context', () => ({ useAssistantContextActions: vi.fn() }));
 vi.mock('next/navigation', () => {
@@ -17,11 +19,13 @@ vi.mock('next/navigation', () => {
 });
 
 const billing = { id: 10, client_id: 7, billing_type: 'avulsa', title: 'Cobrança de teste',
-  due_date: '2026-10-15', amount: 64.99, status: 'pendente', overdue_days: 0 };
+  due_date: '2026-10-15', amount: 64.99, status: 'pendente', overdue_days: 0,
+  titulo_bancario: null as TituloBancario | null };
 let wallet: typeof billing[];
 
 beforeEach(() => {
   vi.resetAllMocks();
+  auth.role = 'financeiro';
   window.history.replaceState({}, '', '/financeiro');
   wallet = [{ ...billing }];
   api.list.mockResolvedValue([]);
@@ -48,7 +52,7 @@ beforeEach(() => {
     return [];
   });
 });
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 async function openWallet() {
   const user = userEvent.setup();
@@ -59,6 +63,36 @@ async function openWallet() {
 }
 
 describe('ações em lote no Financeiro', () => {
+  it('o administrador confirma uma baixa já realizada e pode excluir no detalhe', async () => {
+    auth.role = 'admin';
+    wallet = [{ ...billing, status: 'cancelada', titulo_bancario: {
+      estado: 'registrado', canal: 'ailos_api', baixa_status: 'pendente', nosso_numero: 'NN123',
+    } }];
+    const original = api.fetch.getMockImplementation()!;
+    api.fetch.mockImplementation(async (path: string, options: RequestInit = {}) => {
+      if (path === '/ailos/boletos/10/confirmar-baixa') {
+        wallet = [{ ...wallet[0], titulo_bancario: { ...wallet[0].titulo_bancario!, estado: 'baixado', baixa_status: 'confirmada' } }];
+        return {};
+      }
+      if (path === '/billings/10' && options.method === 'DELETE') { wallet = []; return {}; }
+      return original(path, options);
+    });
+    vi.spyOn(window, 'prompt').mockReturnValue('Baixa conferida no internet banking');
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const user = await openWallet();
+    await user.click(screen.getByRole('button', { name: 'Detalhes' }));
+    const detail = within(screen.getByRole('dialog', { name: 'Cobrança de teste' }));
+    expect(detail.getByRole('button', { name: 'Excluir' })).toBeDisabled();
+    expect(api.fetch.mock.calls.filter(([path]) => path === '/ailos/boletos/10/confirmar-baixa')).toHaveLength(0);
+    await user.click(detail.getByRole('button', { name: 'Confirmar baixa já feita na Ailos' }));
+    const deleteButton = await detail.findByRole('button', { name: 'Excluir' });
+    await vi.waitFor(() => expect(deleteButton).toBeEnabled());
+    await user.click(deleteButton);
+    expect(api.fetch.mock.calls.filter(([path, options]) => path === '/billings/10' && options.method === 'DELETE')).toHaveLength(1);
+    const confirmation = api.fetch.mock.calls.find(([path]) => path === '/ailos/boletos/10/confirmar-baixa')!;
+    expect(JSON.parse(confirmation[1].body)).toEqual({ justificativa: 'Baixa conferida no internet banking' });
+  });
+
   it.each(['cancelar', 'excluir'] as const)('confere e aplica %s pelo menu e atualiza a carteira', async (action) => {
     if (action === 'excluir') wallet[0].status = 'cancelada';
     const user = await openWallet();

@@ -23,7 +23,8 @@ No Financeiro, alterar vencimento, fechamento, lote ou filtros de emissão limpa
 | Paga | Protegida | Protegida |
 | Título registrado ou reserva CNAB | Exige ciência da baixa bancária | Bloqueado |
 | Registro em andamento ou desfecho desconhecido | Bloqueado | Bloqueado |
-| Título com baixa bancária confirmada | Permitido se ainda aberta | Bloqueado pelo histórico bancário |
+| Título com baixa bancária confirmada, sem pendências | Permitido se ainda aberta | Permitido se cancelada no sistema; histórico preservado |
+| Pendência financeira no título baixado | Confira a pendência no Financeiro | Resolva a pendência antes de excluir |
 | Negociação que exige reabrir originais | Use a ação individual para conferir a reversão | Use a ação individual para conferir a reversão |
 
 **Cancelar no sistema mantém o mês ocupado e não executa baixa automática no banco.** Títulos ativos continuam pagáveis até a baixa bancária. A confirmação explica essa pendência; o resultado informa os títulos afetados e o nosso número, quando disponível. A reserva CNAB permanece preservada.
@@ -31,6 +32,13 @@ No Financeiro, alterar vencimento, fechamento, lote ou filtros de emissão limpa
 **Excluir uma mensalidade pode liberar o mês para nova cobrança pelo fechamento.** O lote exige uma confirmação específica para esse efeito. A exclusão retira a cobrança da carteira, preservando o registro e o histórico no banco de dados.
 
 Cada item aplicado recebe a justificativa nas observações, no histórico de alterações e na auditoria. Os bloqueados permanecem intactos. Falha inesperada durante a gravação desfaz todas as alterações dessa aplicação do lote.
+
+Se o boleto já foi baixado no banco, mas a conferência ainda o mostra como ativo,
+atualize a situação bancária antes de excluir. Na Ailos, o administrador pode usar
+**Confirmar baixa já feita na Ailos** no detalhe de uma cobrança cancelada, ou
+**Confirmar baixa** nas pendências bancárias. Essa declaração registra a justificativa
+e o operador; não envia uma ordem de baixa ao banco. No Sicredi, use **Consultar no
+Sicredi** para obter a confirmação. Depois, use **Conferir novamente** no lote.
 
 Se qualquer cobrança ou situação bancária mudar depois da conferência, a API recusa a revisão antiga antes de gravar. Use **Conferir novamente** e revise os dados atualizados. Durante a aplicação, a janela impede novo envio e fechamento pelo X, Esc ou clique fora. Uma falha ao atualizar a carteira após a conclusão é informada separadamente.
 

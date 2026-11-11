@@ -149,4 +149,19 @@ describe('conferência e resultado do lote de boletos', () => {
     await screen.findByText('0 apto(s) · 2 ignorado(s) · 2 selecionado(s)');
     expect(screen.getByRole('button', { name: 'Cancelar 0 boleto(s)' })).toBeDisabled();
   });
+
+  it('reconfere baixas atualizadas sem aplicar a exclusão automaticamente', async () => {
+    const blocked = response('excluir');
+    blocked.aplicados = 0; blocked.ignorados = 2;
+    blocked.itens[0] = { ...blocked.itens[0], situacao: 'ignorado', motivo: 'A baixa bancária ainda não está confirmada.' };
+    api.mockResolvedValueOnce(blocked).mockResolvedValueOnce(response('excluir'));
+    const { user } = renderModal('excluir');
+    await screen.findByText('0 apto(s) · 2 ignorado(s) · 2 selecionado(s)');
+    await user.type(screen.getByRole('textbox', { name: /Justificativa/ }), 'Baixa conferida no banco');
+    await user.click(screen.getByRole('button', { name: 'Conferir novamente' }));
+    await screen.findByText('1 apto(s) · 1 ignorado(s) · 2 selecionado(s)');
+    expect(screen.getByRole('textbox', { name: /Justificativa/ })).toHaveValue('Baixa conferida no banco');
+    expect(screen.getByRole('button', { name: 'Excluir 1 boleto(s)' })).toBeEnabled();
+    expect(api.mock.calls.every(([, options]) => JSON.parse(options.body).simular === true)).toBe(true);
+  });
 });

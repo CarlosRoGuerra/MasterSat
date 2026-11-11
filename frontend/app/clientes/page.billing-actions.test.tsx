@@ -436,12 +436,22 @@ describe('cancelar e excluir pelo ícone Alterar boleto', () => {
     expect(dialog.getByRole('button', { name: 'Excluir boleto' })).toBeEnabled();
   });
 
-  it.each(['registrado', 'baixado', 'em_registro', 'desfecho_desconhecido', 'remessa_cnab'] as const)(
+  it('permite excluir a cancelada com baixa confirmada no banco', async () => {
+    wallet = [{ ...billing, status: 'cancelada', titulo_bancario: { estado: 'baixado', baixa_status: 'confirmada' } }];
+    const { user, dialog } = await openEditor();
+    expect(dialog.getByRole('button', { name: 'Excluir boleto' })).toBeEnabled();
+    await user.click(dialog.getByRole('button', { name: 'Excluir boleto' }));
+    expect(writes('DELETE')).toHaveLength(1);
+    expect(within(await screen.findByRole('dialog', { name: /Boletos do cliente/ })).getByRole('status'))
+      .toHaveTextContent('o histórico foi preservado');
+  });
+
+  it.each(['registrado', 'em_registro', 'desfecho_desconhecido', 'remessa_cnab'] as const)(
     'bloqueia a exclusão de cancelada com título %s', async (estado) => {
       wallet = [{ ...billing, status: 'cancelada', titulo_bancario: { estado } }];
       const { dialog } = await openEditor();
       expect(dialog.getByRole('button', { name: 'Excluir boleto' })).toBeDisabled();
-      expect(dialog.getByText(/histórico bancário e a conciliação/)).toBeInTheDocument();
+      expect(dialog.getByText(/antes de excluir/)).toBeInTheDocument();
     },
   );
 

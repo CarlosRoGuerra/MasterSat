@@ -1461,11 +1461,11 @@ def _delete_billing_locked(obj: Billing, db: Session, current_user: User, *, rev
             status_code=400,
             detail='Cobrança paga não pode ser removida; preserve o histórico financeiro.',
         )
-    # Cobrança com qualquer histórico bancário (registrada, baixada, em
-    # registro, desfecho desconhecido, remessa CNAB) não é removida: remover
-    # tirava o título da conciliação e liberava o mês para nova cobrança
-    # enquanto o boleto seguia pagável (FIN-02). O caminho é cancelar.
-    _exigir(db, titulo_bancario.EXCLUIR, [obj.id])
+    # Só removemos títulos bancários após baixa confirmada e cancelamento
+    # local. A exclusão é lógica: o boleto e seu histórico são preservados.
+    titulos = _exigir(db, titulo_bancario.EXCLUIR, [obj.id])
+    if titulos[obj.id].estado == titulo_bancario.BAIXADO and obj.status != BillingStatus.CANCELED:
+        raise HTTPException(status_code=400, detail='Cancele a cobrança no sistema antes de excluir.')
     restored: list[int] = []
     try:
         originals = ensure_substitution_allows_removal(

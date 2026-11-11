@@ -158,11 +158,11 @@ def test_delete_only_canceled_and_preserves_paid_and_open(http, db, contrato):
     assert db.scalars(select(BillingChangeLog)).one().field_name == 'is_deleted'
 
 
-@pytest.mark.parametrize('bank_state', ['registered', 'lowered', 'in_flight', 'unknown'])
-def test_delete_keeps_every_item_with_bank_history(http, db, contrato, bank_state):
+@pytest.mark.parametrize('bank_state', ['registered', 'in_flight', 'unknown'])
+def test_delete_keeps_every_item_with_active_or_uncertain_title(http, db, contrato, bank_state):
     billing = cobranca(db, contrato, status=BillingStatus.CANCELED)
-    if bank_state in ('registered', 'lowered'):
-        registrar_titulo(db, billing, **({'baixa_status': 'confirmada'} if bank_state == 'lowered' else {}))
+    if bank_state == 'registered':
+        registrar_titulo(db, billing)
     else:
         reserva(db, billing, 'REGISTRANDO' if bank_state == 'in_flight' else 'DESFECHO_DESCONHECIDO')
     review = preview(http, [billing.id], 'excluir')

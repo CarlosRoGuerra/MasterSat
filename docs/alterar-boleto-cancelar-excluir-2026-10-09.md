@@ -4,7 +4,7 @@ Em **Clientes → Central financeira / boletos → Alterar boleto**, a janela of
 
 - **Salvar alteração**: altera valor ou vencimento, com justificativa.
 - **Cancelar boleto**: exige justificativa e confirmação. Mantém a cobrança cancelada no sistema, com o motivo nas observações.
-- **Excluir boleto**: disponível para cobrança cancelada sem histórico bancário. A exclusão é lógica: retira da carteira e preserva o registro e seu histórico no banco de dados.
+- **Excluir boleto**: disponível para cobrança cancelada sem título ativo, inclusive após baixa bancária confirmada, sem pendências financeiras. A exclusão é lógica: retira da carteira e preserva o registro e seu histórico no banco de dados.
 - **Fechar janela**: fecha a edição.
 
 Após cancelar, a janela permanece aberta. Se a exclusão for permitida, o botão fica disponível imediatamente. Ao excluir, a janela fecha e a carteira é atualizada. A seleção de cobranças e os carnês também são atualizados. Uma falha na atualização da carteira é informada separadamente da operação já concluída.
@@ -16,7 +16,7 @@ As ações são restritas a administrador e financeiro. Cobranças pagas ficam p
 As ações usam os endpoints existentes `PUT /billings/{id}`, `POST /billings/{id}/cancel` e `DELETE /billings/{id}`. Não há alteração no backend ou migração de banco nesta entrega.
 
 - **Boleto ativo no banco**: o cancelamento local exige a confirmação apresentada pela API. O título continua pagável até a baixa bancária; a janela mostra essa pendência. Cancelar no sistema não executa baixa automática na Ailos.
-- **Histórico bancário**: cobranças registradas, baixadas, em registro, com desfecho desconhecido ou em remessa CNAB não podem ser excluídas. A API continua validando a situação no momento da ação.
+- **Situação bancária**: títulos ativos, em registro, com desfecho desconhecido ou em remessa CNAB não podem ser excluídos. Após baixa confirmada e cancelamento local, a exclusão lógica é permitida se não houver pendências financeiras. A API continua validando a situação no momento da ação.
 - **Competência**: cancelar nesta janela mantém a competência ocupada, evitando nova cobrança do mês no fechamento. Excluir uma mensalidade pode liberar o mês para ser cobrado novamente; a confirmação explica esse efeito.
 - **Negociação/boleto único**: se a API exigir reabrir as cobranças originais, o operador precisa confirmar antes de prosseguir.
 - **Erro ou desistência**: a janela mantém os dados para revisão. Enquanto uma ação está em andamento, os campos e as outras ações ficam bloqueados, inclusive o fechamento por Esc ou pelo X.

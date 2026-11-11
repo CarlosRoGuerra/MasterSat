@@ -24,7 +24,7 @@ boleto pagável no banco, a cobrança não muda e não é emitida de novo.**
 | em registro | pedido enviado há menos de 30 min (individual ou lote) | nada; aguarde |
 | **desfecho desconhecido** | o pedido pode ter chegado ao banco e não houve resposta conclusiva: timeout de leitura, erro 5xx, "já cadastrado" sem os dados, falha local depois do aceite, ou reserva sem resposta há mais de 30 min | **nada**: nem editar, receber, cancelar, excluir ou emitir de novo |
 | registrado | boleto ativo no banco | receber (por fora), cancelar (com confirmação) |
-| baixado | título registrado com baixa confirmada | receber, cancelar, liberar competência |
+| baixado | título registrado com baixa confirmada | receber, cancelar, liberar competência; excluir logicamente se cancelada e sem pendências financeiras |
 | remessa CNAB | incluído numa remessa CNAB reservada (canal desligado hoje) | receber, cancelar com confirmação |
 
 Tabela completa por operação: `app/services/titulo_bancario.py` (`_PERMITIDO`).

@@ -92,11 +92,11 @@ export function BillingBatchModal({ action, ids, token, onClose, onCompleted }: 
   return <Modal open={!!action} onClose={close}
     title={action === 'excluir' ? 'Excluir boletos em lote' : 'Cancelar boletos em lote'} size="md"
     description={action === 'excluir'
-      ? 'Exclusão de cobranças canceladas sem histórico bancário. O registro fica preservado no sistema.'
+      ? 'Exclusão de cobranças canceladas, sem título ativo e sem pendências bancárias. A baixa de boletos emitidos precisa estar confirmada no sistema. O histórico fica preservado.'
       : 'Cancelamento das cobranças em aberto. As competências continuam ocupadas.'}
     footer={<div className="flex flex-wrap justify-end gap-2">
       <Button variant="secondary" disabled={applying} onClick={close}>{result ? 'Fechar resultado' : 'Voltar'}</Button>
-      {!result && !preview && !checking && <Button variant="secondary" onClick={() => setRetry((value) => value + 1)}>Conferir novamente</Button>}
+      {!result && !checking && <Button variant="secondary" disabled={applying} onClick={() => setRetry((value) => value + 1)}>Conferir novamente</Button>}
       {!result && <Button variant="danger" disabled={checking || applying || !ready} onClick={apply}>
         {applying ? 'Aplicando…' : `${action === 'excluir' ? 'Excluir' : 'Cancelar'} ${preview?.aplicados ?? 0} boleto(s)`}
       </Button>}

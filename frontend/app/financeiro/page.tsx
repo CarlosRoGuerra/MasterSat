@@ -2652,6 +2652,16 @@ export default function FinanceiroPage() {
                   Excluir
                 </Button>
               )}
+              {user?.role === 'admin' && selectedBilling.status === 'cancelada'
+                && selectedBilling.titulo_bancario?.canal === 'ailos_api'
+                && selectedBilling.titulo_bancario.estado === 'registrado' && (
+                <Button variant="secondary" disabled={processing} onClick={() => handleConfirmarBaixa(selectedBilling.id)}>
+                  Confirmar baixa já feita na Ailos
+                </Button>
+              )}
+              {selectedBilling.status === 'cancelada' && motivoBloqueioExclusao(selectedBilling) && (
+                <p className="w-full text-sm text-slate-500">{motivoBloqueioExclusao(selectedBilling)}</p>
+              )}
               {/* Carnê simples vive só no sistema: sem emissão nem consulta na Ailos. */}
               {(selectedBilling.status === 'pendente' || selectedBilling.status === 'vencida') && token && !selectedBilling.somente_sistema
                 && selectedBilling.payment_method !== 'pix_automatico' && !ehPixAutomatico(selectedBilling.titulo_bancario)
