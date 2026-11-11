@@ -54,6 +54,8 @@ type ClosureItem = {
   due_date: string;
   already_generated: boolean;
   billing_day: number | null;
+  installment_number?: number;
+  installment_total?: number;
 };
 
 type UninstallEventItem = {
@@ -96,6 +98,7 @@ type ChargeItem = {
 };
 
 type Simulation = {
+  carne_installments?: number | null;
   reference_month: string;
   billing_month?: string;
   total_contracts: number;
@@ -112,6 +115,7 @@ type Simulation = {
 };
 
 type GenerateResult = {
+  carne_installments?: number | null;
   status: 'completed';
   closure_batch_id: number;
   /** Formato canônico da API (YYYY-MM) — o mesmo aceito nos parâmetros. */
@@ -216,6 +220,9 @@ export default function FechamentoPage() {
   const [referenceMonth, setReferenceMonth] = useState(previousYearMonth);
   const [filterType, setFilterType] = useState<FilterType>('all');
   const [formaCobranca, setFormaCobranca] = useState('');
+  const [carneInstallments, setCarneInstallments] = useState('12');
+  const carneSicredi = formaCobranca === 'carne_sicredi';
+  const parcelasValidas = Number.isInteger(Number(carneInstallments)) && Number(carneInstallments) >= 2 && Number(carneInstallments) <= 60;
   const [selectedClientId, setSelectedClientId] = useState('');
   const [clients, setClients] = useState<ClientOption[]>([]);
   const searchClosureClients = useCallback(async (term: string) => {
@@ -285,6 +292,7 @@ export default function FechamentoPage() {
     const params = new URLSearchParams({ service_month: referenceMonth, filter_type: filterType });
     if (filterType === 'client' && selectedClientId) params.set('client_id', selectedClientId);
     if (formaCobranca) params.set('forma_cobranca', formaCobranca);
+    if (carneSicredi) params.set('carne_installments', carneInstallments);
     return params;
   }
 
@@ -533,11 +541,13 @@ export default function FechamentoPage() {
       chargeItems.length > 0);
 
   // A prévia agrupa os itens selecionados com a mesma regra do fechamento.
-  const titleGroups = new Map<string, { payerName: string; amountCents: number; itemCount: number }>();
-  function addPreviewItem(payerId: number, payerName: string, amount: number, individualKey: string) {
+  const titleGroups = new Map<string, { payerName: string; amountCents: number; itemCount: number; dueMonth?: string }>();
+  const firstDueMonth = simulation?.billing_month?.split('/').reverse().join('-');
+  function addPreviewItem(payerId: number, payerName: string, amount: number, individualKey: string, dueDate?: string) {
     const individual = simulation?.payer_boleto_formats?.[payerId] === 'individual';
-    const key = individual ? `${payerId}:${individualKey}` : String(payerId);
-    const group = titleGroups.get(key) ?? { payerName, amountCents: 0, itemCount: 0 };
+    const dueMonth = simulation?.carne_installments ? (dueDate?.slice(0, 7) ?? firstDueMonth) : undefined;
+    const key = `${individual ? `${payerId}:${individualKey}` : String(payerId)}:${dueMonth ?? ''}`;
+    const group = titleGroups.get(key) ?? { payerName, amountCents: 0, itemCount: 0, dueMonth };
     group.amountCents += Math.round(amount * 100);
     group.itemCount += 1;
     titleGroups.set(key, group);
@@ -545,7 +555,7 @@ export default function FechamentoPage() {
   for (const item of pendingRec) {
     if (selectedContractIds.has(item.contract_id)) {
       addPreviewItem(item.payer_client_id, item.payer_name || item.client_name,
-        item.total_first_billing, `contrato:${item.contract_id}`);
+        item.total_first_billing, `contrato:${item.contract_id}:${item.period_label}`, item.due_date);
     }
   }
   for (const event of desinstalacoes) {
@@ -559,7 +569,7 @@ export default function FechamentoPage() {
       item.amount_to_generate, `servico:${item.item_id}`);
   }
   const previewTitles = [...titleGroups.values()].sort((a, b) =>
-    a.payerName.localeCompare(b.payerName, 'pt-BR'));
+    a.payerName.localeCompare(b.payerName, 'pt-BR') || (a.dueMonth ?? '').localeCompare(b.dueMonth ?? ''));
 
   /* ── Confirm button label ── */
   function confirmLabel() {
@@ -625,11 +635,20 @@ export default function FechamentoPage() {
 
             <div>
               <p className="mb-1.5 text-xs font-semibold text-slate-500 dark:text-slate-400">Forma de cobrança</p>
-              <select className={fieldClass} value={formaCobranca} onChange={(e) => setFormaCobranca(e.target.value)}>
+              <select aria-label="Forma de cobrança" className={fieldClass} value={formaCobranca} onChange={(e) => setFormaCobranca(e.target.value)}>
                 <option value="">Todas</option>
                 {FILTROS_FORMA_COBRANCA.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
               </select>
             </div>
+
+            {carneSicredi && (
+              <div>
+                <label htmlFor="closure-carne-installments" className="mb-1.5 block text-xs font-semibold text-slate-500 dark:text-slate-400">Parcelas do carnê</label>
+                <input id="closure-carne-installments" type="number" min={2} max={60} step={1} className={`${fieldClass} w-28`}
+                  value={carneInstallments} onChange={event => setCarneInstallments(event.target.value)} />
+                <p className="mt-1 text-xs text-slate-500">Uma parcela por mês, a partir do mês seguinte e dentro da vigência do contrato. Meses já cobrados ficam preservados.</p>
+              </div>
+            )}
 
             {filterType === 'client' && (
               <div className="min-w-[240px]">
@@ -649,7 +668,7 @@ export default function FechamentoPage() {
           <div className="mt-6 flex justify-end">
             <Button
               onClick={runSimulation}
-              disabled={simLoading || guardLoading || (filterType === 'client' && !selectedClientId)}
+              disabled={simLoading || guardLoading || (carneSicredi && !parcelasValidas) || (filterType === 'client' && !selectedClientId)}
               className="gap-2"
             >
               {simLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
@@ -667,11 +686,13 @@ export default function FechamentoPage() {
         <>
           {simulation.billing_month && (
             <p className="mb-4 text-sm font-medium text-slate-700 dark:text-slate-200">
-              Serviços de {simulation.reference_month} · vencimentos em {simulation.billing_month}
+              Serviços de {simulation.reference_month} · {simulation.carne_installments ? `carnê com ${simulation.carne_installments} parcelas mensais · primeiro vencimento em` : 'vencimentos em'} {simulation.billing_month}
             </p>
           )}
           <p className="mb-4 text-sm text-slate-600 dark:text-slate-300">
-            Para clientes com boleto único, o fechamento reúne mensalidades, pró-rata, taxas e serviços em um título por responsável financeiro. O vencimento é o dia das mensalidades do responsável (taxas e serviços acompanham). O PDF do boleto traz todos os itens discriminados em anexo.
+            {simulation.carne_installments
+              ? 'O carnê mantém um título por mês para cada responsável financeiro com boleto único. Taxas e serviços deste fechamento entram somente na primeira parcela. As parcelas já lançadas não são geradas novamente.'
+              : 'Para clientes com boleto único, o fechamento reúne mensalidades, pró-rata, taxas e serviços em um título por responsável financeiro. O vencimento é o dia das mensalidades do responsável (taxas e serviços acompanham). O PDF do boleto traz todos os itens discriminados em anexo.'}
           </p>
           {/* KPIs */}
           <section className="mb-5 grid gap-5 sm:grid-cols-2 lg:grid-cols-5">
@@ -729,7 +750,7 @@ export default function FechamentoPage() {
               <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">
                 Títulos previstos ({previewTitles.length})
               </h3>
-              <span className="text-xs text-slate-500">Um título por responsável com boleto único; os itens aparecem detalhados no PDF.</span>
+              <span className="text-xs text-slate-500">{simulation.carne_installments ? 'Um título por mês e responsável com boleto único.' : 'Um título por responsável com boleto único; os itens aparecem detalhados no PDF.'}</span>
             </div>
             {previewTitles.length > 0 ? (
               <div className="max-h-64 divide-y divide-slate-100 overflow-y-auto dark:divide-slate-800">
@@ -737,6 +758,7 @@ export default function FechamentoPage() {
                   <div key={`${group.payerName}-${index}`} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
                     <span className="font-medium text-slate-700 dark:text-slate-200">
                       {group.payerName} <span className="font-normal text-slate-500">· {group.itemCount} lançamento(s)</span>
+                      {group.dueMonth && <span className="ml-1 font-normal text-slate-500">· vencimento em {group.dueMonth.split('-').reverse().join('/')}</span>}
                     </span>
                     <span className="font-semibold text-slate-900 dark:text-white">{fmt(group.amountCents / 100)}</span>
                   </div>
@@ -776,7 +798,7 @@ export default function FechamentoPage() {
                 )}
               </div>
               <span className="text-xs text-slate-500">
-                {selectedContractIds.size} de {pendingRec.length} selecionados
+                {pendingRec.filter(item => selectedContractIds.has(item.contract_id)).length} de {pendingRec.length} selecionados
               </span>
             </div>
 
@@ -805,7 +827,7 @@ export default function FechamentoPage() {
                       {pagRec.slice.map((item) => {
                         const hasFirstCharges = item.first_month_charges?.length > 0;
                         return (
-                        <Tr key={item.contract_id} className={!item.already_generated && !selectedContractIds.has(item.contract_id) ? 'opacity-40' : ''}>
+                        <Tr key={`${item.contract_id}:${item.period_label}`} className={!item.already_generated && !selectedContractIds.has(item.contract_id) ? 'opacity-40' : ''}>
                           <Td>
                             {!item.already_generated && (
                               <input
@@ -834,6 +856,7 @@ export default function FechamentoPage() {
                             {fmtDate(item.due_date)}
                           </Td>
                           <Td>
+                            {item.installment_number && <span className="mb-1 block text-xs font-semibold text-slate-700 dark:text-slate-300">Parcela {item.installment_number}/{item.installment_total}</span>}
                             {hasFirstCharges ? (
                               <span className="inline-flex flex-col gap-0.5">
                                 <span className="inline-flex items-center gap-1 rounded-md bg-violet-100 px-2 py-0.5 text-xs font-semibold text-violet-700 dark:bg-violet-950/40 dark:text-violet-400">
@@ -1177,7 +1200,7 @@ export default function FechamentoPage() {
                 <MetricCard
                   label="Títulos para emitir"
                   value={generateResult.payment_titles_generated}
-                  sub="um por responsável com boleto único"
+                  sub={generateResult.carne_installments ? 'um por mês e responsável com boleto único' : 'um por responsável com boleto único'}
                   icon={<ClipboardList className="h-5 w-5" />}
                 />
                 <MetricCard
@@ -1214,7 +1237,7 @@ export default function FechamentoPage() {
         </Card>
       )}
 
-      <ClosureDeliveryModal open={deliveryOpen} token={token} onClose={() => setDeliveryOpen(false)} initialLoteId={generateResult?.closure_batch_id} />
+      <ClosureDeliveryModal open={deliveryOpen} token={token} onClose={() => setDeliveryOpen(false)} initialLoteId={generateResult?.closure_batch_id} initialBanco={generateResult?.carne_installments ? 'sicredi' : 'ailos'} />
 
       <Modal open={excludingFee !== null} onClose={closeExcludeFee} title="Excluir taxa do fechamento" size="sm"
         description={excludingFee ? `${excludingFee.client_name} · ${excludingFee.vehicle_plate ?? 'Sem placa'} · ${fmt(excludingFee.fee_amount)}` : undefined}>

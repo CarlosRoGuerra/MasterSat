@@ -33,6 +33,12 @@ let emissionFailure: number | null;
 const calls = () =>
   vi.mocked(apiFetch).mock.calls.filter(([path]) => String(path).endsWith('/enviar'));
 
+it('preseleciona Sicredi ao abrir o lote de um carne sem emitir automaticamente', async () => {
+  render(<ClosureDeliveryModal open token="test-token" onClose={() => {}} initialLoteId={10} initialBanco="sicredi" />);
+  await waitFor(() => expect(screen.getByLabelText('Banco para emissão')).toHaveValue('sicredi'));
+  expect(vi.mocked(apiFetch).mock.calls.filter(([path]) => path === '/sicredi/boletos' || path === '/ailos/boletos')).toHaveLength(0);
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(window, 'confirm').mockReturnValue(true);

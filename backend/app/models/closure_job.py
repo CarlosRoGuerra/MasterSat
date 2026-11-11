@@ -11,7 +11,8 @@ class ClosureJob(Base, TimestampMixin):
     """
     Registra cada execução de fechamento como um lote identificável.
     ``result.payment_billing_ids`` contém apenas os títulos efetivos criados
-    nessa execução, sem carnês nem componentes substituídos.
+    nessa execução, incluindo parcelas de carnê preparadas pelo fechamento e
+    sem componentes substituídos.
     """
 
     __tablename__ = 'closure_jobs'

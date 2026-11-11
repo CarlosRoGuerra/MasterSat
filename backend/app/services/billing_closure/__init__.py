@@ -20,6 +20,7 @@ from app.models.tracker import Tracker
 from app.models.uninstall_event import UninstallEvent
 from app.models.vehicle import Vehicle
 from app.services.billing_closure.charge_items import _pending_charge_items
+from app.services.billing_closure.carne import expand_carne_items, validate_carne_request
 from app.services.billing_closure.recurring import (
     _billing_due_in_month,
     _first_cycle_charge_items,
@@ -81,7 +82,9 @@ def simulate_closure(
     commit: bool = True,
     activity_month: date | None = None,
     forma_cobranca: str | None = None,
+    carne_installments: int | None = None,
 ) -> dict:
+    validate_carne_request(forma_cobranca, carne_installments)
     # commit=False quando chamada de dentro de execute_closure: o refresh abaixo
     # comitava e, com isso, encerrava a transação que segura o lock da
     # competência — na prática o lock morria aqui, antes de qualquer cobrança
@@ -299,6 +302,9 @@ def simulate_closure(
             'tracker_install_date': (tracker.install_date if tracker else None),
         })
 
+    if carne_installments is not None:
+        items = expand_carne_items(db, items, activity_month, carne_installments)
+
     # Exclui dos serviços avulsos os itens já embutidos em cobranças de primeiro mês
     embedded_ids: set[int] = {
         c['item_id']
@@ -380,7 +386,8 @@ def simulate_closure(
 
     return {
         'reference_month': reference_month.strftime('%m/%Y'),
-        'total_contracts': len(items),
+        'total_contracts': len({item['contract_id'] for item in items}),
+        'carne_installments': carne_installments,
         'to_generate': len(to_generate),
         'already_generated': len(already_done),
         'total_amount': round(total_amount, 2),
@@ -426,6 +433,7 @@ def execute_closure(
     *,
     activity_month: date | None = None,
     forma_cobranca: str | None = None,
+    carne_installments: int | None = None,
 ) -> dict:
     # Trava a competência ANTES de simular: simulação + geração ficam atômicas em
     # relação a outro fechamento do mesmo mês, fechando a corrida de duplicação.
@@ -436,6 +444,7 @@ def execute_closure(
     simulation = simulate_closure(
         db, reference_month, filter_type, client_id,
         commit=False, activity_month=activity_month, forma_cobranca=forma_cobranca,
+        carne_installments=carne_installments,
     )
     # Ao receber qualquer lista de seleção, opera em modo snapshot/fail-closed:
     # categorias omitidas significam seleção vazia, não "processar tudo". Sem
@@ -510,6 +519,15 @@ def execute_closure(
             _validate_locked_contract_for_closure(
                 db, locked_contract, allow_deleted_tracker=final_item is not None,
             )
+
+    for item in to_generate:
+        if not item.get('installment_number'):
+            continue
+        contract = locked_contracts[item['contract_id']]
+        service_month = add_months(activity_month, item['installment_number'] - 1)
+        if ((contract.end_date and contract.end_date < service_month)
+                or _has_existing_billing(db, contract.id, item['period_label'])):
+            raise ValueError(f'Contrato #{contract.id} mudou durante a preparação do carnê. Refaça a simulação.')
 
     # Serviços que a simulação decidiu embutir na 1ª mensalidade: outro
     # fechamento (de outro mês) pode tê-los faturado depois da simulação e
@@ -586,6 +604,9 @@ def execute_closure(
             )
             billing_type = 'primeira_mensalidade'
 
+            if item.get('installment_number'):
+                title += f' • parcela {item["installment_number"]}/{item["installment_total"]}'
+                billing_type = 'carne'
             billing = Billing(
                 contract_id=contract.id,
                 client_id=contract.client_id,
@@ -600,6 +621,8 @@ def execute_closure(
                 notes=notes,
                 title=title,
                 billing_type=billing_type,
+                installment_number=item.get('installment_number'),
+                installment_total=item.get('installment_total'),
             )
             db.add(billing)
             db.flush()
@@ -632,6 +655,9 @@ def execute_closure(
                 notes = f'Fechamento — {item["period_label"]}'
                 billing_type = 'recorrente'
 
+            if item.get('installment_number'):
+                title += f' • parcela {item["installment_number"]}/{item["installment_total"]}'
+                billing_type = 'carne'
             billing = Billing(
                 contract_id=contract.id,
                 client_id=contract.client_id,
@@ -646,6 +672,8 @@ def execute_closure(
                 notes=notes,
                 title=title,
                 billing_type=billing_type,
+                installment_number=item.get('installment_number'),
+                installment_total=item.get('installment_total'),
             )
             db.add(billing)
             db.flush()
@@ -789,12 +817,17 @@ def execute_closure(
     source_service_amount = sum(Decimal(str(db.get(Billing, bid).amount)) for bid in service_billing_ids)
     payment_billing_ids = created_ids + uninstall_billing_ids + service_billing_ids
     consolidated_ids: list[int] = []
-    by_payer: dict[int, list[Billing]] = defaultdict(list)
+    by_payer: dict[tuple[int, date], list[Billing]] = defaultdict(list)
     for billing_id in payment_billing_ids:
         billing = db.get(Billing, billing_id)
-        by_payer[billing.payer_client_id or billing.client_id].append(billing)
+        # Each month of a booklet remains a separate payable title. Extra fees
+        # and services are included only in the first month of this closing.
+        due_month = (billing.due_date.replace(day=1)
+                     if carne_installments is not None and billing.billing_type == 'carne'
+                     else reference_month.replace(day=1))
+        by_payer[(billing.payer_client_id or billing.client_id, due_month)].append(billing)
 
-    for payer_id, components in by_payer.items():
+    for (payer_id, due_month), components in by_payer.items():
         if len(components) < 2:
             continue
         payer = db.get(Client, payer_id)
@@ -807,7 +840,9 @@ def execute_closure(
         # Competência do título único é a do serviço; o vencimento continua
         # no mês seguinte. As componentes conservam a competência técnica que
         # protege cada contrato contra cobrança duplicada.
-        period = activity_month.strftime('%m/%Y')
+        offset = ((due_month.year - reference_month.year) * 12
+                  + due_month.month - reference_month.month) if carne_installments else 0
+        period = add_months(activity_month, offset).strftime('%m/%Y')
         details = []
         for component in components:
             vehicle = db.get(Vehicle, component.vehicle_id) if component.vehicle_id else None
@@ -821,6 +856,8 @@ def execute_closure(
             payer_client_id=payer_id,
             billing_type=CONSOLIDATED_BILLING_TYPE,
             title=f'Fechamento {period} - ' + ('Pix Automático' if payer.forma_cobranca == 'pix_automatico' else 'boleto único'),
+            installment_number=offset + 1 if carne_installments else None,
+            installment_total=carne_installments,
             amount=total,
             due_date=due_date,
             status=BillingStatus.PENDING if due_date >= hoje() else BillingStatus.OVERDUE,
@@ -838,7 +875,7 @@ def execute_closure(
                 created_ids.remove(component.id)
                 monthly_source_ids.remove(component.id)
         payment_billing_ids.append(unico.id)
-        if any(component.billing_type in ('recorrente', 'prorata', 'primeira_mensalidade') for component in components):
+        if any(component.billing_type in RECURRING_BILLING_TYPES for component in components):
             created_ids.append(unico.id)
         consolidated_ids.append(unico.id)
 
@@ -847,7 +884,7 @@ def execute_closure(
         filter_type=filter_type,
         client_id=client_id,
         status='completed',
-        result={'payment_billing_ids': payment_billing_ids},
+        result={'payment_billing_ids': payment_billing_ids, 'carne_installments': carne_installments},
         started_at=now_utc,
         completed_at=datetime.now(timezone.utc),
     )
@@ -873,6 +910,7 @@ def execute_closure(
 
     return {
         'closure_batch_id': lote.id,
+        'carne_installments': carne_installments,
         'reference_month': simulation['reference_month'],
         'generated': len(created_ids),
         'billing_ids': created_ids,

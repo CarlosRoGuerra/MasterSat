@@ -192,8 +192,10 @@ _FORMA_COBRANCA = Query(
 )
 
 
-def _simulate_for_month(db, billing_month, activity_month, filter_type, client_id, forma_cobranca=None):
+def _simulate_for_month(db, billing_month, activity_month, filter_type, client_id, forma_cobranca=None, carne_installments=None):
     options = {'activity_month': activity_month} if activity_month else {}
+    if carne_installments is not None:
+        options['carne_installments'] = carne_installments
     simulation = simulate_closure(
         db, billing_month, filter_type, client_id, forma_cobranca=forma_cobranca, **options,
     )
@@ -201,7 +203,7 @@ def _simulate_for_month(db, billing_month, activity_month, filter_type, client_i
         simulation['billing_month'] = simulation['reference_month']
         simulation['reference_month'] = activity_month.strftime('%m/%Y')
         for item in simulation['items']:
-            item['service_period_label'] = simulation['reference_month']
+            item.setdefault('service_period_label', simulation['reference_month'])
     return simulation
 
 
@@ -212,6 +214,7 @@ def simulate(
     filter_type: str = Query(default='all', pattern='^(all|pf|pj|client)$'),
     client_id: int | None = None,
     forma_cobranca: str | None = _FORMA_COBRANCA,
+    carne_installments: int | None = Query(default=None, ge=2, le=60, description="Parcelas mensais do carne Sicredi"),
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*ALLOWED_ROLES)),
 ):
@@ -219,7 +222,7 @@ def simulate(
     if filter_type == 'client' and not client_id:
         raise HTTPException(status_code=422, detail='client_id obrigatório quando filter_type=client.')
     try:
-        return _simulate_for_month(db, ref, activity_month, filter_type, client_id, forma_cobranca)
+        return _simulate_for_month(db, ref, activity_month, filter_type, client_id, forma_cobranca, carne_installments)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -231,6 +234,7 @@ def simulate_pdf(
     filter_type: str = Query(default='all', pattern='^(all|pf|pj|client)$'),
     client_id: int | None = None,
     forma_cobranca: str | None = _FORMA_COBRANCA,
+    carne_installments: int | None = Query(default=None, ge=2, le=60, description="Parcelas mensais do carne Sicredi"),
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*ALLOWED_ROLES)),
 ):
@@ -238,7 +242,7 @@ def simulate_pdf(
     if filter_type == 'client' and not client_id:
         raise HTTPException(status_code=422, detail='client_id obrigatório quando filter_type=client.')
     try:
-        simulation = _simulate_for_month(db, ref, activity_month, filter_type, client_id, forma_cobranca)
+        simulation = _simulate_for_month(db, ref, activity_month, filter_type, client_id, forma_cobranca, carne_installments)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     pdf_buffer = generate_closure_pdf(simulation)
@@ -257,6 +261,7 @@ def simulate_xlsx(
     filter_type: str = Query(default='all', pattern='^(all|pf|pj|client)$'),
     client_id: int | None = None,
     forma_cobranca: str | None = _FORMA_COBRANCA,
+    carne_installments: int | None = Query(default=None, ge=2, le=60, description="Parcelas mensais do carne Sicredi"),
     db: Session = Depends(get_db),
     _: object = Depends(require_roles(*ALLOWED_ROLES)),
 ):
@@ -264,7 +269,7 @@ def simulate_xlsx(
     if filter_type == 'client' and not client_id:
         raise HTTPException(status_code=422, detail='client_id obrigatório quando filter_type=client.')
     try:
-        simulation = _simulate_for_month(db, ref, activity_month, filter_type, client_id, forma_cobranca)
+        simulation = _simulate_for_month(db, ref, activity_month, filter_type, client_id, forma_cobranca, carne_installments)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     xlsx_buffer = generate_closure_xlsx(simulation)
@@ -283,6 +288,7 @@ def generate(
     filter_type: str = Query(default='all', pattern='^(all|pf|pj|client)$'),
     client_id: int | None = None,
     forma_cobranca: str | None = _FORMA_COBRANCA,
+    carne_installments: int | None = Query(default=None, ge=2, le=60, description="Parcelas mensais do carne Sicredi"),
     contract_ids: list[int] | None = Query(default=None, description='Seleção exata de contratos recorrentes'),
     uninstall_event_ids: list[int] | None = Query(default=None, description='Seleção exata de eventos de desinstalação'),
     charge_item_ids: list[int] | None = Query(default=None, description='Seleção exata de serviços avulsos'),
@@ -299,6 +305,8 @@ def generate(
 
     try:
         options = {'activity_month': activity_month} if activity_month else {}
+        if carne_installments is not None:
+            options['carne_installments'] = carne_installments
         result = execute_closure(
             db, ref, filter_type, client_id,
             contract_ids=contract_ids,

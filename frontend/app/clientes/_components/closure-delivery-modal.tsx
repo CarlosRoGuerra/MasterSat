@@ -110,11 +110,13 @@ export function ClosureDeliveryModal({
   token,
   onClose,
   initialLoteId,
+  initialBanco = 'ailos',
 }: {
   open: boolean;
   token: string | null;
   onClose: () => void;
   initialLoteId?: number | null;
+  initialBanco?: BancoBoleto;
 }) {
   const [lotes, setLotes] = useState<Lote[]>([]);
   const [mesServico, setMesServico] = useState('');
@@ -156,7 +158,7 @@ export function ClosureDeliveryModal({
   const quantidadeValida = Number.isInteger(Number(quantidade)) && Number(quantidade) > 0;
   const filaAtiva = itens.some(item => item.estado === 'aguardando' || item.estado === 'processando');
 
-  useEffect(() => { setBanco('ailos'); }, [open, loteId]);
+  useEffect(() => { setBanco(initialBanco === 'sicredi' && sicrediDisponivel ? 'sicredi' : 'ailos'); }, [open, loteId, initialBanco, sicrediDisponivel]);
   useEffect(() => {
     if (!sicrediDisponivel) setBanco('ailos');
   }, [sicrediDisponivel]);
