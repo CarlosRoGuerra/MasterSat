@@ -24,9 +24,12 @@ Pré-requisitos:
 
 Uso:
   cd backend
-  python scripts/ailos_homologacao.py [--output-dir DIR]
+  python scripts/ailos_homologacao.py [--output-dir DIR] [--primeiro-numero 380]
+      [--valor 10.00] [--vencimento AAAA-MM-DD]
 
-Seguro para re-executar: faz UPSERT dos registros de teste pelo CPF/CNPJ.
+Usar uma base isolada de homologação, com cooperado de teste já autorizado.
+Seguro para re-executar nos mesmos números: faz UPSERT pelo CPF/CNPJ e
+recusa numeração ocupada por outra cobrança. Só aceita o host de sandbox.
 """
 from __future__ import annotations
 
@@ -113,14 +116,16 @@ def _upsert_cliente(db, dados: dict) -> Client:
     return cliente
 
 
-def _upsert_billing(db, cliente: Client, vencimento: date) -> Billing:
+def _upsert_billing(db, cliente: Client, vencimento: date, *, numero: int | None = None,
+                    valor: Decimal = Decimal('99.90')) -> Billing:
     billing = db.query(Billing).filter_by(client_id=cliente.id, notes=NOTES_MARKER).first()
     if billing is None:
         billing = Billing(
+            id=numero,
             client_id=cliente.id,
             title='HOMOLOGACAO AILOS',
             billing_type='avulsa',
-            amount=Decimal('99.90'),
+            amount=valor,
             due_date=vencimento,
             status=BillingStatus.PENDING,
             period_label=vencimento.strftime('%m/%Y'),
@@ -128,8 +133,10 @@ def _upsert_billing(db, cliente: Client, vencimento: date) -> Billing:
         )
         db.add(billing)
     else:
+        if numero is not None and billing.id != numero:
+            raise ValueError('O registro de teste existente usa outra numeração; utilize uma base isolada de homologação.')
         billing.due_date = vencimento
-        billing.amount = Decimal('99.90')
+        billing.amount = valor
         billing.status = BillingStatus.PENDING
 
     db.commit()
@@ -138,6 +145,9 @@ def _upsert_billing(db, cliente: Client, vencimento: date) -> Billing:
 
 
 def _gerar_pdf(db, billing: Billing, cliente: Client) -> bytes:
+    ailos_boleto = db.query(AilosBoleto).filter_by(billing_id=billing.id).first()
+    if ailos_boleto is None or not ailos_boleto.linha_digitavel or not ailos_boleto.codigo_barras:
+        raise ValueError('Registro ainda não confirmado pela Ailos; nenhum PDF de boleto será gerado com códigos calculados.')
     endereco = ' '.join(filter(None, [
         cliente.address_line, cliente.address_number, cliente.address_complement,
     ]))
@@ -148,25 +158,41 @@ def _gerar_pdf(db, billing: Billing, cliente: Client) -> bytes:
         sacado_nome=cliente.name,
         sacado_cpf_cnpj=cliente.cpf_cnpj or '',
         sacado_endereco=endereco,
+        sacado_cidade=cliente.city or '',
+        sacado_cep=cliente.zip_code or '',
+        sacado_uf=cliente.state or '',
         data_emissao=date.today(),
         instrucoes=[
             'HOMOLOGACAO AILOS - NAO RECEBER, BOLETO DE TESTE.',
             f'Referente ao contrato de rastreamento. Cobranca #{billing.id}.',
         ],
     )
-    ailos_boleto = db.query(AilosBoleto).filter_by(billing_id=billing.id).first()
     dados = ailos_boletos.aplicar_dados_oficiais_ailos(dados, ailos_boleto)
     return gerar_boleto_pdf(dados)
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser(description='Gera boletos de homologação via API Ailos')
     parser.add_argument(
         '--output-dir',
         default=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'homologacao_pdfs'),
         help='Diretório onde os PDFs gerados serão salvos (default: backend/homologacao_pdfs/)',
     )
+    parser.add_argument('--primeiro-numero', type=int, default=380)
+    parser.add_argument('--valor', type=Decimal, default=Decimal('10.00'))
+    parser.add_argument('--vencimento', type=date.fromisoformat)
     args = parser.parse_args()
+    from app.core.config import settings
+    from urllib.parse import urlsplit
+    if settings.ailos_env != 'sandbox' or any(
+        urlsplit(url).hostname != 'apiendpointhml.ailos.coop.br'
+        for url in (settings.ailos_apim_base_url, settings.ailos_gateway_base_url)
+    ):
+        parser.error('Este roteiro só permite a API oficial de homologação Ailos.')
+    if not 380 <= args.primeiro_numero <= args.primeiro_numero + len(CLIENTES_HOMOLOGACAO) - 1 <= 390:
+        parser.error('Use três números dentro da faixa de homologação 380 a 390.')
+    if not args.valor.is_finite() or args.valor <= 0 or args.valor != args.valor.quantize(Decimal('0.01')):
+        parser.error('Informe um valor positivo com até duas casas decimais.')
 
     print('=== Homologação Ailos — Cobrança Bancária API ===\n')
     print('Pré-requisitos:')
@@ -179,7 +205,7 @@ def main() -> None:
     output_dir = os.path.abspath(args.output_dir)
     os.makedirs(output_dir, exist_ok=True)
 
-    vencimento = date.today() + timedelta(days=15)
+    vencimento = args.vencimento or date.today() + timedelta(days=15)
 
     db = SessionLocal()
     sucesso = 0
@@ -188,10 +214,17 @@ def main() -> None:
     client_ids: list[int] = []
 
     try:
+        for idx, dados_cliente in enumerate(CLIENTES_HOMOLOGACAO):
+            existente = db.get(Billing, args.primeiro_numero + idx)
+            if existente is not None:
+                cliente_existente = db.get(Client, existente.client_id)
+                if existente.notes != NOTES_MARKER or cliente_existente.cpf_cnpj != dados_cliente['cpf_cnpj']:
+                    raise ValueError('Numeração ocupada por outra cobrança. Utilize uma base isolada de homologação.')
         for idx, dados_cliente in enumerate(CLIENTES_HOMOLOGACAO, start=1):
             print(f'--- Registro {idx}: {dados_cliente["name"]} ---')
             cliente = _upsert_cliente(db, dados_cliente)
-            billing = _upsert_billing(db, cliente, vencimento)
+            billing = _upsert_billing(db, cliente, vencimento,
+                                      numero=args.primeiro_numero + idx - 1, valor=args.valor)
             client_ids.append(cliente.id)
             billing_ids.append(billing.id)
 
@@ -229,7 +262,8 @@ def main() -> None:
     print(f"  DELETE FROM ailos_boletos WHERE billing_id IN ({', '.join(str(b) for b in billing_ids)});")
     print(f"  DELETE FROM billings WHERE id IN ({', '.join(str(b) for b in billing_ids)});")
     print(f"  DELETE FROM clients WHERE id IN ({', '.join(str(c) for c in client_ids)});")
+    return 1 if erros else 0
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())
