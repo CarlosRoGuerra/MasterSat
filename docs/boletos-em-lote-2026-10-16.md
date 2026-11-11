@@ -21,20 +21,22 @@ No Financeiro, alterar vencimento, fechamento, lote ou filtros de emissão limpa
 | Pendente ou vencida, sem título bancário | Permitido | Cancele primeiro |
 | Cancelada, sem título bancário | Ignorada | Permitido, com exclusão lógica |
 | Paga | Protegida | Protegida |
-| Título registrado ou reserva CNAB | Exige ciência da baixa bancária | Bloqueado |
-| Registro em andamento ou desfecho desconhecido | Bloqueado | Bloqueado |
+| Título registrado ou reserva CNAB | Exige ciência da baixa bancária | Permitido se cancelada; exige ciência da baixa na origem |
+| Registro em andamento ou desfecho desconhecido | Bloqueado | Permitido se já cancelada; conciliação preservada |
 | Título com baixa bancária confirmada, sem pendências | Permitido se ainda aberta | Permitido se cancelada no sistema; histórico preservado |
-| Pendência financeira no título baixado | Confira a pendência no Financeiro | Resolva a pendência antes de excluir |
-| Negociação que exige reabrir originais | Use a ação individual para conferir a reversão | Use a ação individual para conferir a reversão |
+| Pendência financeira no título baixado | Confira a pendência no Financeiro | Permitido se cancelada; pendência preservada |
+| Negociação que exige reabrir originais | Use a ação individual para conferir a reversão | Cancelada pode sair da carteira sem reabrir originais |
 
 **Cancelar no sistema mantém o mês ocupado e não executa baixa automática no banco.** Títulos ativos continuam pagáveis até a baixa bancária. A confirmação explica essa pendência; o resultado informa os títulos afetados e o nosso número, quando disponível. A reserva CNAB permanece preservada.
 
-**Excluir uma mensalidade pode liberar o mês para nova cobrança pelo fechamento.** O lote exige uma confirmação específica para esse efeito. A exclusão retira a cobrança da carteira, preservando o registro e o histórico no banco de dados.
+**Excluir no MasterSat não dá baixa no banco ou sistema de pagamento de origem.** O aviso aparece no detalhe, na confirmação individual e na conferência do lote. O operador deve providenciar ou conferir a baixa na origem. Qualquer cobrança cancelada pode sair da carteira, preservando o registro, os títulos e as pendências no Financeiro.
+
+**Excluir uma mensalidade pode liberar o mês para nova cobrança pelo fechamento**, quando não há título ativo, pendência ou vínculo de substituição. O lote exige confirmação específica para esse efeito. Nos demais casos, a competência continua reservada mesmo após a exclusão, protegida pelo índice único do banco. Uma liberação posterior exige resolver a situação bancária e usar o fluxo de liberação de competência.
 
 Cada item aplicado recebe a justificativa nas observações, no histórico de alterações e na auditoria. Os bloqueados permanecem intactos. Falha inesperada durante a gravação desfaz todas as alterações dessa aplicação do lote.
 
 Se o boleto já foi baixado no banco, mas a conferência ainda o mostra como ativo,
-atualize a situação bancária antes de excluir. Na Ailos, o administrador pode usar
+o administrador pode atualizar a situação bancária, mas isso não é requisito para excluir uma cancelada. Na Ailos, use
 **Confirmar baixa já feita na Ailos** no detalhe de uma cobrança cancelada, ou
 **Confirmar baixa** nas pendências bancárias. Essa declaração registra a justificativa
 e o operador; não envia uma ordem de baixa ao banco. No Sicredi, use **Consultar no

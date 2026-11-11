@@ -33,19 +33,20 @@ class Billing(Base, TimestampMixin, SoftDeleteMixin):
         # Uma mensalidade por contrato e competência (FIN-04/FIN-01). Cancelada
         # continua ocupando o mês — é o que impede o fechamento de recobrar um
         # mês negociado ou consolidado. Só sai do índice quando o financeiro
-        # libera a competência explicitamente (competencia_liberada) ou remove
-        # a cobrança. Substitui uq_billings_contract_period_recurring, que
+        # libera a competência explicitamente (competencia_liberada). Excluir
+        # uma cancelada com pendência bancária mantém a reserva do mês.
+        # Substitui uq_billings_contract_period_recurring, que
         # comparava o texto do rótulo.
         Index(
             'uq_billings_contract_competencia_recorrente',
             'contract_id', 'competencia',
             unique=True,
             postgresql_where=text(
-                f'is_deleted = false AND competencia_liberada = false '
+                f"(is_deleted = false OR status = 'CANCELED') AND competencia_liberada = false "
                 f'AND billing_type IN ({_TIPOS_SQL})'
             ),
             sqlite_where=text(
-                f'is_deleted = 0 AND competencia_liberada = 0 '
+                f"(is_deleted = 0 OR status = 'CANCELED') AND competencia_liberada = 0 "
                 f'AND billing_type IN ({_TIPOS_SQL})'
             ),
         ),
@@ -57,10 +58,12 @@ class Billing(Base, TimestampMixin, SoftDeleteMixin):
             'item_id', 'installment_number',
             unique=True,
             postgresql_where=text(
-                "is_deleted = false AND (status <> 'CANCELED' OR substituted_by_id IS NOT NULL)"
+                "(is_deleted = false OR (status = 'CANCELED' AND competencia_liberada = false)) "
+                "AND (status <> 'CANCELED' OR substituted_by_id IS NOT NULL)"
             ),
             sqlite_where=text(
-                "is_deleted = 0 AND (status <> 'CANCELED' OR substituted_by_id IS NOT NULL)"
+                "(is_deleted = 0 OR (status = 'CANCELED' AND competencia_liberada = 0)) "
+                "AND (status <> 'CANCELED' OR substituted_by_id IS NOT NULL)"
             ),
         ),
         # Removida não é validada: é histórico, e remover é o saneamento de

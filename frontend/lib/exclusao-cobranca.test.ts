@@ -26,22 +26,27 @@ describe('motivoBloqueioExclusao', () => {
     expect(motivoBloqueioExclusao({ ...cancelada, status: 'paga' })).toMatch(/cancelada/);
   });
 
-  it('libera cancelada com baixa confirmada e bloqueia pendência financeira', () => {
+  it('libera cancelada com baixa confirmada ou pendência financeira preservada', () => {
     expect(motivoBloqueioExclusao({ ...cancelada, titulo_bancario: { estado: 'baixado' } })).toBeNull();
     expect(motivoBloqueioExclusao({ ...cancelada, titulo_bancario: {
       estado: 'baixado', pendencia: 'pago_em_cobranca_cancelada',
-    } })).toMatch(/pendência bancária/);
+    } })).toBeNull();
   });
 
   it.each(['registrado', 'em_registro', 'desfecho_desconhecido', 'remessa_cnab'] as const)(
-    'bloqueia cancelada com título %s no banco',
+    'permite retirar cancelada com título %s da carteira',
     (estado) => {
-      expect(motivoBloqueioExclusao({ ...cancelada, titulo_bancario: { estado } })).toMatch(/banco/);
+      expect(motivoBloqueioExclusao({ ...cancelada, titulo_bancario: { estado } })).toBeNull();
     },
   );
 });
 
 describe('mensagemConfirmacaoExclusao', () => {
+  it('avisa sempre para providenciar a baixa no sistema de pagamento de origem', () => {
+    expect(mensagemConfirmacaoExclusao(cancelada)).toContain('não dá baixa no banco ou sistema de pagamento de origem');
+    const unsafe = { ...cancelada, billing_type: 'carne', contract_id: 3, titulo_bancario: { estado: 'registrado' as const } };
+    expect(mensagemConfirmacaoExclusao(unsafe)).not.toContain('o mês fica livre');
+  });
   it('avisa que a mensalidade libera o mês para o fechamento', () => {
     const msg = mensagemConfirmacaoExclusao({
       ...cancelada, billing_type: 'recorrente', contract_id: 3, period_label: '09/2026',

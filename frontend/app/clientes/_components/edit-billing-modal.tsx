@@ -89,6 +89,9 @@ export function EditBillingModal({
             <p className="text-sm text-slate-500 dark:text-slate-400">
               Cancelar mantém a cobrança no histórico. Excluir retira a cobrança da carteira, preservando o registro no sistema.
             </p>
+            <p className="text-sm text-amber-700 dark:text-amber-300">
+              Excluir no MasterSat não dá baixa no banco ou sistema de pagamento de origem. Providencie ou confirme a baixa também na origem.
+            </p>
             {deleteBlocked && <p className="text-xs text-slate-500 dark:text-slate-400">{deleteBlocked}</p>}
             <div className="flex flex-wrap gap-2">
               <Button variant="secondary" onClick={onCancel} disabled={busy || !editable}>

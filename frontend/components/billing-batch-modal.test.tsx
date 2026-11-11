@@ -70,7 +70,7 @@ describe('conferência e resultado do lote de boletos', () => {
     await user.click(button);
     await screen.findByRole('button', { name: 'Fechar resultado' });
     expect(JSON.parse(api.mock.calls[1][1].body).confirmar_boleto_ailos).toBe(true);
-    expect(screen.getByText(/continuam pagáveis no banco/)).toBeInTheDocument();
+    expect(screen.getByText(/competência continua reservada/)).toBeInTheDocument();
   });
 
   it('avisa e exige confirmação da liberação do mês na exclusão', async () => {

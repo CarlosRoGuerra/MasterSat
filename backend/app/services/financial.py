@@ -159,11 +159,11 @@ def occupying_recurring_filter():
     índice uq_billings_contract_competencia_recorrente.
 
     Cancelada continua ocupando (é o que impede recobrar um mês consolidado,
-    negociado ou dispensado). Só sai quem foi removido ou teve a competência
-    liberada explicitamente (release_billing_competencia).
+    negociado ou dispensado). A exclusão só libera quando não existe risco
+    bancário nem substituição; uma cancelada removida pode manter a reserva.
     """
     return (
-        Billing.is_deleted.is_(False),
+        or_(Billing.is_deleted.is_(False), Billing.status == BillingStatus.CANCELED),
         Billing.competencia_liberada.is_(False),
         Billing.billing_type.in_(RECURRING_BILLING_TYPES),
     )
@@ -524,7 +524,8 @@ def _occupied_item_installments(db: Session, item_id: int) -> set[int]:
         select(Billing.installment_number).where(
             Billing.item_id == item_id,
             Billing.installment_number.is_not(None),
-            Billing.is_deleted.is_(False),
+            or_(Billing.is_deleted.is_(False),
+                (Billing.status == BillingStatus.CANCELED) & Billing.competencia_liberada.is_(False)),
             or_(
                 Billing.status != BillingStatus.CANCELED,
                 Billing.substituted_by_id.is_not(None),
@@ -540,7 +541,8 @@ def _item_has_installment_due_in_month(db: Session, item_id: int, reference: dat
     return db.scalar(
         select(Billing.id).where(
             Billing.item_id == item_id,
-            Billing.is_deleted.is_(False),
+            or_(Billing.is_deleted.is_(False),
+                (Billing.status == BillingStatus.CANCELED) & Billing.competencia_liberada.is_(False)),
             Billing.due_date >= start,
             Billing.due_date < end,
             or_(
@@ -1000,7 +1002,7 @@ def substituted_originals(db: Session, substitute_id: int) -> list[Billing]:
         select(Billing)
         .where(
             Billing.substituted_by_id == substitute_id,
-            Billing.is_deleted.is_(False),
+            or_(Billing.is_deleted.is_(False), Billing.competencia_liberada.is_(False)),
         )
         .order_by(Billing.id.asc())
     ).all())
@@ -1035,7 +1037,7 @@ def restore_substituted_originals(
         return []
     originals = [
         billing for billing in lock_billings_for_update(db, [b.id for b in candidates])
-        if not billing.is_deleted and billing.substituted_by_id == substitute.id
+        if (not billing.is_deleted or not billing.competencia_liberada) and billing.substituted_by_id == substitute.id
     ]
     try:
         titulo_bancario.exigir(db, titulo_bancario.REABRIR, [b.id for b in originals])
@@ -1059,6 +1061,7 @@ def restore_substituted_originals(
             justification=f'Substituição pela cobrança #{substitute.id} revertida: {reason}',
         ))
         billing.substituted_by_id = None
+        billing.is_deleted = False
         billing.status = new_status
         marker = f'Reaberta: substituição pela cobrança #{substitute.id} revertida.'
         billing.notes = f'{billing.notes} | {marker}' if billing.notes else marker

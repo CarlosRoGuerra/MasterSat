@@ -1321,6 +1321,13 @@ def _filtro_monitorados():
         & Billing.status.in_([BillingStatus.PENDING, BillingStatus.OVERDUE])
         & AilosBoleto.nosso_numero.isnot(None),
         AilosBoleto.baixa_status == 'pendente',
+        # Uma exclusão durante registro incerto pode se resolver depois como
+        # título ativo. A retirada da carteira não encerra a conciliação.
+        Billing.is_deleted.is_(True)
+        & (Billing.status == BillingStatus.CANCELED)
+        & (func.coalesce(AilosBoleto.baixa_status, '') != 'confirmada')
+        & AilosBoleto.nosso_numero.isnot(None)
+        & (func.coalesce(AilosBoleto.status_ailos, '') != titulo_bancario.STATUS_ERRO_REGISTRO),
         AilosBoleto.status_ailos == titulo_bancario.STATUS_DESFECHO_DESCONHECIDO,
         AilosBoleto.status_ailos.in_(titulo_bancario.STATUS_EM_REGISTRO)
         & (func.coalesce(AilosBoleto.registro_iniciado_em, AilosBoleto.updated_at) < limite_orfa),

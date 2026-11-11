@@ -82,7 +82,8 @@ describe('ações em lote no Financeiro', () => {
     const user = await openWallet();
     await user.click(screen.getByRole('button', { name: 'Detalhes' }));
     const detail = within(screen.getByRole('dialog', { name: 'Cobrança de teste' }));
-    expect(detail.getByRole('button', { name: 'Excluir' })).toBeDisabled();
+    expect(detail.getByRole('button', { name: 'Excluir' })).toBeEnabled();
+    expect(detail.getByText(/não dá baixa no banco ou sistema de pagamento de origem/)).toBeInTheDocument();
     expect(api.fetch.mock.calls.filter(([path]) => path === '/ailos/boletos/10/confirmar-baixa')).toHaveLength(0);
     await user.click(detail.getByRole('button', { name: 'Confirmar baixa já feita na Ailos' }));
     const deleteButton = await detail.findByRole('button', { name: 'Excluir' });

@@ -167,7 +167,7 @@ def _period_label_sort_key(label: str) -> tuple:
         return (1, label)
 
 
-def base_query(db: Session, *, refresh_statuses: bool = False):
+def base_query(db: Session, *, refresh_statuses: bool = False, include_deleted: bool = False):
     # Reclassificação pendente<->vencida roda como worker de hora em hora (BE-05,
     # ver main.py); due_date é granularidade de dia, então até 1h de atraso na
     # reclassificação não afeta regra de negócio nenhuma. refresh_statuses=True
@@ -227,7 +227,7 @@ def base_query(db: Session, *, refresh_statuses: bool = False):
             CnabRemessaItem,
             and_(CnabRemessaItem.billing_id == Billing.id, CnabRemessaItem.status == 'reservado'),
         )
-        .filter(Billing.is_deleted.is_(False))
+        .filter(True if include_deleted else Billing.is_deleted.is_(False))
     )
 
 
@@ -947,7 +947,8 @@ def batch_actions(
         else:
             try:
                 titulo_bancario.validar_titulos(payload.action, {bid: titulo}, confirmado=True)
-                ensure_substitution_allows_removal(db, billing, revert_substitution=False)
+                if payload.action == 'cancelar':
+                    ensure_substitution_allows_removal(db, billing, revert_substitution=False)
             except (titulo_bancario.PoliticaBancariaError, BillingSubstitutionError) as exc:
                 reason = str(exc)
                 if isinstance(exc, BillingSubstitutionError):
@@ -959,10 +960,9 @@ def batch_actions(
             'status': billing.status.value if billing else None,
             'situacao': 'ignorado' if reason else 'aplicavel', 'motivo': reason,
             'nosso_numero': titulo.nosso_numero,
-            'baixa_bancaria_pendente': not reason and payload.action == 'cancelar' and titulo.ativo_no_banco,
+            'baixa_bancaria_pendente': not reason and titulo.ativo_no_banco,
             'libera_competencia': bool(not reason and payload.action == 'excluir'
-                and billing.contract_id and billing.billing_type in RECURRING_BILLING_TYPES
-                and not billing.competencia_liberada),
+                and _exclusao_libera_competencia(billing, titulo)),
         })
     fingerprint = {
         'action': payload.action, 'ids': sorted(ids),
@@ -977,7 +977,7 @@ def batch_actions(
                 'message': 'A seleção mudou desde a conferência. Confira novamente antes de aplicar.'})
         if any(item['baixa_bancaria_pendente'] for item in itens) and not payload.confirmar_boleto_ailos:
             raise HTTPException(409, {'code': 'confirmacao_bancaria_necessaria',
-                'message': 'Confirme que os boletos ativos continuam pagáveis no banco até a baixa bancária.'})
+                'message': 'Excluir ou cancelar no MasterSat não dá baixa no sistema de pagamento de origem. Confirme que providenciará ou conferirá a baixa.'})
         if any(item['libera_competencia'] for item in itens) and not payload.confirmar_liberacao_competencia:
             raise HTTPException(409, {'code': 'confirmacao_competencia_necessaria',
                 'message': 'Confirme que excluir estas mensalidades libera os meses para nova cobrança.'})
@@ -1455,20 +1455,29 @@ def update_item(item_id: int, payload: BillingUpdate, db: Session = Depends(get_
     return serialize_billing(row)
 
 
+def _exclusao_libera_competencia(obj: Billing, titulo: titulo_bancario.TituloBancario) -> bool:
+    return bool(obj.contract_id and obj.billing_type in RECURRING_BILLING_TYPES
+        and not obj.competencia_liberada and not obj.substituted_by_id
+        and titulo.estado in (titulo_bancario.SEM_TITULO, titulo_bancario.BAIXADO) and not titulo.pendencia)
+
+
 def _delete_billing_locked(obj: Billing, db: Session, current_user: User, *, reverter_substituicao: bool = False):
     if obj.status == BillingStatus.PAID:
         raise HTTPException(
             status_code=400,
             detail='Cobrança paga não pode ser removida; preserve o histórico financeiro.',
         )
-    # Só removemos títulos bancários após baixa confirmada e cancelamento
-    # local. A exclusão é lógica: o boleto e seu histórico são preservados.
+    # Qualquer cancelada pode sair da carteira. O título, as pendências e a
+    # reserva de competência ficam preservados quando há risco bancário.
     titulos = _exigir(db, titulo_bancario.EXCLUIR, [obj.id])
-    if titulos[obj.id].estado == titulo_bancario.BAIXADO and obj.status != BillingStatus.CANCELED:
-        raise HTTPException(status_code=400, detail='Cancele a cobrança no sistema antes de excluir.')
+    titulo = titulos[obj.id]
+    if obj.status != BillingStatus.CANCELED and titulo.estado != titulo_bancario.SEM_TITULO:
+        if titulo.estado == titulo_bancario.BAIXADO:
+            raise HTTPException(status_code=400, detail='Cancele a cobrança no sistema antes de excluir.')
+        _exigir(db, titulo_bancario.ALTERAR_VALOR, [obj.id])
     restored: list[int] = []
     try:
-        originals = ensure_substitution_allows_removal(
+        originals = [] if obj.status == BillingStatus.CANCELED else ensure_substitution_allows_removal(
             db, obj, revert_substitution=reverter_substituicao,
         )
         if originals:
@@ -1479,6 +1488,12 @@ def _delete_billing_locked(obj: Billing, db: Session, current_user: User, *, rev
         db.rollback()
         raise _substitution_conflict(exc) from exc
     lock_charge_items_for_billings(db, [obj])
+    if obj.status == BillingStatus.CANCELED:
+        if (not obj.substituted_by_id and not titulo.pendencia
+                and titulo.estado in (titulo_bancario.SEM_TITULO, titulo_bancario.BAIXADO)):
+            obj.competencia_liberada = True
+        titulo_bancario.marcar_baixa_pendente(db, [obj.id],
+            'Cobrança excluída da carteira; providenciar ou conferir baixa no sistema de pagamento de origem.')
     obj.is_deleted = True
     refresh_charge_items_for_billing(db, obj, commit=False)
     return restored
@@ -1509,7 +1524,10 @@ def release_period(
 ):
     """Devolve o mês de uma mensalidade cancelada para nova cobrança (carnê ou
     fechamento). Cancelada continua ocupando o mês até isto ser feito."""
-    billing = _lock_billing_or_404(db, item_id)
+    locked = lock_billings_for_update(db, [item_id])
+    if not locked:
+        raise HTTPException(status_code=404, detail='Cobrança não encontrada')
+    billing = locked[0]
     try:
         release_billing_competencia(
             db, billing, user_id=current_user.id, justification=payload.justificativa.strip(),
@@ -1519,5 +1537,5 @@ def release_period(
         raise _substitution_conflict(exc) from exc
     _commit_billing_write(db)
     db.refresh(billing)
-    row = base_query(db).filter(Billing.id == billing.id).first()
+    row = base_query(db, include_deleted=True).filter(Billing.id == billing.id).first()
     return serialize_billing(row)

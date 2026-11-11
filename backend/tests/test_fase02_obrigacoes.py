@@ -292,11 +292,12 @@ class TestSubstituicao:
         ).count()
         assert abertas == 2
 
-    def test_excluir_original_substituida_e_recusado(self, http, db, contrato):
+    def test_excluir_original_cancelada_preserva_substituicao_e_competencia(self, http, db, contrato):
         a, _, nova = self._negociar(http, db, contrato)
         r = http.delete(f'{PREFIX}/{a.id}')
-        assert r.status_code == 409
-        assert r.json()['detail']['code'] == 'titulo_substituido'
+        assert r.status_code == 200
+        db.refresh(a)
+        assert a.is_deleted and a.substituted_by_id == nova and not a.competencia_liberada
 
     def test_cancelar_substituto_em_lote_e_recusado(self, http, db, contrato):
         _, _, nova = self._negociar(http, db, contrato)

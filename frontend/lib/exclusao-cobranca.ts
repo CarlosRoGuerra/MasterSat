@@ -3,10 +3,8 @@
 // DELETE /billings/{id} é exclusão lógica (o registro e o histórico ficam no
 // banco). O backend continua recusando — e a tela não tenta contornar:
 //   - cobrança paga;
-//   - título ativo no banco, em registro, com desfecho desconhecido ou em
-//     remessa CNAB; títulos baixados só saem sem pendências financeiras;
-//   - original de boleto único/negociação que ainda vale (o mês seria
-//     cobrado de novo por cima da negociação).
+// Qualquer cobrança cancelada pode sair da carteira. Títulos bancários,
+// pendências e vínculos de substituição ficam preservados no histórico.
 // Boleto único cancelado que ainda aponta para originais responde 409
 // `titulo_substituto`: a exclusão só segue se o operador aceitar reabrir as
 // originais (mesma confirmação do cancelamento).
@@ -26,6 +24,7 @@ export type CobrancaParaExcluir = {
   contract_id?: number | null;
   competencia_liberada?: boolean;
   period_label?: string | null;
+  substituted_by_id?: number | null;
   titulo_bancario?: Pick<TituloBancario, 'estado' | 'pendencia'> | null;
 };
 
@@ -34,27 +33,21 @@ type ErroApi = Error & { status?: number; detail?: { code?: string; message?: st
 /** Por que a exclusão não é oferecida (null = pode tentar). */
 export function motivoBloqueioExclusao(cobranca: CobrancaParaExcluir): string | null {
   if (cobranca.status !== 'cancelada') return 'Só cobrança cancelada pode ser excluída.';
-  const estado = cobranca.titulo_bancario?.estado;
-  if (estado === 'baixado' && cobranca.titulo_bancario?.pendencia) {
-    return 'Resolva a pendência bancária no Financeiro antes de excluir.';
-  }
-  if (estado === 'registrado') {
-    return 'A baixa no banco ainda não está confirmada no sistema. Atualize a situação bancária no Financeiro antes de excluir.';
-  }
-  if (estado && !['sem_titulo', 'baixado'].includes(estado)) {
-    return 'A situação do boleto no banco ainda precisa ser resolvida antes de excluir.';
-  }
   return null;
 }
 
 export function ocupaCompetencia(cobranca: CobrancaParaExcluir): boolean {
   return TIPOS_QUE_OCUPAM_MES.includes(cobranca.billing_type)
     && !!cobranca.contract_id
-    && !cobranca.competencia_liberada;
+    && !cobranca.competencia_liberada
+    && !cobranca.substituted_by_id
+    && !cobranca.titulo_bancario?.pendencia
+    && (!cobranca.titulo_bancario?.estado || ['sem_titulo', 'baixado'].includes(cobranca.titulo_bancario.estado));
 }
 
 export function mensagemConfirmacaoExclusao(cobranca: CobrancaParaExcluir): string {
-  const base = `Excluir a cobrança cancelada #${cobranca.id}? Ela sai da carteira; o histórico continua registrado.`;
+  const base = `Excluir a cobrança cancelada #${cobranca.id}? Ela sai da carteira; o histórico continua registrado.`
+    + '\n\nAtenção: excluir no MasterSat não dá baixa no banco ou sistema de pagamento de origem. Providencie ou confirme a baixa também na origem.';
   if (!ocupaCompetencia(cobranca)) return base;
   return `${base}\n\nAtenção: esta mensalidade ainda ocupa a competência ${cobranca.period_label ?? 'do contrato'}. `
     + 'Excluindo, o mês fica livre e o fechamento pode gerar a cobrança de novo. '

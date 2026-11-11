@@ -2662,6 +2662,11 @@ export default function FinanceiroPage() {
               {selectedBilling.status === 'cancelada' && motivoBloqueioExclusao(selectedBilling) && (
                 <p className="w-full text-sm text-slate-500">{motivoBloqueioExclusao(selectedBilling)}</p>
               )}
+              {selectedBilling.status === 'cancelada' && (
+                <p className="w-full text-sm text-amber-700 dark:text-amber-300">
+                  Excluir no MasterSat não dá baixa no banco ou sistema de pagamento de origem. Providencie ou confirme a baixa também na origem.
+                </p>
+              )}
               {/* Carnê simples vive só no sistema: sem emissão nem consulta na Ailos. */}
               {(selectedBilling.status === 'pendente' || selectedBilling.status === 'vencida') && token && !selectedBilling.somente_sistema
                 && selectedBilling.payment_method !== 'pix_automatico' && !ehPixAutomatico(selectedBilling.titulo_bancario)

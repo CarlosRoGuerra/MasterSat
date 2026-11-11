@@ -99,11 +99,11 @@ históricos podem apontar para cadastros removidos ou transferidos).
   cobrança passa por `titulo_bancario.exigir()` — tabela única por operação
   e estado do título (sem título, em registro, desfecho desconhecido,
   registrado, baixado, remessa CNAB).
-- Cobrança com título ativo não é removida; cancelada/recebida por fora
+- Cobrança cancelada pode ser excluída logicamente da carteira; cancelada/recebida por fora
   com título ativo fica com **baixa pendente** (coluna, não nota) e continua
-  na conciliação; liberar a competência exige baixa confirmada. Uma cobrança
-  cancelada com baixa confirmada e sem pendências financeiras pode ser excluída
-  logicamente, preservando o título bancário e o histórico.
+  na conciliação; liberar a competência exige baixa confirmada. A exclusão
+  preserva o título, as pendências e os vínculos de substituição. O índice único
+  mantém a competência/parcela reservada quando a exclusão não a libera com segurança.
 - Detalhes e códigos 409: [runbook-desfecho-desconhecido.md](runbook-desfecho-desconhecido.md).
 
 ### I8 — Resultado bancário incerto não libera a cobrança (Fase 03)

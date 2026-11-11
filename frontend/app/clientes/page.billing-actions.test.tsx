@@ -80,10 +80,11 @@ function mockBatchApi(fail = false) {
     const body = JSON.parse(String(options.body));
     const items: BillingBatchResult['itens'] = body.billing_ids.map((id: number) => {
       const item = wallet.find((b) => b.id === id)!;
-      const blocked = body.action === 'excluir' && item.titulo_bancario?.estado === 'registrado';
+      const blocked = body.action === 'excluir' && item.status !== 'cancelada';
       return { billing_id: id, status: item.status, situacao: blocked ? 'ignorado' : body.simular ? 'aplicavel' : 'aplicado',
         motivo: blocked ? 'Cobrança com histórico bancário.' : null,
-        baixa_bancaria_pendente: false, libera_competencia: !blocked && body.action === 'excluir' && !!item.contract_id };
+        baixa_bancaria_pendente: item.titulo_bancario?.estado === 'registrado',
+        libera_competencia: !blocked && body.action === 'excluir' && !!item.contract_id && item.titulo_bancario?.estado !== 'registrado' };
     });
     const result: BillingBatchResult = { action: body.action, simulacao: body.simular, total_enviados: items.length,
       aplicados: items.filter((i) => i.situacao !== 'ignorado').length,
@@ -229,7 +230,7 @@ describe('ações em lote na central financeira do cliente', () => {
       reason: 'Dispensa das mensalidades', revisao: 'a'.repeat(64) });
   });
 
-  it('seleciona canceladas, exclui as permitidas e mantém o bloqueio bancário visível', async () => {
+  it('exclui todas as canceladas e exige ciência da baixa na origem', async () => {
     wallet = [{ ...billing, status: 'cancelada' }, { ...billing, id: 38513, status: 'cancelada', titulo_bancario: { estado: 'registrado' } }];
     mockBatchApi();
     const user = await openBatchWallet();
@@ -237,16 +238,17 @@ describe('ações em lote na central financeira do cliente', () => {
     expect(screen.queryByRole('button', { name: 'Gerar carnê' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Unificar em 1 boleto' })).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Excluir selecionados' }));
-    await screen.findByText('1 apto(s) · 1 ignorado(s) · 2 selecionado(s)');
+    await screen.findByText('2 apto(s) · 0 ignorado(s) · 2 selecionado(s)');
+    expect(screen.getByRole('note')).toHaveTextContent('sistema de pagamento de origem');
     await user.type(screen.getByRole('textbox', { name: /Justificativa/ }), 'Correção do cadastro');
     await user.click(screen.getByRole('checkbox', { name: /Confirmo a liberação dos meses/ }));
-    await user.click(screen.getByRole('button', { name: 'Excluir 1 boleto(s)' }));
-    expect(await screen.findByText(/Ignorado: Cobrança com histórico bancário/)).toBeInTheDocument();
+    await user.click(screen.getByRole('checkbox', { name: /providenciar a baixa/ }));
+    await user.click(screen.getByRole('button', { name: 'Excluir 2 boleto(s)' }));
+    await screen.findByRole('button', { name: 'Fechar resultado' });
     await user.click(screen.getByRole('button', { name: 'Fechar resultado' }));
     const list = within(screen.getByRole('dialog', { name: /Boletos do cliente/ }));
-    expect(list.getAllByTitle('Alterar boleto')).toHaveLength(1);
-    expect(list.getByRole('checkbox', { name: 'Selecionar boleto #38513' })).toBeChecked();
-    expect(list.getByRole('status')).toHaveTextContent('1 boleto(s) excluído(s) · 1 ignorado(s)');
+    expect(list.queryByTitle('Alterar boleto')).not.toBeInTheDocument();
+    expect(list.getByRole('status')).toHaveTextContent('2 boleto(s) excluído(s)');
   });
 
   it('selecionar e desmarcar um filtro mantém a seleção de outro mês', async () => {
@@ -336,7 +338,7 @@ describe('cancelar e excluir pelo ícone Alterar boleto', () => {
     if (accept) {
       expect(JSON.parse(writes('POST')[1][1].body).confirmar_boleto_ailos).toBe(true);
       expect(dialog.getByRole('status')).toHaveTextContent('continua ativo no banco até a baixa');
-      expect(dialog.getByRole('button', { name: 'Excluir boleto' })).toBeDisabled();
+      expect(dialog.getByRole('button', { name: 'Excluir boleto' })).toBeEnabled();
       expect(dialog.getByText(/A baixa bancária está pendente/)).toBeInTheDocument();
     } else {
       expect(dialog.queryByRole('status')).not.toBeInTheDocument();
@@ -447,11 +449,11 @@ describe('cancelar e excluir pelo ícone Alterar boleto', () => {
   });
 
   it.each(['registrado', 'em_registro', 'desfecho_desconhecido', 'remessa_cnab'] as const)(
-    'bloqueia a exclusão de cancelada com título %s', async (estado) => {
+    'permite excluir cancelada com título %s e avisa sobre a baixa na origem', async (estado) => {
       wallet = [{ ...billing, status: 'cancelada', titulo_bancario: { estado } }];
       const { dialog } = await openEditor();
-      expect(dialog.getByRole('button', { name: 'Excluir boleto' })).toBeDisabled();
-      expect(dialog.getByText(/antes de excluir/)).toBeInTheDocument();
+      expect(dialog.getByRole('button', { name: 'Excluir boleto' })).toBeEnabled();
+      expect(dialog.getByText(/não dá baixa no banco ou sistema de pagamento de origem/)).toBeInTheDocument();
     },
   );
 

@@ -80,7 +80,7 @@ def test_registered_cancel_requires_bank_ack_before_any_write(http, db, contrato
     assert 'baixa manual pendente' in registered.notes
 
 
-def test_cnab_cancel_requires_ack_and_keeps_reservation_and_delete_protection(http, db, contrato):
+def test_cnab_deletion_keeps_bank_reservation_and_requires_warning_ack(http, db, contrato):
     billing = cobranca(db, contrato)
     remessa = CnabRemessa(layout='240', sequencial=1, arquivo_sha256='a' * 64,
         arquivo=b'isolated-cnab-reservation', total_titulos=1, valor_total=billing.amount)
@@ -101,10 +101,11 @@ def test_cnab_cancel_requires_ack_and_keeps_reservation_and_delete_protection(ht
     assert billing.status == BillingStatus.CANCELED
     assert item.status == 'reservado'
     deletion = preview(http, [billing.id], 'excluir')
-    assert deletion['aplicados'] == 0 and deletion['itens'][0]['motivo']
-    assert apply(http, deletion).status_code == 200
+    assert deletion['aplicados'] == 1 and deletion['itens'][0]['baixa_bancaria_pendente']
+    assert apply(http, deletion, confirmar_boleto_ailos=True).status_code == 200
     db.refresh(billing)
-    assert not billing.is_deleted
+    db.refresh(item)
+    assert billing.is_deleted and item.status == 'reservado'
 
 
 @pytest.mark.parametrize('state', ['REGISTRANDO', 'DESFECHO_DESCONHECIDO'])
@@ -159,18 +160,18 @@ def test_delete_only_canceled_and_preserves_paid_and_open(http, db, contrato):
 
 
 @pytest.mark.parametrize('bank_state', ['registered', 'in_flight', 'unknown'])
-def test_delete_keeps_every_item_with_active_or_uncertain_title(http, db, contrato, bank_state):
+def test_delete_canceled_keeps_active_or_uncertain_bank_history(http, db, contrato, bank_state):
     billing = cobranca(db, contrato, status=BillingStatus.CANCELED)
     if bank_state == 'registered':
         registrar_titulo(db, billing)
     else:
         reserva(db, billing, 'REGISTRANDO' if bank_state == 'in_flight' else 'DESFECHO_DESCONHECIDO')
     review = preview(http, [billing.id], 'excluir')
-    assert review['aplicados'] == 0 and review['itens'][0]['motivo']
-    response = apply(http, review)
+    assert review['aplicados'] == 1 and review['itens'][0]['baixa_bancaria_pendente']
+    response = apply(http, review, confirmar_boleto_ailos=True)
     assert response.status_code == 200, response.text
     db.refresh(billing)
-    assert not billing.is_deleted
+    assert billing.is_deleted and billing.status == BillingStatus.CANCELED
 
 
 def test_delete_monthly_requires_explicit_release_ack(http, db, contrato):
@@ -202,7 +203,12 @@ def test_negotiations_are_not_reverted_implicitly_even_in_a_mixed_batch(http, db
     assert master.status == BillingStatus.PENDING
     assert child.status == BillingStatus.CANCELED and child.substituted_by_id == master.id
     deleted = preview(http, [child.id], 'excluir')
-    assert deleted['aplicados'] == 0
+    assert deleted['aplicados'] == 1
+    assert apply(http, deleted).status_code == 200
+    db.refresh(child)
+    db.refresh(master)
+    assert child.is_deleted and child.substituted_by_id == master.id
+    assert master.status == BillingStatus.PENDING
 
 
 def test_unexpected_write_failure_rolls_back_all_items(http, db, contrato, monkeypatch):

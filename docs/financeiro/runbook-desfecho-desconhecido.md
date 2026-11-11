@@ -21,11 +21,11 @@ boleto pagável no banco, a cobrança não muda e não é emitida de novo.**
 | Estado | O que significa | O que a cobrança aceita |
 |---|---|---|
 | sem título | nunca foi ao banco, ou o banco recusou de forma definitiva (4xx) | tudo |
-| em registro | pedido enviado há menos de 30 min (individual ou lote) | nada; aguarde |
-| **desfecho desconhecido** | o pedido pode ter chegado ao banco e não houve resposta conclusiva: timeout de leitura, erro 5xx, "já cadastrado" sem os dados, falha local depois do aceite, ou reserva sem resposta há mais de 30 min | **nada**: nem editar, receber, cancelar, excluir ou emitir de novo |
-| registrado | boleto ativo no banco | receber (por fora), cancelar (com confirmação) |
-| baixado | título registrado com baixa confirmada | receber, cancelar, liberar competência; excluir logicamente se cancelada e sem pendências financeiras |
-| remessa CNAB | incluído numa remessa CNAB reservada (canal desligado hoje) | receber, cancelar com confirmação |
+| em registro | pedido enviado há menos de 30 min (individual ou lote) | aguarde; se a cobrança já estiver cancelada, pode sair da carteira, com conciliação preservada |
+| **desfecho desconhecido** | o pedido pode ter chegado ao banco e não houve resposta conclusiva: timeout de leitura, erro 5xx, "já cadastrado" sem os dados, falha local depois do aceite, ou reserva sem resposta há mais de 30 min | não editar, receber, cancelar ou emitir de novo; cancelada pode sair da carteira, com conciliação e reserva preservadas |
+| registrado | boleto ativo no banco | receber (por fora), cancelar (com confirmação); cancelada pode sair da carteira, com aviso sobre baixa na origem |
+| baixado | título registrado com baixa confirmada | receber, cancelar, liberar competência; cancelada pode sair da carteira, preservando eventuais pendências |
+| remessa CNAB | incluído numa remessa CNAB reservada (canal desligado hoje) | receber, cancelar com confirmação; cancelada pode sair da carteira, preservando a remessa |
 
 Tabela completa por operação: `app/services/titulo_bancario.py` (`_PERMITIDO`).
 
