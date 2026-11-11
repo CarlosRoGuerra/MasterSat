@@ -132,6 +132,71 @@ def test_existing_individually_registered_titles_can_become_carne_without_new_ba
     assert db.query(Billing).count() == 12
 
 
+@pytest.mark.parametrize('legacy_order', [False, True])
+def test_first_month_with_service_keeps_chronological_order_in_tracking_and_pdf(
+    http, db, monthly, cliente, sicredi, monkeypatch, legacy_order,
+):
+    from pypdf import PdfReader
+    from app.models.sicredi_lote import SicrediLote
+    from app.services import boleto_pdf
+
+    db.add(ClientChargeItem(client_id=cliente.id, title='Servico do primeiro mes', quantity=1,
+                            unit_price=Decimal('10'), total_amount=Decimal('10'),
+                            installment_count=1, start_date=date(2026, 11, 1), active=True))
+    db.commit()
+    generated = http.post(PREFIX + '/generate', params=PARAMS)
+    assert generated.status_code == 200, generated.text
+    result = generated.json()
+    group = http.get(f"{PREFIX}/lotes/{result['closure_batch_id']}").json()['carnes'][0]
+    ids = group['billing_ids']
+    assert len(ids) == 12 and ids[0] == max(ids)  # A primeira parcela consolidada é criada por último.
+    titles = [db.get(Billing, bid) for bid in ids]
+    assert titles[0].amount == Decimal('74.99')
+    assert [b.due_date for b in titles] == [add_months(date(2026, 12, 10), i) for i in range(12)]
+    sicredi.quando('POST', '/cobranca/boleto/v1/boletos',
+                  lambda **kw: resposta_cadastro(kw['json']['nossoNumero']))
+    response = http.post('/api/v1/sicredi/carne/lote', json={'billing_ids': ids})
+    assert response.status_code == 200, response.text
+    lote = db.get(SicrediLote, response.json()['id'])
+    if legacy_order:
+        lote.billing_ids = sorted(ids)  # Carnês já gravados pela versão anterior.
+        db.commit()
+    else:
+        assert lote.billing_ids == ids
+    before = len(sicredi.chamadas)
+    numbers = {r.billing_id: r.nosso_numero for r in db.query(SicrediBoleto).all()}
+    stored_ids = list(lote.billing_ids)
+    progress = http.get(f'/api/v1/sicredi/lotes/{lote.ticket}').json()['parcelas']
+    assert [p['billing_id'] for p in progress] == ids
+    assert [p['numero_parcela'] for p in progress] == list(range(1, 13))
+    details = http.get(f'/api/v1/boletos/carne?payer_client_id={cliente.id}').json()[0]['parcelas_detalhe']
+    assert [p['billing_id'] for p in details] == ids
+    assert [p['numero_parcela'] for p in details] == list(range(1, 13))
+
+    printed = []
+    draw = boleto_pdf._draw_carne_parcela
+
+    def capture(canvas, data, y, number, total):
+        printed.append((data.billing_id, data.data_vencimento, data.valor, number, total))
+        return draw(canvas, data, y, number, total)
+
+    monkeypatch.setattr(boleto_pdf, '_draw_carne_parcela', capture)
+    pdf = http.get(f'/api/v1/boletos/carne/{lote.id}/pdf?banco=sicredi')
+    assert pdf.status_code == 200, pdf.text
+    assert printed == [(b.id, b.due_date, b.amount, i, 12) for i, b in enumerate(titles, 1)]
+    pages = PdfReader(BytesIO(pdf.content)).pages
+    assert len(pages) == 4 and [p.extract_text().count('748-X') for p in pages] == [3] * 4
+    assert '10/12/2026' in pages[0].extract_text()
+    assert '10/11/2027' in pages[-1].extract_text()
+    repeated = http.post('/api/v1/sicredi/carne/lote', json={'billing_ids': sorted(ids)})
+    assert repeated.status_code == 200 and repeated.json()['id'] == lote.id
+    assert len(sicredi.chamadas) == before
+    assert {r.billing_id: r.nosso_numero for r in db.query(SicrediBoleto).all()} == numbers
+    assert db.query(SicrediLote).count() == 1
+    db.refresh(lote)
+    assert lote.billing_ids == stored_ids  # Consultar/baixar não altera títulos antigos.
+
+
 def test_two_vehicles_and_service_consolidate_each_month_not_the_whole_booklet(http, db, cliente, plan, monthly):
     second = Contract(client_id=cliente.id, plan_id=plan.id, start_date=date(2026, 1, 1),
                       status='ativo', billing_day=20)

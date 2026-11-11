@@ -56,6 +56,47 @@ def test_repetir_criacao_reutiliza_mesmo_lote_e_numeros(db, parcelas, sicredi):
     assert numeros == [b.nosso_numero for b in db.query(SicrediBoleto).all()]
 
 
+@pytest.mark.parametrize('legacy_order', [False, True])
+def test_emissao_e_retomada_respeitam_vencimento_mesmo_com_ids_fora_de_ordem(
+    db, parcelas, sicredi, legacy_order,
+):
+    parcelas[-1].due_date = date(2099, 10, 15)
+    db.commit()
+    ids = [b.id for b in parcelas]
+    esperada = [ids[2], ids[0], ids[1]]
+    lote = sicredi_lotes.criar_lote(db, ids)
+    assert lote.billing_ids == esperada
+    if legacy_order:
+        lote.billing_ids = ids
+        db.commit()
+    numeros = {r.billing_id: r.nosso_numero for r in db.query(SicrediBoleto).all()}
+    sicredi.quando('POST', BOLETOS, eco)
+    # Mesmo o subconjunto retomado deve seguir a ordem do carnê, não a dos IDs.
+    status = sicredi_lotes.processar_lote(db, lote.id, billing_ids=[ids[1], ids[2]], retentar=True)
+    assert [p['billing_id'] for p in status['parcelas']] == esperada
+    assert [p['numero_parcela'] for p in status['parcelas']] == [1, 2, 3]
+    assert [p['status'] for p in status['parcelas']] == ['registrado', 'processando', 'registrado']
+    assert [c['json']['nossoNumero'] for c in sicredi.chamadas_de('POST', BOLETOS)] == [
+        numeros[ids[2]], numeros[ids[1]],
+    ]
+    sicredi_lotes.processar_lote(db, lote.id)
+    assert [c['json']['nossoNumero'] for c in sicredi.chamadas_de('POST', BOLETOS)] == [
+        numeros[ids[2]], numeros[ids[1]], numeros[ids[0]],
+    ]
+    sicredi_lotes.processar_lote(db, lote.id, retentar=True)
+    assert len(sicredi.chamadas_de('POST', BOLETOS)) == 3
+
+
+def test_lote_avulso_preserva_ordem_anterior_sem_renumerar_por_vencimento(db, parcelas, sicredi):
+    parcelas[-1].due_date = date(2099, 10, 15)
+    db.commit()
+    ids = [b.id for b in parcelas]
+    lote = sicredi_lotes.criar_lote(db, list(reversed(ids)), tipo='boleto')
+    assert lote.billing_ids == ids
+    assert [p['billing_id'] for p in sicredi_lotes.status_lote(db, lote)['parcelas']] == ids
+    assert sicredi.chamadas == []
+
+
 @pytest.mark.parametrize('tipo', ['carne', 'boleto'])
 def test_endpoint_progresso_registro_e_repeticao_sem_duplicar(db, http, parcelas, sicredi, tipo):
     sicredi.quando('POST', BOLETOS, eco)

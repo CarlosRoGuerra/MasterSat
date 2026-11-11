@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from datetime import date
 import hashlib
 import json
 import logging
@@ -22,6 +23,27 @@ from app.services.financial import lock_billings_for_update
 logger = logging.getLogger(__name__)
 
 
+def _ordenar_ids(ids: list[int], cobrancas: dict[int, Billing], *, tipo: str) -> list[int]:
+    if tipo != 'carne':
+        return ids
+    # Um boleto único da primeira competência pode ter sido criado por último.
+    # O ID serve para desempate, nunca para definir a sequência das mensalidades.
+    return sorted(ids, key=lambda bid: (
+        (cobrancas[bid].due_date or date.max) if bid in cobrancas else date.max, bid,
+    ))
+
+
+def parcelas_do_lote(db: Session, lote: SicrediLote) -> list[tuple[int, Billing | None]]:
+    """Ordem comum à emissão, acompanhamento e PDF, inclusive de carnês antigos.
+
+    Apenas lê os dados: corrige a apresentação de lotes gravados por ID sem
+    alterar os títulos, seus números bancários ou a chave de idempotência.
+    """
+    ids = lote.billing_ids or []
+    cobrancas = {b.id: b for b in db.scalars(select(Billing).where(Billing.id.in_(ids))).all()}
+    return [(bid, cobrancas.get(bid)) for bid in _ordenar_ids(ids, cobrancas, tipo=lote.tipo)]
+
+
 def validar_convenio(lote: SicrediLote) -> None:
     cred = sicredi_client.credenciais()
     if (lote.ambiente, lote.cooperativa, lote.posto, lote.codigo_beneficiario) != (
@@ -32,6 +54,7 @@ def validar_convenio(lote: SicrediLote) -> None:
 
 def criar_lote(db: Session, billing_ids: list[int], *, tipo: str = 'carne') -> SicrediLote:
     cred = sicredi_client.credenciais()
+    # IDs canônicos mantêm a ordem dos locks e a chave dos lotes já existentes.
     ids = sorted(set(billing_ids))
     if not ids or len(ids) > 1000 or (tipo == 'carne' and len(ids) < 2):
         raise sicredi_boletos.SicrediValidationError(['Selecione de 2 a 1.000 parcelas para carnê, ou de 1 a 1.000 para lote.'])
@@ -61,7 +84,8 @@ def criar_lote(db: Session, billing_ids: list[int], *, tipo: str = 'carne') -> S
     lote = SicrediLote(chave=chave, ticket=str(uuid4()), tipo=tipo, ambiente=cred.ambiente,
                       cooperativa=cred.cooperativa, posto=cred.posto, codigo_beneficiario=cred.codigo_beneficiario,
                       payer_client_id=next(iter(pagadores)) if len(pagadores) == 1 else None,
-                      billing_ids=ids, status='processing', erros={})
+                      billing_ids=_ordenar_ids(ids, {b.id: b for b in billings}, tipo=tipo),
+                      status='processing', erros={})
     db.add(lote)
     db.flush()
     for billing in billings:
@@ -77,11 +101,10 @@ def criar_lote(db: Session, billing_ids: list[int], *, tipo: str = 'carne') -> S
 
 def status_lote(db: Session, lote: SicrediLote) -> dict:
     ids = lote.billing_ids or []
-    cobrancas = {b.id: b for b in db.scalars(select(Billing).where(Billing.id.in_(ids))).all()}
     registros = {b.billing_id: b for b in db.scalars(select(SicrediBoleto).where(SicrediBoleto.billing_id.in_(ids))).all()}
     parcelas = []
-    for indice, bid in enumerate(ids, 1):
-        b, registro = cobrancas.get(bid), registros.get(bid)
+    for indice, (bid, b) in enumerate(parcelas_do_lote(db, lote), 1):
+        registro = registros.get(bid)
         estado = titulo_bancario.estado_do_sicredi(registro)
         erro = (lote.erros or {}).get(str(bid))
         if b is None or b.is_deleted or b.status == BillingStatus.CANCELED:
@@ -133,9 +156,10 @@ def processar_lote(db: Session, lote_id: int, *, billing_ids: list[int] | None =
     if lote is None:
         raise sicredi_client.SicrediError('Lote Sicredi não encontrado.')
     validar_convenio(lote)
-    ids = list(lote.billing_ids or []) if billing_ids is None else sorted(set(billing_ids))
-    if not set(ids).issubset(lote.billing_ids or []):
+    selecionadas = set(lote.billing_ids or []) if billing_ids is None else set(billing_ids)
+    if not selecionadas.issubset(lote.billing_ids or []):
         raise sicredi_client.SicrediError('A parcela não pertence ao lote.')
+    ids = [bid for bid, _ in parcelas_do_lote(db, lote) if bid in selecionadas]
     with _trava_processamento(db, lote_id) as obtido:
         if not obtido:
             return status_lote(db, lote)

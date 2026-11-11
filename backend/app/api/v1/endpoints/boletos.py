@@ -42,7 +42,7 @@ from app.models.cnab_remessa import CnabRemessa
 from app.models.enums import BillingStatus, UserRole
 from app.models.vehicle import Vehicle
 from app.models.uninstall_event import UninstallEvent
-from app.services import ailos_boletos, cnab_remessa, sicredi_boletos, sicredi_client
+from app.services import ailos_boletos, cnab_remessa, sicredi_boletos, sicredi_client, sicredi_lotes
 from app.services.email_smtp import emails_cadastrados
 from app.services.ailos_boletos import aplicar_dados_oficiais_ailos
 from app.services.boleto_ailos import CEDENTE_CNPJ, CEDENTE_NOME, gerar_dados_boleto, DadosBoleto
@@ -225,7 +225,8 @@ def listar_carnes(
     if payer_client_id is not None:
         lotes_sicredi = lotes_sicredi.filter(SicrediLote.payer_client_id == payer_client_id)
     for lote in lotes_sicredi.order_by(SicrediLote.id.desc()).all():
-        cobrancas = list(db.scalars(select(Billing).where(Billing.id.in_(lote.billing_ids or []))).all())
+        parcelas = sicredi_lotes.parcelas_do_lote(db, lote)
+        cobrancas = [b for _, b in parcelas if b is not None]
         if not any(not b.is_deleted for b in cobrancas):
             continue
         if client_id is not None and not any(b.client_id == client_id and not b.is_deleted for b in cobrancas):
@@ -239,11 +240,11 @@ def listar_carnes(
             'total': float(sum((b.amount or 0) for b in cobrancas)),
             'valor_pago': float(sum((b.amount or 0) for b in cobrancas if b.status == BillingStatus.PAID)),
             'status': 'completed' if registradas == len(lote.billing_ids or []) else lote.status,
-            'parcelas_detalhe': [{'billing_id': b.id, 'numero_parcela': b.installment_number,
+            'parcelas_detalhe': [{'billing_id': b.id, 'numero_parcela': indice,
                                  'vencimento': b.due_date.isoformat() if b.due_date else None,
                                  'valor': float(b.amount or 0), 'status': b.status.value,
                                  'data_pagamento': b.payment_date.isoformat() if b.payment_date else None}
-                                for b in sorted(cobrancas, key=lambda b: (b.due_date or date.min, b.id))],
+                                for indice, (_, b) in enumerate(parcelas, 1) if b is not None],
         })
     return sorted(resultado, key=lambda item: item['criado_em'] or '', reverse=True)
 
@@ -765,8 +766,7 @@ def _carne_pdf_sicredi(db: Session, lote_id: int, *, parcial: bool = False) -> R
         raise HTTPException(status_code=404, detail='Carnê Sicredi não encontrado.')
     parcelas = []
     abertas = 0
-    for bid in lote.billing_ids or []:
-        b = db.get(Billing, bid)
+    for bid, b in sicredi_lotes.parcelas_do_lote(db, lote):
         if b is None or b.is_deleted or b.status not in (BillingStatus.PENDING, BillingStatus.OVERDUE):
             continue
         abertas += 1
