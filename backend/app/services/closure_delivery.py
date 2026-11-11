@@ -17,6 +17,7 @@ from app.models.closure_job import ClosureJob
 from app.models.enums import BillingStatus
 from app.models.nfse_nota import NfseNota
 from app.models.sicredi_boleto import SicrediBoleto
+from app.models.sicredi_lote import SicrediLote
 from app.models.sicredi_pix import SicrediPixCobranca
 from app.services.ailos_boletos import resolver_pagador
 from app.services.email_smtp import emails_cadastrados
@@ -145,6 +146,7 @@ def recuperar_lotes_anteriores(db: Session) -> list[dict]:
 
 def conferir_lote(db: Session, lote_id: int, billing_id: int | None = None, *, ignorar_entrega=False) -> dict:
     lote, ids = _lote(db, lote_id)
+    conferencia_individual = billing_id is not None
     if billing_id is not None:
         if billing_id not in ids:
             raise HTTPException(status_code=404, detail='Cobrança não pertence a este fechamento.')
@@ -227,6 +229,7 @@ def conferir_lote(db: Session, lote_id: int, billing_id: int | None = None, *, i
         itens.append({
             'lote_id': lote.id,
             'billing_id': billing_id,
+            'payer_client_id': payer.id if payer else None,
             'cliente': payer.name if payer else 'Responsável indisponível',
             'email': ', '.join(emails) or None,
             'emails': emails,
@@ -262,7 +265,61 @@ def conferir_lote(db: Session, lote_id: int, billing_id: int | None = None, *, i
         'bloqueados': sum(item['estado'] == 'bloqueado' for item in itens),
         'indeterminados': sum(item['estado'] in ('processando', 'desconhecido') for item in itens),
         'itens': itens,
+        'carnes': [] if conferencia_individual else _carnes_do_fechamento(db, lote, billings, itens, sicredi, titulos),
     }
+
+
+def _carnes_do_fechamento(db, lote, billings, itens, registros, titulos) -> list[dict]:
+    """Relaciona as parcelas ao mesmo fluxo de carnê usado no Financeiro.
+
+    Conferir o fechamento é somente leitura: a reserva/emissão das parcelas
+    continua dependendo do clique explícito em emitir o carnê.
+    """
+    if not (lote.result or {}).get('carne_installments'):
+        return []
+    grupos: dict[int, list[dict]] = {}
+    for item in itens:
+        if item['payer_client_id'] is not None:
+            grupos.setdefault(item['payer_client_id'], []).append(item)
+    existentes = db.query(SicrediLote).filter(
+        SicrediLote.tipo == 'carne', SicrediLote.payer_client_id.in_(grupos),
+    ).order_by(SicrediLote.id.desc()).all() if grupos else []
+    resultado = []
+    for payer_id, parcelas in grupos.items():
+        parcelas.sort(key=lambda p: (p['vencimento'] or date.max, p['billing_id']))
+        ids = [p['billing_id'] for p in parcelas]
+        if len(ids) < 2:
+            continue
+        existente = next((c for c in existentes if set(c.billing_ids or []) == set(ids)), None)
+        registradas = 0
+        permitidas = True
+        for item in parcelas:
+            bid = item['billing_id']
+            b, titulo, registro = billings[bid], titulos[bid], registros.get(bid)
+            aberta = not b.is_deleted and b.substituted_by_id is None and b.status in (
+                BillingStatus.PENDING, BillingStatus.OVERDUE,
+            )
+            sicredi_sem_baixa = (titulo.canal == titulo_bancario.CANAL_SICREDI
+                                and registro is not None and registro.baixa_status is None)
+            registradas += bool(aberta and sicredi_sem_baixa and item['boleto_emitido']
+                                and titulo.estado == titulo_bancario.REGISTRADO)
+            permitidas &= bool(aberta and not b.somente_sistema
+                               and b.payment_method != 'pix_automatico'
+                               and (item['pode_emitir_boleto'] or sicredi_sem_baixa))
+        resultado.append({
+            'payer_client_id': payer_id,
+            'cliente': parcelas[0]['cliente'],
+            'banco': 'sicredi',
+            'billing_ids': ids,
+            'total': len(ids),
+            'registradas': registradas,
+            'primeiro_vencimento': parcelas[0]['vencimento'],
+            'ultimo_vencimento': parcelas[-1]['vencimento'],
+            'lote_id': existente.id if existente else None,
+            'ticket': existente.ticket if existente else None,
+            'pode_iniciar': permitidas and existente is None,
+        })
+    return resultado
 
 
 def conferir_mes(db: Session, mes_servico: str) -> dict:

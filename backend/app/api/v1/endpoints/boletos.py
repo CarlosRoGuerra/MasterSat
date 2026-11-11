@@ -792,7 +792,7 @@ def get_carne_pdf(
 ):
     """
     PDF do carnê: todas as parcelas registradas de um lote tipo 'carne', uma
-    por bloco pagável (2 por página).
+    por bloco pagável (3 por página).
 
     Se alguma parcela ainda não tem os dados oficiais (linha digitável), tenta
     recuperá-la na Ailos antes de montar — o registro pode ter sido feito, mas

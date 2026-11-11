@@ -6,6 +6,7 @@ import {
   CalendarDays,
   Check,
   Clock3,
+  Download,
   FileText,
   Inbox,
   Loader2,
@@ -21,6 +22,7 @@ import { nomeBancoBoleto, type BancoBoleto } from '@/lib/banco-boleto';
 import { useSicrediDisponivel } from '@/lib/use-sicredi-disponivel';
 import { Button } from '@/components/ui/button';
 import { Modal } from '@/components/ui/modal';
+import { CarneTrackingModal, useCarneTracking } from '@/components/carne-tracking-modal';
 
 type Lote = {
   id: number;
@@ -49,6 +51,20 @@ type Item = {
   proxima_tentativa_em?: string | null;
 };
 
+type CarneFechamento = {
+  payer_client_id: number;
+  cliente: string;
+  banco: BancoBoleto;
+  billing_ids: number[];
+  total: number;
+  registradas: number;
+  primeiro_vencimento: string;
+  ultimo_vencimento: string;
+  lote_id: number | null;
+  ticket: string | null;
+  pode_iniciar: boolean;
+};
+
 type Previa = {
   id: number;
   mes_servico: string;
@@ -61,6 +77,7 @@ type Previa = {
   em_fila: number;
   limite_destinatarios_hora: number;
   itens: Item[];
+  carnes?: CarneFechamento[];
 };
 
 function mensagemErro(err: unknown) {
@@ -136,7 +153,9 @@ export function ClosureDeliveryModal({
   const [filtro, setFiltro] = useState<Filtro>('todos');
   const operacaoRef = useRef(false);
   const requestId = useRef(0);
-  const busy = sending || emitting || loading || loadingMeses;
+  const carne = useCarneTracking(token, () => { void atualizarPrevia(); });
+  const busy = sending || emitting || loading || loadingMeses || !!carne.track;
+  const carnes = previa?.carnes ?? [];
   const meses = [...new Set(lotes.map(lote => lote.mes_servico))].sort().reverse();
   const lotesVisiveis = lotes.filter(lote => !mesServico || lote.mes_servico === mesServico);
   const itens = previa?.itens ?? [];
@@ -349,9 +368,32 @@ export function ClosureDeliveryModal({
     }
   }
 
+  async function iniciarCarne(grupo: CarneFechamento) {
+    if (!token || busy || operacaoRef.current || !grupo.pode_iniciar || !sicrediDisponivel) return;
+    const jaEmitido = grupo.registradas === grupo.total;
+    if (!jaEmitido && !window.confirm(
+      `Emitir carnê Sicredi de ${grupo.cliente}: ${grupo.total} boletos mensais separados, ` +
+      `de ${formatDate(grupo.primeiro_vencimento)} até ${formatDate(grupo.ultimo_vencimento)}?\n\n` +
+      'Cada parcela terá seu próprio vencimento e código de barras. As parcelas já registradas serão reaproveitadas.',
+    )) return;
+    operacaoRef.current = true;
+    try {
+      await carne.iniciar(grupo.billing_ids, grupo.banco);
+      await atualizarPrevia();
+    } finally { operacaoRef.current = false; }
+  }
+
+  async function baixarCarne(grupo: CarneFechamento) {
+    if (!grupo.lote_id || busy) return;
+    setError('');
+    try { await carne.baixarPdf(grupo.lote_id, grupo.banco); }
+    catch (err) { setError(mensagemErro(err)); }
+  }
+
   return (
+    <>
     <Modal
-      open={open}
+      open={open && !carne.track}
       onClose={() => {
         if (!operacaoRef.current) onClose();
       }}
@@ -516,6 +558,33 @@ export function ClosureDeliveryModal({
         )}
         {previa && (
           <>
+            {carnes.length > 0 ? (
+              <section aria-label="Carnês do fechamento" className="space-y-3">
+                <p className="text-sm text-slate-600 dark:text-slate-300">Cada carnê contém boletos mensais separados, no mesmo formato da Ailos, com três parcelas por folha.</p>
+                {carnes.map(grupo => (
+                  <div key={grupo.payer_client_id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 p-4 dark:border-slate-700">
+                    <div className="text-sm">
+                      <p className="font-semibold">{grupo.cliente}</p>
+                      <p>{grupo.total} boletos mensais separados · {grupo.registradas} registrados</p>
+                      <p className="text-xs text-slate-500">{formatDate(grupo.primeiro_vencimento)} até {formatDate(grupo.ultimo_vencimento)}</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {grupo.lote_id && grupo.ticket ? (
+                        <>
+                          <Button type="button" variant="secondary" disabled={busy} onClick={() => carne.abrirExistente(grupo.lote_id!, grupo.ticket!, grupo.banco)}>Acompanhar carnê</Button>
+                          <Button type="button" disabled={busy || grupo.registradas !== grupo.total} onClick={() => baixarCarne(grupo)}><Download aria-hidden="true" className="h-4 w-4" />Baixar carnê ({grupo.total} parcelas)</Button>
+                        </>
+                      ) : (
+                        <Button type="button" disabled={busy || !grupo.pode_iniciar || !sicrediDisponivel} onClick={() => iniciarCarne(grupo)}>
+                          <Barcode aria-hidden="true" className="h-4 w-4" />
+                          {grupo.registradas === grupo.total ? `Montar carnê (${grupo.total} parcelas)` : `Emitir carnê pelo Sicredi (${grupo.total} boletos)`}
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </section>
+            ) : (
             <div className="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/40">
               <div className="min-w-[200px]">
                 <label htmlFor="closure-issuance-bank" className="mb-2 block text-xs font-semibold text-slate-700 dark:text-slate-200">Banco para emissão</label>
@@ -530,6 +599,7 @@ export function ClosureDeliveryModal({
               </Button>
               <p className="w-full text-xs text-slate-500 dark:text-slate-400">Selecione as cobranças sem boleto e escolha o banco para emitir. Depois, confira o boleto e a NFS-e exigida antes de enviar por e-mail.</p>
             </div>
+            )}
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex flex-wrap gap-1" aria-label="Filtrar cobranças">
                 {(
@@ -760,5 +830,7 @@ export function ClosureDeliveryModal({
         )}
       </div>
     </Modal>
+    {open && <CarneTrackingModal carne={carne} />}
+    </>
   );
 }

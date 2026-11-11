@@ -813,7 +813,7 @@ class ParcelarContratoIn(BaseModel):
     contract_id: int
     num_parcelas: int = Field(ge=2, le=60)
     valor_parcela: float | None = None       # padrão: valor do plano do contrato
-    primeiro_vencimento: date | None = None  # padrão: próximo dia de vencimento do contrato
+    primeiro_vencimento: date | None = None  # padrão: próximo vencimento, após o mês inicial do serviço
     # Carnê simples: parcelas só no sistema, sem registro na Ailos (nem depois).
     somente_sistema: bool = False
 
@@ -848,8 +848,13 @@ def parcelar_contrato(payload: ParcelarContratoIn, db: Session = Depends(get_db)
     if payload.primeiro_vencimento:
         primeiro = payload.primeiro_vencimento
     else:
-        hoje = date.today()
-        primeiro = normalize_due_date(hoje.replace(day=1), 0 if hoje.day <= billing_day else 1, billing_day, 1)
+        hoje_local = hoje()
+        primeiro = normalize_due_date(hoje_local.replace(day=1), 0 if hoje_local.day <= billing_day else 1, billing_day, 1)
+        # A mensalidade do mês de instalação vence no mês seguinte, como no
+        # fechamento. Um cadastro antes do dia de vencimento não deve antecipar
+        # o carnê para o próprio mês da instalação.
+        if plan.billing_interval_months == 1 and contract.start_date:
+            primeiro = max(primeiro, normalize_due_date(contract.start_date.replace(day=1), 1, billing_day, 1))
 
     try:
         payer_client_id = contract_payer_client_id(db, contract)

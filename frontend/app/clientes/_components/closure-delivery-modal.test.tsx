@@ -4,7 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { apiFetch } from '@/lib/api';
 import { ClosureDeliveryModal } from './closure-delivery-modal';
 
-vi.mock('@/lib/api', () => ({ apiFetch: vi.fn() }));
+vi.mock('@/lib/api', () => ({ apiFetch: vi.fn(), API_URL: 'http://test/api/v1' }));
+vi.mock('@/lib/arquivo', () => ({ entregarArquivo: vi.fn() }));
 
 function item(id: number, estado = 'pronto', extra = {}) {
   return {
@@ -30,6 +31,11 @@ let sendFailure: number | null;
 let previewFailure: boolean;
 let sicrediHabilitado: boolean;
 let emissionFailure: number | null;
+let carnes: Array<{
+  payer_client_id: number; cliente: string; banco: 'sicredi'; billing_ids: number[];
+  total: number; registradas: number; primeiro_vencimento: string; ultimo_vencimento: string;
+  lote_id: number | null; ticket: string | null; pode_iniciar: boolean;
+}>;
 const calls = () =>
   vi.mocked(apiFetch).mock.calls.filter(([path]) => String(path).endsWith('/enviar'));
 
@@ -46,6 +52,8 @@ beforeEach(() => {
   previewFailure = false;
   sicrediHabilitado = true;
   emissionFailure = null;
+  carnes = [];
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, blob: async () => new Blob(['%PDF-test']) }));
   rows = [
     item(1),
     item(2),
@@ -61,6 +69,22 @@ beforeEach(() => {
   ];
   vi.mocked(apiFetch).mockImplementation(async (path, options) => {
     if (path === '/sicredi/status') return { habilitado: sicrediHabilitado };
+    if (path === '/sicredi/carne/lote') {
+      const ids: number[] = JSON.parse(String(options?.body)).billing_ids;
+      const grupo = carnes.find(g => g.billing_ids.every(id => ids.includes(id)));
+      if (!grupo) throw new Error('Carnê não encontrado');
+      grupo.lote_id = 25;
+      grupo.ticket = 'ticket-carne';
+      return { id: 25, ticket: 'ticket-carne', status: 'processing' };
+    }
+    if (path === '/sicredi/lotes/ticket-carne') {
+      const grupo = carnes.find(g => g.lote_id === 25)!;
+      grupo.registradas = grupo.total;
+      grupo.pode_iniciar = false;
+      return { status: 'completed', total: grupo.total, prontas: grupo.total,
+        parcelas: grupo.billing_ids.map((billing_id, i) => ({ billing_id, numero_parcela: i + 1,
+          vencimento: '2026-12-10', valor: 64.99, status: 'registrado', erro: null })) };
+    }
     if (path === '/sicredi/boletos' || path === '/ailos/boletos') {
       const id = JSON.parse(String(options?.body)).billing_id;
       if (id === emissionFailure) throw new Error('Registro sem confirmação; consulte o banco.');
@@ -93,6 +117,7 @@ beforeEach(() => {
         em_fila: batchRows.filter(r => r.estado === 'aguardando').length,
         limite_destinatarios_hora: 90,
         itens: batchRows,
+        carnes: id === 10 ? carnes : [],
       };
     }
     if (String(path).endsWith('/enviar')) {
@@ -200,6 +225,60 @@ it('envia mais de 25 títulos do lote completo, mesmo com filtro e seleção par
   await screen.findByText(/61 cobrança\(s\) adicionada\(s\) à fila/);
   expect(calls()).toHaveLength(1);
   expect(JSON.parse(String(calls()[0][1]?.body)).billing_ids).toEqual(Array.from({ length: 61 }, (_, i) => i + 1));
+});
+
+function prepararCarne(registradas = 0, existente = false) {
+  rows = Array.from({ length: 12 }, (_, i) => item(i + 1, 'bloqueado', {
+    boleto_emitido: registradas === 12, boleto_banco: registradas === 12 ? 'sicredi' : null,
+    pode_emitir_boleto: registradas !== 12,
+  }));
+  carnes = [{ payer_client_id: 115, cliente: 'Cliente Carnê', banco: 'sicredi',
+    billing_ids: rows.map(r => r.billing_id), total: 12, registradas,
+    primeiro_vencimento: '2026-12-10', ultimo_vencimento: '2027-11-10',
+    lote_id: existente ? 25 : null, ticket: existente ? 'ticket-carne' : null, pode_iniciar: !existente }];
+}
+
+it('emite as 12 parcelas do cliente pelo mesmo fluxo de carnê da Ailos somente após o clique', async () => {
+  prepararCarne();
+  const { user } = await abrir();
+  expect(emissoes()).toHaveLength(0);
+  expect(vi.mocked(apiFetch).mock.calls.some(([p]) => p === '/sicredi/carne/lote')).toBe(false);
+  expect(screen.getByText('12 boletos mensais separados · 0 registrados')).toBeInTheDocument();
+  expect(screen.queryByLabelText('Banco para emissão')).not.toBeInTheDocument();
+  // Selecionar uma linha para e-mail não reduz o carnê a uma parcela.
+  await user.click(screen.getByRole('checkbox', { name: 'Selecionar cobrança #1' }));
+  await user.click(screen.getByRole('button', { name: 'Emitir carnê pelo Sicredi (12 boletos)' }));
+  await screen.findByText('Carnê completo.');
+  await user.keyboard('{Escape}');
+  await screen.findByRole('button', { name: 'Baixar carnê (12 parcelas)' });
+  expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('12 boletos mensais separados'));
+  const lotes = vi.mocked(apiFetch).mock.calls.filter(([p]) => p === '/sicredi/carne/lote');
+  expect(lotes).toHaveLength(1);
+  expect(JSON.parse(String(lotes[0][1]?.body))).toEqual({ billing_ids: Array.from({ length: 12 }, (_, i) => i + 1) });
+  expect(emissoes()).toHaveLength(0);
+  expect(calls()).toHaveLength(0);
+});
+
+it('permite baixar o carnê existente sem emitir ou cancelar nenhum título', async () => {
+  prepararCarne(12, true);
+  const { user } = await abrir();
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Baixar carnê (12 parcelas)' })).toBeEnabled());
+  await user.click(screen.getByRole('button', { name: 'Baixar carnê (12 parcelas)' }));
+  expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/boletos/carne/25/pdf?banco=sicredi'), expect.anything());
+  expect(vi.mocked(apiFetch).mock.calls.filter(([, options]) => options?.method === 'POST')
+    .map(([p]) => p)).toEqual(['/billing-closure/lotes/recuperar']);
+});
+
+it('reaproveita os 12 boletos emitidos individualmente ao montar o carnê', async () => {
+  prepararCarne(12);
+  const { user } = await abrir();
+  await user.click(screen.getByRole('button', { name: 'Montar carnê (12 parcelas)' }));
+  await screen.findByText('Carnê completo.');
+  await user.keyboard('{Escape}');
+  await screen.findByRole('button', { name: 'Baixar carnê (12 parcelas)' });
+  expect(vi.mocked(apiFetch).mock.calls.filter(([p]) => p === '/sicredi/carne/lote')).toHaveLength(1);
+  expect(emissoes()).toHaveLength(0);
+  expect(window.confirm).not.toHaveBeenCalled();
 });
 
 const emissoes = () => vi.mocked(apiFetch).mock.calls.filter(([path]) =>

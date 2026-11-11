@@ -56,6 +56,27 @@ def test_carne_ailos_continua_como_antes(http, db, contrato, cliente):
     assert cliente.forma_cobranca == 'carne_ailos'
 
 
+@pytest.mark.parametrize('inicio, hoje_teste, esperado', [
+    (date(2026, 11, 11), date(2026, 11, 11), '2026-12-15'),
+    (date(2026, 11, 11), date(2026, 11, 20), '2026-12-15'),
+    (date(2026, 1, 1), date(2026, 11, 11), '2026-11-15'),
+    (date(2027, 1, 5), date(2026, 11, 11), '2027-02-15'),
+])
+def test_cadastro_novo_inicia_carne_no_mes_seguinte_sem_alterar_contrato_antigo(
+    http, db, contrato, inicio, hoje_teste, esperado, monkeypatch,
+):
+    from app.api.v1.endpoints import billings
+    contrato.start_date = inicio
+    contrato.billing_day = 15
+    db.commit()
+    monkeypatch.setattr(billings, 'hoje', lambda: hoje_teste)
+    response = http.post(PARCELAR, json={'contract_id': contrato.id, 'num_parcelas': 12, 'banco': 'sicredi'})
+    assert response.status_code == 200, response.text
+    parcelas = response.json()
+    assert len(parcelas) == 12 and parcelas[0]['due_date'] == esperado
+    assert [p['installment_number'] for p in parcelas] == list(range(1, 13))
+
+
 def test_parcelamento_sicredi_define_forma_sem_emitir_titulos(http, db, contrato, cliente):
     parcelas = _parcelar(http, contrato, banco='sicredi')
     assert not any(p['somente_sistema'] for p in parcelas)

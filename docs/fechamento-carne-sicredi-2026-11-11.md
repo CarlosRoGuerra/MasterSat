@@ -21,6 +21,24 @@ todo o carnê em um boleto único. O lote guarda todos os títulos efetivos e a
 conferência abre com Sicredi selecionado. Preparar o fechamento não registra
 boletos no banco: a emissão continua sendo uma ação explícita da equipe.
 
+A conferência do lote oferece **Emitir carnê pelo Sicredi (12 boletos)** por
+responsável. Essa ação usa o mesmo acompanhamento de carnê do Financeiro e da
+Ailos: registra cada parcela separadamente, mostra o progresso dos 12 títulos
+e disponibiliza o carnê com três parcelas pagáveis por folha (quatro folhas
+para 12 parcelas). Não soma os 12 meses em um título. A seleção de linhas para
+envio por e-mail não reduz a quantidade de parcelas do carnê.
+
+Para títulos que já foram emitidos individualmente pelo fechamento, **Montar
+carnê** reaproveita os registros e os nossos números existentes, sem novo
+registro bancário. O lote fica disponível para acompanhar e baixar novamente
+no fechamento e na lista de carnês do Financeiro. Abrir a conferência e baixar
+o PDF não emitem nem cancelam boletos.
+
+No parcelamento pelo plano, o primeiro vencimento automático de um contrato
+mensal novo respeita o mês seguinte ao início do serviço. Um primeiro
+vencimento explicitamente informado continua sendo respeitado. A troca de
+cliente no gerador de carnê limpa o vencimento digitado para o cliente anterior.
+
 Verificação: 183 testes de backend e 24 de interface aprovados; TypeScript
 aprovado. Um teste antigo de PDF que exige duas páginas foi excluído dessa
 execução: a falha de expectativa (PDF atual em uma página) já foi reproduzida

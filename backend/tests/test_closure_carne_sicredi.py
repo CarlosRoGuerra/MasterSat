@@ -13,6 +13,7 @@ from app.models.contract import Contract
 from app.models.enums import BillingStatus
 from app.models.sicredi_boleto import SicrediBoleto
 from app.services.financial import add_months
+from tests.sicredi_apoio import resposta_cadastro, sicredi  # noqa: F401
 
 PREFIX = '/api/v1/billing-closure'
 PARAMS = {'service_month': '2026-11', 'forma_cobranca': 'carne_sicredi', 'carne_installments': 12}
@@ -66,6 +67,68 @@ def test_generate_preserves_twelve_payable_titles_and_is_idempotent(http, db, mo
     again = http.post(PREFIX + '/generate', params=params)
     assert again.status_code == 200, again.text
     assert again.json()['generated'] == 0
+    assert db.query(Billing).count() == 12
+
+
+def test_closure_uses_existing_carne_flow_for_twelve_independent_titles_and_four_pdf_pages(
+    http, db, monthly, sicredi,
+):
+    from pypdf import PdfReader
+    from app.models.sicredi_lote import SicrediLote
+
+    result = http.post(PREFIX + '/generate', params=PARAMS).json()
+    ids = result['payment_billing_ids']
+    path = f"{PREFIX}/lotes/{result['closure_batch_id']}"
+    group = http.get(path).json()['carnes'][0]
+    assert group['billing_ids'] == ids and group['total'] == 12
+    assert group['registradas'] == 0 and group['pode_iniciar']
+    assert group['lote_id'] is None
+    assert db.query(SicrediLote).count() == db.query(SicrediBoleto).count() == 0
+    assert sicredi.chamadas == []  # Abrir/conferir não emite nada.
+
+    sicredi.quando('POST', '/cobranca/boleto/v1/boletos',
+                  lambda **kw: resposta_cadastro(kw['json']['nossoNumero']))
+    response = http.post('/api/v1/sicredi/carne/lote', json={'billing_ids': ids})
+    assert response.status_code == 200, response.text
+    lote = response.json()
+    group = http.get(path).json()['carnes'][0]
+    assert group['lote_id'] == lote['id'] and group['ticket'] == lote['ticket']
+    assert group['registradas'] == 12 and not group['pode_iniciar']
+    records = db.query(SicrediBoleto).all()
+    assert len(records) == len({r.nosso_numero for r in records}) == 12
+    assert len(sicredi.chamadas_de('POST', '/cobranca/boleto/v1/boletos')) == 12
+    pdf = http.get(f"/api/v1/boletos/carne/{lote['id']}/pdf?banco=sicredi")
+    assert pdf.status_code == 200, pdf.text
+    pages = PdfReader(BytesIO(pdf.content)).pages
+    assert len(pages) == 4
+    assert [p.extract_text().count('748-X') for p in pages] == [3] * 4
+    before = len(sicredi.chamadas)
+    repeated = http.post('/api/v1/sicredi/carne/lote', json={'billing_ids': ids})
+    assert repeated.json()['id'] == lote['id']
+    assert len(sicredi.chamadas) == before and db.query(Billing).count() == 12
+
+
+def test_existing_individually_registered_titles_can_become_carne_without_new_bank_calls(
+    http, db, monthly, sicredi,
+):
+    from app.services import sicredi_boletos
+    from app.models.sicredi_lote import SicrediLote
+
+    result = http.post(PREFIX + '/generate', params=PARAMS).json()
+    ids = result['payment_billing_ids']
+    sicredi.quando('POST', '/cobranca/boleto/v1/boletos',
+                  lambda **kw: resposta_cadastro(kw['json']['nossoNumero']))
+    for bid in ids:
+        sicredi_boletos.gerar_boleto(db, bid)
+    before = len(sicredi.chamadas)
+    numbers = {r.billing_id: r.nosso_numero for r in db.query(SicrediBoleto).all()}
+    group = http.get(f"{PREFIX}/lotes/{result['closure_batch_id']}").json()['carnes'][0]
+    assert group['registradas'] == 12 and group['pode_iniciar'] and group['lote_id'] is None
+    assert db.query(SicrediLote).count() == 0
+    response = http.post('/api/v1/sicredi/carne/lote', json={'billing_ids': ids})
+    assert response.status_code == 200, response.text
+    assert len(sicredi.chamadas) == before  # Só monta o carnê com os dados oficiais existentes.
+    assert {r.billing_id: r.nosso_numero for r in db.query(SicrediBoleto).all()} == numbers
     assert db.query(Billing).count() == 12
 
 

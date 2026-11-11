@@ -1522,6 +1522,7 @@ export default function FinanceiroPage() {
     setCarneSelected([]);
     setCarneContractId('');
     setCarneValor('');
+    setCarnePrimeiroVenc('');
     setCarnesGerados([]);
     setCarneContratos([]);
     if (!token || !clientId) return;
