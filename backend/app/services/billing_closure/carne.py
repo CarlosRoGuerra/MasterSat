@@ -1,4 +1,11 @@
-"""Monthly installments explicitly requested in the Sicredi closing preview."""
+"""Carnê Sicredi do fechamento: o ano inteiro para quem precisa renovar.
+
+Para cada contrato cujo mês ainda não foi cobrado, o fechamento com a forma
+Carnê Sicredi gera um carnê com uma parcela por mês (padrão: 12). Contrato com
+o mês já cobrado — carnê em andamento ou mensalidade lançada — não recebe
+pedaços de carnê: aparece como já gerado e volta no fechamento do mês em que
+o carnê atual terminar.
+"""
 from __future__ import annotations
 
 from datetime import date
@@ -24,6 +31,11 @@ def expand_carne_items(
     for original in items:
         # A final uninstall prorata is one last obligation, never a new booklet.
         if original.get('is_final_prorata'):
+            expanded.append(original)
+            continue
+        # Mês deste fechamento já cobrado: o carnê vigente segue até o fim e o
+        # contrato volta no fechamento em que ele terminar (sem carnê parcial).
+        if original.get('already_generated'):
             expanded.append(original)
             continue
         contract = db.get(Contract, original['contract_id'])

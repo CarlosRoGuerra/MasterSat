@@ -58,10 +58,12 @@ type CarneFechamento = {
   billing_ids: number[];
   total: number;
   registradas: number;
+  abertas?: number;
   primeiro_vencimento: string;
   ultimo_vencimento: string;
   lote_id: number | null;
   ticket: string | null;
+  lote_status?: string | null;
   pode_iniciar: boolean;
 };
 
@@ -142,6 +144,7 @@ export function ClosureDeliveryModal({
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [emitting, setEmitting] = useState(false);
+  const [emitindoCarnes, setEmitindoCarnes] = useState('');
   const [banco, setBanco] = useState<BancoBoleto>('ailos');
   const [progressoEmissao, setProgressoEmissao] = useState('');
   const sicrediDisponivel = useSicrediDisponivel(token, open);
@@ -154,8 +157,14 @@ export function ClosureDeliveryModal({
   const operacaoRef = useRef(false);
   const requestId = useRef(0);
   const carne = useCarneTracking(token, () => { void atualizarPrevia(); });
-  const busy = sending || emitting || loading || loadingMeses || !!carne.track;
+  const busy = sending || emitting || !!emitindoCarnes || loading || loadingMeses || !!carne.track;
   const carnes = previa?.carnes ?? [];
+  const carnesParaEmitir = carnes.filter(grupo => !grupo.lote_id && grupo.pode_iniciar);
+  // Registro em andamento no servidor: a conferência se atualiza sozinha só
+  // enquanto o Sicredi processa (parcela paga ou com erro não prende a tela).
+  const carnesRegistrando = carnes.some(grupo => grupo.lote_id && grupo.lote_status === 'processing');
+  const carneCompleto = (grupo: CarneFechamento) =>
+    grupo.registradas > 0 && grupo.registradas === (grupo.abertas ?? grupo.total);
   const meses = [...new Set(lotes.map(lote => lote.mes_servico))].sort().reverse();
   const lotesVisiveis = lotes.filter(lote => !mesServico || lote.mes_servico === mesServico);
   const itens = previa?.itens ?? [];
@@ -275,7 +284,7 @@ export function ClosureDeliveryModal({
   }, [open, token, loteId]);
 
   useEffect(() => {
-    if (!open || !token || !loteId || !filaAtiva) return;
+    if (!open || !token || !loteId || !(filaAtiva || carnesRegistrando)) return;
     let active = true;
     let fetching = false;
     const timer = window.setInterval(async () => {
@@ -290,7 +299,7 @@ export function ClosureDeliveryModal({
       } finally { fetching = false; }
     }, 5000);
     return () => { active = false; window.clearInterval(timer); };
-  }, [open, token, loteId, filaAtiva]);
+  }, [open, token, loteId, filaAtiva, carnesRegistrando]);
 
   async function enviarSelecionados(loteCompleto = false) {
     const paraEnviar = loteCompleto ? prontosDoLote : prontos;
@@ -381,6 +390,42 @@ export function ClosureDeliveryModal({
       await carne.iniciar(grupo.billing_ids, grupo.banco);
       await atualizarPrevia();
     } finally { operacaoRef.current = false; }
+  }
+
+  /** Um carnê por responsável, todos do fechamento numa só ação. O Sicredi
+   *  registra cada parcela no servidor; a lista mostra o progresso. */
+  async function emitirTodosCarnes() {
+    if (!token || busy || operacaoRef.current || !carnesParaEmitir.length || !sicrediDisponivel) return;
+    const boletos = carnesParaEmitir.reduce((soma, grupo) => soma + grupo.total, 0);
+    if (!window.confirm(
+      `Emitir ${carnesParaEmitir.length} carnê(s) Sicredi deste fechamento, um por responsável financeiro?\n\n`
+      + `Serão ${boletos} boletos mensais separados, cada um com o próprio vencimento e código de barras. `
+      + 'As parcelas já registradas são reaproveitadas. O registro continua no servidor mesmo com esta tela fechada.',
+    )) return;
+    operacaoRef.current = true;
+    setError('');
+    setFeedback('');
+    const falhas: string[] = [];
+    let enviados = 0;
+    try {
+      for (const [indice, grupo] of carnesParaEmitir.entries()) {
+        setEmitindoCarnes(`${indice + 1}/${carnesParaEmitir.length}`);
+        try {
+          await apiFetch(`/${grupo.banco}/carne/lote`, {
+            method: 'POST', body: JSON.stringify({ billing_ids: grupo.billing_ids }),
+          }, token);
+          enviados += 1;
+        } catch (err) {
+          falhas.push(`${grupo.cliente}: ${mensagemErro(err)}`);
+        }
+      }
+      await atualizarPrevia();
+      setFeedback(`${enviados} carnê(s) enviado(s) para registro no Sicredi. Acompanhe as parcelas registradas na lista e baixe cada carnê quando estiver completo.`);
+      if (falhas.length) setError(`Não foi possível iniciar: ${falhas.join(' · ')}`);
+    } finally {
+      operacaoRef.current = false;
+      setEmitindoCarnes('');
+    }
   }
 
   async function baixarCarne(grupo: CarneFechamento) {
@@ -560,7 +605,21 @@ export function ClosureDeliveryModal({
           <>
             {carnes.length > 0 ? (
               <section aria-label="Carnês do fechamento" className="space-y-3">
-                <p className="text-sm text-slate-600 dark:text-slate-300">Cada carnê contém boletos mensais separados, no mesmo formato da Ailos, com três parcelas por folha.</p>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <p className="text-sm text-slate-600 dark:text-slate-300">Cada carnê contém boletos mensais separados, no mesmo formato da Ailos, com três parcelas por folha.</p>
+                  {carnesParaEmitir.length > 0 && (
+                    <Button type="button" disabled={busy || !sicrediDisponivel} onClick={emitirTodosCarnes}>
+                      <Barcode aria-hidden="true" className="h-4 w-4" />
+                      Emitir todos os carnês pelo Sicredi ({carnesParaEmitir.length})
+                    </Button>
+                  )}
+                </div>
+                {emitindoCarnes && (
+                  <p role="status" className="flex items-center gap-2 text-sm">
+                    <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin motion-reduce:animate-none" />
+                    Enviando carnês para registro no Sicredi… {emitindoCarnes}
+                  </p>
+                )}
                 {carnes.map(grupo => (
                   <div key={grupo.payer_client_id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 p-4 dark:border-slate-700">
                     <div className="text-sm">
@@ -572,7 +631,7 @@ export function ClosureDeliveryModal({
                       {grupo.lote_id && grupo.ticket ? (
                         <>
                           <Button type="button" variant="secondary" disabled={busy} onClick={() => carne.abrirExistente(grupo.lote_id!, grupo.ticket!, grupo.banco)}>Acompanhar carnê</Button>
-                          <Button type="button" disabled={busy || grupo.registradas !== grupo.total} onClick={() => baixarCarne(grupo)}><Download aria-hidden="true" className="h-4 w-4" />Baixar carnê ({grupo.total} parcelas)</Button>
+                          <Button type="button" disabled={busy || !carneCompleto(grupo)} onClick={() => baixarCarne(grupo)}><Download aria-hidden="true" className="h-4 w-4" />Baixar carnê ({grupo.total} parcelas)</Button>
                         </>
                       ) : (
                         <Button type="button" disabled={busy || !grupo.pode_iniciar || !sicrediDisponivel} onClick={() => iniciarCarne(grupo)}>

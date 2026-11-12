@@ -601,6 +601,41 @@ export default function FechamentoPage() {
           <h2 className="mb-4 text-base font-semibold text-slate-800 dark:text-white">
             1. Defina o escopo do fechamento
           </h2>
+          <div className="mb-5">
+            <p className="mb-1.5 text-xs font-semibold text-slate-500 dark:text-slate-400">Tipo de fechamento</p>
+            <div className="flex flex-wrap gap-1.5" role="group" aria-label="Tipo de fechamento">
+              {([
+                ['mensal', 'Boletos mensais'],
+                ['carne', 'Carnês Sicredi (12 meses)'],
+              ] as const).map(([tipo, rotulo]) => {
+                const ativo = tipo === 'carne' ? carneSicredi : !carneSicredi;
+                return (
+                  <button
+                    key={tipo}
+                    type="button"
+                    aria-pressed={ativo}
+                    onClick={() => {
+                      if (tipo === 'carne') { setFormaCobranca('carne_sicredi'); setCarneInstallments('12'); }
+                      else if (carneSicredi) setFormaCobranca('');
+                    }}
+                    className={`rounded-lg border px-3 py-2 text-xs font-semibold transition-colors ${
+                      ativo
+                        ? 'border-brand-500 bg-brand-500 text-black'
+                        : 'border-slate-200 bg-white text-slate-600 hover:border-brand-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'
+                    }`}
+                  >
+                    {rotulo}
+                  </button>
+                );
+              })}
+            </div>
+            {carneSicredi && (
+              <p className="mt-1.5 max-w-3xl text-xs text-slate-500">
+                Gera o carnê do ano para cada cliente com a forma Carnê Sicredi que precisa de um carnê novo neste mês: uma parcela por mês,
+                cada uma com o próprio boleto. Quem ainda tem carnê em andamento aparece como já gerado e não recebe parcelas a mais.
+              </p>
+            )}
+          </div>
           <div className="flex flex-wrap items-end gap-5">
             <div>
               <p className="mb-1.5 text-xs font-semibold text-slate-500 dark:text-slate-400">Mês do serviço</p>

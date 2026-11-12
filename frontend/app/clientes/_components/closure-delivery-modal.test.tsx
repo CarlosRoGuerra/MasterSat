@@ -31,10 +31,11 @@ let sendFailure: number | null;
 let previewFailure: boolean;
 let sicrediHabilitado: boolean;
 let emissionFailure: number | null;
+let carneFailure: number | null;
 let carnes: Array<{
   payer_client_id: number; cliente: string; banco: 'sicredi'; billing_ids: number[];
   total: number; registradas: number; primeiro_vencimento: string; ultimo_vencimento: string;
-  lote_id: number | null; ticket: string | null; pode_iniciar: boolean;
+  lote_id: number | null; ticket: string | null; pode_iniciar: boolean; abertas?: number; lote_status?: string | null;
 }>;
 const calls = () =>
   vi.mocked(apiFetch).mock.calls.filter(([path]) => String(path).endsWith('/enviar'));
@@ -52,6 +53,7 @@ beforeEach(() => {
   previewFailure = false;
   sicrediHabilitado = true;
   emissionFailure = null;
+  carneFailure = null;
   carnes = [];
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, blob: async () => new Blob(['%PDF-test']) }));
   rows = [
@@ -73,6 +75,7 @@ beforeEach(() => {
       const ids: number[] = JSON.parse(String(options?.body)).billing_ids;
       const grupo = carnes.find(g => g.billing_ids.every(id => ids.includes(id)));
       if (!grupo) throw new Error('Carnê não encontrado');
+      if (grupo.payer_client_id === carneFailure) throw new Error('Cobrança com título de outro convênio.');
       grupo.lote_id = 25;
       grupo.ticket = 'ticket-carne';
       return { id: 25, ticket: 'ticket-carne', status: 'processing' };
@@ -259,6 +262,49 @@ it('emite as 12 parcelas do cliente pelo mesmo fluxo de carnê da Ailos somente 
   expect(calls()).toHaveLength(0);
 });
 
+function prepararCarnes(quantidade: number) {
+  rows = Array.from({ length: quantidade * 12 }, (_, i) => item(i + 1, 'bloqueado', {
+    boleto_emitido: false, boleto_banco: null, pode_emitir_boleto: true,
+  }));
+  carnes = Array.from({ length: quantidade }, (_, g) => ({
+    payer_client_id: 115 + g, cliente: `Cliente ${115 + g}`, banco: 'sicredi' as const,
+    billing_ids: rows.slice(g * 12, g * 12 + 12).map(r => r.billing_id), total: 12, registradas: 0,
+    primeiro_vencimento: '2026-12-10', ultimo_vencimento: '2027-11-10', lote_id: null, ticket: null, pode_iniciar: true,
+  }));
+}
+
+it('emite todos os carnês do fechamento numa só ação, um por responsável', async () => {
+  prepararCarnes(3);
+  const esperados = carnes.map(g => g.billing_ids);
+  const { user } = await abrir();
+  await user.click(screen.getByRole('button', { name: 'Emitir todos os carnês pelo Sicredi (3)' }));
+  expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('36 boletos mensais separados'));
+  await screen.findByText(/3 carnê\(s\) enviado\(s\) para registro no Sicredi/);
+  const lotes = vi.mocked(apiFetch).mock.calls.filter(([p]) => p === '/sicredi/carne/lote');
+  expect(lotes.map(([, o]) => JSON.parse(String(o?.body)).billing_ids)).toEqual(esperados);
+  expect(emissoes()).toHaveLength(0);
+  expect(calls()).toHaveLength(0);
+  expect(screen.queryByRole('button', { name: /Emitir todos os carnês/ })).not.toBeInTheDocument();
+});
+
+it('uma falha num carnê não impede os demais e é informada', async () => {
+  prepararCarnes(3);
+  carneFailure = 116;
+  const { user } = await abrir();
+  await user.click(screen.getByRole('button', { name: 'Emitir todos os carnês pelo Sicredi (3)' }));
+  await screen.findByText(/2 carnê\(s\) enviado\(s\)/);
+  expect(screen.getByText(/Cliente 116: Cobrança com título de outro convênio/)).toBeInTheDocument();
+  expect(vi.mocked(apiFetch).mock.calls.filter(([p]) => p === '/sicredi/carne/lote')).toHaveLength(3);
+});
+
+it('não oferece emitir todos quando o usuário recusa a confirmação', async () => {
+  prepararCarnes(2);
+  vi.mocked(window.confirm).mockReturnValue(false);
+  const { user } = await abrir();
+  await user.click(screen.getByRole('button', { name: 'Emitir todos os carnês pelo Sicredi (2)' }));
+  expect(vi.mocked(apiFetch).mock.calls.some(([p]) => p === '/sicredi/carne/lote')).toBe(false);
+});
+
 it('permite baixar o carnê existente sem emitir ou cancelar nenhum título', async () => {
   prepararCarne(12, true);
   const { user } = await abrir();
@@ -267,6 +313,15 @@ it('permite baixar o carnê existente sem emitir ou cancelar nenhum título', as
   expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/boletos/carne/25/pdf?banco=sicredi'), expect.anything());
   expect(vi.mocked(apiFetch).mock.calls.filter(([, options]) => options?.method === 'POST')
     .map(([p]) => p)).toEqual(['/billing-closure/lotes/recuperar']);
+});
+
+it('libera o download quando todas as parcelas em aberto estão registradas', async () => {
+  prepararCarne(11, true);
+  Object.assign(carnes[0], { abertas: 11, lote_status: 'partial' });
+  const { user } = await abrir();
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Baixar carnê (12 parcelas)' })).toBeEnabled());
+  await user.click(screen.getByRole('button', { name: 'Baixar carnê (12 parcelas)' }));
+  expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/boletos/carne/25/pdf?banco=sicredi'), expect.anything());
 });
 
 it('reaproveita os 12 boletos emitidos individualmente ao montar o carnê', async () => {

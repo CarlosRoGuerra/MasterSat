@@ -101,6 +101,30 @@ describe('fechamento do carne Sicredi', () => {
     expect(within(firstTitle).getByText(/74,99/)).toBeInTheDocument();
   });
 
+  it('offers the twelve-month booklet closing as its own closing type', async () => {
+    const user = userEvent.setup();
+    const { container } = render(<FechamentoPage />);
+    fireEvent.change(container.querySelector('input[type="month"]')!, { target: { value: '2026-11' } });
+    expect(screen.getByRole('button', { name: 'Boletos mensais' })).toHaveAttribute('aria-pressed', 'true');
+    await user.click(screen.getByRole('button', { name: 'Carnês Sicredi (12 meses)' }));
+    expect(screen.getByRole('button', { name: 'Carnês Sicredi (12 meses)' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('combobox', { name: 'Forma de cobrança' })).toHaveValue('carne_sicredi');
+    expect(screen.getByRole('spinbutton', { name: 'Parcelas do carnê' })).toHaveValue(12);
+    expect(screen.getByText(/carnê em andamento aparece como já gerado/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Simular fechamento' }));
+    expect(await screen.findByText('Títulos previstos (12)')).toBeInTheDocument();
+    const params = new URLSearchParams(api.fetch.mock.calls[0][0].split('?')[1]);
+    expect(params.get('forma_cobranca')).toBe('carne_sicredi');
+    expect(params.get('carne_installments')).toBe('12');
+  });
+
+  it('returns to the monthly closing without booklet installments', async () => {
+    const user = await setup();
+    await user.click(screen.getByRole('button', { name: 'Boletos mensais' }));
+    expect(screen.getByRole('combobox', { name: 'Forma de cobrança' })).toHaveValue('');
+    expect(screen.queryByRole('spinbutton')).not.toBeInTheDocument();
+  });
+
   it('validates the installment count and keeps the monthly path unchanged', async () => {
     const user = await setup();
     fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '1' } });

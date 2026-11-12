@@ -291,7 +291,7 @@ def _carnes_do_fechamento(db, lote, billings, itens, registros, titulos) -> list
         if len(ids) < 2:
             continue
         existente = next((c for c in existentes if set(c.billing_ids or []) == set(ids)), None)
-        registradas = 0
+        registradas = abertas = 0
         permitidas = True
         for item in parcelas:
             bid = item['billing_id']
@@ -301,6 +301,7 @@ def _carnes_do_fechamento(db, lote, billings, itens, registros, titulos) -> list
             )
             sicredi_sem_baixa = (titulo.canal == titulo_bancario.CANAL_SICREDI
                                 and registro is not None and registro.baixa_status is None)
+            abertas += aberta
             registradas += bool(aberta and sicredi_sem_baixa and item['boleto_emitido']
                                 and titulo.estado == titulo_bancario.REGISTRADO)
             permitidas &= bool(aberta and not b.somente_sistema
@@ -313,10 +314,14 @@ def _carnes_do_fechamento(db, lote, billings, itens, registros, titulos) -> list
             'billing_ids': ids,
             'total': len(ids),
             'registradas': registradas,
+            # Parcela paga/cancelada sai do carnê impresso; o registro conclui
+            # quando todas as parcelas em aberto estão no banco.
+            'abertas': abertas,
             'primeiro_vencimento': parcelas[0]['vencimento'],
             'ultimo_vencimento': parcelas[-1]['vencimento'],
             'lote_id': existente.id if existente else None,
             'ticket': existente.ticket if existente else None,
+            'lote_status': existente.status if existente else None,
             'pode_iniciar': permitidas and existente is None,
         })
     return resultado
