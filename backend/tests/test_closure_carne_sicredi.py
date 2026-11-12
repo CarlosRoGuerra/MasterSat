@@ -12,6 +12,7 @@ from app.models.closure_job import ClosureJob
 from app.models.contract import Contract
 from app.models.enums import BillingStatus
 from app.models.sicredi_boleto import SicrediBoleto
+from app.models.vehicle import Vehicle
 from app.services.financial import add_months
 from tests.sicredi_apoio import resposta_cadastro, sicredi  # noqa: F401
 
@@ -197,14 +198,25 @@ def test_first_month_with_service_keeps_chronological_order_in_tracking_and_pdf(
     assert lote.billing_ids == stored_ids  # Consultar/baixar não altera títulos antigos.
 
 
-def test_two_vehicles_and_service_consolidate_each_month_not_the_whole_booklet(http, db, cliente, plan, monthly):
-    second = Contract(client_id=cliente.id, plan_id=plan.id, start_date=date(2026, 1, 1),
+@pytest.mark.parametrize('boleto_format', ['unico', 'individual'])
+def test_two_vehicles_and_service_consolidate_each_month_not_the_whole_booklet(
+    http, db, cliente, plan, monthly, veiculo, boleto_format,
+):
+    cliente.boleto_format = boleto_format
+    monthly.vehicle_id = veiculo.id
+    other_vehicle = Vehicle(client_id=cliente.id, plate='CAR2B34')
+    db.add(other_vehicle)
+    db.flush()
+    second = Contract(client_id=cliente.id, vehicle_id=other_vehicle.id,
+                      plan_id=plan.id, start_date=date(2026, 1, 1),
                       status='ativo', billing_day=20)
     service = ClientChargeItem(client_id=cliente.id, title='Servico avulso', quantity=1,
                                unit_price=Decimal('10'), total_amount=Decimal('10'), installment_count=1,
                                start_date=date(2026, 11, 1), active=True)
     db.add_all([second, service])
     db.commit()
+    preview = http.get(PREFIX + '/simulate', params=PARAMS).json()
+    assert preview['payer_boleto_formats'][str(cliente.id)] == 'unico'
     response = http.post(PREFIX + '/generate', params=PARAMS)
     assert response.status_code == 200, response.text
     result = response.json()
@@ -218,6 +230,9 @@ def test_two_vehicles_and_service_consolidate_each_month_not_the_whole_booklet(h
     assert [title.period_label for title in titles] == [add_months(date(2026, 11, 1), i).strftime('%m/%Y') for i in range(12)]
     assert all(title.billing_type == 'boleto_unico' for title in titles)
     assert db.query(Billing).filter(Billing.billing_type == 'carne', Billing.substituted_by_id.is_not(None)).count() == 24
+    assert {b.vehicle_id for b in db.query(Billing).filter(Billing.billing_type == 'carne')} == {
+        veiculo.id, other_vehicle.id,
+    }
 
 
 def test_existing_paid_future_month_is_preserved(http, db, monthly, cliente):
@@ -227,13 +242,15 @@ def test_existing_paid_future_month_is_preserved(http, db, monthly, cliente):
     db.add(paid)
     db.commit()
     preview = http.get(PREFIX + '/simulate', params=PARAMS).json()
-    assert preview['already_generated'] == 1 and preview['to_generate'] == 11
+    assert preview['already_generated'] == 1 and preview['to_generate'] == 0
+    assert preview['items'][0]['carne_renewal_blocked']
+    assert '02/2027' in preview['items'][0]['carne_renewal_reason']
     result = http.post(PREFIX + '/generate', params=PARAMS)
     assert result.status_code == 200, result.text
-    assert result.json()['payment_titles_generated'] == 11
+    assert result.json()['payment_titles_generated'] == 0
     db.refresh(paid)
     assert paid.status == BillingStatus.PAID and paid.paid_amount == Decimal('64.99')
-    assert db.query(Billing).count() == 12
+    assert db.query(Billing).count() == 1
 
 
 def test_released_archived_booklet_does_not_block_twelve_new_installments(http, db, monthly, cliente):
@@ -288,14 +305,15 @@ def test_initial_prorata_and_installation_service_are_not_repeated(http, db, mon
     assert db.query(ClientChargeItem).one().status == 'faturado'
 
 
-def test_future_month_is_revalidated_under_contract_lock(http, db, monthly, cliente, monkeypatch):
+@pytest.mark.parametrize('status', [BillingStatus.PENDING, BillingStatus.PAID])
+def test_future_month_is_revalidated_under_contract_lock(http, db, monthly, cliente, monkeypatch, status):
     from app.services import billing_closure
     lock = billing_closure._locked_contracts
 
     def concurrent_billing(session, ids):
         session.add(Billing(contract_id=monthly.id, client_id=cliente.id, amount=Decimal('64.99'),
                             due_date=date(2027, 1, 10), period_label='01/2027', billing_type='recorrente',
-                            status=BillingStatus.PENDING))
+                            status=status))
         session.flush()
         return lock(session, ids)
 

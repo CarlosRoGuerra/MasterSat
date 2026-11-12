@@ -20,7 +20,9 @@ from app.models.tracker import Tracker
 from app.models.uninstall_event import UninstallEvent
 from app.models.vehicle import Vehicle
 from app.services.billing_closure.charge_items import _pending_charge_items
-from app.services.billing_closure.carne import expand_carne_items, validate_carne_request
+from app.services.billing_closure.carne import (
+    carne_contracts_by_payer, expand_carne_items, scope_carne_obligations, validate_carne_request,
+)
 from app.services.billing_closure.recurring import (
     _billing_due_in_month,
     _first_cycle_charge_items,
@@ -190,6 +192,7 @@ def simulate_closure(
             'client_type': client.type,
             'vehicle_plate': vehicle.plate if vehicle else None,
             'tracker_imei': tracker.imei if tracker else None,
+            'tracker_id': tracker.id if tracker else None,
             'plan_name': plan.name,
             'plan_price': plan_price,
             'billing_amount': billing_amount,
@@ -368,19 +371,22 @@ def simulate_closure(
         filter_type=filter_type, client_id=client_id,
         billing_month=reference_month, forma_cobranca=forma_cobranca,
     )
+    carne_renewal_blocks = (scope_carne_obligations(items, uninstall_items, charge_items)
+                            if carne_installments is not None else [])
 
     to_generate = [i for i in items if not i['already_generated']]
     already_done = [i for i in items if i['already_generated']]
     # total_amount inclui os serviços embutidos na primeira cobrança
     total_amount = sum(i['total_first_billing'] for i in to_generate)
     total_uninstall = sum(i['fee_amount'] for i in uninstall_items if not i['deferred'])
-    total_services = sum(i['amount_to_generate'] for i in charge_items)
+    total_services = sum(i['amount_to_generate'] for i in charge_items if not i.get('carne_renewal_blocked'))
     payer_ids = {
         entry['payer_client_id']
         for entry in (*items, *uninstall_items, *charge_items)
     }
     payer_formats = {
-        payer.id: ('unico' if payer.forma_cobranca == 'pix_automatico' else payer.boleto_format or 'unico')
+        payer.id: ('unico' if carne_installments is not None or payer.forma_cobranca == 'pix_automatico'
+                   else payer.boleto_format or 'unico')
         for payer in db.scalars(select(Client).where(Client.id.in_(payer_ids))).all()
     } if payer_ids else {}
 
@@ -388,6 +394,7 @@ def simulate_closure(
         'reference_month': reference_month.strftime('%m/%Y'),
         'total_contracts': len({item['contract_id'] for item in items}),
         'carne_installments': carne_installments,
+        'carne_renewal_blocks': carne_renewal_blocks,
         'to_generate': len(to_generate),
         'already_generated': len(already_done),
         'total_amount': round(total_amount, 2),
@@ -460,9 +467,21 @@ def execute_closure(
             item for item in to_generate
             if item['contract_id'] in selected_contracts
         ]
+    if carne_installments is not None:
+        expected_by_payer: dict[int, set[int]] = defaultdict(set)
+        selected_by_payer: dict[int, set[int]] = defaultdict(set)
+        for item in simulation['items']:
+            if item.get('installment_number') and not item['already_generated']:
+                expected_by_payer[item['payer_client_id']].add(item['contract_id'])
+        for item in to_generate:
+            if item.get('installment_number'):
+                selected_by_payer[item['payer_client_id']].add(item['contract_id'])
+        if any(ids != expected_by_payer[payer_id] for payer_id, ids in selected_by_payer.items()):
+            raise ValueError('Selecione todos os contratos do responsável financeiro para renovar o carnê completo.')
 
     deferred_item_ids = {
-        item['event_id'] for item in simulation['uninstall_events'] if item['deferred']
+        item['event_id'] for item in simulation['uninstall_events']
+        if item['deferred'] and not item.get('carne_renewal_blocked')
     }
     selected_uninstall_items = [
         item for item in simulation['uninstall_events'] if not item['deferred']
@@ -473,12 +492,19 @@ def execute_closure(
             item for item in selected_uninstall_items if item['event_id'] in selected
         ]
 
-    selected_charge_items = list(simulation['charge_items'])
+    selected_charge_items = [i for i in simulation['charge_items'] if not i.get('carne_renewal_blocked')]
     if exact_selection:
         selected = set(charge_item_ids or [])
         selected_charge_items = [
             item for item in selected_charge_items if item['item_id'] in selected
         ]
+    if carne_installments is not None:
+        # Uma seleção sem os contratos da renovação não transforma apenas as
+        # taxas/serviços desse responsável em um carnê avulso de uma parcela.
+        selected_uninstall_items = [i for i in selected_uninstall_items
+                                    if i['payer_client_id'] in selected_by_payer]
+        selected_charge_items = [i for i in selected_charge_items
+                                 if i['payer_client_id'] in selected_by_payer]
 
     recurring_contract_ids = {item['contract_id'] for item in to_generate}
     final_items_by_contract = {
@@ -528,6 +554,23 @@ def execute_closure(
         if ((contract.end_date and contract.end_date < service_month)
                 or _has_existing_billing(db, contract.id, item['period_label'])):
             raise ValueError(f'Contrato #{contract.id} mudou durante a preparação do carnê. Refaça a simulação.')
+        if contract_payer_client_id(db, contract) != item['payer_client_id']:
+            raise ValueError(f'Responsável do contrato #{contract.id} mudou. Refaça a simulação.')
+        if item['installment_number'] == 1:
+            plan = db.get(Plan, contract.plan_id, populate_existing=True)
+            if (contract.plan_id != item['carne_plan_id']
+                    or contract.end_date != item['carne_contract_end_date']
+                    or contract.start_date != item['contract_start_date']
+                    or contract.billing_day != item['billing_day']
+                    or not plan or int(plan.billing_interval_months or 1) != 1
+                    or decimal_to_float(plan.price) != item['plan_price']):
+                raise ValueError(f'Contrato #{contract.id} mudou durante a preparação do carnê. Refaça a simulação.')
+    if carne_installments is not None:
+        current_scope = carne_contracts_by_payer(db, set(selected_by_payer), activity_month, reference_month)
+        for payer_id, selected_ids in selected_by_payer.items():
+            payer = db.get(Client, payer_id, populate_existing=True)
+            if current_scope[payer_id] != selected_ids or not payer or payer.forma_cobranca != 'carne_sicredi':
+                raise ValueError('Os contratos ou a forma de cobrança do responsável mudaram. Refaça a simulação.')
 
     # Serviços que a simulação decidiu embutir na 1ª mensalidade: outro
     # fechamento (de outro mês) pode tê-los faturado depois da simulação e
@@ -810,7 +853,8 @@ def execute_closure(
     # O fechamento cria componentes separados para conservar contrato, placa,
     # competência, parcela e taxa. O pagador recebe apenas um título efetivo:
     # as componentes ficam canceladas e apontam para o substituto. Somente a
-    # opção explícita "individual" no cadastro impede essa consolidação.
+    # opção explícita "individual" impede essa consolidação no fechamento
+    # mensal. No carnê, cada responsável recebe uma parcela por mês.
     monthly_source_ids = set(created_ids)
     source_monthly_amount = sum(Decimal(str(db.get(Billing, bid).amount)) for bid in created_ids)
     source_uninstall_amount = sum(Decimal(str(db.get(Billing, bid).amount)) for bid in uninstall_billing_ids)
@@ -831,7 +875,8 @@ def execute_closure(
         if len(components) < 2:
             continue
         payer = db.get(Client, payer_id)
-        if not payer or (payer.boleto_format == 'individual' and payer.forma_cobranca != 'pix_automatico'):
+        if not payer or (carne_installments is None and payer.boleto_format == 'individual'
+                         and payer.forma_cobranca != 'pix_automatico'):
             continue
 
         total = sum((Decimal(str(b.amount)) for b in components), Decimal('0.00'))
@@ -911,6 +956,7 @@ def execute_closure(
     return {
         'closure_batch_id': lote.id,
         'carne_installments': carne_installments,
+        'carne_renewal_blocks': simulation['carne_renewal_blocks'],
         'reference_month': simulation['reference_month'],
         'generated': len(created_ids),
         'billing_ids': created_ids,

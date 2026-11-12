@@ -131,12 +131,14 @@ export function ClosureDeliveryModal({
   onClose,
   initialLoteId,
   initialBanco = 'ailos',
+  carneDownloadOnly = false,
 }: {
   open: boolean;
   token: string | null;
   onClose: () => void;
   initialLoteId?: number | null;
   initialBanco?: BancoBoleto;
+  carneDownloadOnly?: boolean;
 }) {
   const [lotes, setLotes] = useState<Lote[]>([]);
   const [mesServico, setMesServico] = useState('');
@@ -443,13 +445,14 @@ export function ClosureDeliveryModal({
       onClose={() => {
         if (!operacaoRef.current) onClose();
       }}
-      title="Enviar fechamento por e-mail"
-      subtitle="Financeiro / Fechamento mensal"
-      description="Escolha o número do lote e envie todos os documentos prontos aos e-mails cadastrados de cada responsável."
+      title={carneDownloadOnly ? 'Conferir e baixar carnês' : 'Enviar fechamento por e-mail'}
+      subtitle={carneDownloadOnly ? 'Financeiro / Carnês Sicredi' : 'Financeiro / Fechamento mensal'}
+      description={carneDownloadOnly ? 'Confira as parcelas e baixe o PDF de cada responsável para imprimir ou encaminhar manualmente pelo WhatsApp.' : 'Escolha o número do lote e envie todos os documentos prontos aos e-mails cadastrados de cada responsável.'}
       size="2xl"
       footer={
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="text-sm">
+            {carneDownloadOnly ? <p className="font-semibold text-slate-900 dark:text-white">{carnes.length} carnê(s) · {carnes.reduce((total, grupo) => total + grupo.total, 0)} parcelas</p> : <>
             <p className="font-semibold text-slate-900 dark:text-white">
               {marcados.length} selecionada(s){' '}
               <span className="mx-2 font-normal text-slate-300">/</span>{' '}
@@ -457,8 +460,9 @@ export function ClosureDeliveryModal({
                 {formatCurrency(marcados.reduce((total, item) => total + item.valor, 0))}
               </span>
             </p>
+            </>}
             <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-              {marcados.length
+              {carneDownloadOnly ? 'Salve um PDF por responsável para impressão ou envio manual.' : marcados.length
                 ? `${prontos.length} pronta(s) para envio${marcados.length > prontos.length ? ` · ${marcados.length - prontos.length} com pendências` : ''}`
                 : previa ? `Lote #${previa.id} · ${prontosDoLote.length} pronta(s) para envio completo` : 'Escolha um lote de fechamento.'}
             </p>
@@ -473,14 +477,14 @@ export function ClosureDeliveryModal({
               <RefreshCw aria-hidden="true" className="h-4 w-4" />
               Atualizar conferência
             </Button>
-            <Button type="button" variant="secondary" onClick={() => enviarSelecionados()} disabled={busy || !prontos.length}>
+            {!carneDownloadOnly && <><Button type="button" variant="secondary" onClick={() => enviarSelecionados()} disabled={busy || !prontos.length}>
               <Send aria-hidden="true" className="h-4 w-4" />
               Enviar selecionadas ({prontos.length})
             </Button>
             <Button type="button" onClick={() => enviarSelecionados(true)} disabled={busy || !prontosDoLote.length}>
               <Send aria-hidden="true" className="h-4 w-4" />
               Enviar lote completo ({prontosDoLote.length})
-            </Button>
+            </Button></>}
           </div>
         </div>
       }
@@ -489,9 +493,14 @@ export function ClosureDeliveryModal({
         <div className="flex items-start gap-3 rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-100">
           <Clock3 aria-hidden="true" className="mt-0.5 h-5 w-5 shrink-0" />
           <div>
-            <p className="font-semibold">Envio automático com intervalo</p>
-            <p className="mt-1">Até {previa?.limite_destinatarios_hora ?? 90} destinatários por hora, com intervalo de {Math.ceil(3600 / (previa?.limite_destinatarios_hora ?? 90))} segundos por e-mail cadastrado. Você pode fechar esta tela; a fila continua no servidor.</p>
-            {filaAtiva && <p className="mt-2 font-medium">{previa?.em_fila ?? 0} cobrança(s) na fila · acompanhamento atualizado automaticamente.</p>}
+            {carneDownloadOnly ? <>
+              <p className="font-semibold">PDF individual por responsável</p>
+              <p className="mt-1">Confira o registro das parcelas no Sicredi e baixe cada carnê quando estiver completo. Salve o PDF para imprimir ou anexar manualmente na conversa do cliente no WhatsApp.</p>
+            </> : <>
+              <p className="font-semibold">Envio automático com intervalo</p>
+              <p className="mt-1">Até {previa?.limite_destinatarios_hora ?? 90} destinatários por hora, com intervalo de {Math.ceil(3600 / (previa?.limite_destinatarios_hora ?? 90))} segundos por e-mail cadastrado. Você pode fechar esta tela; a fila continua no servidor.</p>
+              {filaAtiva && <p className="mt-2 font-medium">{previa?.em_fila ?? 0} cobrança(s) na fila · acompanhamento atualizado automaticamente.</p>}
+            </>}
           </div>
         </div>
         <div className="grid overflow-hidden rounded-xl border border-slate-200 md:grid-cols-[minmax(250px,1fr)_2fr] dark:border-slate-700">
@@ -536,7 +545,11 @@ export function ClosureDeliveryModal({
               </span>
             </div>
             <div className="grid grid-cols-3 divide-x divide-slate-200 dark:divide-slate-700">
-              {[
+              {(carneDownloadOnly ? [
+                { label: 'Carnês', value: carnes.length, color: 'text-slate-800 dark:text-slate-100' },
+                { label: 'Para baixar', value: carnes.filter(carneCompleto).length, color: 'text-emerald-700 dark:text-emerald-400' },
+                { label: 'Parcelas registradas', value: carnes.reduce((sum, grupo) => sum + grupo.registradas, 0), color: 'text-blue-700 dark:text-blue-400' },
+              ] : [
                 {
                   label: 'Prontas',
                   value: previa?.prontos,
@@ -552,7 +565,7 @@ export function ClosureDeliveryModal({
                   value: previa?.enviados,
                   color: 'text-blue-700 dark:text-blue-400',
                 },
-              ].map((stat, index) => (
+              ]).map((stat, index) => (
                 <div key={stat.label} className={index ? 'pl-5' : ''}>
                   <p className={`text-2xl font-semibold tabular-nums ${stat.color}`}>
                     {stat.value ?? '—'}
@@ -644,7 +657,7 @@ export function ClosureDeliveryModal({
                   </div>
                 ))}
               </section>
-            ) : (
+            ) : !carneDownloadOnly ? (
             <div className="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/40">
               <div className="min-w-[200px]">
                 <label htmlFor="closure-issuance-bank" className="mb-2 block text-xs font-semibold text-slate-700 dark:text-slate-200">Banco para emissão</label>
@@ -659,7 +672,8 @@ export function ClosureDeliveryModal({
               </Button>
               <p className="w-full text-xs text-slate-500 dark:text-slate-400">Selecione as cobranças sem boleto e escolha o banco para emitir. Depois, confira o boleto e a NFS-e exigida antes de enviar por e-mail.</p>
             </div>
-            )}
+            ) : <p className="text-sm text-slate-500">Nenhum carnê disponível neste lote. Atualize a conferência ou escolha outro lote.</p>}
+            {!carneDownloadOnly && <>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex flex-wrap gap-1" aria-label="Filtrar cobranças">
                 {(
@@ -873,6 +887,7 @@ export function ClosureDeliveryModal({
                 <span>Enviadas e envios a conferir não podem ser selecionados.</span>
               </div>
             </div>
+            </>}
           </>
         )}
         {!previa && !loading && !loadingMeses && !error && (
@@ -880,12 +895,12 @@ export function ClosureDeliveryModal({
             <Inbox aria-hidden="true" className="mb-3 h-8 w-8 text-slate-300" />
             <p className="text-sm font-medium text-slate-700 dark:text-slate-200">
               {meses.length
-                ? 'Escolha o número do lote para preparar seu envio'
+                ? carneDownloadOnly ? 'Escolha o número do lote para conferir os carnês' : 'Escolha o número do lote para preparar seu envio'
                 : 'Nenhum fechamento encontrado'}
             </p>
             <p className="mt-1 max-w-md text-xs leading-relaxed text-slate-500">
               {meses.length
-                ? 'Envie o lote completo em uma operação, sem selecionar grupos de 25 cobranças. Boletos e notas fiscais seguem em PDF para todos os e-mails do responsável.'
+                ? carneDownloadOnly ? 'As parcelas e o PDF individual de cada responsável aparecem na conferência do lote.' : 'Envie o lote completo em uma operação, sem selecionar grupos de 25 cobranças. Boletos e notas fiscais seguem em PDF para todos os e-mails do responsável.'
                 : 'Gere as cobranças de um fechamento para começar.'}
             </p>
           </div>

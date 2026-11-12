@@ -38,9 +38,10 @@ def _parcelas_existentes(db, contrato, primeiro: date, quantidade: int):
     db.commit()
 
 
-def test_carne_em_andamento_nao_ganha_pedaco_e_o_terminado_renova_o_ano(http, db, cliente, plan):
+def test_carne_em_andamento_nao_ganha_pedaco_e_o_terminado_renova_o_ano(http, db, cliente, outro_cliente, plan):
     vigente = _contrato(db, cliente, plan)
-    terminado = Contract(client_id=cliente.id, plan_id=plan.id, start_date=date(2026, 1, 1),
+    outro_cliente.forma_cobranca = 'carne_sicredi'
+    terminado = Contract(client_id=outro_cliente.id, plan_id=plan.id, start_date=date(2026, 1, 1),
                          status='ativo', billing_day=10)
     db.add(terminado)
     db.commit()

@@ -531,6 +531,10 @@ def generate_closure_xlsx(simulation: dict) -> BytesIO:
 
 def generate_closure_pdf(simulation: dict) -> BytesIO:
     """Simulação de fechamento em PDF, no formato monoespaçado do SGR."""
+    if simulation.get('carne_installments'):
+        from app.services.billing_closure_carne_report import generate_carne_closure_pdf
+        return generate_carne_closure_pdf(simulation)
+
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.units import mm
     from reportlab.pdfgen import canvas as pdfcanvas

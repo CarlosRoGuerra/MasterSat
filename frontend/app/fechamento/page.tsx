@@ -40,6 +40,7 @@ type ClosureItem = {
   payer_name?: string;
   client_type: string;
   vehicle_plate: string | null;
+  tracker_id?: number | null;
   tracker_imei: string | null;
   plan_name: string;
   plan_price: number;
@@ -56,6 +57,8 @@ type ClosureItem = {
   billing_day: number | null;
   installment_number?: number;
   installment_total?: number;
+  carne_renewal_blocked?: boolean;
+  carne_renewal_reason?: string | null;
 };
 
 type UninstallEventItem = {
@@ -95,6 +98,8 @@ type ChargeItem = {
   total_remaining: number;
   start_date: string;
   date_basis?: 'service_date' | 'due_date';
+  carne_renewal_blocked?: boolean;
+  carne_renewal_reason?: string | null;
 };
 
 type Simulation = {
@@ -112,6 +117,7 @@ type Simulation = {
   total_services: number;
   grand_total: number;
   payer_boleto_formats: Record<number, string>;
+  carne_renewal_blocks?: { payer_client_id: number; payer_name: string; contract_ids: number[]; reason: string }[];
 };
 
 type GenerateResult = {
@@ -144,12 +150,21 @@ function previousYearMonth() {
   const previous = new Date(now.getFullYear(), now.getMonth() - 1, 1);
   return `${previous.getFullYear()}-${String(previous.getMonth() + 1).padStart(2, '0')}`;
 }
+function currentYearMonth() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
 function fmt(v: number) {
   return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
 function fmtDate(iso?: string | null) {
   if (!iso) return '—';
   return new Date(iso.slice(0, 10) + 'T12:00:00').toLocaleDateString('pt-BR');
+}
+function preferredDueDate(dates: string[]) {
+  const counts = new Map<string, number>();
+  for (const date of dates) counts.set(date, (counts.get(date) ?? 0) + 1);
+  return [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0];
 }
 
 const fieldClass =
@@ -218,10 +233,14 @@ export default function FechamentoPage() {
 
   // Step 1
   const [referenceMonth, setReferenceMonth] = useState(previousYearMonth);
+  const [referenceMonthTouched, setReferenceMonthTouched] = useState(false);
   const [filterType, setFilterType] = useState<FilterType>('all');
   const [formaCobranca, setFormaCobranca] = useState('');
   const [carneInstallments, setCarneInstallments] = useState('12');
   const carneSicredi = formaCobranca === 'carne_sicredi';
+  useEffect(() => {
+    if (!referenceMonthTouched) setReferenceMonth(carneSicredi ? currentYearMonth() : previousYearMonth());
+  }, [carneSicredi, referenceMonthTouched]);
   const parcelasValidas = Number.isInteger(Number(carneInstallments)) && Number(carneInstallments) >= 2 && Number(carneInstallments) <= 60;
   const [selectedClientId, setSelectedClientId] = useState('');
   const [clients, setClients] = useState<ClientOption[]>([]);
@@ -243,10 +262,13 @@ export default function FechamentoPage() {
   const [simLoading, setSimLoading] = useState(false);
   const [showAlready, setShowAlready] = useState(false);
   const [selectedContractIds, setSelectedContractIds] = useState<Set<number>>(new Set());
+  const [refreshingPreview, setRefreshingPreview] = useState(false);
+  const [previewNeedsRefresh, setPreviewNeedsRefresh] = useState(false);
 
   // Step 3
   const [generateResult, setGenerateResult] = useState<GenerateResult | null>(null);
   const [deliveryOpen, setDeliveryOpen] = useState(false);
+  const [deliveryForEmail, setDeliveryForEmail] = useState(false);
   const [generating, setGenerating] = useState(false);
 
   const [error, setError] = useState('');
@@ -278,6 +300,9 @@ export default function FechamentoPage() {
   const recorrentes = simulation?.items ?? [];
   const desinstalacoes = simulation?.uninstall_events ?? [];
   const chargeItems = simulation?.charge_items ?? [];
+  const selectedCarnePayers = new Set(recorrentes.filter(item => !item.already_generated && !item.carne_renewal_blocked && selectedContractIds.has(item.contract_id)).map(item => item.payer_client_id));
+  const pendingChargeItems = chargeItems.filter(item => !item.carne_renewal_blocked && (!simulation?.carne_installments || selectedCarnePayers.has(item.payer_client_id)));
+  const pendingUninstallEvents = desinstalacoes.filter(item => !item.deferred && (!simulation?.carne_installments || selectedCarnePayers.has(item.payer_client_id)));
   const displayedRec = showAlready ? recorrentes : recorrentes.filter((i) => !i.already_generated);
   const pagRec = usePagination(displayedRec, 50);
   const pagDes = usePagination(desinstalacoes, 50);
@@ -298,16 +323,29 @@ export default function FechamentoPage() {
 
   async function refreshSimulation() {
     if (!token || !referenceMonth) return;
+    const carnePreview = !!simulation?.carne_installments;
+    if (carnePreview) {
+      setRefreshingPreview(true);
+      setError('');
+    }
     try {
       const params = closureParams();
       const data = await apiFetch<Simulation>(`/billing-closure/simulate?${params}`, {}, token);
       setSimulation(data);
       // Keep previously selected IDs that are still pending; add new ones
       setSelectedContractIds(prev => {
-        const stillPending = new Set(data.items.filter(i => !i.already_generated).map(i => i.contract_id));
+        const stillPending = new Set(data.items.filter(i => !i.already_generated && !i.carne_renewal_blocked).map(i => i.contract_id));
         return new Set([...prev].filter(id => stillPending.has(id)));
       });
-    } catch { /* silent */ }
+      if (carnePreview) setPreviewNeedsRefresh(false);
+    } catch (e) {
+      if (carnePreview) {
+        setPreviewNeedsRefresh(true);
+        setError(e instanceof Error ? e.message : 'Não foi possível atualizar a prévia. Tente novamente antes de gerar os carnês.');
+      }
+    } finally {
+      if (carnePreview) setRefreshingPreview(false);
+    }
   }
 
   function openEditItem(item: ChargeItem) {
@@ -423,7 +461,8 @@ export default function FechamentoPage() {
       const data = await apiFetch<Simulation>(`/billing-closure/simulate?${params}`, {}, token);
       setSimulation(data);
       // Pre-select all non-generated contracts
-      setSelectedContractIds(new Set(data.items.filter(i => !i.already_generated).map(i => i.contract_id)));
+      setSelectedContractIds(new Set(data.items.filter(i => !i.already_generated && !i.carne_renewal_blocked).map(i => i.contract_id)));
+      setPreviewNeedsRefresh(false);
       setStep(2);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Erro ao simular fechamento.');
@@ -473,10 +512,11 @@ export default function FechamentoPage() {
   }
 
   async function confirmGenerate() {
-    if (!token || !simulation || !hasWork) return;
+    if (!token || !simulation || !hasWork || (simulation.carne_installments && (refreshingPreview || previewNeedsRefresh || carneHasPartialSelection))) return;
     setGenerating(true);
     setError('');
     setGenerateResult(null);
+    setDeliveryForEmail(false);
     setStep(3);
     try {
       const params = closureParams();
@@ -489,11 +529,11 @@ export default function FechamentoPage() {
       // A prévia é um snapshot: envia também as seleções exatas de taxas e
       // serviços. Assim um lançamento criado por outra pessoa entre Simular e
       // Gerar não entra silenciosamente nesta execução.
-      const eventIds = desinstalacoes.filter(e => !e.deferred).map(e => e.event_id);
+      const eventIds = pendingUninstallEvents.map(e => e.event_id);
       eventIds.forEach(id => params.append('uninstall_event_ids', String(id)));
       if (eventIds.length === 0) params.append('uninstall_event_ids', '-1');
-      chargeItems.forEach(item => params.append('charge_item_ids', String(item.item_id)));
-      if (chargeItems.length === 0) params.append('charge_item_ids', '-1');
+      pendingChargeItems.forEach(item => params.append('charge_item_ids', String(item.item_id)));
+      if (pendingChargeItems.length === 0) params.append('charge_item_ids', '-1');
       const result = await apiFetch<GenerateResult>(`/billing-closure/generate?${params}`, { method: 'POST' }, token);
       setGenerateResult(result);
     } catch (e) {
@@ -509,12 +549,13 @@ export default function FechamentoPage() {
     setSimulation(null);
     setGenerateResult(null);
     setSelectedContractIds(new Set());
+    setPreviewNeedsRefresh(false);
     setError('');
     setGenerating(false);
   }
 
   // Selection helpers
-  const pendingRec = recorrentes.filter(i => !i.already_generated);
+  const pendingRec = recorrentes.filter(i => !i.already_generated && !i.carne_renewal_blocked);
   const allSelected = pendingRec.length > 0 && pendingRec.every(i => selectedContractIds.has(i.contract_id));
   const someSelected = pendingRec.some(i => selectedContractIds.has(i.contract_id));
 
@@ -537,19 +578,20 @@ export default function FechamentoPage() {
   const hasWork =
     simulation &&
     (selectedContractIds.size > 0 ||
-      desinstalacoes.filter((e) => !e.deferred).length > 0 ||
-      chargeItems.length > 0);
+      pendingUninstallEvents.length > 0 ||
+      pendingChargeItems.length > 0);
 
   // A prévia agrupa os itens selecionados com a mesma regra do fechamento.
-  const titleGroups = new Map<string, { payerName: string; amountCents: number; itemCount: number; dueMonth?: string }>();
+  const titleGroups = new Map<string, { payerId: number; payerName: string; amountCents: number; itemCount: number; dueMonth?: string; dueDate?: string; recurringDueDates: string[] }>();
   const firstDueMonth = simulation?.billing_month?.split('/').reverse().join('-');
   function addPreviewItem(payerId: number, payerName: string, amount: number, individualKey: string, dueDate?: string) {
-    const individual = simulation?.payer_boleto_formats?.[payerId] === 'individual';
+    const individual = !simulation?.carne_installments && simulation?.payer_boleto_formats?.[payerId] === 'individual';
     const dueMonth = simulation?.carne_installments ? (dueDate?.slice(0, 7) ?? firstDueMonth) : undefined;
     const key = `${individual ? `${payerId}:${individualKey}` : String(payerId)}:${dueMonth ?? ''}`;
-    const group = titleGroups.get(key) ?? { payerName, amountCents: 0, itemCount: 0, dueMonth };
+    const group = titleGroups.get(key) ?? { payerId, payerName, amountCents: 0, itemCount: 0, dueMonth, dueDate, recurringDueDates: [] };
     group.amountCents += Math.round(amount * 100);
     group.itemCount += 1;
+    if (simulation?.carne_installments && dueDate) group.recurringDueDates.push(dueDate);
     titleGroups.set(key, group);
   }
   for (const item of pendingRec) {
@@ -558,18 +600,51 @@ export default function FechamentoPage() {
         item.total_first_billing, `contrato:${item.contract_id}:${item.period_label}`, item.due_date);
     }
   }
-  for (const event of desinstalacoes) {
-    if (!event.deferred) {
-      addPreviewItem(event.payer_client_id, event.payer_name || event.client_name,
-        event.fee_amount, 'taxa');
-    }
+  for (const event of pendingUninstallEvents) {
+    addPreviewItem(event.payer_client_id, event.payer_name || event.client_name,
+      event.fee_amount, 'taxa');
   }
-  for (const item of chargeItems) {
+  for (const item of pendingChargeItems) {
     addPreviewItem(item.payer_client_id, item.payer_name || item.client_name,
       item.amount_to_generate, `servico:${item.item_id}`);
   }
-  const previewTitles = [...titleGroups.values()].sort((a, b) =>
+  const previewTitles = [...titleGroups.values()].map(group => simulation?.carne_installments
+    ? { ...group, dueDate: preferredDueDate(group.recurringDueDates) } : group).sort((a, b) =>
     a.payerName.localeCompare(b.payerName, 'pt-BR') || (a.dueMonth ?? '').localeCompare(b.dueMonth ?? ''));
+
+  // No carnê, a conferência e a seleção são por responsável, reunindo seus veículos.
+  const carnePayers = new Map<number, { payerId: number; payerName: string; items: ClosureItem[]; reason?: string | null }>();
+  if (simulation?.carne_installments) {
+    for (const item of recorrentes) {
+      const group = carnePayers.get(item.payer_client_id) ?? {
+        payerId: item.payer_client_id, payerName: item.payer_name || item.client_name, items: [],
+      };
+      group.items.push(item);
+      if (item.carne_renewal_reason) group.reason = item.carne_renewal_reason;
+      carnePayers.set(group.payerId, group);
+    }
+    for (const block of simulation.carne_renewal_blocks ?? []) {
+      const group = carnePayers.get(block.payer_client_id) ?? {
+        payerId: block.payer_client_id, payerName: block.payer_name, items: [],
+      };
+      group.reason = block.reason;
+      carnePayers.set(group.payerId, group);
+    }
+  }
+  const carneGroups = [...carnePayers.values()].sort((a, b) => a.payerName.localeCompare(b.payerName, 'pt-BR'));
+  const carneHasPartialSelection = carneGroups.some(group => {
+    const pending = group.items.filter(item => !item.already_generated && !item.carne_renewal_blocked);
+    return pending.some(item => selectedContractIds.has(item.contract_id)) && !pending.every(item => selectedContractIds.has(item.contract_id));
+  });
+
+  function toggleCarne(contractIds: number[]) {
+    setSelectedContractIds(previous => {
+      const next = new Set(previous);
+      const selected = contractIds.every(id => next.has(id));
+      contractIds.forEach(id => { if (selected) next.delete(id); else next.add(id); });
+      return next;
+    });
+  }
 
   /* ── Confirm button label ── */
   function confirmLabel() {
@@ -588,7 +663,7 @@ export default function FechamentoPage() {
       {notice && <p role="status" className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200">{notice}</p>}
 
       {(guardError || error) && (
-        <div className="mb-4">
+        <div className="mb-4" role={simulation?.carne_installments ? 'alert' : undefined}>
           <ErrorBanner message={guardError || error} />
         </div>
       )}
@@ -631,8 +706,8 @@ export default function FechamentoPage() {
             </div>
             {carneSicredi && (
               <p className="mt-1.5 max-w-3xl text-xs text-slate-500">
-                Gera o carnê do ano para cada cliente com a forma Carnê Sicredi que precisa de um carnê novo neste mês: uma parcela por mês,
-                cada uma com o próprio boleto. Quem ainda tem carnê em andamento aparece como já gerado e não recebe parcelas a mais.
+                Inclui somente cadastros com a forma Carnê Sicredi. O grupo Todos reúne Pessoa Física e Pessoa Jurídica dessa forma de cobrança.
+                Cada responsável elegível recebe 12 parcelas mensais com todos os seus veículos. A prévia informa quem ainda tem carnê vigente ou renovação bloqueada.
               </p>
             )}
           </div>
@@ -643,7 +718,7 @@ export default function FechamentoPage() {
                 type="month"
                 className={fieldClass}
                 value={referenceMonth}
-                onChange={(e) => setReferenceMonth(e.target.value)}
+                onChange={(e) => { setReferenceMonth(e.target.value); setReferenceMonthTouched(true); }}
               />
               <p className="mt-1 text-xs text-slate-500">Vencimento no mês seguinte ao selecionado.</p>
             </div>
@@ -655,6 +730,7 @@ export default function FechamentoPage() {
                   <button
                     key={ft}
                     type="button"
+                    aria-pressed={filterType === ft}
                     onClick={() => { setFilterType(ft); setSelectedClientId(''); }}
                     className={`rounded-lg border px-3 py-2 text-xs font-semibold transition-colors ${
                       filterType === ft
@@ -666,6 +742,7 @@ export default function FechamentoPage() {
                   </button>
                 ))}
               </div>
+              {carneSicredi && <p className="mt-1 text-xs text-slate-500">Todos = PF e PJ com Carnê Sicredi. Os demais cadastros ficam fora deste fechamento.</p>}
             </div>
 
             <div>
@@ -726,9 +803,23 @@ export default function FechamentoPage() {
           )}
           <p className="mb-4 text-sm text-slate-600 dark:text-slate-300">
             {simulation.carne_installments
-              ? 'O carnê mantém um título por mês para cada responsável financeiro com boleto único. Taxas e serviços deste fechamento entram somente na primeira parcela. As parcelas já lançadas não são geradas novamente.'
+              ? 'Confira cada responsável, os veículos e as parcelas antes de gerar. O carnê reúne todos os veículos em um título por mês para cada responsável financeiro. Taxas e serviços deste fechamento entram somente na primeira parcela.'
               : 'Para clientes com boleto único, o fechamento reúne mensalidades, pró-rata, taxas e serviços em um título por responsável financeiro. O vencimento é o dia das mensalidades do responsável (taxas e serviços acompanham). O PDF do boleto traz todos os itens discriminados em anexo.'}
           </p>
+          {simulation.carne_installments && (
+            <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/40">
+              <div className="text-sm text-slate-600 dark:text-slate-300">
+                <p>Confira o cadastro e use Ajustar mensalidade para revisar o plano do contrato em outra aba. Depois de salvar, volte e atualize esta prévia.</p>
+                {previewNeedsRefresh && <p role="status" className="mt-1 font-medium text-amber-700 dark:text-amber-400">Atualize a prévia antes de gerar os carnês.</p>}
+                {carneHasPartialSelection && <p role="status" className="mt-1 font-medium text-amber-700 dark:text-amber-400">A lista de veículos mudou. Confira e selecione novamente o responsável para incluir todos os seus veículos.</p>}
+              </div>
+              <Button type="button" variant="secondary" disabled={refreshingPreview} onClick={refreshSimulation}>
+                {refreshingPreview ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                {refreshingPreview ? 'Atualizando prévia…' : 'Atualizar prévia'}
+              </Button>
+              {refreshingPreview && <p role="status" className="w-full text-sm text-slate-500">Recarregando mensalidades e elegibilidade dos carnês…</p>}
+            </div>
+          )}
           {/* KPIs */}
           <section className="mb-5 grid gap-5 sm:grid-cols-2 lg:grid-cols-5">
             <MetricCard
@@ -766,7 +857,7 @@ export default function FechamentoPage() {
               label="Serviços / cobranças"
               value={
                 <span className={chargeItems.length > 0 ? 'text-blue-600 dark:text-blue-400' : ''}>
-                  {chargeItems.length}
+                  {simulation.carne_installments ? pendingChargeItems.length : chargeItems.length}
                 </span>
               }
               sub={`${fmt(simulation.total_services)} a gerar`}
@@ -780,7 +871,94 @@ export default function FechamentoPage() {
             />
           </section>
 
-          <Card className="mb-5">
+          {simulation.carne_installments ? (
+            <Card className="mb-5">
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Carnês por responsável ({carneGroups.length})</h3>
+                <span className="text-xs text-slate-500">Títulos previstos ({previewTitles.length})</span>
+                {pendingRec.length > 0 && (
+                  <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
+                    <input type="checkbox" checked={allSelected} disabled={refreshingPreview}
+                      ref={el => { if (el) el.indeterminate = !allSelected && someSelected; }}
+                      onChange={toggleSelectAll} className="rounded border-slate-300" />
+                    {allSelected ? 'Desmarcar todos' : 'Selecionar todos'}
+                  </label>
+                )}
+              </div>
+              {carneGroups.length === 0 ? (
+                <EmptyState icon={CalendarCheck} title="Nenhum carnê a gerar" description="Nenhum responsável com Carnê Sicredi está elegível neste escopo." />
+              ) : (
+                <div className="space-y-4" aria-label="Conferência dos carnês">
+                  {carneGroups.map(group => {
+                    const contracts = [...new Map(group.items.map(item => [item.contract_id, item])).values()];
+                    const pendingIds = [...new Set(group.items.filter(item => !item.already_generated && !item.carne_renewal_blocked).map(item => item.contract_id))];
+                    const selected = pendingIds.length > 0 && pendingIds.every(id => selectedContractIds.has(id));
+                    const some = pendingIds.some(id => selectedContractIds.has(id));
+                    const titles = previewTitles.filter(title => title.payerId === group.payerId);
+                    const datesByMonth = new Map<string, string[]>();
+                    for (const item of group.items) {
+                      const month = item.due_date.slice(0, 7);
+                      datesByMonth.set(month, [...(datesByMonth.get(month) ?? []), item.due_date]);
+                    }
+                    const dates = [...datesByMonth.values()].map(preferredDueDate).filter((date): date is string => !!date).sort();
+                    const installments = new Set(group.items.map(item => item.due_date.slice(0, 7))).size;
+                    return (
+                      <section key={group.payerId} aria-label={`Carnê de ${group.payerName}`} className="rounded-xl border border-slate-200 p-4 dark:border-slate-700">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <h4 className="font-semibold text-slate-900 dark:text-white">{group.payerName}</h4>
+                            {pendingIds.length > 0 ? (
+                              <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">{installments} parcelas mensais · {contracts.length} veículo(s) / contrato(s)</p>
+                            ) : <p className="mt-1 text-sm font-medium text-amber-700 dark:text-amber-400">{group.reason ? 'Renovação indisponível' : 'Carnê já gerado'}</p>}
+                            {dates.length > 0 && pendingIds.length > 0 && <p className="mt-1 text-xs text-slate-500">Primeiro vencimento: {fmtDate(dates[0])} · Último vencimento: {fmtDate(dates[dates.length - 1])}</p>}
+                          </div>
+                          <div className="flex flex-wrap items-center gap-3">
+                            <Link href={`/clientes?focus=${group.payerId}`} target="_blank" rel="noopener noreferrer"
+                              onClick={() => setPreviewNeedsRefresh(true)}
+                              className="text-sm font-medium text-brand-800 underline underline-offset-4 dark:text-brand-300">Abrir cadastro de {group.payerName}</Link>
+                            {pendingIds.length > 0 && (
+                              <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
+                                <input type="checkbox" aria-label={`Selecionar carnê de ${group.payerName}`} checked={selected} disabled={refreshingPreview}
+                                  ref={el => { if (el) el.indeterminate = some && !selected; }}
+                                  onChange={() => toggleCarne(pendingIds)} className="rounded border-slate-300" />
+                                Incluir carnê
+                              </label>
+                            )}
+                          </div>
+                        </div>
+                        {group.reason && <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">{group.reason}</p>}
+                        <ul className="mt-3 space-y-2 text-sm text-slate-600 dark:text-slate-300">
+                          {contracts.map(item => (
+                            <li key={item.contract_id} className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                              {typeBadge(item.client_type)}
+                              <span>{item.vehicle_plate || 'Sem placa'} · {item.plan_name} · mensalidade {fmt(item.plan_price)}</span>
+                              {item.tracker_id && <Link href={`/rastreadores?focus=${item.tracker_id}`} target="_blank" rel="noopener noreferrer"
+                                onClick={() => setPreviewNeedsRefresh(true)} className="text-xs font-medium text-brand-800 underline underline-offset-4 dark:text-brand-300">Ajustar mensalidade de {item.vehicle_plate || item.tracker_imei || `contrato ${item.contract_id}`}</Link>}
+                              {item.client_id !== group.payerId && <Link href={`/clientes?focus=${item.client_id}`} target="_blank" rel="noopener noreferrer"
+                                onClick={() => setPreviewNeedsRefresh(true)} className="text-xs underline underline-offset-4">Abrir cadastro de {item.client_name}</Link>}
+                            </li>
+                          ))}
+                        </ul>
+                        {titles.length > 0 && (
+                          <details className="mt-4" open>
+                            <summary className="cursor-pointer text-sm font-medium text-slate-700 dark:text-slate-200">Conferir {titles.length} parcelas · total do carnê {fmt(titles.reduce((sum, title) => sum + title.amountCents, 0) / 100)}</summary>
+                            <div className="mt-2 grid gap-x-6 sm:grid-cols-2 lg:grid-cols-3">
+                              {titles.map((title, index) => (
+                                <div key={title.dueMonth} className="flex items-center justify-between gap-3 border-b border-slate-100 py-2 text-sm dark:border-slate-800">
+                                  <span className="text-slate-600 dark:text-slate-300">Parcela {index + 1}/{titles.length} · {fmtDate(title.dueDate)}</span>
+                                  <span className="font-semibold text-slate-900 dark:text-white">{fmt(title.amountCents / 100)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </details>
+                        )}
+                      </section>
+                    );
+                  })}
+                </div>
+              )}
+            </Card>
+          ) : <Card className="mb-5">
             <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
               <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">
                 Títulos previstos ({previewTitles.length})
@@ -800,10 +978,10 @@ export default function FechamentoPage() {
                 ))}
               </div>
             ) : <p className="text-sm text-slate-500">Nenhum lançamento selecionado.</p>}
-          </Card>
+          </Card>}
 
           {/* Mensalidades */}
-          <Card className="mb-5">
+          {!simulation.carne_installments && <Card className="mb-5">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
               <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-700 dark:text-slate-200">
                 <ClipboardList className="h-4 w-4 text-brand-500" />
@@ -991,7 +1169,7 @@ export default function FechamentoPage() {
                   )}
                 </>
               )}
-          </Card>
+          </Card>}
 
           {/* Desinstalações */}
           {desinstalacoes.length > 0 && (
@@ -1107,6 +1285,7 @@ export default function FechamentoPage() {
                           <Td className="text-sm text-slate-700 dark:text-slate-300">{item.vehicle_plate ?? '—'}</Td>
                           <Td>
                             <p className="text-sm font-medium text-slate-800 dark:text-slate-200">{item.title}</p>
+                            {simulation.carne_installments && item.carne_renewal_blocked && <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">Fora deste carnê: {item.carne_renewal_reason || 'Renovação indisponível para o responsável.'}</p>}
                             <p className="text-2xs text-slate-500">
                               {item.date_basis === 'due_date' ? 'vencimento' : 'início'} {fmtDate(item.start_date)}
                             </p>
@@ -1185,7 +1364,7 @@ export default function FechamentoPage() {
               </Button>
               <Button
                 onClick={confirmGenerate}
-                disabled={generating || !hasWork}
+                disabled={generating || !hasWork || (!!simulation.carne_installments && (refreshingPreview || previewNeedsRefresh || carneHasPartialSelection))}
                 className="gap-2"
               >
                 <CalendarCheck className="h-4 w-4" />
@@ -1226,7 +1405,8 @@ export default function FechamentoPage() {
               </span>
               <div className="flex flex-wrap items-center gap-3 rounded-xl border border-brand-200 bg-brand-50 px-4 py-3 dark:border-brand-900 dark:bg-brand-950/30">
                 <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">Lote de fechamento #{generateResult.closure_batch_id}</p>
-                <Button type="button" onClick={() => setDeliveryOpen(true)}>Conferir e enviar lote</Button>
+                <Button type="button" onClick={() => { setDeliveryForEmail(false); setDeliveryOpen(true); }}>{generateResult.carne_installments ? 'Conferir e baixar carnês' : 'Conferir e enviar lote'}</Button>
+                {!!generateResult.carne_installments && <Button type="button" variant="secondary" onClick={() => { setDeliveryForEmail(true); setDeliveryOpen(true); }}>Enviar por e-mail</Button>}
                 <Link href={`/financeiro?tab=overview&closure_batch_id=${generateResult.closure_batch_id}`} className="text-sm font-medium text-brand-800 underline underline-offset-4 dark:text-brand-300">Ver cobranças deste lote</Link>
                 <Link href={`/notas-fiscais?aba=gerar&service_month=${generateResult.reference_month}&closure_batch_id=${generateResult.closure_batch_id}`} className="text-sm font-medium text-brand-800 underline underline-offset-4 dark:text-brand-300">Emitir notas deste lote</Link>
               </div>
@@ -1235,7 +1415,7 @@ export default function FechamentoPage() {
                 <MetricCard
                   label="Títulos para emitir"
                   value={generateResult.payment_titles_generated}
-                  sub={generateResult.carne_installments ? 'um por mês e responsável com boleto único' : 'um por responsável com boleto único'}
+                  sub={generateResult.carne_installments ? 'um por mês e responsável, com todos os veículos' : 'um por responsável com boleto único'}
                   icon={<ClipboardList className="h-5 w-5" />}
                 />
                 <MetricCard
@@ -1257,7 +1437,9 @@ export default function FechamentoPage() {
                   icon={<DollarSign className="h-5 w-5" />}
                 />
               </div>
-              <p className="text-sm text-slate-600 dark:text-slate-300">Os títulos foram criados no Financeiro. Escolha Ailos ou Sicredi para emitir os boletos na conferência do fechamento.</p>
+              <p className="text-sm text-slate-600 dark:text-slate-300">{generateResult.carne_installments
+                ? 'Confira as parcelas de cada responsável. Na conferência, registre os boletos no Sicredi quando necessário e baixe o PDF individual do carnê para imprimir ou encaminhar manualmente pelo WhatsApp.'
+                : 'Os títulos foram criados no Financeiro. Escolha Ailos ou Sicredi para emitir os boletos na conferência do fechamento.'}</p>
             </div>
           )}
 
@@ -1272,7 +1454,7 @@ export default function FechamentoPage() {
         </Card>
       )}
 
-      <ClosureDeliveryModal open={deliveryOpen} token={token} onClose={() => setDeliveryOpen(false)} initialLoteId={generateResult?.closure_batch_id} initialBanco={generateResult?.carne_installments ? 'sicredi' : 'ailos'} />
+      <ClosureDeliveryModal open={deliveryOpen} token={token} onClose={() => setDeliveryOpen(false)} initialLoteId={generateResult?.closure_batch_id} initialBanco={generateResult?.carne_installments ? 'sicredi' : 'ailos'} carneDownloadOnly={!!generateResult?.carne_installments && !deliveryForEmail} />
 
       <Modal open={excludingFee !== null} onClose={closeExcludeFee} title="Excluir taxa do fechamento" size="sm"
         description={excludingFee ? `${excludingFee.client_name} · ${excludingFee.vehicle_plate ?? 'Sem placa'} · ${fmt(excludingFee.fee_amount)}` : undefined}>

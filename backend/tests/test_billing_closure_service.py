@@ -457,9 +457,11 @@ class TestBoletoUnico:
         assert any('DESINSTALAÇÃO' in descricao for descricao, _ in dados.itens)
         assert any('TROCA DE EQUIPAMENTO' in descricao for descricao, _ in dados.itens)
         pdf = PdfReader(BytesIO(gerar_boleto_pdf(dados)))
-        assert len(pdf.pages) == 2
-        detalhe = pdf.pages[1].extract_text().upper()
-        assert 'DETALHAMENTO DO BOLETO' in detalhe
+        # Os quatro componentes cabem no recibo da primeira página; só o
+        # excedente exige anexo no layout atual do boleto.
+        assert len(pdf.pages) == 1
+        detalhe = pdf.pages[0].extract_text().upper()
+        assert 'RECIBO DO PAGADOR' in detalhe
         assert 'PRÓ-RATA' in detalhe
         assert 'DESINSTALAÇÃO' in detalhe
         assert 'TROCA DE EQUIPAMENTO' in detalhe

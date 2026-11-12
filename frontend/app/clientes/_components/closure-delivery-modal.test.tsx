@@ -315,6 +315,24 @@ it('permite baixar o carnê existente sem emitir ou cancelar nenhum título', as
     .map(([p]) => p)).toEqual(['/billing-closure/lotes/recuperar']);
 });
 
+it('no resultado do carnê orienta baixar PDF e compartilhar manualmente pelo WhatsApp sem abrir envio por e-mail', async () => {
+  prepararCarne(12, true);
+  const user = userEvent.setup();
+  render(<ClosureDeliveryModal open token="test-token" onClose={() => {}} initialLoteId={10} initialBanco="sicredi" carneDownloadOnly />);
+  expect(await screen.findByRole('dialog', { name: 'Conferir e baixar carnês' })).toBeInTheDocument();
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Baixar carnê (12 parcelas)' })).toBeEnabled());
+  expect(screen.getByText(/anexar manualmente na conversa do cliente no WhatsApp/)).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /Enviar lote completo|Enviar selecionadas/ })).not.toBeInTheDocument();
+  expect(screen.queryByText('Envio automático com intervalo')).not.toBeInTheDocument();
+  expect(screen.queryByRole('checkbox', { name: /Selecionar cobrança/ })).not.toBeInTheDocument();
+  expect(fetch).not.toHaveBeenCalled();
+  expect(emissoes()).toHaveLength(0);
+  expect(calls()).toHaveLength(0);
+  await user.click(screen.getByRole('button', { name: 'Baixar carnê (12 parcelas)' }));
+  expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/boletos/carne/25/pdf?banco=sicredi'), expect.anything());
+  expect(vi.mocked(apiFetch).mock.calls.filter(([, options]) => options?.method === 'POST').map(([path]) => path)).toEqual(['/billing-closure/lotes/recuperar']);
+});
+
 it('mostra o carnê como um único envio com o carnê registrado', async () => {
   rows = [item(1, 'pronto', { documentos: ['Carnê (12 boletos)'], boleto_banco: 'sicredi', carne_parcelas: 12, valor: 779.88 })];
   await abrir();
