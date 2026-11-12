@@ -146,6 +146,16 @@ def recuperar_lotes_anteriores(db: Session) -> list[dict]:
 
 def conferir_lote(db: Session, lote_id: int, billing_id: int | None = None, *, ignorar_entrega=False) -> dict:
     lote, ids = _lote(db, lote_id)
+    if billing_id is not None and _fechamento_de_carne(lote):
+        # O carnê é um envio só, representado pela 1ª parcela: a conferência
+        # individual precisa enxergar o carnê inteiro.
+        if billing_id not in ids:
+            raise HTTPException(status_code=404, detail='Cobrança não pertence a este fechamento.')
+        previa = conferir_lote(db, lote_id, ignorar_entrega=ignorar_entrega)
+        itens = [item for item in previa['itens'] if item['billing_id'] == billing_id]
+        if not itens:
+            raise HTTPException(status_code=409, detail=MSG_PARCELA_DO_CARNE)
+        return {**previa, **_contagens(itens), 'itens': itens, 'carnes': []}
     conferencia_individual = billing_id is not None
     if billing_id is not None:
         if billing_id not in ids:
@@ -212,19 +222,7 @@ def conferir_lote(db: Session, lote_id: int, billing_id: int | None = None, *, i
         elif fiscal not in ('sim', 'nao'):
             motivos.append('Preferência de NFS-e não informada')
 
-        if entrega and entrega.status == 'enviado':
-            estado = 'enviado'
-            motivo = None
-        elif entrega and entrega.status in ('aguardando', 'processando', 'desconhecido'):
-            estado = entrega.status
-            motivo = entrega.error or ('Aguardando envio automático' if estado == 'aguardando'
-                                      else 'Confirme o resultado do envio antes de tentar novamente')
-        elif motivos:
-            estado = 'bloqueado'
-            motivo = '; '.join(motivos)
-        else:
-            estado = 'pronto'
-            motivo = entrega.error if entrega and entrega.status == 'erro' else None
+        estado, motivo = _estado_do_envio(entrega, motivos)
 
         itens.append({
             'lote_id': lote.id,
@@ -252,21 +250,106 @@ def conferir_lote(db: Session, lote_id: int, billing_id: int | None = None, *, i
             'proxima_tentativa_em': entrega.next_attempt_at if entrega else None,
         })
 
+    carnes = [] if conferencia_individual else _carnes_do_fechamento(db, lote, billings, itens, sicredi, titulos)
+    if carnes:
+        itens = _um_envio_por_carne(itens, carnes, billings, {} if ignorar_entrega else entregas)
     return {
         'id': lote.id,
         'total_lotes': 1,
         'mes_servico': lote.reference_month,
         'criado_em': lote.created_at,
+        **_contagens(itens),
+        'limite_destinatarios_hora': _limite_envio(),
+        'itens': itens,
+        'carnes': carnes,
+    }
+
+
+MSG_PARCELA_DO_CARNE = 'Esta parcela vai no e-mail do carnê, junto com as demais; envie o carnê pela 1ª parcela.'
+
+
+def _fechamento_de_carne(lote: ClosureJob) -> bool:
+    return bool((lote.result or {}).get('carne_installments'))
+
+
+def _contagens(itens: list[dict]) -> dict:
+    return {
         'total': len(itens),
         'prontos': sum(item['estado'] == 'pronto' for item in itens),
         'enviados': sum(item['estado'] == 'enviado' for item in itens),
         'em_fila': sum(item['estado'] == 'aguardando' for item in itens),
-        'limite_destinatarios_hora': _limite_envio(),
         'bloqueados': sum(item['estado'] == 'bloqueado' for item in itens),
         'indeterminados': sum(item['estado'] in ('processando', 'desconhecido') for item in itens),
-        'itens': itens,
-        'carnes': [] if conferencia_individual else _carnes_do_fechamento(db, lote, billings, itens, sicredi, titulos),
     }
+
+
+def _estado_do_envio(entrega, motivos: list[str]) -> tuple[str, str | None]:
+    if entrega and entrega.status == 'enviado':
+        return 'enviado', None
+    if entrega and entrega.status in ('aguardando', 'processando', 'desconhecido'):
+        return entrega.status, entrega.error or (
+            'Aguardando envio automático' if entrega.status == 'aguardando'
+            else 'Confirme o resultado do envio antes de tentar novamente')
+    if motivos:
+        return 'bloqueado', '; '.join(motivos)
+    return 'pronto', entrega.error if entrega and entrega.status == 'erro' else None
+
+
+def _um_envio_por_carne(itens: list[dict], carnes: list[dict], billings: dict, entregas: dict) -> list[dict]:
+    """Um e-mail por carnê, com o PDF de todas as parcelas, em vez de um por mês.
+
+    A 1ª parcela representa o carnê na conferência e na fila de envio. A NFS-e
+    exigida é a da 1ª parcela; as dos meses seguintes saem nos meses delas.
+    """
+    por_id = {item['billing_id']: item for item in itens}
+    grupos = {grupo['billing_ids'][0]: grupo for grupo in carnes}
+    no_carne = {bid for grupo in carnes for bid in grupo['billing_ids']}
+    resultado = []
+    for item in itens:
+        if item['billing_id'] not in no_carne:
+            resultado.append(item)
+            continue
+        grupo = grupos.get(item['billing_id'])
+        if grupo is None:
+            continue  # parcela seguinte: vai no e-mail do carnê
+        cabeca = por_id[item['billing_id']]
+        abertas = [billings[bid] for bid in grupo['billing_ids'] if billings.get(bid) is not None
+                   and not billings[bid].is_deleted and billings[bid].substituted_by_id is None
+                   and billings[bid].status in (BillingStatus.PENDING, BillingStatus.OVERDUE)]
+        completo = bool(abertas) and grupo['lote_id'] is not None and grupo['registradas'] == len(abertas)
+        motivos = []
+        if cabeca['payer_client_id'] is None:
+            motivos.append('Responsável financeiro indisponível')
+        elif not cabeca['emails']:
+            motivos.append('Responsável financeiro sem e-mail')
+        if not abertas:
+            motivos.append('Nenhuma parcela do carnê em aberto')
+        elif grupo['lote_id'] is None:
+            motivos.append('Carnê ainda não emitido; use "Emitir carnê pelo Sicredi"')
+        elif not completo:
+            motivos.append(f'Registro do carnê em andamento: {grupo["registradas"]} de {len(abertas)} parcelas')
+        fiscal = cabeca['emitir_nfse']
+        if fiscal == 'sim' and cabeca['nfse_status'] != 'emitida':
+            motivos.append('NFS-e da 1ª parcela ainda não emitida')
+        elif fiscal not in ('sim', 'nao'):
+            motivos.append('Preferência de NFS-e não informada')
+        entrega = entregas.get(cabeca['billing_id'])
+        estado, motivo = _estado_do_envio(entrega, motivos)
+        resultado.append({
+            **cabeca,
+            'valor': float(sum(b.amount for b in abertas)),
+            'boleto_emitido': completo,
+            'boleto_banco': 'sicredi' if completo else None,
+            'pode_emitir_boleto': False,
+            'documentos': [f'Carnê ({len(abertas)} boletos)'] + (['NFS-e'] if fiscal == 'sim' else []),
+            'carne_lote_id': grupo['lote_id'],
+            'carne_parcelas': len(grupo['billing_ids']),
+            'estado': estado,
+            'motivo': motivo,
+            'enviado_em': entrega.sent_at if entrega else None,
+            'proxima_tentativa_em': entrega.next_attempt_at if entrega else None,
+        })
+    return resultado
 
 
 def _carnes_do_fechamento(db, lote, billings, itens, registros, titulos) -> list[dict]:
@@ -370,7 +453,11 @@ def enfileirar_lote(db: Session, lote_id: int, billing_ids: list[int] | None = N
     from app.services.email_smtp import load_config
     previa = conferir_lote(db, lote_id)
     selected = set(billing_ids) if billing_ids is not None else {i['billing_id'] for i in previa['itens']}
-    if not selected.issubset({i['billing_id'] for i in previa['itens']}):
+    fora = selected - {i['billing_id'] for i in previa['itens']}
+    if fora:
+        _, ids = _lote(db, lote_id)
+        if fora.issubset(ids):
+            raise HTTPException(status_code=409, detail=MSG_PARCELA_DO_CARNE)
         raise HTTPException(status_code=404, detail='Cobrança não pertence a este fechamento.')
     config = load_config(db)
     if not config['host'] or not config['from_email']:
@@ -431,7 +518,7 @@ def processar_fila(db: Session) -> None:
 
 
 def transmitir_titulo(db: Session, entrega: ClosureEmailDelivery) -> None:
-    from app.api.v1.endpoints.boletos import preparar_envio_boleto_email
+    from app.api.v1.endpoints.boletos import preparar_envio_boleto_email, preparar_envio_carne_email
     from app.services.email_smtp import (
         EmailConfigError, EmailRateLimitError, enviar_email, load_config, verificar_intervalo,
     )
@@ -446,9 +533,14 @@ def transmitir_titulo(db: Session, entrega: ClosureEmailDelivery) -> None:
         # Não baixa PDFs enquanto aguarda o intervalo. O SMTP reserva a quota
         # novamente, de forma atômica, imediatamente antes da transmissão.
         verificar_intervalo(db, config, item['email'])
-        destinatario, assunto, corpo, anexos = preparar_envio_boleto_email(
-            db, entrega.billing_id, item['emitir_nfse'] == 'sim',
-        )
+        if item.get('carne_lote_id'):
+            destinatario, assunto, corpo, anexos = preparar_envio_carne_email(
+                db, item['carne_lote_id'], entrega.billing_id, item['emitir_nfse'] == 'sim',
+            )
+        else:
+            destinatario, assunto, corpo, anexos = preparar_envio_boleto_email(
+                db, entrega.billing_id, item['emitir_nfse'] == 'sim',
+            )
         entrega.recipient = destinatario
         db.commit()
         transmitting = True

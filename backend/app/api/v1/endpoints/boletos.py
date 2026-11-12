@@ -732,6 +732,46 @@ def preparar_envio_boleto_email(db: Session, billing_id: int, incluir_nfse: bool
     return ', '.join(destinatarios), assunto, corpo, anexos
 
 
+def preparar_envio_carne_email(db: Session, lote_id: int, billing_id: int, incluir_nfse: bool):
+    """E-mail único do carnê Sicredi: o PDF com todas as parcelas em aberto.
+
+    Recusa (409) enquanto houver parcela em aberto sem registro — nunca envia
+    carnê incompleto. A NFS-e anexada é a da 1ª parcela (``billing_id``).
+    """
+    lote = db.get(SicrediLote, lote_id)
+    if lote is None or lote.tipo != 'carne' or billing_id not in (lote.billing_ids or []):
+        raise HTTPException(status_code=404, detail='Carnê Sicredi não encontrado para esta cobrança.')
+    pdf_bytes = _carne_pdf_sicredi(db, lote_id).body
+    if not pdf_bytes or not pdf_bytes.startswith(b'%PDF-'):
+        raise HTTPException(status_code=502, detail='Não foi possível gerar o PDF do carnê. O e-mail não foi enviado.')
+    abertas = [b for _, b in sicredi_lotes.parcelas_do_lote(db, lote)
+               if b is not None and not b.is_deleted and b.status in (BillingStatus.PENDING, BillingStatus.OVERDUE)]
+    c = _pagador_do_billing(_get_billing_or_404(billing_id, db), db)
+    destinatarios = emails_cadastrados(c)
+    if not destinatarios:
+        raise HTTPException(status_code=400, detail='Cliente sem e-mail cadastrado.')
+    nfse_anexo = None
+    if incluir_nfse:
+        from app.api.v1.endpoints.nfse import anexo_nfse_emitida
+        nfse_anexo = anexo_nfse_emitida(db, billing_id)
+    primeiro, ultimo = abertas[0].due_date, abertas[-1].due_date
+    total = sum((b.amount for b in abertas), Decimal('0'))
+    assunto = f'Carnê MasterSat — {primeiro:%m/%Y} a {ultimo:%m/%Y}'
+    corpo = (
+        f'Olá, {(c.name or "").upper()}.\n\n'
+        f'Segue o seu carnê MasterSat com {len(abertas)} parcela(s) mensais, de {primeiro:%d/%m/%Y} '
+        f'a {ultimo:%d/%m/%Y}, no total de R$ {_valor_brl(total)}.\n\n'
+        'Cada parcela tem o próprio código de barras e o próprio vencimento: pague uma por mês, '
+        'até a data indicada em cada boleto.'
+        + ('\n\nA NFS-e da primeira parcela também está anexada a este e-mail.' if nfse_anexo else '')
+        + '\n\nMasterSat'
+    )
+    anexos = [(f'carne-mastersat-{primeiro:%m-%Y}-a-{ultimo:%m-%Y}.pdf', pdf_bytes, 'application/pdf')]
+    if nfse_anexo:
+        anexos.append(nfse_anexo)
+    return ', '.join(destinatarios), assunto, corpo, anexos
+
+
 @router.post("/{billing_id}/enviar-email")
 def enviar_boleto_email(
     billing_id: int,

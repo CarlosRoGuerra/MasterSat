@@ -40,6 +40,7 @@ type Item = {
   valor: number;
   vencimento: string | null;
   documentos: string[];
+  carne_parcelas?: number;
   boleto_emitido: boolean;
   pix_agendado?: boolean;
   boleto_banco?: BancoBoleto | null;
@@ -810,8 +811,10 @@ export function ClosureDeliveryModal({
                         <td className="px-4 py-4">
                           <div className="flex flex-wrap gap-1.5">
                             {item.documentos.map((documento) => {
+                              // Fechamento de carnês: um envio com o carnê inteiro (todas as parcelas).
+                              const boleto = documento === 'Boleto' || documento.startsWith('Carnê');
                               const emitido =
-                                documento === 'Boleto'
+                                boleto
                                   ? item.boleto_emitido
                                   : documento === 'Pix Automático' ? item.pix_agendado : item.nfse_status === 'emitida';
                               return (
@@ -820,7 +823,7 @@ export function ClosureDeliveryModal({
                                   title={`${documento}: ${emitido ? documento === 'Pix Automático' ? 'agendado' : 'emitido' : 'pendente'}`}
                                   className={`inline-flex items-center gap-1 rounded border px-2 py-1 ${emitido ? 'border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-300' : 'border-dashed border-amber-300 text-amber-800 dark:border-amber-800 dark:text-amber-300'}`}
                                 >
-                                  {documento === 'Boleto' ? (
+                                  {boleto ? (
                                     <Barcode aria-hidden="true" className="h-3 w-3" />
                                   ) : documento === 'Pix Automático' ? <QrCode aria-hidden="true" className="h-3 w-3" /> : (
                                     <FileText aria-hidden="true" className="h-3 w-3" />

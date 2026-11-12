@@ -315,6 +315,12 @@ it('permite baixar o carnê existente sem emitir ou cancelar nenhum título', as
     .map(([p]) => p)).toEqual(['/billing-closure/lotes/recuperar']);
 });
 
+it('mostra o carnê como um único envio com o carnê registrado', async () => {
+  rows = [item(1, 'pronto', { documentos: ['Carnê (12 boletos)'], boleto_banco: 'sicredi', carne_parcelas: 12, valor: 779.88 })];
+  await abrir();
+  expect(await screen.findByTitle('Carnê (12 boletos): emitido')).toBeInTheDocument();
+});
+
 it('libera o download quando todas as parcelas em aberto estão registradas', async () => {
   prepararCarne(11, true);
   Object.assign(carnes[0], { abertas: 11, lote_status: 'partial' });

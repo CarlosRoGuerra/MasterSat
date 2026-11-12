@@ -34,6 +34,22 @@ quando estiver completo. Continua possível emitir um carnê por vez.
 Nada é registrado no banco ao simular, gerar o fechamento ou abrir a
 conferência: o registro só começa no clique em emitir.
 
+## Envio por e-mail
+
+Num fechamento de carnês, cada carnê é **um envio só**: a conferência mostra
+uma linha por responsável ("Carnê (12 boletos)"), com o valor somado das
+parcelas em aberto. "Enviar" manda um único e-mail com o PDF do carnê inteiro
+(três parcelas por folha), em vez de um e-mail por parcela.
+
+- O envio fica pendente até o carnê ser emitido e todas as parcelas em aberto
+  estarem registradas no Sicredi; carnê incompleto nunca é enviado.
+- Quando o cliente exige NFS-e, vai a da 1ª parcela; as notas dos meses
+  seguintes são emitidas e enviadas nos meses delas.
+- Uma parcela seguinte não pode ser enviada sozinha pela conferência do
+  fechamento: ela já está no e-mail do carnê.
+- O limite de destinatários por hora continua valendo, agora com um e-mail
+  por cliente em vez de doze.
+
 ## Verificação
 
 - Backend: novos testes do fechamento de carnês (carnê em andamento sem
