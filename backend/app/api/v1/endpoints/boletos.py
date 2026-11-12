@@ -522,6 +522,17 @@ def _conteudo_boleto(b: Billing, c: Client, db: Session) -> dict:
     servico_sem_placa = descricao_servico(b, None)
     itens = _itens_detalhados(b, db)
     service_period_label = _periodo_servico_fechamento(b) or b.period_label
+    # Boleto que reúne vários veículos (boleto único/carnê de várias placas).
+    placas_componentes = list(dict.fromkeys(
+        p for p in (_placa_do_billing(comp, db) for comp in components) if p
+    ))
+    if components and (b.title or '').startswith('Carnê ') and b.installment_total:
+        referente = (f"Referente a: carnê {b.period_label}, parcela {b.installment_number}/"
+                     f"{b.installment_total}, {len(itens)} itens.")
+    elif components:
+        referente = f"Referente a: fechamento {service_period_label} com {len(itens)} itens."
+    else:
+        referente = f"Referente a: {servico_sem_placa}."
     return dict(
         billing_id=b.id,
         valor=b.amount,
@@ -536,9 +547,9 @@ def _conteudo_boleto(b: Billing, c: Client, db: Session) -> dict:
         sacado_ie=c.rg_ie or "",
         itens=itens,
         instrucoes=[
-            (f"Referente a: fechamento {service_period_label} com {len(itens)} itens."
-             if components else f"Referente a: {servico_sem_placa}."),
-            *([f"Placa: {placa}"] if placa else []),
+            referente,
+            *([f"Placa: {placa}"] if placa
+              else [f"Placas: {', '.join(placas_componentes)}"] if len(placas_componentes) > 1 else []),
             "Não receber após o vencimento.",
             "Após vencimento entrar em contato: whats (47)98877-9273",
         ],

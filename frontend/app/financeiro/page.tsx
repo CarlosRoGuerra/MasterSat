@@ -746,7 +746,8 @@ export default function FinanceiroPage() {
   const [carneSelected, setCarneSelected] = useState<number[]>([]);
   const [carneLoading, setCarneLoading] = useState(false);
   const [carneMode, setCarneMode] = useState<'existentes' | 'plano'>('existentes');
-  const [carneContractId, setCarneContractId] = useState('');
+  // Veículos (contratos) do carnê: com mais de um, cada parcela soma os planos.
+  const [carneContractIds, setCarneContractIds] = useState<string[]>([]);
   const [carneNumParcelas, setCarneNumParcelas] = useState('12');
   const [carnePrimeiroVenc, setCarnePrimeiroVenc] = useState('');
   const [carneValor, setCarneValor] = useState('');
@@ -754,6 +755,10 @@ export default function FinanceiroPage() {
   // Contratos ativos DO cliente escolhido, buscados na API: a lista da página
   // traz só os 100 mais recentes e deixava o seletor vazio para os demais.
   const [carneContratos, setCarneContratos] = useState<Contract[]>([]);
+  const carneContratosAtivos = carneContratos.filter(c => String(c.client_id) === carneClientId && c.status === 'ativo');
+  const carneValorTotal = carneContratosAtivos
+    .filter(c => carneContractIds.includes(String(c.id)))
+    .reduce((soma, c) => soma + (c.monthly_value ?? 0), 0);
   type CarneGerado = {
     banco?: BancoBoleto;
     lote_id: number;
@@ -1503,7 +1508,7 @@ export default function FinanceiroPage() {
     setCarneClientId('');
     setCarneBillings([]);
     setCarneSelected([]);
-    setCarneContractId('');
+    setCarneContractIds([]);
     setCarneNumParcelas('12');
     setCarnePrimeiroVenc('');
     setCarneValor('');
@@ -1521,7 +1526,7 @@ export default function FinanceiroPage() {
     setCarneClientId(clientId);
     setCarneBillings([]);
     setCarneSelected([]);
-    setCarneContractId('');
+    setCarneContractIds([]);
     setCarneValor('');
     setCarnePrimeiroVenc('');
     setCarnesGerados([]);
@@ -1567,22 +1572,26 @@ export default function FinanceiroPage() {
   // Modo "a partir do plano": cria N parcelas do contrato (valor do plano) e as
   // transforma em carnê. Vincula ao plano do veículo + a quantidade de parcelas.
   async function gerarCarneDoPlano() {
-    if (!token || !carneContractId) { alert('Selecione o contrato (plano do veículo).'); return; }
+    if (!token || !carneContractIds.length) { alert('Selecione o veículo (contrato) do carnê.'); return; }
     const n = Number(carneNumParcelas);
     if (!n || n < 2) { alert('Informe ao menos 2 parcelas.'); return; }
     const soSistema = carneCanal === 'sistema';
     if (carneCanal === 'sicredi' && !sicrediHabilitado) return;
+    const veiculos = carneContractIds.length > 1
+      ? ` com ${carneContractIds.length} veículos, cada parcela de ${formatCurrency(carneValorTotal)} (um boleto por mês com todas as placas)`
+      : '';
     if (!confirm(soSistema
-      ? `Serão criadas ${n} parcelas do plano somente no sistema (carnê simples, sem boleto no banco). Continuar?`
-      : `Serão criadas ${n} parcelas do plano e registradas — ${nomeBancoBoleto(carneCanal as BancoBoleto)} — como carnê. Continuar?`)) return;
+      ? `Serão criadas ${n} parcelas do plano${veiculos} somente no sistema (carnê simples, sem boleto no banco). Continuar?`
+      : `Serão criadas ${n} parcelas do plano${veiculos} e registradas — ${nomeBancoBoleto(carneCanal as BancoBoleto)} — como carnê. Continuar?`)) return;
     setGerandoCarne(true); setModalError('');
     try {
       const parcelar = (liberar_canceladas: boolean) => apiFetch<{ id: number }[]>('/billings/parcelar', {
         method: 'POST',
         body: JSON.stringify({
-          contract_id: Number(carneContractId),
+          contract_ids: carneContractIds.map(Number),
           num_parcelas: n,
-          valor_parcela: carneValor ? Number(carneValor.replace(',', '.')) : null,
+          // Com vários veículos, cada parcela é a soma dos planos (sem valor manual).
+          valor_parcela: carneContractIds.length === 1 && carneValor ? Number(carneValor.replace(',', '.')) : null,
           primeiro_vencimento: carnePrimeiroVenc || null,
           somente_sistema: soSistema,
           banco: carneCanal === 'sicredi' ? 'sicredi' : 'ailos',
@@ -3082,29 +3091,55 @@ export default function FinanceiroPage() {
             <p className="text-sm text-slate-500">Selecione um cliente para escolher o contrato.</p>
           ) : (
             <div className="grid gap-4 sm:grid-cols-2">
-              <label className="sm:col-span-2 text-sm">
-                <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Contrato (plano do veículo)</span>
-                <select className={fieldClass} value={carneContractId} onChange={e => {
-                  const id = e.target.value;
-                  const ct = carneContratos.find(c => String(c.id) === id);
-                  setCarneContractId(id);
-                  if (ct?.monthly_value != null) setCarneValor(String(ct.monthly_value));
-                }}>
-                  <option value="">{carneLoading ? 'Carregando contratos…' : carneContratos.length ? 'Selecione o contrato' : 'Nenhum contrato ativo deste cliente'}</option>
-                  {carneContratos
-                    .filter(c => String(c.client_id) === carneClientId && c.status === 'ativo')
-                    .map(c => (
-                      <option key={c.id} value={c.id}>#{c.id} • {c.plan_name || 'Plano'}{c.vehicle_plate ? ` • ${c.vehicle_plate}` : ''}{c.monthly_value != null ? ` • ${formatCurrency(c.monthly_value)}` : ''}</option>
+              <fieldset className="sm:col-span-2 text-sm">
+                <legend className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Veículos do carnê (plano de cada contrato)</legend>
+                {carneLoading ? (
+                  <p className="text-sm text-slate-500">Carregando contratos…</p>
+                ) : !carneContratosAtivos.length ? (
+                  <p className="text-sm text-slate-500">Nenhum contrato ativo deste cliente.</p>
+                ) : (
+                  <div className="rounded-lg border border-slate-200 dark:border-slate-700">
+                    {carneContratosAtivos.length > 1 && (
+                      <label className="flex items-center gap-2 border-b border-slate-100 px-3 py-2 font-medium dark:border-slate-800">
+                        <input type="checkbox" className="h-4 w-4 accent-brand-500"
+                          checked={carneContractIds.length === carneContratosAtivos.length}
+                          onChange={e => {
+                            setCarneContractIds(e.target.checked ? carneContratosAtivos.map(c => String(c.id)) : []);
+                            setCarneValor('');
+                          }} />
+                        Selecionar todos os veículos ativos ({carneContratosAtivos.length})
+                      </label>
+                    )}
+                    {carneContratosAtivos.map(c => (
+                      <label key={c.id} className="flex items-center gap-2 px-3 py-1.5">
+                        <input type="checkbox" className="h-4 w-4 accent-brand-500"
+                          checked={carneContractIds.includes(String(c.id))}
+                          onChange={e => {
+                            const id = String(c.id);
+                            const proximos = e.target.checked
+                              ? [...carneContractIds, id]
+                              : carneContractIds.filter(x => x !== id);
+                            setCarneContractIds(proximos);
+                            const unico = proximos.length === 1 ? carneContratosAtivos.find(ct => String(ct.id) === proximos[0]) : null;
+                            setCarneValor(unico?.monthly_value != null ? String(unico.monthly_value) : '');
+                          }} />
+                        #{c.id} • {c.plan_name || 'Plano'}{c.vehicle_plate ? ` • ${c.vehicle_plate}` : ''}{c.monthly_value != null ? ` • ${formatCurrency(c.monthly_value)}` : ''}
+                      </label>
                     ))}
-                </select>
-              </label>
+                  </div>
+                )}
+              </fieldset>
               <label className="text-sm">
                 <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Quantidade de parcelas</span>
                 <input className={fieldClass} inputMode="numeric" value={carneNumParcelas} onChange={e => setCarneNumParcelas(e.target.value.replace(/\D/g, '').slice(0, 2))} placeholder="12" />
               </label>
               <label className="text-sm">
                 <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Valor de cada parcela (R$)</span>
-                <input className={fieldClass} value={carneValor} onChange={e => setCarneValor(e.target.value)} placeholder="valor do plano" />
+                {carneContractIds.length > 1 ? (
+                  <input className={fieldClass} value={`${formatCurrency(carneValorTotal)} (soma dos planos)`} readOnly aria-readonly="true" />
+                ) : (
+                  <input className={fieldClass} value={carneValor} onChange={e => setCarneValor(e.target.value)} placeholder="valor do plano" />
+                )}
               </label>
               <label className="sm:col-span-2 text-sm">
                 <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Primeiro vencimento <span className="font-normal text-slate-500">(opcional — padrão: próximo vencimento do contrato)</span></span>
@@ -3113,14 +3148,14 @@ export default function FinanceiroPage() {
               <p className="sm:col-span-2 text-xs text-slate-500">
                 {carneCanal === 'sistema'
                   ? `Serão criadas ${Number(carneNumParcelas) || 0} parcelas mensais do plano somente no sistema. Elas não podem ser emitidas no banco; o pagamento é registrado manualmente.`
-                  : `Serão criadas ${Number(carneNumParcelas) || 0} parcelas mensais do plano e registradas — ${nomeBancoBoleto(carneCanal)} — como carnê (1 boleto por parcela).`}
+                  : `Serão criadas ${Number(carneNumParcelas) || 0} parcelas mensais do plano e registradas — ${nomeBancoBoleto(carneCanal)} — como carnê (1 boleto por parcela${carneContractIds.length > 1 ? `, com as ${carneContractIds.length} placas, de ${formatCurrency(carneValorTotal)}` : ''}).`}
               </p>
             </div>
           )}
         </div>
         <div className="mt-5 flex justify-end gap-3">
           <button type="button" className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200" onClick={() => setCarneModal(false)}>Cancelar</button>
-          <Button onClick={carneMode === 'existentes' ? () => gerarCarne(carneSelected) : gerarCarneDoPlano} disabled={gerandoCarne || (carneCanal === 'sicredi' && !sicrediHabilitado) || (carneMode === 'existentes' ? carneSelected.length < 2 : (!carneContractId || Number(carneNumParcelas) < 2))}>{gerandoCarne ? 'Gerando carnê…' : carneMode === 'existentes' ? `Gerar carnê (${carneSelected.length})` : `Gerar carnê (${Number(carneNumParcelas) || 0} parcelas)`}</Button>
+          <Button onClick={carneMode === 'existentes' ? () => gerarCarne(carneSelected) : gerarCarneDoPlano} disabled={gerandoCarne || (carneCanal === 'sicredi' && !sicrediHabilitado) || (carneMode === 'existentes' ? carneSelected.length < 2 : (!carneContractIds.length || Number(carneNumParcelas) < 2))}>{gerandoCarne ? 'Gerando carnê…' : carneMode === 'existentes' ? `Gerar carnê (${carneSelected.length})` : `Gerar carnê (${Number(carneNumParcelas) || 0} parcelas)`}</Button>
         </div>
       </Modal>
 

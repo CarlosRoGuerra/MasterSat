@@ -6,6 +6,8 @@ Barcode: I2of5, barWidth=0.88, ratio=2.2, bearers=0.
 """
 from __future__ import annotations
 
+import re
+
 import io
 import os
 import shutil
@@ -721,11 +723,21 @@ def _draw_pix_no_quadro(c, d: DadosBoleto, cx: float, cy: float, lado_mm: float)
     return False
 
 
+_RE_PLACA = re.compile(r"PLACA:?[\s\u00a0]+([A-Z0-9-]+)")
+
+
 def _draw_boleto_itau_style(c, d: DadosBoleto, y_top: float, parcela: tuple[int, int] | None = None) -> float:
     """Ficha canhoto+compensação compacta (3 por página A4), no modelo do
     carnê Hinova/Itaú de referência: mesmos campos do boleto avulso, em
     densidade de carnê — não da fatura de página inteira."""
     servico = str(d.itens[0][0]) if d.itens else "SERVIÇO DE RASTREAMENTO"
+    # Campo "Placa" do canhoto: as placas cobradas (várias quando o boleto
+    # reúne veículos), em vez do começo da descrição, que cortava a placa.
+    placas = list(dict.fromkeys(
+        m.group(1) for desc, _ in (d.itens or []) for m in [_RE_PLACA.search(str(desc))] if m
+    ))
+    if placas:
+        servico = ", ".join(placas)
     ag_cod = f"{d.cedente_agencia} / {d.cedente_codigo}"
     y = y_top
 

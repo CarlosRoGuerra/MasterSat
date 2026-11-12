@@ -11,7 +11,7 @@ from io import BytesIO, StringIO
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from reportlab.lib.pagesizes import A4
@@ -29,7 +29,7 @@ from app.models.sicredi_boleto import STATUS_REGISTRADO as SICREDI_REGISTRADO, S
 from app.models.sicredi_pix import SicrediPixCobranca
 from app.models.audit_log import AuditLog
 from app.models.nfse_nota import NfseNota
-from app.models.billing import RECURRING_BILLING_TYPES, Billing
+from app.models.billing import CONSOLIDATED_BILLING_TYPE, RECURRING_BILLING_TYPES, Billing
 from app.models.billing_change_log import BillingChangeLog
 from app.models.client import Client
 from app.models.client_charge_item import ClientChargeItem
@@ -811,7 +811,10 @@ def create_item(payload: BillingCreate, db: Session = Depends(get_db), _: object
 
 class ParcelarContratoIn(BaseModel):
     banco: Literal['ailos', 'sicredi'] = 'ailos'
-    contract_id: int
+    contract_id: int | None = None
+    # Vários veículos do mesmo responsável num carnê só: cada parcela é um
+    # boleto do mês com todas as placas (soma dos planos).
+    contract_ids: list[int] | None = Field(default=None, max_length=50)
     num_parcelas: int = Field(ge=2, le=60)
     valor_parcela: float | None = None       # padrão: valor do plano do contrato
     primeiro_vencimento: date | None = None  # padrão: próximo vencimento, após o mês inicial do serviço
@@ -821,15 +824,22 @@ class ParcelarContratoIn(BaseModel):
     # antes de o cancelamento liberar o mês): True libera e gera o carnê.
     liberar_canceladas: bool = False
 
+    @model_validator(mode='after')
+    def _contratos(self):
+        ids = list(dict.fromkeys(self.contract_ids or ([self.contract_id] if self.contract_id else [])))
+        if not ids:
+            raise ValueError('Selecione o contrato (plano do veículo) do carnê.')
+        if len(ids) > 1 and self.valor_parcela:
+            raise ValueError('Com mais de um veículo, cada parcela soma os planos; não informe o valor da parcela.')
+        self.contract_ids = ids
+        return self
 
-def _liberar_meses_cancelados(
-    db: Session, contract_id: int, meses: list[str], payload: ParcelarContratoIn, user_id: int,
-) -> None:
-    """Aplica a regra atual do cancelamento aos meses que ainda estão presos.
 
-    Só libera quando TODOS os ocupantes são canceladas liberáveis; qualquer
-    cobrança em aberto, paga, substituída ou com registro incerto mantém o
-    conflito original. A baixa no banco continua manual e pendente.
+def _ocupantes_liberaveis(db: Session, contract_id: int, meses: list[str], rotulo: str) -> tuple[list[Billing], dict]:
+    """Ocupantes dos meses, se TODOS forem canceladas liberáveis; senão 409.
+
+    Qualquer cobrança em aberto, paga, substituída ou com registro incerto
+    mantém o conflito original. A baixa no banco continua manual e pendente.
     """
     ocupantes = occupying_recurring_billings(db, contract_id, meses)
     titulos = titulo_bancario.titulos_bancarios(db, [b.id for b in ocupantes])
@@ -841,13 +851,33 @@ def _liberar_meses_cancelados(
         raise HTTPException(
             status_code=409,
             detail=(
-                'Este contrato já tem cobrança de mensalidade lançada para: '
+                rotulo + 'Este contrato já tem cobrança de mensalidade lançada para: '
                 + ', '.join(meses)
                 + '. Cancelada também ocupa o mês. Para cobrar um desses meses no carnê, '
                 'cancele a cobrança liberando a competência (ou use "Liberar competência" '
                 'numa cobrança já cancelada); ou ajuste o primeiro vencimento.'
             ),
         )
+    return ocupantes, titulos
+
+
+def _liberar_meses_cancelados(
+    db: Session, conflitos: dict[int, list[str]], rotulos: dict[int, str],
+    payload: ParcelarContratoIn, user_id: int,
+) -> None:
+    """Aplica a regra atual do cancelamento aos meses que ainda estão presos.
+
+    Confere todos os contratos antes de liberar qualquer mês: um contrato com
+    conflito real recusa o carnê inteiro, sem liberar os outros.
+    """
+    ocupantes: list[Billing] = []
+    titulos: dict = {}
+    meses: list[str] = []
+    for contract_id, meses_contrato in conflitos.items():
+        o, t = _ocupantes_liberaveis(db, contract_id, meses_contrato, rotulos[contract_id])
+        ocupantes += o
+        titulos.update(t)
+        meses += [m for m in meses_contrato if m not in meses]
     sites = sorted({titulo_bancario.site_do_banco(titulos[b.id].canal)
                     for b in ocupantes if titulos[b.id].ativo_no_banco})
     if not payload.liberar_canceladas:
@@ -875,83 +905,142 @@ def _liberar_meses_cancelados(
     db.flush()
 
 
+def _primeiro_vencimento_do_contrato(contract: Contract, plan: Plan, billing_day: int) -> date:
+    hoje_local = hoje()
+    primeiro = normalize_due_date(hoje_local.replace(day=1), 0 if hoje_local.day <= billing_day else 1, billing_day, 1)
+    # A mensalidade do mês de instalação vence no mês seguinte, como no
+    # fechamento. Um cadastro antes do dia de vencimento não deve antecipar
+    # o carnê para o próprio mês da instalação.
+    if plan.billing_interval_months == 1 and contract.start_date:
+        primeiro = max(primeiro, normalize_due_date(contract.start_date.replace(day=1), 1, billing_day, 1))
+    return primeiro
+
+
+def _placa_do_contrato(db: Session, contract: Contract) -> str:
+    vehicle = db.get(Vehicle, contract.vehicle_id) if getattr(contract, 'vehicle_id', None) else None
+    return vehicle.plate if vehicle and not vehicle.is_deleted and vehicle.plate else f'contrato #{contract.id}'
+
+
 @router.post('/parcelar', response_model=list[BillingOut])
 def parcelar_contrato(payload: ParcelarContratoIn, db: Session = Depends(get_db),
                       current_user: User = Depends(require_roles(UserRole.ADMIN, UserRole.FINANCIAL))):
-    """Cria N parcelas (boletos) de um contrato — vincula ao plano do veículo e à
-    quantidade de parcelas — para depois virarem carnê. Cada parcela vale o valor
-    do plano (ou o valor informado), com vencimentos mensais.
+    """Cria N parcelas (boletos) do plano para depois virarem carnê, com
+    vencimentos mensais. Cada parcela vale o valor do plano (ou o informado).
+
+    Com vários contratos (veículos do mesmo responsável), cada mês vira um
+    boleto único com todas as placas, no valor da soma dos planos — como o
+    fechamento faz. As mensalidades de cada contrato continuam registradas
+    (substituídas pelo boleto do mês) e ocupam o mês de cada contrato.
 
     Com ``somente_sistema`` é o carnê simples: as parcelas ficam só no sistema e
     a política de título bancário recusa emiti-las na Ailos ou por CNAB.
     """
-    # Trava o contrato: fecha a corrida com um fechamento mensal concorrente
-    # para o MESMO contrato (mesmo padrão de _locked_contracts em
-    # billing_closure/recurring.py) — sem isto, um fechamento em andamento
-    # podia comitar a mensalidade de um mês entre a checagem de conflito
-    # abaixo e a criação das parcelas do carnê.
-    contract = db.query(Contract).filter(Contract.id == payload.contract_id).with_for_update().first()
-    if not contract or contract.is_deleted:
+    # Trava os contratos (em ordem de id): fecha a corrida com um fechamento
+    # mensal concorrente — sem isto, um fechamento em andamento podia comitar
+    # a mensalidade de um mês entre a checagem de conflito e a criação.
+    locked = {c.id: c for c in db.query(Contract).filter(
+        Contract.id.in_(payload.contract_ids),
+    ).order_by(Contract.id).with_for_update().all()}
+    contratos = [locked.get(contract_id) for contract_id in payload.contract_ids]
+    if any(c is None or c.is_deleted for c in contratos):
         raise HTTPException(status_code=404, detail='Contrato não encontrado')
-    plan = db.get(Plan, contract.plan_id)
-    if not plan or plan.is_deleted:
+    planos = {c.id: db.get(Plan, c.plan_id) for c in contratos}
+    if any(not plan or plan.is_deleted for plan in planos.values()):
         raise HTTPException(status_code=404, detail='Plano do contrato não encontrado')
+    multiplos = len(contratos) > 1
 
-    valor = Decimal(str(payload.valor_parcela)) if payload.valor_parcela else Decimal(str(plan.price))
-    if valor <= 0:
+    valores = {c.id: (Decimal(str(payload.valor_parcela)) if payload.valor_parcela
+                      else Decimal(str(planos[c.id].price))) for c in contratos}
+    if any(valor <= 0 for valor in valores.values()):
         raise HTTPException(status_code=422, detail='Valor da parcela deve ser maior que zero.')
 
-    billing_day = contract.billing_day or (payload.primeiro_vencimento.day if payload.primeiro_vencimento else 10)
-    if payload.primeiro_vencimento:
-        primeiro = payload.primeiro_vencimento
-    else:
-        hoje_local = hoje()
-        primeiro = normalize_due_date(hoje_local.replace(day=1), 0 if hoje_local.day <= billing_day else 1, billing_day, 1)
-        # A mensalidade do mês de instalação vence no mês seguinte, como no
-        # fechamento. Um cadastro antes do dia de vencimento não deve antecipar
-        # o carnê para o próprio mês da instalação.
-        if plan.billing_interval_months == 1 and contract.start_date:
-            primeiro = max(primeiro, normalize_due_date(contract.start_date.replace(day=1), 1, billing_day, 1))
-
     try:
-        payer_client_id = contract_payer_client_id(db, contract)
+        pagadores = {contract_payer_client_id(db, c) for c in contratos}
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if len(pagadores) > 1:
+        raise HTTPException(status_code=422, detail=(
+            'Os veículos selecionados têm responsáveis financeiros diferentes. '
+            'Um carnê é sempre de um único responsável.'))
+    payer_client_id = next(iter(pagadores))
+
+    billing_day = contratos[0].billing_day or (payload.primeiro_vencimento.day if payload.primeiro_vencimento else 10)
+    primeiro = payload.primeiro_vencimento or max(
+        _primeiro_vencimento_do_contrato(c, planos[c.id], billing_day) for c in contratos)
 
     total = payload.num_parcelas
     period_labels = [add_months(primeiro, i).strftime('%m/%Y') for i in range(total)]
+    placas = {c.id: _placa_do_contrato(db, c) for c in contratos}
 
     # Sem isto, um contrato que já teve a mensalidade de um mês gerada pelo
     # fechamento (ou por um carnê anterior) ganhava uma SEGUNDA cobrança do
     # mesmo mês ao gerar/regerar o carnê — cobrança duplicada em produção.
-    conflitos = existing_recurring_periods(db, contract.id, period_labels)
+    conflitos = {}
+    for c in contratos:
+        ocupados = existing_recurring_periods(db, c.id, period_labels)
+        if ocupados:
+            conflitos[c.id] = [p for p in period_labels if p in ocupados]
     if conflitos:
-        _liberar_meses_cancelados(
-            db, contract.id, [p for p in period_labels if p in conflitos], payload, current_user.id,
-        )
+        rotulos = {c.id: (f'{placas[c.id]}: ' if multiplos else '') for c in contratos}
+        _liberar_meses_cancelados(db, conflitos, rotulos, payload, current_user.id)
 
-    criados: list[Billing] = []
-    for i in range(total):
-        venc = add_months(primeiro, i)
-        b = Billing(
-            contract_id=contract.id,
-            client_id=contract.client_id,
-            payer_client_id=payer_client_id,
-            vehicle_id=getattr(contract, 'vehicle_id', None),
-            tracker_id=getattr(contract, 'tracker_id', None),
-            title=f'{plan_title(plan)} • parcela {i + 1}/{total}',
-            billing_type='carne',
-            installment_number=i + 1,
-            installment_total=total,
-            amount=valor,
-            due_date=venc,
-            status=BillingStatus.PENDING if venc >= date.today() else BillingStatus.OVERDUE,
-            period_label=period_labels[i],
-            payment_method=getattr(contract, 'payment_method', None) or 'boleto',
-            somente_sistema=payload.somente_sistema,
-        )
-        db.add(b)
-        criados.append(b)
+    componentes: dict[int, list[Billing]] = {}
+    for c in contratos:
+        plan = planos[c.id]
+        componentes[c.id] = []
+        for i in range(total):
+            venc = add_months(primeiro, i)
+            b = Billing(
+                contract_id=c.id,
+                client_id=c.client_id,
+                payer_client_id=payer_client_id,
+                vehicle_id=getattr(c, 'vehicle_id', None),
+                tracker_id=getattr(c, 'tracker_id', None),
+                title=f'{plan_title(plan)} • parcela {i + 1}/{total}',
+                billing_type='carne',
+                installment_number=i + 1,
+                installment_total=total,
+                amount=valores[c.id],
+                due_date=venc,
+                status=BillingStatus.PENDING if venc >= date.today() else BillingStatus.OVERDUE,
+                period_label=period_labels[i],
+                payment_method=getattr(c, 'payment_method', None) or 'boleto',
+                somente_sistema=payload.somente_sistema,
+            )
+            db.add(b)
+            componentes[c.id].append(b)
+
+    criados = componentes[contratos[0].id]
+    if multiplos:
+        db.flush()
+        donos = {c.client_id for c in contratos}
+        criados = []
+        for i in range(total):
+            mes = [componentes[c.id][i] for c in contratos]
+            venc = mes[0].due_date
+            unico = Billing(
+                client_id=next(iter(donos)) if len(donos) == 1 else payer_client_id,
+                payer_client_id=payer_client_id,
+                title=f'Carnê {" + ".join(placas[c.id] for c in contratos)} • parcela {i + 1}/{total}',
+                billing_type=CONSOLIDATED_BILLING_TYPE,
+                installment_number=i + 1,
+                installment_total=total,
+                amount=sum((b.amount for b in mes), Decimal('0.00')),
+                due_date=venc,
+                status=BillingStatus.PENDING if venc >= date.today() else BillingStatus.OVERDUE,
+                period_label=period_labels[i],
+                payment_method=mes[0].payment_method,
+                somente_sistema=payload.somente_sistema,
+                notes=(f'Carnê com {len(contratos)} veículos ({period_labels[i]}): '
+                       + ' | '.join(f'{placas[c.id]} - {b.title}: R$ {b.amount:.2f}'
+                                    for c, b in zip(contratos, mes))),
+            )
+            db.add(unico)
+            db.flush()
+            transfer_charge_items_to_billing(db, mes, unico)
+            mark_billings_substituted(mes, unico, f'Consolidada na parcela {i + 1}/{total} do carnê (#{unico.id}).')
+            criados.append(unico)
+
     # Forma de cobrança do responsável (filtro dos relatórios): preenche só se
     # ainda não foi informada — escolha feita no cadastro não é sobrescrita.
     pagador = db.get(Client, payer_client_id)
