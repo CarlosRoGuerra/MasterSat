@@ -4,16 +4,42 @@ Pix Automático é uma opção de **Forma de cobrança**, junto de boleto mensal
 
 ## Uso pela equipe
 
-1. Em Clientes, editar o cadastro e selecionar **Pix Automático** em Forma de cobrança.
-2. Salvar e abrir os detalhes do cliente. O bloco **Pix Automático · Sicredi** apresenta a autorização e os agendamentos. O mesmo acompanhamento aparece nos detalhes da cobrança no Financeiro.
-3. Quando o ambiente estiver liberado para escrita, informar o primeiro vencimento e gerar a autorização. A Jornada 2 fornece um QR Code e um código Copia e Cola oficiais, usados pelo pagador no aplicativo do banco.
-4. Consultar a autorização até o banco informar `APROVADA`. O QR não é um boleto nem uma confirmação de pagamento.
+1. Em Clientes, cadastrar ou editar o cliente, informar o dia de vencimento e escolher **Pix Automático** em Forma de cobrança. O formulário mostra o quadro **Pix Automático — Sicredi** com o dia de vencimento, o início sugerido da autorização, o responsável financeiro, o canal de envio do convite e a situação atual.
+2. Salvar. O cliente é gravado primeiro; só depois o sistema pede a autorização ao Sicredi (Jornada 2) e abre a continuação do cadastro com o resultado:
+   - **Cadastro salvo — autorização Pix gerada.** O QR Code e o código Copia e Cola oficiais aparecem na mesma tela. Isso ainda não é autorização do cliente.
+   - **Cadastro salvo — autorização Pix pendente.** Explica o motivo: integração não liberada no ambiente, perfil sem permissão (a autorização é do Financeiro), falha de comunicação ou resultado bancário desconhecido. O cadastro nunca é desfeito por essas falhas.
+3. Convite: com o canal **E-mail** e o SMTP configurado, o convite (instruções, QR em anexo e código Copia e Cola) segue para os e-mails do responsável. Data, destino, tentativas e último erro ficam registrados na autorização. **Reenviar convite** reutiliza a mesma autorização, sem nova chamada ao banco. O botão **Abrir no WhatsApp (envio manual)** só abre a conversa no navegador; o sistema não registra isso como envio.
+4. O worker consulta a autorização até o banco informar `APROVADA`, `REJEITADA`, `EXPIRADA` ou `CANCELADA`. Quando aprovada, as cobranças Pix já geradas pelo fechamento são associadas automaticamente à fila (antes era o botão **Preparar cobranças do fechamento**, que continua disponível).
 5. Fazer o fechamento pelo fluxo habitual. Os valores do responsável são consolidados em uma cobrança por ciclo. Não há taxa de emissão de boleto nessa modalidade.
 6. O worker aguarda autorização e a janela de 2 a 10 dias antes do vencimento para enviar a instrução. A baixa só ocorre com liquidação identificada, valor compatível e horário informado pelo Sicredi.
+7. No Financeiro, o botão **Pix Automático** (ao lado de Pendências bancárias) mostra quantas situações pedem ação e abre o acompanhamento: autorizações pendentes, débitos não realizados, total aguardando confirmação, clientes a contatar e falhas de integração, com a próxima ação de cada linha.
+
+Editar um cliente que já era Pix não pede autorização sozinho quando já houve uma autorização encerrada (recusada, expirada, cancelada): é preciso marcar **Solicitar uma nova autorização ao Sicredi ao salvar**. Com autorização ativa, salvar não cria outra.
+
+### Permissões (inalteradas)
+
+O cadastro de clientes continua com admin e operacional; as ações da API Pix continuam com admin e financeiro. Quando o operacional cadastra um cliente Pix, a continuação informa que a autorização é do Financeiro e o cliente aparece como **Autorização não gerada** no painel. Somente o perfil admin faz cadastro e autorização na mesma tela.
+
+### Situações no painel do Financeiro
+
+As situações são derivadas dos registros existentes; não há estado financeiro novo. Atraso de consulta nunca é tratado como débito recusado: uma cobrança agendada cujo vencimento passou fica **Aguardando confirmação do banco** até uma consulta feita depois do dia do vencimento; só então vira **Pagamento não confirmado pelo banco**. **Débito não realizado** exige `REJEITADA`/`EXPIRADA` informada pelo Sicredi após o envio. Não há nova tentativa de débito (`NAO_PERMITE`).
+
+| Situação | Origem | Próxima ação |
+|---|---|---|
+| Autorização não gerada / pendente / recusada / expirada / cancelada | autorização | Gerar autorização / contatar cliente |
+| Vencimento anterior ao início da autorização | cobrança sem agendamento | Cobrar por outro meio |
+| Agendamento não enviado (fora da janela / aguardando / prazo terminando) | `NA_FILA` | Nenhuma / aguardar / verificar envio automático |
+| Agendamento recusado pelo banco | `REJEITADA` sem consulta posterior | Revisar e cobrar por outro meio |
+| Resultado bancário desconhecido | `ENVIANDO` / `DESFECHO_DESCONHECIDO` | Consultar banco |
+| Aguardando confirmação / Pagamento não confirmado | `ATIVA` após o vencimento | Aguardar / consultar banco e contatar cliente |
+| Débito não realizado | `REJEITADA`/`EXPIRADA` após o envio | Contatar cliente |
+| Divergência / devolução / revisão necessária | pendência registrada | Conferir no Financeiro |
+
+O worker alerta o administrador (log crítico e `ALERT_WEBHOOK`, quando configurado) depois de três rodadas seguidas com falha.
 
 O fechamento, a conferência de documentos e os filtros passam a reconhecer a nova forma. O envio por e-mail do fechamento exige agendamento confirmado e NFS-e quando obrigatória; informa Pix Automático e não exige nem anexa boleto. Nenhuma mensagem foi enviada no desenvolvimento.
 
-Cobranças antigas não são convertidas pela mudança da preferência. A ação **Preparar cobranças do fechamento** considera apenas obrigações já identificadas como Pix Automático pelo novo fechamento. Se o primeiro vencimento não couber na autorização, ou se houver outra cobrança do mesmo ciclo, a equipe precisa revisar o lançamento.
+Cobranças antigas não são convertidas pela mudança da preferência. A associação automática (e o botão **Preparar cobranças do fechamento**) considera apenas obrigações já identificadas como Pix Automático pelo fechamento e só roda para autorizações aprovadas, para não reservar cobranças que seriam canceladas se o cliente recusar. Se o primeiro vencimento não couber na autorização, ou se houver outra cobrança do mesmo ciclo, a equipe precisa revisar o lançamento.
 
 ### Datas da autorização e da cobrança
 
@@ -80,7 +106,9 @@ Somente uma liberação posterior de `SICREDI_PIX_ENVIO_AUTOMATICO=true` permite
 
 Uma ação administrativa explícita em `POST /api/v1/sicredi-pix/webhooks/configurar` registra as três famílias de callback e exige liberação de escrita. A URL pública deve ter HTTPS e porta 443. Antes de registrar, verificar DNS, certificado público, proxy e acesso externo do Sicredi.
 
-O callback usa um segredo opaco na URL. O backend redige esse trecho nos logs de acesso e não o grava na auditoria. O proxy também deve omitir ou redigir o caminho em seus logs (por exemplo, `access_log off` no location específico de `/api/v1/sicredi-pix/webhooks/` do nginx). O segredo fica no cofre, e não em documentação ou frontend. A autenticação mTLS de entrada oferecida pelo Sicredi pode reforçar a configuração do proxy.
+O callback usa um segredo opaco na URL. O backend redige esse trecho nos logs de acesso e não o grava na auditoria. O `nginx/nginx.conf` tem um location próprio para `/api/v1/sicredi-pix/webhooks/` com `access_log off` e `error_log` só em nível crítico. Se o proxy em uso for outro (por exemplo, Caddy), aplicar a mesma regra antes de cadastrar os webhooks.
+
+O Sicredi segue a especificação do Banco Central: cadastra-se a URL base (`.../sicredi-pix/webhooks/<segredo>`) e cada família é entregue com o sufixo `/pix`, `/rec` ou `/cobr`, exatamente as rotas aceitas pelo backend. Os corpos usam as chaves `pix`, `recs` e `cobsr`. O segredo fica no cofre, e não em documentação ou frontend. A autenticação mTLS de entrada oferecida pelo Sicredi pode reforçar a configuração do proxy.
 
 Os callbacks apenas sinalizam registros locais para nova consulta autenticada. Valores, status e declarações de pagamento recebidos no corpo do webhook não dão baixa diretamente. Isso também permite lidar com eventos repetidos ou fora de ordem. As consultas periódicas continuam recuperando alterações quando não houver notificação.
 

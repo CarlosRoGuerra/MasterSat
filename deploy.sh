@@ -65,7 +65,9 @@ log "Domínio: app.$DOMAIN / api.$DOMAIN (já configurado em nginx/nginx.conf)"
 
 # ── 4. Builda e sobe serviços de aplicação ────────────────────────────────────
 log "Buildando e subindo serviços de aplicação..."
-$COMPOSE up -d --build db redis minio backend frontend
+# backend-worker executa os jobs agendados (conciliações, fila de e-mails,
+# Pix Automático). Sem ele nada roda em segundo plano em produção.
+$COMPOSE up -d --build db redis minio backend backend-worker frontend
 ok "Serviços de aplicação no ar"
 
 CERT_DIR="/etc/letsencrypt/live/app.$DOMAIN"
