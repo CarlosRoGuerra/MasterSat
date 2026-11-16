@@ -22,7 +22,7 @@ import { ErrorBanner } from '@/components/ui/error-banner';
 import { ClientAutocomplete } from '@/components/ui/client-autocomplete';
 import { CarneTrackingModal, useCarneTracking } from '@/components/carne-tracking-modal';
 import { CarneCanalChoice, type CarneCanal } from '@/components/carne-canal-choice';
-import { API_URL, apiFetch, apiFetchList } from '@/lib/api';
+import { API_URL, apiFetch, apiFetchList, apiFetchResponse } from '@/lib/api';
 import { loadChargeLinks, type ChargeLinks } from '@/lib/financeiro-charge-links';
 import { entregarArquivo, nomeArquivoCliente } from '@/lib/arquivo';
 import { podeEmitirNfse, precisaConsultarNfse } from '@/lib/nfse';
@@ -1794,15 +1794,7 @@ export default function FinanceiroPage() {
   async function abrirNotaPdf(billingId: number) {
     if (!token) return;
     try {
-      const resp = await fetch(
-        `${API_URL.replace(/\/+$/, '')}/nfse/${billingId}/danfse-local`,
-        { headers: { Authorization: `Bearer ${token}` } },
-      );
-      if (!resp.ok) {
-        let detalhe = `Erro ${resp.status}`;
-        try { detalhe = (await resp.json())?.detail || detalhe; } catch { /* noop */ }
-        throw new Error(detalhe);
-      }
+      const resp = await apiFetchResponse(`/nfse/${billingId}/danfse-local`, {}, token);
       entregarArquivo(await resp.blob(), `nfse-${billingId}.pdf`, { emNovaAba: true });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Erro ao abrir a nota fiscal');

@@ -23,7 +23,7 @@ import { EmptyState, TableSkeleton } from '@/components/ui/empty-state';
 import { Table, TableHead, Th, TableBody, Tr, Td } from '@/components/ui/table';
 import { Pagination } from '@/components/ui/pagination';
 import { ExportButton } from '@/components/ui/export-button';
-import { apiFetch, apiFetchList, API_URL } from '@/lib/api';
+import { apiFetch, apiFetchList, apiFetchResponse, API_URL } from '@/lib/api';
 import { entregarArquivo, nomeArquivoCliente } from '@/lib/arquivo';
 import { enviarBoletoEmail, enviarBoletoWhats } from '@/lib/boleto-mensagem';
 import { cancelarComConfirmacoes, corpoCancelamento } from '@/lib/cancelamento-cobranca';
@@ -594,15 +594,7 @@ function ClientesPageInner() {
   async function abrirNotaPdf(billingId: number) {
     if (!token) return;
     try {
-      const resp = await fetch(
-        `${API_URL.replace(/\/+$/, '')}/nfse/${billingId}/danfse-local`,
-        { headers: { Authorization: `Bearer ${token}` } },
-      );
-      if (!resp.ok) {
-        let detalhe = `Erro ${resp.status}`;
-        try { detalhe = (await resp.json())?.detail || detalhe; } catch { /* noop */ }
-        throw new Error(detalhe);
-      }
+      const resp = await apiFetchResponse(`/nfse/${billingId}/danfse-local`, {}, token);
       entregarArquivo(await resp.blob(), `nfse-${billingId}.pdf`, { emNovaAba: true });
     } catch (e) {
       alert(e instanceof Error ? e.message : 'Erro ao abrir a nota fiscal');

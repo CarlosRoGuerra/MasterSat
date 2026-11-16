@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { apiFetch, apiFetchList, logout } from './api';
+import { apiFetch, apiFetchList, apiFetchResponse, logout } from './api';
 
 const originalLocation = window.location;
 
@@ -76,6 +76,73 @@ describe('apiFetch', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(apiFetch('/auth/login', { method: 'POST' })).rejects.toThrow('Credenciais inválidas.');
+    expect(window.location.href).toBe('');
+  });
+});
+
+describe('arquivos protegidos pela mesma sessão da API', () => {
+  beforeEach(() => new Promise((resolve) => setTimeout(resolve, 0)));
+
+  it('abre a nota com o token atual, mesmo que a página tenha guardado um token antigo', async () => {
+    localStorage.setItem('access_token', 'current-token');
+    const pdf = new Response('%PDF-1.7 nota autorizada', {
+      headers: { 'Content-Type': 'application/pdf', 'Content-Disposition': 'inline; filename="nota.pdf"' },
+    });
+    const fetchMock = vi.fn().mockResolvedValue(pdf);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await apiFetchResponse('/nfse/39489/danfse-local', {}, 'old-page-token');
+
+    expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe('Bearer current-token');
+    expect(response.headers.get('Content-Disposition')).toContain('nota.pdf');
+    expect(await (await response.blob()).text()).toBe('%PDF-1.7 nota autorizada');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('renova a sessão antes de entregar o PDF e conserva os bytes do documento', async () => {
+    localStorage.setItem('access_token', 'expired-token');
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ detail: 'Não foi possível validar as credenciais' }), { status: 401 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ access_token: 'fresh-token' })))
+      .mockResolvedValueOnce(new Response('%PDF-1.7 nota autorizada', { headers: { 'Content-Type': 'application/pdf' } }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await apiFetchResponse('/nfse/39489/danfse-local', {}, 'expired-token');
+
+    expect(await (await response.blob()).text()).toBe('%PDF-1.7 nota autorizada');
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls[1][0]).toContain('/auth/refresh');
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({ method: 'POST', credentials: 'include' });
+    expect(fetchMock.mock.calls[2][1].headers.Authorization).toBe('Bearer fresh-token');
+  });
+
+  it.each([
+    ['/clientes', '/login/admin'],
+    ['/financeiro', '/login/admin'],
+    ['/cliente', '/login/cliente'],
+    ['/cliente/financeiro', '/login/cliente'],
+  ])('encerra a sessão inválida de %s no login correto', async (page, login) => {
+    mockLocation(page);
+    localStorage.setItem('access_token', 'expired-token');
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 401 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(apiFetchResponse('/nfse/39489/danfse-local', {}, 'expired-token'))
+      .rejects.toMatchObject({ message: 'Sessão expirada.', status: 401 });
+
+    expect(localStorage.getItem('access_token')).toBeNull();
+    expect(window.location.href).toBe(login);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('mantém a recusa de permissão, sem renovar nem tentar abrir o documento', async () => {
+    localStorage.setItem('access_token', 'valid-token');
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ detail: 'Acesso não autorizado para este perfil' }), { status: 403 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(apiFetchResponse('/nfse/39489/danfse-local', {}, 'valid-token'))
+      .rejects.toMatchObject({ status: 403, message: 'Acesso não autorizado para este perfil' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(window.location.href).toBe('');
   });
 });

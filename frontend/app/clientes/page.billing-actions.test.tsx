@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ClientesPage from './page';
 import type { BillingItem } from './_components/types';
 import type { BillingBatchResult } from '@/lib/billing-batch';
+import { entregarArquivo } from '@/lib/arquivo';
 
 const api = vi.hoisted(() => ({ fetch: vi.fn(), list: vi.fn() }));
 const auth = vi.hoisted(() => ({ role: 'admin' }));
@@ -14,6 +15,8 @@ vi.mock('@/lib/api', async () => ({ ...await vi.importActual<typeof import('@/li
 vi.mock('@/lib/use-auth-guard', () => ({ useAuthGuard: () => ({ token: 'test-token', user: { role: auth.role }, error: '' }) }));
 vi.mock('@/components/page-shell', () => ({ PageShell: ({ children }: { children: ReactNode }) => <main>{children}</main> }));
 vi.mock('@/lib/assistant-context', () => ({ useAssistantContextActions: vi.fn() }));
+vi.mock('@/lib/arquivo', async () => ({ ...await vi.importActual<typeof import('@/lib/arquivo')>('@/lib/arquivo'),
+  entregarArquivo: vi.fn() }));
 vi.mock('next/navigation', () => {
   const params = new URLSearchParams();
   const router = { replace: vi.fn(), push: vi.fn() };
@@ -56,7 +59,7 @@ beforeEach(() => {
     throw new Error(`Requisição inesperada: ${path}`);
   });
 });
-afterEach(() => { cleanup(); queryClient.clear(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); queryClient.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); localStorage.clear(); });
 
 function renderPage() {
   render(<QueryClientProvider client={queryClient}><ClientesPage /></QueryClientProvider>);
@@ -106,6 +109,33 @@ async function openBatchWallet() {
   await screen.findAllByTitle('Alterar boleto');
   return user;
 }
+
+it('abre o PDF da nota já emitida após renovar o token, sem emitir ou enviar e-mail', async () => {
+  const original = api.fetch.getMockImplementation()!;
+  api.fetch.mockImplementation(async (path: string, options: RequestInit = {}) => path.startsWith('/nfse?')
+    ? [{ billing_id: 39489, numero_nfse: '142', titulo: 'Fechamento', valor: 129.98,
+      data_emissao: '2026-11-04', status: 'emitida' }] : original(path, options));
+  localStorage.setItem('access_token', 'expired-token');
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(new Response('{}', { status: 401 }))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ access_token: 'fresh-token' })))
+    .mockResolvedValueOnce(new Response('%PDF-1.7 NF 142', { headers: { 'Content-Type': 'application/pdf' } }));
+  vi.stubGlobal('fetch', fetchMock);
+  const user = userEvent.setup();
+  renderPage();
+  await user.click(await screen.findByTitle('Notas fiscais do cliente'));
+  await user.click(await screen.findByRole('button', { name: 'Ver PDF' }));
+
+  await waitFor(() => expect(entregarArquivo).toHaveBeenCalledTimes(1));
+  expect(fetchMock.mock.calls.map(([path]) => String(path))).toEqual([
+    expect.stringContaining('/nfse/39489/danfse-local'),
+    expect.stringContaining('/auth/refresh'),
+    expect.stringContaining('/nfse/39489/danfse-local'),
+  ]);
+  expect(fetchMock.mock.calls[2][1].headers.Authorization).toBe('Bearer fresh-token');
+  expect(vi.mocked(entregarArquivo).mock.calls[0].slice(1)).toEqual(['nfse-39489.pdf', { emNovaAba: true }]);
+  expect(writes('POST')).toHaveLength(0);
+});
 
 describe('ações em lote na central financeira do cliente', () => {
   it('dá baixa no SGR agrupado com total em centavos, sem receber cobranças já pagas', async () => {

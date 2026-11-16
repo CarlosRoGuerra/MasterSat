@@ -17,7 +17,7 @@ import { Badge } from '@/components/ui/badge';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { DonutChart } from '@/components/ui/donut-chart';
 import { Pagination } from '@/components/ui/pagination';
-import { apiFetch, API_URL } from '@/lib/api';
+import { apiFetch, apiFetchResponse } from '@/lib/api';
 import { entregarArquivo } from '@/lib/arquivo';
 import { precisaConsultarNfse } from '@/lib/nfse';
 import { useAuthGuard } from '@/lib/use-auth-guard';
@@ -435,19 +435,17 @@ export default function NotasFiscaisPage() {
   async function baixarArquivo(billingId: number, tipo: 'danfse' | 'danfse-local' | 'xml') {
     setError('');
     try {
-      const resp = await fetch(`${API_URL.replace(/\/+$/, '')}/nfse/${billingId}/${tipo}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!resp.ok) {
-        let detail = `HTTP ${resp.status}`;
-        try { detail = (await resp.json())?.detail || detail; } catch { /* noop */ }
+      let resp: Response;
+      try {
+        resp = await apiFetchResponse(`/nfse/${billingId}/${tipo}`, {}, token);
+      } catch (error) {
         // O DANFSE oficial depende de um serviço do governo que sai do ar; quem
         // vê o erro precisa saber que existe o PDF gerado aqui, ao lado.
-        if (tipo === 'danfse') {
-          detail += ' Você pode gerar o PDF pelo botão "Nota em PDF", que monta'
-            + ' o documento a partir do XML e não depende do governo.';
+        if (tipo === 'danfse' && (error as { status?: number }).status !== 401) {
+          throw new Error(parseErr(error) + ' Você pode gerar o PDF pelo botão "Nota em PDF", que monta'
+            + ' o documento a partir do XML e não depende do governo.');
         }
-        throw new Error(detail);
+        throw error;
       }
       // PDF abre em aba (é o que serve para imprimir); XML desce como arquivo.
       const nomeArquivo = resp.headers.get('content-disposition')

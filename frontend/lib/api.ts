@@ -20,7 +20,7 @@ function buildApiUrl(path: string) {
 }
 
 function loginPathForCurrentPage() {
-  if (typeof window !== 'undefined' && window.location.pathname.startsWith('/cliente')) {
+  if (typeof window !== 'undefined' && (window.location.pathname === '/cliente' || window.location.pathname.startsWith('/cliente/'))) {
     return '/login/cliente';
   }
   return '/login/admin';
@@ -109,7 +109,8 @@ export async function logout(loginPath: string = '/login/admin'): Promise<void> 
   window.location.href = loginPath;
 }
 
-export async function apiFetch<T>(path: string, options: RequestInit = {}, token?: string): Promise<T> {
+/** Requisição autenticada sem consumir o corpo; PDFs e XMLs renovam a mesma sessão que o JSON. */
+export async function apiFetchResponse(path: string, options: RequestInit = {}, token?: string): Promise<Response> {
   const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
 
   // O estado das páginas pode guardar um access token antigo (já renovado em
@@ -152,7 +153,7 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}, token
       // Refresh indisponível ou também expirado → sessão realmente encerrada
       clearSession();
       window.location.href = loginPathForCurrentPage();
-      throw new Error('Sessão expirada.');
+      throw Object.assign(new Error('Sessão expirada.'), { status: 401 });
     }
 
     let message = `HTTP ${response.status}`;
@@ -187,6 +188,11 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}, token
     throw error;
   }
 
+  return response;
+}
+
+export async function apiFetch<T>(path: string, options: RequestInit = {}, token?: string): Promise<T> {
+  const response = await apiFetchResponse(path, options, token);
   return response.json();
 }
 
