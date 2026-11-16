@@ -126,7 +126,12 @@ describe('quadro Pix no formulário', () => {
     const recusada = { ...ligado, recorrencia: { status: 'REJEITADA', ativa: false, data_inicial: '2026-11-20' } };
     expect(deveSolicitarPix(PIX_OPCOES_INICIAIS, false, recusada)).toBe(false);
     expect(deveSolicitarPix(PIX_OPCOES_INICIAIS, true, recusada)).toBe(true);
-    expect(deveSolicitarPix(PIX_OPCOES_INICIAIS, false, ligado)).toBe(true);  // nunca solicitada
+    // Já era Pix e nunca teve autorização: edição comum não pede ao banco sem marcar.
+    expect(deveSolicitarPix(PIX_OPCOES_INICIAIS, false, ligado)).toBe(false);
+    expect(deveSolicitarPix({ ...PIX_OPCOES_INICIAIS, solicitar: true }, false, ligado)).toBe(true);
+    // Situação ainda não carregada (ou com erro): nunca pede, mesmo marcado.
+    expect(deveSolicitarPix({ ...PIX_OPCOES_INICIAIS, solicitar: true }, false, null)).toBe(false);
+    expect(deveSolicitarPix({ ...PIX_OPCOES_INICIAIS, solicitar: true }, false, { ...ligado, erro: 'falhou' })).toBe(false);
     render(<Bloco novaSelecao={false} contexto={recusada} />);
     expect(screen.getByText('Recusada')).toBeInTheDocument();
     const box = screen.getByLabelText('Solicitar uma nova autorização ao Sicredi ao salvar');
@@ -134,6 +139,13 @@ describe('quadro Pix no formulário', () => {
     expect(screen.queryByLabelText('Início sugerido da autorização')).not.toBeInTheDocument();
     fireEvent.click(box);
     expect(screen.getByLabelText('Início sugerido da autorização')).toBeInTheDocument();
+  });
+
+  it('edição de cliente Pix com situação ainda carregando não deixa marcar o pedido', () => {
+    render(<Bloco novaSelecao={false} contexto={null} />);
+    const box = screen.getByLabelText('Solicitar a autorização ao Sicredi ao salvar');
+    expect(box).not.toBeChecked();
+    expect(box).toBeDisabled();
   });
 
   it('autorização ativa: salvar não cria outra', () => {

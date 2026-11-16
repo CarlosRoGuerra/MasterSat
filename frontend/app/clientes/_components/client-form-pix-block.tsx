@@ -20,12 +20,14 @@ export type PixCadastroContexto = {
 
 export const PIX_OPCOES_INICIAIS: PixCadastroOpcoes = { data_inicial: '', enviar_convite: true, solicitar: null };
 
-/** Pedir a autorização ao salvar? Por padrão só quando Pix acabou de ser
- *  escolhido ou o cliente nunca teve autorização: editar um cadastro que já era
- *  Pix (ex.: trocar o telefone) não dispara pedido ao banco nem e-mail. */
+/** Pedir a autorização ao salvar? Automaticamente só quando Pix acabou de ser
+ *  escolhido (cliente novo ou forma anterior diferente). Editar um cadastro que
+ *  já era Pix (ex.: trocar o telefone) nunca dispara pedido ao banco nem e-mail
+ *  sem a caixa marcada, e a caixa só libera depois de carregar a situação. */
 export function deveSolicitarPix(opcoes: PixCadastroOpcoes, novaSelecao: boolean, contexto: PixCadastroContexto | null): boolean {
   if (contexto?.recorrencia?.ativa) return false;
-  return opcoes.solicitar ?? (novaSelecao || !contexto?.recorrencia);
+  if (!novaSelecao && (!contexto || contexto.erro)) return false;  // situação desconhecida
+  return opcoes.solicitar ?? novaSelecao;
 }
 
 /** Mesma regra da tela de detalhes: cobrança real/servidor primeiro, depois o dia do cadastro. */
@@ -104,6 +106,7 @@ export function ClientFormPixBlock({
         <>
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" className="h-4 w-4 accent-brand-600" checked={solicitar}
+            disabled={!novaSelecao && (!contexto || Boolean(contexto.erro))}
             onChange={(e) => onOpcoesChange({ ...opcoes, solicitar: e.target.checked })} />
           {rec ? 'Solicitar uma nova autorização ao Sicredi ao salvar' : 'Solicitar a autorização ao Sicredi ao salvar'}
         </label>

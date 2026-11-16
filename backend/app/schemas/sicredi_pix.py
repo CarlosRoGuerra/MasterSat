@@ -83,6 +83,7 @@ class PixClienteOut(BaseModel):
 class PixPainelLinhaOut(BaseModel):
     client_id: int
     cliente: str | None
+    telefone: str | None = None
     billing_id: int | None
     cobranca_pix_id: int | None
     vencimento: date | None

@@ -3,14 +3,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ArrowLeft, QrCode, RefreshCw } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
-import { formatCurrency, formatDate } from '@/lib/format';
+import { formatCurrency, formatDate, formatPhone } from '@/lib/format';
 import { Modal } from '@/components/ui/modal';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ClientPixAutomatico } from '../../clientes/_components/client-pix-automatico';
 
 export type PixPainelLinha = {
-  client_id: number; cliente: string | null; billing_id: number | null; cobranca_pix_id: number | null;
+  client_id: number; cliente: string | null; telefone?: string | null; billing_id: number | null; cobranca_pix_id: number | null;
   vencimento: string | null; valor: string | number | null; situacao: string; situacao_label: string;
   acao: string; acao_label: string; gravidade: 'alta' | 'media' | 'info'; detalhe: string | null;
   convite_status: string | null;
@@ -42,7 +42,7 @@ export function PixAutomaticoPainel({ token }: { token: string | null }) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [incluirResolvidos, setIncluirResolvidos] = useState(false);
-  const [cliente, setCliente] = useState<{ id: number; name: string } | null>(null);
+  const [cliente, setCliente] = useState<{ id: number; name: string; phone?: string | null } | null>(null);
 
   const load = useCallback(async (incluir: boolean) => {
     if (!token) return;
@@ -87,7 +87,7 @@ export function PixAutomaticoPainel({ token }: { token: string | null }) {
               <ArrowLeft className="h-4 w-4" aria-hidden="true" />Voltar ao painel
             </Button>
             <p className="text-sm font-semibold">{cliente.name}</p>
-            <ClientPixAutomatico key={cliente.id} client={{ id: cliente.id, name: cliente.name }} token={token}
+            <ClientPixAutomatico key={cliente.id} client={{ id: cliente.id, name: cliente.name, phone: cliente.phone }} token={token}
               onUpdated={() => void load(incluirResolvidos)} />
           </div>
         ) : (
@@ -129,7 +129,9 @@ export function PixAutomaticoPainel({ token }: { token: string | null }) {
                   <tbody>
                     {data.linhas.map((linha) => (
                       <tr key={`${linha.client_id}-${linha.billing_id ?? 'aut'}`} className="border-t border-slate-100 align-top dark:border-slate-800">
-                        <td className="py-2 pr-3">{linha.cliente}{linha.billing_id && <span className="block text-xs text-slate-500">Cobrança #{linha.billing_id}</span>}</td>
+                        <td className="py-2 pr-3">{linha.cliente}
+                          {linha.telefone && <span className="block text-xs text-slate-500">{formatPhone(linha.telefone)}</span>}
+                          {linha.billing_id && <span className="block text-xs text-slate-500">Cobrança #{linha.billing_id}</span>}</td>
                         <td className="py-2 pr-3 tabular-nums">{linha.vencimento ? formatDate(linha.vencimento) : '—'}</td>
                         <td className="py-2 pr-3 tabular-nums">{linha.valor != null ? formatCurrency(Number(linha.valor)) : '—'}</td>
                         <td className="py-2 pr-3">
@@ -138,7 +140,8 @@ export function PixAutomaticoPainel({ token }: { token: string | null }) {
                         </td>
                         <td className="py-2 pr-3">{linha.acao_label}</td>
                         <td className="py-2 text-right">
-                          <Button type="button" variant="ghost" onClick={() => setCliente({ id: linha.client_id, name: linha.cliente ?? `Cliente #${linha.client_id}` })}>
+                          <Button type="button" variant="ghost" onClick={() => setCliente({ id: linha.client_id,
+                            name: linha.cliente ?? `Cliente #${linha.client_id}`, phone: linha.telefone })}>
                             Abrir
                           </Button>
                         </td>

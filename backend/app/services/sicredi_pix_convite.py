@@ -196,6 +196,7 @@ def enviar_convite(db: Session, rec_id: int, *, manual: bool = False) -> Sicredi
     except EmailRateLimitError as exc:
         rec.convite_status = PENDENTE  # nada transmitido; o worker retoma após o intervalo
         rec.convite_erro = str(exc)
+        rec.convite_tentativas = max(0, (rec.convite_tentativas or 1) - 1)  # não houve tentativa real
     except EmailConfigError as exc:
         rec.convite_status = ERRO
         rec.convite_erro = str(exc)
@@ -230,6 +231,11 @@ def processar_convites(db: Session, ambiente: str, *, limite: int = 20) -> dict:
             db.rollback()
             result['falhas'] += 1
             continue
-        if rec is not None:
-            result['enviados' if rec.convite_status == ENVIADO else 'falhas'] += 1
+        if rec is None:
+            continue
+        if rec.convite_status == ENVIADO:
+            result['enviados'] += 1
+        elif rec.convite_status in (ERRO, DESCONHECIDO):
+            result['falhas'] += 1
+        # PENDENTE (limite do SMTP) não é falha: será retomado na próxima rodada.
     return result

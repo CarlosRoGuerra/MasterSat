@@ -291,10 +291,14 @@ def test_falha_incerta_de_email_nao_reenvia_sozinha(http, db, cliente, bank, smt
 def test_limite_do_smtp_deixa_convite_para_o_worker(http, db, cliente, bank, smtp):
     cliente.forma_cobranca = 'pix_automatico'; db.commit()
     smtp.error = email_smtp.EmailRateLimitError(NOW + timedelta(minutes=10))
-    assert autorizar(http, cliente.id).json()['recorrencia']['convite_status'] == 'pendente'
+    body = autorizar(http, cliente.id).json()['recorrencia']
+    assert body['convite_status'] == 'pendente' and body['convite_tentativas'] == 0
+    result = svc.processar_fila(db)  # ainda no intervalo do SMTP: não é falha da fila (sem alerta falso)
+    assert result['falhas'] == 0 and smtp.sent == []
     smtp.error = None
     svc.processar_fila(db)
     assert len(smtp.sent) == 1
+    assert db.scalar(select(SicrediPixRecorrencia)).convite_tentativas == 1
 
 
 def test_envio_interrompido_vira_desconhecido_e_nao_repete(db, cliente, rec, smtp):
@@ -395,6 +399,8 @@ def _charge(status, venc, consultada=None, **kw):
     # Vencimento ontem e última consulta no próprio dia: atraso de consulta, não falha.
     ('ATIVA', date(2026, 11, 4), datetime(2026, 11, 4, 20, tzinfo=timezone.utc), {}, 'aguardando_confirmacao'),
     ('ATIVA', date(2026, 11, 3), datetime(2026, 11, 5, 12, tzinfo=timezone.utc), {}, 'pagamento_nao_confirmado'),
+    # Worker parado: dois dias após o vencimento sem consulta posterior é falha de integração, não recusa.
+    ('ATIVA', date(2026, 11, 3), datetime(2026, 11, 2, 12, tzinfo=timezone.utc), {}, 'consulta_atrasada'),
     ('REJEITADA', date(2026, 11, 3), datetime(2026, 11, 4, 12, tzinfo=timezone.utc), {}, 'debito_nao_realizado'),
     ('REJEITADA', date(2026, 11, 12), None, {'erro': 'Dados inválidos'}, 'agendamento_recusado'),
     ('EXPIRADA', date(2026, 11, 3), datetime(2026, 11, 4, 12, tzinfo=timezone.utc), {}, 'debito_nao_realizado'),
@@ -460,6 +466,28 @@ def test_worker_em_leitura_associa_mas_nao_envia(db, cliente, rec, bank, smtp, m
     charge = db.scalar(select(SicrediPixCobranca).where(SicrediPixCobranca.billing_id == billing.id))
     assert charge.status == 'NA_FILA' and charge.enviada_em is None
     assert bank.count('PUT') == 0
+
+
+def test_cobranca_em_ciclo_ocupado_pede_revisao_no_painel(db, cliente, rec, bank):
+    primeira, charge = make_charge(db, cliente, rec, due=date(2026, 11, 15))
+    segunda = Billing(client_id=cliente.id, billing_type='avulsa', title='Serviço', amount=Decimal('30.00'),
+                      due_date=date(2026, 11, 20), status=BillingStatus.PENDING, payment_method='pix_automatico')
+    db.add(segunda); db.commit()
+    svc.processar_fila(db)
+    assert db.scalar(select(SicrediPixCobranca).where(SicrediPixCobranca.billing_id == segunda.id)) is None
+    linha = next(l for l in montar_painel(db)['linhas'] if l['billing_id'] == segunda.id)
+    assert linha['situacao'] == 'ciclo_ocupado' and f'#{primeira.id}' in linha['detalhe']
+    assert linha['acao'] == 'revisar'
+
+
+def test_paga_por_outro_caminho_com_agendamento_ativo_aparece(db, cliente, rec, bank, monkeypatch):
+    monkeypatch.setattr('app.services.sicredi_pix_painel.hoje', lambda: NOW.date())
+    billing, charge = make_charge(db, cliente, rec, due=date(2026, 11, 15))
+    svc.processar_cobranca(db, charge)
+    assert charge.status == 'ATIVA'
+    billing.status = BillingStatus.PAID; db.commit()  # baixa fora do fluxo Pix (ex.: importação)
+    linha = next(l for l in montar_painel(db)['linhas'] if l['billing_id'] == billing.id)  # visível por padrão
+    assert linha['situacao'] == 'pago_com_agendamento' and linha['gravidade'] == 'alta'
 
 
 def test_cliente_inativo_nao_entra_no_painel(db, cliente, bank):

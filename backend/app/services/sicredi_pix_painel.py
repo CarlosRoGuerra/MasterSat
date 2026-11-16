@@ -11,7 +11,7 @@ from collections import defaultdict
 from datetime import date, timedelta, timezone
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -20,6 +20,7 @@ from app.models.billing import Billing
 from app.models.client import Client
 from app.models.enums import BillingStatus, ClientStatus
 from app.models.sicredi_pix import SicrediPixCobranca, SicrediPixRecorrencia
+from app.services.sicredi_pix import ciclo_mensal
 
 # código: (rótulo, próxima ação, rótulo da ação, gravidade)
 SITUACOES: dict[str, tuple[str, str, str, str]] = {
@@ -40,6 +41,9 @@ SITUACOES: dict[str, tuple[str, str, str, str]] = {
     'agendamento_cancelado': ('Agendamento cancelado', 'cobrar_outro_meio', 'Cobrar por outro meio', 'alta'),
     'agendado': ('Agendado no banco', 'nenhuma', 'Nenhuma', 'info'),
     'aguardando_confirmacao': ('Aguardando confirmação do banco', 'aguardar', 'Aguardar consulta automática', 'info'),
+    'consulta_atrasada': ('Consulta ao banco atrasada', 'verificar_integracao', 'Verificar o worker e consultar o banco', 'alta'),
+    'ciclo_ocupado': ('Outra cobrança já ocupa este ciclo', 'revisar', 'Revisar: um débito por ciclo da autorização', 'alta'),
+    'pago_com_agendamento': ('Paga fora do Pix com agendamento ativo', 'revisar', 'Cancelar o agendamento no banco', 'alta'),
     'pagamento_nao_confirmado': ('Pagamento não confirmado pelo banco', 'consultar_banco', 'Consultar banco e contatar cliente', 'alta'),
     'debito_nao_realizado': ('Débito não realizado', 'contatar_cliente', 'Contatar cliente', 'alta'),
     'revisao_necessaria': ('Revisão necessária', 'revisar', 'Revisar agendamento', 'alta'),
@@ -49,8 +53,10 @@ SITUACOES: dict[str, tuple[str, str, str, str]] = {
     'pago': ('Pago', 'nenhuma', 'Nenhuma', 'info'),
 }
 AUTORIZACAO_PENDENTE = {'autorizacao_nao_gerada', 'aguardando_geracao', 'autorizacao_pendente', 'resultado_desconhecido'}
-AGUARDANDO_CONFIRMACAO = {'aguardando_confirmacao', 'pagamento_nao_confirmado'}
-INTEGRACAO = {'falha_comunicacao', 'resultado_desconhecido', 'envio_atrasado', 'agendamento_recusado', 'falha_integracao'}
+AGUARDANDO_CONFIRMACAO = {'aguardando_confirmacao', 'pagamento_nao_confirmado', 'consulta_atrasada'}
+INTEGRACAO = {'falha_comunicacao', 'resultado_desconhecido', 'envio_atrasado', 'agendamento_recusado', 'falha_integracao',
+              'consulta_atrasada'}
+AGENDAMENTO_VIVO = {'NA_FILA', 'AGUARDANDO_AUTORIZACAO', 'ENVIANDO', 'DESFECHO_DESCONHECIDO', 'CRIADA', 'ATIVA'}
 SEM_ACAO = {'nenhuma', 'aguardar'}
 TRANQUILAS = {'pago', 'agendado', 'aguardando_janela'}  # ocultas por padrão: nada pendente
 
@@ -108,8 +114,11 @@ def situacao_cobranca(charge: SicrediPixCobranca, hoje_: date) -> str:
             return 'agendado'
         consultada = _data_brt(charge.consultada_em)
         # Só após uma consulta feita DEPOIS do dia do vencimento a falta de
-        # liquidação é tratada como "não confirmado"; antes disso é atraso.
-        return 'pagamento_nao_confirmado' if consultada and consultada > charge.vencimento else 'aguardando_confirmacao'
+        # liquidação é tratada como "não confirmado"; antes disso é atraso de
+        # consulta (nunca recusa). Dois dias sem consulta posterior = worker parado.
+        if consultada and consultada > charge.vencimento:
+            return 'pagamento_nao_confirmado'
+        return 'consulta_atrasada' if (hoje_ - charge.vencimento).days >= 2 else 'aguardando_confirmacao'
     if charge.status == 'REJEITADA':
         if charge.consultada_em is None:  # PUT recusado: o banco não aceitou o agendamento
             return 'agendamento_recusado'
@@ -127,7 +136,7 @@ def _linha(client: Client, situacao: str, *, billing: Billing | None = None, cha
            detalhe: str | None = None) -> dict:
     rotulo, acao, rotulo_acao, gravidade = SITUACOES[situacao]
     return {
-        'client_id': client.id, 'cliente': client.name,
+        'client_id': client.id, 'cliente': client.name, 'telefone': client.phone,
         'billing_id': billing.id if billing else None,
         'cobranca_pix_id': charge.id if charge else None,
         'vencimento': billing.due_date if billing else None,
@@ -165,10 +174,13 @@ def montar_painel(db: Session, *, incluir_resolvidos: bool = False) -> dict:
         Billing.payment_method == 'pix_automatico', Billing.is_deleted.is_(False),
         Billing.status.in_((BillingStatus.PENDING, BillingStatus.OVERDUE)),
     ).order_by(Billing.due_date, Billing.id)).all()
+    # Pagas: recentes só sob demanda; com agendamento ainda vivo no banco, sempre.
+    vivas = select(SicrediPixCobranca.billing_id).where(SicrediPixCobranca.status.in_(AGENDAMENTO_VIVO))
     pagas = db.execute(select(Billing, func.coalesce(Billing.payer_client_id, Billing.client_id)).where(
-        Billing.payment_method == 'pix_automatico', Billing.is_deleted.is_(False),
-        Billing.status == BillingStatus.PAID, Billing.due_date >= hoje_ - timedelta(days=45),
-    ).order_by(Billing.due_date, Billing.id)).all() if incluir_resolvidos else []
+        Billing.payment_method == 'pix_automatico', Billing.is_deleted.is_(False), Billing.status == BillingStatus.PAID,
+        or_(Billing.id.in_(vivas), Billing.due_date >= hoje_ - timedelta(days=45)) if incluir_resolvidos
+        else Billing.id.in_(vivas),
+    ).order_by(Billing.due_date, Billing.id)).all()
     payer_ids = set(payers) | {pid for _, pid in abertas} | {pid for _, pid in pagas}
     for client in db.scalars(select(Client).where(Client.id.in_(payer_ids - set(payers)))).all() if payer_ids else []:
         payers[client.id] = client
@@ -181,6 +193,9 @@ def montar_painel(db: Session, *, incluir_resolvidos: bool = False) -> dict:
     billing_ids = [b.id for b, _ in (*abertas, *pagas)]
     charges = {c.billing_id: c for c in db.scalars(select(SicrediPixCobranca).where(
         SicrediPixCobranca.billing_id.in_(billing_ids))).all()} if billing_ids else {}
+    rec_ids = [r.id for r in recs.values()]
+    ciclos_ocupados = {(c.recorrencia_id, c.ciclo): c.billing_id for c in db.scalars(select(SicrediPixCobranca).where(
+        SicrediPixCobranca.recorrencia_id.in_(rec_ids))).all()} if rec_ids else {}
 
     linhas: list[dict] = []
     com_cobranca: set[int] = set()
@@ -200,13 +215,24 @@ def montar_painel(db: Session, *, incluir_resolvidos: bool = False) -> dict:
                 detalhe = (f'Janela de envio: {(charge.vencimento - timedelta(days=10)):%d/%m} a '
                            f'{(charge.vencimento - timedelta(days=2)):%d/%m}.' + (f' {detalhe}' if detalhe else ''))
         elif rec is not None and rec.ativa and rec.status == 'APROVADA':
-            situacao = 'fora_da_autorizacao' if billing.due_date < rec.data_inicial else 'aguardando_associacao'
-            detalhe = (f'Autorização válida a partir de {rec.data_inicial:%d/%m/%Y}.'
-                       if situacao == 'fora_da_autorizacao' else None)
+            if billing.due_date < rec.data_inicial:
+                situacao, detalhe = 'fora_da_autorizacao', f'Autorização válida a partir de {rec.data_inicial:%d/%m/%Y}.'
+            else:
+                ciclo = ciclo_mensal(rec.data_inicial, billing.due_date)
+                ocupante = ciclos_ocupados.get((rec.id, ciclo))
+                if ocupante is not None and ocupante != billing.id:
+                    situacao = 'ciclo_ocupado'
+                    detalhe = (f'A cobrança #{ocupante} já ocupa o ciclo de {ciclo:%d/%m/%Y}; a autorização permite '
+                               'um débito por ciclo. Consolide os valores ou cobre por outro meio.')
+                else:
+                    situacao, detalhe = 'aguardando_associacao', None
         else:
             situacao = situacao_autorizacao(rec)
             detalhe = _detalhe_autorizacao(rec)
-        if billing.status == BillingStatus.PAID and situacao != 'pago' and not (charge and charge.pendencia):
+        if billing.status == BillingStatus.PAID and charge is not None and charge.status in AGENDAMENTO_VIVO:
+            situacao = 'pago_com_agendamento'
+            detalhe = 'A cobrança foi baixada por outro caminho, mas o débito Pix continua agendado ou sem desfecho.'
+        elif billing.status == BillingStatus.PAID and situacao != 'pago' and not (charge and charge.pendencia):
             situacao, detalhe = 'pago', None
         linhas.append(_linha(client, situacao, billing=billing, charge=charge, rec=rec, detalhe=detalhe))
 
