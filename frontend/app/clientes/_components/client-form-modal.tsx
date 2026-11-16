@@ -1,4 +1,4 @@
-import type { Dispatch, FormEvent, SetStateAction } from 'react';
+import type { Dispatch, FormEvent, ReactNode, SetStateAction } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 
 import { Modal } from '@/components/ui/modal';
@@ -33,6 +33,7 @@ export function ClientFormModal({
   onClose,
   onCancel,
   onSubmit,
+  pixBlock,
 }: {
   open: boolean;
   isEditing: boolean;
@@ -54,6 +55,8 @@ export function ClientFormModal({
   onClose: () => void;
   onCancel: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  /** Quadro do Pix Automático, exibido apenas quando essa forma está selecionada. */
+  pixBlock?: ReactNode;
 }) {
   return (
     <Modal
@@ -235,7 +238,7 @@ export function ClientFormModal({
               />
             </FormField>
             <FormField label="Forma de cobrança" hint={form.forma_cobranca === 'pix_automatico'
-              ? 'Após salvar, abra os detalhes do cliente para solicitar a autorização no banco.'
+              ? 'Ao salvar, a autorização é solicitada ao Sicredi conforme o quadro abaixo.'
               : 'Usada nos filtros do relatório de cobranças e do fechamento.'}>
               <Select value={form.forma_cobranca} onChange={(e) => {
                 const value = e.target.value;
@@ -295,6 +298,7 @@ export function ClientFormModal({
               </Select>
             </FormField>
           </FormGrid>
+          {form.forma_cobranca === 'pix_automatico' && pixBlock}
         </FormSection>
 
         <FormDivider />

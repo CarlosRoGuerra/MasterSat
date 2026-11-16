@@ -34,6 +34,7 @@ import { excluirComConfirmacoes, mensagemConfirmacaoExclusao, motivoBloqueioExcl
 import { parcelarLiberandoCanceladas } from '@/lib/parcelar-carne';
 import { CorrigirVencimentoAction } from './_components/corrigir-vencimento-action';
 import { ClientPixAutomatico } from '../clientes/_components/client-pix-automatico';
+import { PixAutomaticoPainel } from './_components/pix-automatico-painel';
 import { camposDiferenca, diferencaRecebimento, pendenciaDoFormulario, ROTULO_TRATAMENTO, type TratamentoDiferenca } from '@/lib/recebimento';
 import { descreverTitulo, ehSicredi, ehPixAutomatico, podeConsultarDesfecho, ROTULO_PENDENCIA, type TituloBancario } from '@/lib/titulo-bancario';
 import { useAuthGuard } from '@/lib/use-auth-guard';
@@ -2043,6 +2044,7 @@ export default function FinanceiroPage() {
       <div className="mb-4 flex flex-wrap items-center justify-end gap-2">
         {conciliacao?.alerta_atraso && <span className="text-xs font-medium text-rose-600 dark:text-rose-400">Conciliação bancária atrasada</span>}
         {pendenciasError && <span className="text-xs text-amber-700 dark:text-amber-300">Não foi possível atualizar as pendências</span>}
+        <PixAutomaticoPainel token={token} />
         <Button type="button" variant="secondary" aria-haspopup="dialog" onClick={() => setPendenciasModal(true)}>
           <Banknote aria-hidden="true" className="h-4 w-4" />
           Pendências bancárias

@@ -103,3 +103,36 @@ describe('Pix Automático no cadastro', () => {
     expect(vi.mocked(apiFetch).mock.calls.filter(([, options]) => options?.method === 'POST')).toHaveLength(1);
   });
 });
+
+describe('convite de autorização', () => {
+  const criada = { ...empty, conexao: { ...empty.conexao, escrita_habilitada: true }, smtp_configurado: true,
+    emails_responsavel: ['cliente@test.local'], recorrencia: { id: 1, status: 'CRIADA', ativa: true,
+      data_inicial: '2099-12-20', pix_copia_cola: 'QR-OFICIAL', qr_svg: null, convite_status: 'enviado',
+      convite_destino: 'cliente@test.local', convite_tentativas: 1, convite_enviado_em: '2026-11-16T12:00:00Z' } };
+
+  it('reenvia pelo endpoint do convite, sem nova autorização no banco', async () => {
+    vi.mocked(apiFetch).mockResolvedValue(criada);
+    render(<ClientPixAutomatico client={client} token="token" />);
+    expect(await screen.findByText(/Enviado por e-mail/)).toHaveTextContent('cliente@test.local');
+    fireEvent.click(screen.getByRole('button', { name: 'Reenviar convite por e-mail' }));
+    await waitFor(() => expect(vi.mocked(apiFetch).mock.calls.some(([, o]) => o?.method === 'POST')).toBe(true));
+    const posts = vi.mocked(apiFetch).mock.calls.filter(([, o]) => o?.method === 'POST');
+    expect(posts.map(([p]) => p)).toEqual(['/sicredi-pix/clientes/10/convite']);
+  });
+
+  it('sem e-mail do sistema o envio fica indisponível e o motivo aparece', async () => {
+    vi.mocked(apiFetch).mockResolvedValue({ ...criada, smtp_configurado: false, recorrencia: { ...criada.recorrencia,
+      convite_status: 'erro', convite_erro: 'SMTP não configurado para envio por e-mail.' } });
+    render(<ClientPixAutomatico client={client} token="token" />);
+    expect(await screen.findByText('SMTP não configurado para envio por e-mail.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Enviar convite por e-mail' })).toBeDisabled();
+    expect(screen.queryByRole('link', { name: /WhatsApp/ })).not.toBeInTheDocument();  // cliente sem telefone
+  });
+
+  it('QR ainda não devolvido: explica que o sistema consulta sozinho', async () => {
+    vi.mocked(apiFetch).mockResolvedValue({ ...criada, recorrencia: { ...criada.recorrencia, pix_copia_cola: null,
+      convite_status: 'pendente' } });
+    render(<ClientPixAutomatico client={client} token="token" />);
+    expect(await screen.findByText(/ainda não devolveu o QR Code/)).toHaveTextContent('envia o convite por e-mail');
+  });
+});

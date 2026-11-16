@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { FormEvent, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 import { Users, AlertTriangle, Building2, CheckCircle2, Plus, Trash2, Car, Coins, DollarSign, PawPrint, Pencil, Printer, Search } from 'lucide-react';
@@ -67,6 +67,8 @@ import { BillingHistoryModal } from './_components/billing-history-modal';
 import { BillingsModal } from './_components/billings-modal';
 import { ClientDetailModal } from './_components/client-detail-modal';
 import { ClientFormModal } from './_components/client-form-modal';
+import { ClientFormPixBlock, deveSolicitarPix, PIX_OPCOES_INICIAIS, sugestaoInicioPix, type PixCadastroContexto, type PixCadastroOpcoes } from './_components/client-form-pix-block';
+import { ClientPixResultadoModal, iniciarAutorizacaoPix, type PixResultadoCadastro } from './_components/client-pix-cadastro';
 import { VehiclesModal } from './_components/vehicles-modal';
 import { IntervenienteModal } from './_components/interveniente-modal';
 import { NfseModal } from './_components/nfse-modal';
@@ -107,6 +109,12 @@ function ClientesPageInner() {
   const [docCategory, setDocCategory] = useState('cnh');
   const [docFiles, setDocFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
+  // Pix Automático no cadastro: opções do quadro, situação atual e resultado
+  // exibido como continuação logo depois de salvar.
+  const [pixOpcoes, setPixOpcoes] = useState<PixCadastroOpcoes>(PIX_OPCOES_INICIAIS);
+  const [pixContexto, setPixContexto] = useState<PixCadastroContexto | null>(null);
+  const [pixResultado, setPixResultado] = useState<{ resultado: PixResultadoCadastro; client: Client } | null>(null);
+  const savingRef = useRef(false);
 
   // Ordenação + paginação da tabela (padrão do sistema de referência)
   const [clientSort, setClientSort] = useState<ClientSort>({ field: 'name', dir: 'asc' });
@@ -889,6 +897,8 @@ function ClientesPageInner() {
     setIsEditing(false);
     setDocFiles([]);
     setDocCategory('cnh');
+    setPixOpcoes(PIX_OPCOES_INICIAIS);
+    setPixContexto(null);
   }
 
   function openCreateModal() {
@@ -901,6 +911,8 @@ function ClientesPageInner() {
     setSelectedClient(client);
     setIsEditing(true);
     setModalError('');
+    setPixOpcoes(PIX_OPCOES_INICIAIS);
+    setPixContexto(null);
     setForm({
       name: client.name || '',
       cpf_cnpj: formatCpfCnpj(client.cpf_cnpj || ''),
@@ -1015,9 +1027,15 @@ function ClientesPageInner() {
     }
   }
 
+  // Sugestão do servidor (cobrança Pix real) só vale se o dia de vencimento não mudou no formulário.
+  const pixSugestao = sugestaoInicioPix(form.billing_day,
+    isEditing && String(selectedClient?.billing_day ?? '') === form.billing_day ? pixContexto?.sugestaoServidor : null);
+  const pixNovaSelecao = !isEditing || selectedClient?.forma_cobranca !== 'pix_automatico';
+
   async function submitClient(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!token || !canEdit) return;
+    if (!token || !canEdit || savingRef.current) return;  // duplo clique antes do re-render
+    savingRef.current = true;
     setSaving(true);
     setModalError('');
     setFeedback('');
@@ -1070,6 +1088,20 @@ function ClientesPageInner() {
         ? await apiFetch<Client>(`/clients/${selectedClient.id}`, { method: 'PUT', body: JSON.stringify(payload) }, token)
         : await apiFetch<Client>('/clients', { method: 'POST', body: JSON.stringify(payload) }, token);
 
+      // Só depois do cliente salvo: a chamada bancária nunca segura o cadastro
+      // e uma falha nela não desfaz o que já foi gravado.
+      let pix: PixResultadoCadastro | null = null;
+      const pedirPix = payload.forma_cobranca === 'pix_automatico'
+        && (canFinance ? deveSolicitarPix(pixOpcoes, pixNovaSelecao, pixContexto) : pixNovaSelecao);
+      if (pedirPix) {
+        pix = await iniciarAutorizacaoPix({
+          clientId: saved.id, token, podeGerar: canFinance, contexto: pixContexto,
+          opcoes: { data_inicial: pixOpcoes.data_inicial || pixSugestao,
+            enviar_convite: pixOpcoes.enviar_convite && Boolean(payload.email), solicitar: true },
+        });
+        if (pix.tipo !== 'existente') setPixResultado({ resultado: pix, client: saved });
+      }
+
       if (docFiles.length) {
         const body = new FormData();
         body.append('category', docCategory);
@@ -1077,7 +1109,8 @@ function ClientesPageInner() {
         await apiFetch(`/clients/${saved.id}/documents`, { method: 'POST', body }, token);
       }
 
-      setFeedback(isEditing ? 'Cliente atualizado com sucesso.' : 'Cliente cadastrado com sucesso.');
+      setFeedback((isEditing ? 'Cliente atualizado com sucesso.' : 'Cliente cadastrado com sucesso.')
+        + (pix?.tipo === 'existente' ? ` ${pix.mensagem}` : ''));
       setModalOpen(false);
       resetForm();
       await invalidateClients();
@@ -1086,6 +1119,7 @@ function ClientesPageInner() {
     } catch (err) {
       setModalError(parseError(err));
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   }
@@ -1366,7 +1400,33 @@ function ClientesPageInner() {
         onClose={() => { setModalOpen(false); resetForm(); setModalError(''); }}
         onCancel={() => { setModalOpen(false); resetForm(); }}
         onSubmit={submitClient}
+        pixBlock={
+          <ClientFormPixBlock
+            token={token}
+            clientId={isEditing && selectedClient ? selectedClient.id : null}
+            novaSelecao={pixNovaSelecao}
+            canFinance={canFinance}
+            nome={form.name}
+            email={form.email}
+            billingDay={form.billing_day}
+            sugestao={pixSugestao}
+            opcoes={pixOpcoes}
+            onOpcoesChange={setPixOpcoes}
+            contexto={pixContexto}
+            onContextoChange={setPixContexto}
+          />
+        }
       />
+
+      {!modalOpen && (
+        <ClientPixResultadoModal
+          resultado={pixResultado?.resultado ?? null}
+          client={pixResultado?.client ?? null}
+          token={token}
+          canFinance={canFinance}
+          onClose={() => { setPixResultado(null); void invalidateClients(); }}
+        />
+      )}
 
       <VehiclesModal
         open={vehiclesModalOpen}

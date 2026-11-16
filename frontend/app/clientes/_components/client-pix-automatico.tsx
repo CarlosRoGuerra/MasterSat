@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Image from 'next/image';
-import { Copy, QrCode, RefreshCw } from 'lucide-react';
+import { Copy, Mail, MessageCircle, QrCode, RefreshCw } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import { formatCurrency, formatDate } from '@/lib/format';
 import { Button } from '@/components/ui/button';
@@ -18,21 +18,42 @@ type Charge = { id: number; billing_id: number; txid: string; status: string; ve
 type Data = {
   conexao: { configurado: boolean; escrita_habilitada: boolean; ambiente: string };
   recorrencia: { id: number; status: string; ativa: boolean; data_inicial: string; objeto: string;
-    pix_copia_cola: string | null; qr_svg: string | null; erro: string | null } | null;
+    pix_copia_cola: string | null; qr_svg: string | null; erro: string | null;
+    created_at?: string | null; convite_canal?: string | null; convite_status?: string | null;
+    convite_destino?: string | null; convite_tentativas?: number; convite_enviado_em?: string | null;
+    convite_erro?: string | null } | null;
   cobrancas: Charge[]; pendentes_adesao: number;
   primeiro_vencimento_sugerido?: string; data_minima_autorizacao?: string;
+  smtp_configurado?: boolean; emails_responsavel?: string[];
 };
 
+/** Situação da autorização para a equipe (derivada do status bancário; nenhum estado novo). */
+export const ROTULO_AUTORIZACAO: Record<string, string> = {
+  PREPARANDO: 'Aguardando geração', CRIADA: 'Aguardando autorização no banco', APROVADA: 'Autorizada pelo cliente',
+  REJEITADA: 'Recusada', EXPIRADA: 'Expirada', CANCELADA: 'Cancelada', ERRO: 'Falha na comunicação com o Sicredi',
+  DESFECHO_DESCONHECIDO: 'Resultado bancário desconhecido',
+};
 const LABELS: Record<string, string> = {
-  PREPARANDO: 'Preparando autorização', CRIADA: 'Aguardando autorização no banco', APROVADA: 'Autorizada pelo cliente',
-  REJEITADA: 'Rejeitada', EXPIRADA: 'Expirada', CANCELADA: 'Cancelada', ERRO: 'Falha ao criar autorização',
-  DESFECHO_DESCONHECIDO: 'Resultado pendente de consulta', NA_FILA: 'Aguardando janela de agendamento',
+  ...ROTULO_AUTORIZACAO, NA_FILA: 'Aguardando janela de agendamento',
   AGUARDANDO_AUTORIZACAO: 'Aguardando autorização do cliente', ENVIANDO: 'Enviando agendamento',
   ATIVA: 'Agendada no banco', CONCLUIDA: 'Concluída no banco', PENDENCIA: 'Revisão necessária',
 };
 const TERMINAL = new Set(['CANCELADA', 'EXPIRADA', 'REJEITADA', 'CONCLUIDA']);
+const CONVITE: Record<string, string> = {
+  pendente: 'Envio por e-mail pendente', enviando: 'Enviando por e-mail', enviado: 'Enviado por e-mail',
+  erro: 'Não enviado', desconhecido: 'Envio sem confirmação', dispensado: 'Envio dispensado',
+};
 
-function primeiroVencimento(day?: number | null, ...suggestions: (string | null | undefined)[]): string {
+/** Mensagem do WhatsApp aberta no navegador do operador (não é envio automático). */
+export function mensagemWhatsAppPix(nome: string, codigo: string): string {
+  return `Olá, ${nome}. Para autorizar o Pix Automático da MasterSat, abra o aplicativo do seu banco, `
+    + `entre em Pix > Pix Copia e Cola e use o código abaixo. Autorizar não gera pagamento imediato: `
+    + `cada débito ocorre somente no vencimento da cobrança.
+
+${codigo}`;
+}
+
+export function primeiroVencimento(day?: number | null, ...suggestions: (string | null | undefined)[]): string {
   const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' });
   const [year, month, date] = today.split('-').map(Number);
   const earliest = new Date(year, month - 1, date + 2);
@@ -46,7 +67,7 @@ function primeiroVencimento(day?: number | null, ...suggestions: (string | null 
 }
 
 export function ClientPixAutomatico({ client, token, onUpdated, vencimentoCobranca }: {
-  client: Pick<Client, 'id' | 'name' | 'billing_day'>; token: string; onUpdated?: () => void;
+  client: Pick<Client, 'id' | 'name' | 'billing_day'> & Partial<Pick<Client, 'phone'>>; token: string; onUpdated?: () => void;
   vencimentoCobranca?: string | null;
 }) {
   const [data, setData] = useState<Data | null>(null);
@@ -146,11 +167,41 @@ export function ClientPixAutomatico({ client, token, onUpdated, vencimentoCobran
               try { await navigator.clipboard.writeText(rec.pix_copia_cola!); setFeedback('Código de autorização copiado.'); }
               catch { setError('Não foi possível copiar. Selecione o código no campo acima.'); }
             }}><Copy className="h-4 w-4" aria-hidden="true" />Copiar código</Button>
+            <div className="space-y-2 border-t border-slate-100 pt-3 dark:border-slate-800" aria-label="Convite ao cliente">
+              <p className="text-xs">
+                <strong>Convite:</strong> {rec.convite_status ? CONVITE[rec.convite_status] ?? rec.convite_status : 'Ainda não enviado'}
+                {rec.convite_status === 'enviado' && rec.convite_enviado_em && <> em {formatDate(rec.convite_enviado_em)}</>}
+                {rec.convite_destino && <> · {rec.convite_destino}</>}
+                {Boolean(rec.convite_tentativas) && <> · {rec.convite_tentativas} tentativa(s)</>}
+              </p>
+              {rec.convite_erro && <p className="text-xs text-amber-800 dark:text-amber-200">{rec.convite_erro}</p>}
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" variant="secondary" disabled={busy || !data?.smtp_configurado || !data?.emails_responsavel?.length}
+                  title={!data?.smtp_configurado ? 'E-mail do sistema não configurado' : !data?.emails_responsavel?.length ? 'Responsável sem e-mail cadastrado' : undefined}
+                  onClick={() => run(`${base}/convite`)}>
+                  <Mail className="h-4 w-4" aria-hidden="true" />{rec.convite_status === 'enviado' || rec.convite_status === 'desconhecido' ? 'Reenviar convite por e-mail' : 'Enviar convite por e-mail'}
+                </Button>
+                {client.phone && (
+                  <a className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800"
+                    href={`https://wa.me/55${client.phone.replace(/\D/g, '')}?text=${encodeURIComponent(mensagemWhatsAppPix(client.name, rec.pix_copia_cola))}`}
+                    target="_blank" rel="noopener noreferrer">
+                    <MessageCircle className="h-4 w-4" aria-hidden="true" />Abrir no WhatsApp (envio manual)
+                  </a>
+                )}
+              </div>
+              {rec.convite_status === 'desconhecido' && <p className="text-xs text-slate-500">O e-mail pode ter sido entregue. Confirme com o cliente antes de reenviar.</p>}
+            </div>
           </div>
         </div>
       )}
+      {rec?.status === 'CRIADA' && !rec.pix_copia_cola && (
+        <p className="text-sm text-slate-600 dark:text-slate-300">O Sicredi ainda não devolveu o QR Code desta autorização. O sistema consulta automaticamente{rec.convite_status === 'pendente' ? ' e envia o convite por e-mail assim que o QR estiver disponível' : ''}.</p>
+      )}
+      {rec?.status === 'DESFECHO_DESCONHECIDO' && (
+        <p className="text-sm text-amber-800 dark:text-amber-200">O pedido pode ter chegado ao banco. O sistema consulta o resultado automaticamente e nunca cria outra autorização sem essa confirmação.</p>
+      )}
       {Boolean(data?.pendentes_adesao) && <div className="space-y-2">
-        <p className="text-sm">{data!.pendentes_adesao} cobrança(s) do fechamento aguardam uma autorização compatível com o vencimento.</p>
+        <p className="text-sm">{data!.pendentes_adesao} cobrança(s) do fechamento aguardam uma autorização compatível com o vencimento. Depois da aprovação do cliente, o sistema as associa automaticamente.</p>
         {rec?.ativa && <Button type="button" variant="secondary" disabled={busy} onClick={() => run(`${base}/preparar-pendentes`)}>Preparar cobranças do fechamento</Button>}
       </div>}
       {Boolean(data?.cobrancas.length) && <div className="space-y-2">
