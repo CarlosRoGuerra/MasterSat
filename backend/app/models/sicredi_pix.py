@@ -32,6 +32,15 @@ class SicrediPixRecorrencia(Base, TimestampMixin):
     erro: Mapped[str | None] = mapped_column(Text)
     consultada_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     processar_evento: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Convite ao pagador (QR/Copia e Cola da própria autorização). Registro
+    # operacional do envio; não altera a situação bancária da recorrência.
+    convite_canal: Mapped[str | None] = mapped_column(String(20))
+    convite_status: Mapped[str | None] = mapped_column(String(20))
+    convite_destino: Mapped[str | None] = mapped_column(Text)
+    convite_tentativas: Mapped[int] = mapped_column(Integer, default=0, server_default=text('0'), nullable=False)
+    convite_iniciado_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    convite_enviado_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    convite_erro: Mapped[str | None] = mapped_column(Text)
 
 
 class SicrediPixCobranca(Base, TimestampMixin):

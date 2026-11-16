@@ -5,7 +5,7 @@ from datetime import timedelta
 from secrets import compare_digest
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -13,12 +13,15 @@ from app.api.deps import require_roles
 from app.api.v1.endpoints.common import get_client_or_404
 from app.core.config import settings
 from app.db.session import get_db
-from app.models.billing import Billing
-from app.models.enums import BillingStatus, UserRole
+from app.models.enums import UserRole
 from app.models.sicredi_pix import SicrediPixCobranca, SicrediPixRecorrencia
-from app.schemas.sicredi_pix import PixAutorizacaoIn, PixClienteOut, PixCobrancaOut, PixRecorrenciaOut, PixStatusOut
+from app.schemas.sicredi_pix import (
+    PixAutorizacaoIn, PixClienteOut, PixCobrancaOut, PixPainelOut, PixRecorrenciaOut, PixStatusOut,
+)
 from app.services import sicredi_pix as service
 from app.services import sicredi_pix_client as client
+from app.services import sicredi_pix_convite as convite
+from app.services.sicredi_pix_painel import montar_painel
 from app.services.titulo_bancario import PoliticaBancariaError
 
 router = APIRouter()
@@ -68,21 +71,21 @@ def _cliente(db: Session, client_id: int) -> PixClienteOut:
     charges = db.scalars(select(SicrediPixCobranca).join(SicrediPixRecorrencia).where(
         SicrediPixRecorrencia.client_id == client_id, SicrediPixRecorrencia.ambiente == client.ambiente(),
     ).order_by(SicrediPixCobranca.id.desc()).limit(50)).all()
-    pending = db.scalar(select(func.count()).select_from(Billing).where(
-        func.coalesce(Billing.payer_client_id, Billing.client_id) == client_id,
-        Billing.payment_method == 'pix_automatico', Billing.is_deleted.is_(False),
-        Billing.status.in_((BillingStatus.PENDING, BillingStatus.OVERDUE)),
-        ~Billing.id.in_(select(SicrediPixCobranca.billing_id)),
-    )) or 0
+    pending = db.scalar(select(func.count()).select_from(
+        service.cobrancas_pix_sem_agendamento(client_id).subquery())) or 0
     return PixClienteOut(client_id=client_id, forma_cobranca=payer.forma_cobranca, conexao=_status(),
                          recorrencia=rec_out, cobrancas=charges, pendentes_adesao=pending,
                          primeiro_vencimento_sugerido=service.sugerir_inicio_autorizacao(db, payer),
-                         data_minima_autorizacao=service.hoje() + timedelta(days=2))
+                         data_minima_autorizacao=service.hoje() + timedelta(days=2),
+                         smtp_configurado=convite.smtp_configurado(db),
+                         emails_responsavel=convite.destinatarios(db, client_id))
 
 
 @router.get('/status', response_model=PixStatusOut)
-def status(_: object = Depends(require_roles(*FINANCE))):
-    return _status()
+def status(db: Session = Depends(get_db), _: object = Depends(require_roles(*FINANCE))):
+    out = _status()
+    out.smtp_configurado = convite.smtp_configurado(db)
+    return out
 
 
 @router.post('/testar-conexao')
@@ -105,10 +108,45 @@ def autorizar(client_id: int, payload: PixAutorizacaoIn, db: Session = Depends(g
               _: object = Depends(require_roles(*FINANCE))):
     get_client_or_404(client_id, db)
     try:
-        service.criar_recorrencia(db, client_id, **payload.model_dump())
+        rec = service.criar_recorrencia(db, client_id, **payload.model_dump())
     except client.PixError as exc:
         _raise(exc)
+    # Depois da autorização persistida (sem transação aberta durante o SMTP):
+    # envia o convite pedido e associa cobranças do fechamento se já aprovada.
+    # Falhas ficam registradas na autorização e aparecem na tela e no painel.
+    if rec.convite_status == convite.PENDENTE:
+        try:
+            convite.enviar_convite(db, rec.id)
+        except client.PixError:
+            db.rollback()
+    if rec.ativa and rec.status == 'APROVADA':
+        service.enfileirar_pendentes(db, client_id)
+        db.commit()
     return _cliente(db, client_id)
+
+
+@router.post('/clientes/{client_id}/convite', response_model=PixClienteOut)
+def enviar_convite(client_id: int, db: Session = Depends(get_db), _: object = Depends(require_roles(*FINANCE))):
+    """Envia (ou reenvia) por e-mail o QR da MESMA autorização: nenhuma chamada ao banco."""
+    get_client_or_404(client_id, db)
+    rec = service.recorrencia_cliente(db, client_id)
+    if not rec:
+        raise HTTPException(404, detail='Cliente ainda não tem autorização Pix.')
+    try:
+        convite.enviar_convite(db, rec.id, manual=True)
+    except client.PixError as exc:
+        db.rollback()
+        raise HTTPException(409, detail=client.erro_seguro(str(exc))) from exc
+    return _cliente(db, client_id)
+
+
+@router.get('/painel', response_model=PixPainelOut)
+def painel(incluir_resolvidos: bool = Query(default=False), db: Session = Depends(get_db),
+           _: object = Depends(require_roles(*FINANCE))):
+    """Situação Pix por cliente/cobrança e alertas para o Financeiro (somente leitura)."""
+    status_ = _status()
+    return {**montar_painel(db, incluir_resolvidos=incluir_resolvidos),
+            'habilitado': status_.habilitado, 'escrita_habilitada': status_.escrita_habilitada}
 
 
 @router.post('/clientes/{client_id}/consultar', response_model=PixClienteOut)
@@ -142,12 +180,7 @@ def cancelar(client_id: int, db: Session = Depends(get_db), _: object = Depends(
 @router.post('/clientes/{client_id}/preparar-pendentes', response_model=PixClienteOut)
 def preparar_pendentes(client_id: int, db: Session = Depends(get_db), _: object = Depends(require_roles(*FINANCE))):
     get_client_or_404(client_id, db)
-    ids = db.scalars(select(Billing.id).where(
-        func.coalesce(Billing.payer_client_id, Billing.client_id) == client_id,
-        Billing.payment_method == 'pix_automatico', Billing.is_deleted.is_(False),
-        Billing.status.in_((BillingStatus.PENDING, BillingStatus.OVERDUE)),
-    ).order_by(Billing.id).with_for_update()).all()
-    service.enfileirar_fechamento(db, list(ids))
+    service.enfileirar_pendentes(db, client_id)
     db.commit()
     return _cliente(db, client_id)
 

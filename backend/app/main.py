@@ -823,13 +823,29 @@ def _sicredi_lotes_worker():
 
 
 def _sicredi_pix_worker():
+    """Acompanha autorizações, associa cobranças do fechamento, envia convites
+    pedidos e processa a fila. Alerta o admin após 3 rodadas seguidas com falha
+    (uma vez por sequência), como a conciliação Sicredi."""
     from app.services.sicredi_pix import processar_fila
+    logger = logging.getLogger('uvicorn.error')
+    falhas_seguidas = 0
+    ja_alertado = False
     while True:
         time.sleep(max(30, settings.sicredi_pix_worker_interval_seconds))
         try:
-            _run_locked(918273655, processar_fila)
+            res = _run_locked(918273655, processar_fila)
+            falhou = bool(res and res.get('falhas'))
         except Exception:
-            logging.getLogger('uvicorn.error').exception('Falha ao acompanhar a fila Pix Automático.')
+            logger.exception('Falha ao acompanhar a fila Pix Automático.')
+            falhou = True
+        if not falhou:
+            falhas_seguidas, ja_alertado = 0, False
+            continue
+        falhas_seguidas += 1
+        if falhas_seguidas >= 3 and not ja_alertado:
+            _alerta_admin(f'Pix Automático: falhas em {falhas_seguidas} rodadas seguidas da fila. '
+                          'Confira o painel Pix Automático no Financeiro.', logger)
+            ja_alertado = True
 
 
 def _sicredi_log_retention_worker():

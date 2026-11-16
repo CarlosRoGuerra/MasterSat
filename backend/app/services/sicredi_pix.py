@@ -8,6 +8,7 @@ import re
 from uuid import uuid4
 
 from sqlalchemy import and_, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -111,7 +112,10 @@ def _aplicar_recorrencia(db: Session, rec: SicrediPixRecorrencia, body: dict) ->
 
 
 def criar_recorrencia(db: Session, client_id: int, *, data_inicial: date,
-                     valor_minimo: Decimal, objeto: str) -> SicrediPixRecorrencia:
+                     valor_minimo: Decimal, objeto: str, enviar_convite: bool = False) -> SicrediPixRecorrencia:
+    """``enviar_convite`` registra, na mesma reserva durável, o pedido de enviar
+    o QR por e-mail assim que ele existir. Uma autorização ativa é devolvida
+    como está: nunca cria outra recorrência nem altera o convite já pedido."""
     exigir_escrita()
     client = db.scalar(select(Client).where(Client.id == client_id).with_for_update())
     if not client or client.is_deleted or client.status != ClientStatus.ACTIVE:
@@ -128,6 +132,9 @@ def criar_recorrencia(db: Session, client_id: int, *, data_inicial: date,
     rec = SicrediPixRecorrencia(client_id=client_id, ambiente=ambiente(), referencia='MS' + uuid4().hex,
         data_inicial=data_inicial, valor_minimo=valor_minimo, objeto=objeto.strip(),
         status='PREPARANDO', ativa=True, politica_retentativa='NAO_PERMITE')
+    if enviar_convite:
+        rec.convite_canal = 'email'
+        rec.convite_status = 'pendente'
     db.add(rec)
     db.commit()  # Reserva durável antes de qualquer chamada de criação.
     rec_id = rec.id
@@ -259,10 +266,37 @@ def enfileirar_fechamento(db: Session, billing_ids: list[int]) -> list[int]:
         charge = SicrediPixCobranca(billing_id=bid, recorrencia_id=rec.id, txid=uuid4().hex,
             ciclo=ciclo, vencimento=billing.due_date, valor=billing.amount,
             status='NA_FILA' if rec.status == 'APROVADA' else 'AGUARDANDO_AUTORIZACAO')
-        db.add(charge)
-        db.flush()
+        try:
+            # Savepoint: se o worker reservou a mesma cobrança/ciclo em paralelo,
+            # só esta reserva é descartada, nunca a transação do fechamento.
+            with db.begin_nested():
+                db.add(charge)
+                db.flush()
+        except IntegrityError:
+            continue
         queued.append(charge.id)
     return queued
+
+
+def cobrancas_pix_sem_agendamento(client_id: int):
+    """Cobranças Pix em aberto do pagador ainda sem reserva na fila."""
+    return select(Billing.id).where(
+        func.coalesce(Billing.payer_client_id, Billing.client_id) == client_id,
+        Billing.payment_method == 'pix_automatico', Billing.is_deleted.is_(False),
+        Billing.status.in_((BillingStatus.PENDING, BillingStatus.OVERDUE)),
+        ~Billing.id.in_(select(SicrediPixCobranca.billing_id)),
+    )
+
+
+def enfileirar_pendentes(db: Session, client_id: int) -> list[int]:
+    """Associa à autorização ativa as cobranças Pix que o fechamento já gerou.
+
+    Mesma regra de ``enfileirar_fechamento`` (ciclo, vencimento posterior ao
+    início da autorização, uma cobrança por ciclo). Somente fila local: nenhum
+    cálculo financeiro, nenhuma rede. O chamador confirma a transação.
+    """
+    ids = db.scalars(cobrancas_pix_sem_agendamento(client_id).order_by(Billing.id).with_for_update()).all()
+    return enfileirar_fechamento(db, list(ids))
 
 
 def _aplicar_recebimento(db: Session, charge: SicrediPixCobranca, pix: dict) -> bool:
@@ -465,6 +499,34 @@ def processar_cobranca(db: Session, charge: SicrediPixCobranca) -> None:
         raise
 
 
+def associar_cobrancas_do_fechamento(db: Session, *, limite: int = 100) -> int:
+    """Substitui o botão "Preparar cobranças do fechamento" para autorizações
+    APROVADAS: as cobranças Pix já geradas pelo fechamento entram na fila local.
+
+    Não calcula valores, não cria cobranças e não acessa o banco. Autorizações
+    ainda não aprovadas ficam de fora para não reservar cobranças que seriam
+    canceladas se o cliente recusar. Cada pagador é confirmado separadamente.
+    """
+    payers = db.scalars(select(SicrediPixRecorrencia.client_id).where(
+        SicrediPixRecorrencia.ambiente == ambiente(), SicrediPixRecorrencia.ativa.is_(True),
+        SicrediPixRecorrencia.status == 'APROVADA',
+        # Vencimento anterior ao início nunca entra na fila: não reprocessar a cada rodada.
+        cobrancas_pix_sem_agendamento(SicrediPixRecorrencia.client_id)
+        .where(Billing.due_date >= SicrediPixRecorrencia.data_inicial).exists(),
+    ).order_by(SicrediPixRecorrencia.client_id).limit(limite)).all()
+    db.rollback()
+    total = 0
+    for client_id in payers:
+        try:
+            total += len(enfileirar_pendentes(db, client_id))
+            db.commit()
+        except Exception:  # noqa: BLE001 — um pagador não interrompe os demais
+            db.rollback()
+            import logging
+            logging.getLogger('uvicorn.error').exception('Falha ao associar cobranças Pix do pagador %s.', client_id)
+    return total
+
+
 def processar_fila(db: Session, *, limite: int = 100) -> dict:
     if not settings.sicredi_pix_enabled:
         return {'consultadas': 0, 'processadas': 0, 'falhas': 0}
@@ -485,6 +547,11 @@ def processar_fila(db: Session, *, limite: int = 100) -> dict:
             rec.consultada_em = agora()
             db.commit()
             result['falhas'] += 1
+    result['associadas'] = associar_cobrancas_do_fechamento(db, limite=limite)
+    from app.services.sicredi_pix_convite import processar_convites
+    convites = processar_convites(db, ambiente())
+    result['convites_enviados'] = convites['enviados']
+    result['falhas'] += convites['falhas']
     charges = db.scalars(select(SicrediPixCobranca).join(SicrediPixRecorrencia).where(
         SicrediPixRecorrencia.ambiente == ambiente(),
         or_(SicrediPixCobranca.status.not_in(COB_TERMINAIS | {'PENDENCIA'}), SicrediPixCobranca.processar_evento.is_(True),
